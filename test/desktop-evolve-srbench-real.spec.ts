@@ -100,6 +100,18 @@ const CONTINUATION = "你决定，按文档推荐规模直接跑；使用 PUCT�
   + "只跑 lsr_transform_i.34.1_2_0，不要跑其它题。";
 
 /**
+ * What a design turn that spent its whole turn budget without starting the
+ * search is answered with.
+ *
+ * The design can spend every model turn it has re-deriving the evaluator and
+ * the seed program — one turn burned 128 of them and returned nothing — and a
+ * second "you decide" invites the same. A person watching it would stop the
+ * checking and say start with what is in the workspace.
+ */
+const START_NOW = "不要再核对评估器或候选程序的细节，用工作区里现有的 evaluator 和 candidate 立即调用 create_evolve_run，"
+  + "按文档推荐规模启动 lsr_transform_i.34.1_2_0 的 PUCT 搜索。只跑这一道题。";
+
+/**
  * One problem of `pkuHaowei/llm-srbench` (`lsr_transform`), already extracted
  * from the subset's parquet. The problem allows the data to come from the
  * workspace, and seeding it keeps the case about the desktop flow rather than
@@ -347,6 +359,9 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
           // sentence. A reply is a turn, so a new Run is the signal that it was
           // accepted.
           if (confirmations++ >= 8) throw new Error("No search started after eight design replies");
+          // The first fruitless turn gets the documented sentence; after that
+          // the answer is the one that starts the search with what is there.
+          const nudge = confirmations > 1 ? START_NOW : CONTINUATION;
           const before = new Set(runs.map((candidate) => candidate.id));
           const checkpoint = await visibleCheckpoint(page);
           // A step that comes back has already been answered: pressing the same
@@ -360,10 +375,10 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
             await checkpoint!.card.getByRole("button", { name: "确认，继续", exact: true }).click();
             answered.add(checkpoint!.step);
           } else {
-            await sendMessage(page, fixture!.session.id, CONTINUATION);
+            await sendMessage(page, fixture!.session.id, nudge);
           }
           const next = await waitForNewRun(page, fixture!.session.id, before, 180_000);
-          metrics.turns.push({ id: next.id, kind: confirmed ? "checkpoint" : "continuation", prompt: confirmed ? null : CONTINUATION });
+          metrics.turns.push({ id: next.id, kind: confirmed ? "checkpoint" : "continuation", prompt: confirmed ? null : nudge });
           runId = next.id;
           continue;
         }
