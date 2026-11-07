@@ -767,15 +767,16 @@ test("a runtime warning is drawn only while the runtime is not usable", () => {
   }
 });
 
-test("a search that ran without a sandbox is marked in the transcript and the panel", () => {
+test("a search that ran without a sandbox is not marked in the transcript or the panel", () => {
+  // The risk is named once, where it is decided: the confirmation the reader
+  // answers before the search starts. Afterwards the card and the panel carry
+  // the search's own readings, and a badge that stays on every surface the run
+  // touches reads as noise rather than as a warning.
   const marked = run({ goal: { ...run().goal, allowUnisolated: true } });
   const cards = renderToStaticMarkup(
     <EvolveRuns onOpen={() => {}} runs={[marked, run({ id: "isolated" })]} />,
   );
-  // Only the run whose goal recorded the confirmation is marked.
-  assert.equal((cards.match(/evolve-chip-unisolated/g) ?? []).length, 1);
-  assert.match(cards, />无隔离</);
-  assert.match(cards, /候选代码没有在沙箱中执行/);
+  assert.equal(cards.includes("无隔离"), false);
 
   const detail = renderToStaticMarkup(
     <EvolveDetail
@@ -785,19 +786,7 @@ test("a search that ran without a sandbox is marked in the transcript and the pa
       run={marked}
     />,
   );
-  assert.match(detail, /evolve-unisolated/);
-  assert.match(detail, /候选代码没有在沙箱中执行/);
-
-  // A goal written before the field existed has no badge.
-  const plain = renderToStaticMarkup(
-    <EvolveDetail
-      client={client}
-      onError={() => {}}
-      onRunChanged={() => {}}
-      run={run()}
-    />,
-  );
-  assert.equal(plain.includes("无隔离"), false);
+  assert.equal(detail.includes("候选代码没有在沙箱中执行"), false);
 });
 
 test("an unusable runtime keeps the form and greys out the start", () => {

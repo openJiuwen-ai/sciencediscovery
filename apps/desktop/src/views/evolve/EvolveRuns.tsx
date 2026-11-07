@@ -93,7 +93,6 @@ function EvolveRunCard({ onOpen, run }: { onOpen: (runId: string) => void; run: 
         run.goal.statement,
         evolveStatusLabel(run.status),
         ...(run.goal.checkpointMode === "auto" ? [TEXT.evolve.autoPaceTitle] : []),
-        ...(run.goal.allowUnisolated === true ? [TEXT.evolve.unisolatedTitle] : []),
       ].join(" · ")}
       type="button"
     >
@@ -108,9 +107,6 @@ function EvolveRunCard({ onOpen, run }: { onOpen: (runId: string) => void; run: 
           </span>
           {run.goal.checkpointMode === "auto"
             ? <span className="evolve-chip-auto">{TEXT.evolve.autoPace}</span>
-            : null}
-          {run.goal.allowUnisolated === true
-            ? <span className="evolve-chip-unisolated">{TEXT.evolve.unisolated}</span>
             : null}
         </span>
       </span>
