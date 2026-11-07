@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import type { ModelInput, WireToolSpec } from "@sciencediscovery/model";
-import type { ContextAssembler, ContextAssembly, RuntimeMessage } from "@sciencediscovery/runtime-core";
+import type { ContextAssembler, ContextAssembly, ContextRecovery, RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import { applyContextBudget, type ContextBudgetConfig } from "./budget.js";
 import {
@@ -50,7 +50,7 @@ export interface DynamicContextTrace<TMessage extends RuntimeMessage = RuntimeMe
   error?: string;
   modelInput?: ModelInput<TMessage>;
   mode: ContextAssemblyMode;
-  recovery?: { attempt: 1; reason: "model-input-overflow" };
+  recovery?: ContextRecovery;
   rendered?: DynamicRenderedContext<TMessage>;
   turn: number;
   used: "dynamic" | "legacy";
@@ -94,7 +94,7 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
   async assemble(input: {
     history: readonly TMessage[];
     onProgress: () => void;
-    recovery?: { attempt: 1; reason: "model-input-overflow" };
+    recovery?: ContextRecovery;
     signal: AbortSignal;
     turn: number;
   }): Promise<ContextAssembly<TMessage, ModelInput<TMessage>>> {
