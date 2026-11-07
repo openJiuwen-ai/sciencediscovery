@@ -197,6 +197,8 @@ export type EvolveScoring =
    *  with only the candidate for company. Material that genuinely lives in a
    *  file belongs in `dataset_metric`, which owns the splitting too. */
   | { kind: "custom_script"; scriptCas: string; split: EvolveSplit; timeoutSeconds: number }
+  /** The fixed program runs on the conversation's selected runner. The candidate is data. */
+  | { kind: "npu_job"; scriptCas: string; timeoutSeconds: number }
   | {
     /** Judges never see the candidate's identity, iteration or parent score. */
     blind: true;
@@ -235,6 +237,7 @@ export type EvolveScoringKind = EvolveScoring["kind"];
 export const SOLVED_THRESHOLD_BY_SCORING: Readonly<Record<EvolveScoringKind, number>> = {
   custom_script: 0.999,
   dataset_metric: 0.999,
+  npu_job: 0.999,
   llm_judge: 0.85,
   test_gate: 0.999,
 };
@@ -275,6 +278,8 @@ export interface EvolveScorecard {
   confirmedAt: string;
   confirmedBy: string;
   derivedFrom: { draftRunId: string; statement: string };
+  /** Top-level JSON fields a directed search may change. Absent: the search stays free. */
+  direction?: { editable: string[] };
   /** L0 freeze key. `--resume` refuses a run whose card hash moved: scores under
    * a different card are not comparable. */
   hash: string;
@@ -398,6 +403,8 @@ export interface EvolveRunProposal {
    *  run it before proposing — that is the whole advantage of designing inside
    *  a loop that has an interpreter. */
   evaluatorSource?: string;
+  /** npu_job: the JSON fields this run may change. */
+  editableFields?: string[];
   /** `llm_judge`: the rubric and its top mark. */
   rubric?: string;
   scaleMax?: number;

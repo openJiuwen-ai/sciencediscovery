@@ -16,7 +16,7 @@ scoring that cannot shows up as a flat run, not as an error.
 
 **Algorithm first.** The user's `/evolve-design` command may carry `--algorithm puct` or
 `--algorithm openevolve`; if unset, ask. PUCT ranks candidates over a tree, OpenEvolve over
-MAP-Elites islands. The four steps and the four scoring modes are identical for both, so design
+MAP-Elites islands. The four steps and the scoring modes are identical for both, so design
 the scorecard, the split and the starting point the same way and only set `algorithm` in
 `create_evolve_run`.
 
@@ -276,6 +276,11 @@ maintain the measuring apparatus yourself, so every mistake in it is yours. Judg
   tests", "make these cases pass", or describes behaviour case by case. The failure text is the
   learning signal, and `frozenGlobs` **must** include the test paths, or the shortest way to a
   higher score is to weaken the tests. Shards ≤ half the case count.
+- **The score has to run on this conversation's selected runner** → `npu_job`. The starting
+  point is a JSON object. `editableFields` lists the top-level fields that may change.
+  `evaluatorSource` is the fixed Python program: it reads `_EVOLVE_CANDIDATE` and prints one
+  JSON line with `device` equal to `npu` and a `score` from 0 to 1, larger is better. A number the candidate prints is not
+  the score. Use this only when the conversation has a remote runner and a ticked NPU card.
 - **Neither fits** → `custom_script`, which you write: simulations, optimisation heuristics,
   anything whose quality is a computation with no natural table and no test suite. **Read
   `references/custom-script.md` before writing the evaluator** — it holds the contract, how it

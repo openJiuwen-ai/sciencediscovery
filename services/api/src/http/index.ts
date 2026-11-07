@@ -61,6 +61,7 @@ import {
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
+import { handleEvolveRunner } from "../evolution/runner-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
   handleListRuns as handleEvolveListRuns,
@@ -948,6 +949,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
         return;
       }
+      if (url.pathname.startsWith("/internal/evolve-runner/") && await handleEvolveRunner(request, response, url, {
+        grants: evolveOrchestrator.runnerGrants,
+        runnerClient: (runnerId) => remoteCompute.runnerClient(runnerId),
+        sessions: store,
+      })) return;
 
       // OAuth callbacks are authorized by a single-use state and SDK PKCE verifier.
       if (await handleMcpOAuthCallback(request, response, url, platform.customMcpServers)) return;

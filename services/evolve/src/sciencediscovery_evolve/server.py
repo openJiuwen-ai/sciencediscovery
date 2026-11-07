@@ -220,7 +220,7 @@ def start_run(request: RunRequest) -> StreamingResponse:
     # reads it. Requiring isolation there would refuse a run that never runs
     # anything, which is the opposite of what the refusal is for.
     executes = any(
-        (criterion.get("measure") or {}).get("kind") != "llm_judge"
+        (criterion.get("measure") or {}).get("kind") not in {"llm_judge", "npu_job"}
         for criterion in (request.scorecard.get("criteria") or [])
     ) or not request.scorecard
     if getattr(engine, "requires_sandbox", True) and executes and not spec_sandbox(request).available:

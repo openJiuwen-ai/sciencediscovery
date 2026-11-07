@@ -29,6 +29,7 @@ import { useEffect, useState } from "react";
 import type { ApiClient } from "../api.js";
 import { useLocale } from "../i18n/LocaleProvider.js";
 
+import { fieldChanges, jsonObject, previewValue } from "./field-rows.js";
 import type { EvolveCandidateView } from "./model.js";
 import { collapseContext, diffLines, type DiffRow } from "./text-diff.js";
 
@@ -75,6 +76,8 @@ export function CandidateDetail({ candidate, client, onClose, parent, runId }: C
   const rows = typeof sources === "object"
     ? collapseContext(diffLines(sources.before, sources.after))
     : { hidden: 0, rows: [] as DiffRow[] };
+  const directed = typeof sources === "object" && Boolean(jsonObject(sources.before) && jsonObject(sources.after));
+  const changes = typeof sources === "object" ? fieldChanges(sources.before, sources.after) : [];
 
   return <aside aria-label={t("evolve.detail.title")} className="evolve-detail">
     <header className="evolve-detail-header">
@@ -117,6 +120,33 @@ export function CandidateDetail({ candidate, client, onClose, parent, runId }: C
 
     {candidate.parentIndex === null
       ? <p className="evolve-detail-note">{t("evolve.detail.noParent")}</p>
+      : directed ? <section className="evolve-fields">
+        <h4>{t("evolve.detail.fields")}</h4>
+        {changes.length === 0
+          ? <p className="evolve-detail-note">{t("evolve.detail.unchanged")}</p>
+          : <div className="evolve-fields-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t("evolve.fields.field")}</th>
+                  <th>{t("evolve.fields.old")}</th>
+                  <th>{t("evolve.fields.new")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changes.map((change) => {
+                  const oldShown = previewValue(change.oldValue);
+                  const newShown = previewValue(change.newValue);
+                  return <tr key={change.field}>
+                    <td><code>{change.field}</code></td>
+                    <td>{oldShown.short === oldShown.full ? oldShown.full : <details><summary>{oldShown.short}</summary><code>{oldShown.full}</code></details>}</td>
+                    <td>{newShown.short === newShown.full ? newShown.full : <details><summary>{newShown.short}</summary><code>{newShown.full}</code></details>}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>}
+      </section>
       : <section className="evolve-detail-diff">
         <h4>{t("evolve.detail.diff")}</h4>
         {sources === "loading" ? <p className="evolve-detail-note">{t("evolve.detail.loading")}</p> : null}
