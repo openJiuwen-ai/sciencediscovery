@@ -38,10 +38,12 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import {
+  composeEvolveMessage,
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveSkill,
+  splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
 import { useEvolve } from "./evolve/use-evolve.js";
@@ -58,12 +60,12 @@ import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
 import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
-import { Composer } from "./views/Composer.js";
+import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
-import { EvolveOverlay } from "./views/evolve/EvolveOverlay.js";
-import { EvolveShelf } from "./views/evolve/EvolveShelf.js";
+import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
+import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
@@ -135,15 +137,26 @@ export function App({ initialToken }: Props) {
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   const resize = usePanelWidth();
 
-  /** The runtime and the open Session's searches. The shelf reads `runs`
-   *  directly, which is why the hook exists at this level rather than inside
-   *  the panel: the searches must stay reachable while the panel is closed. */
+  /** The runtime and the open Session's searches. The transcript's run cards
+   *  read `runs` directly, which is why the hook exists at this level rather
+   *  than inside the panel: the searches must stay reachable while the panel is
+   *  closed. */
   const evolve = useEvolve(client, state.sessionId);
   const refreshEvolve = evolve.refresh;
   /** Which search the panel is showing, by id. Storing the id rather than the
-   *  record keeps the panel reading the same list the shelf does, so a status
+   *  record keeps the panel reading the same list the run cards do, so a status
    *  that moves while the panel is open changes both at once. */
   const [evolveRunId, setEvolveRunId] = useState<string>();
+  /** Set the moment a design command leaves the composer, and cleared when the
+   *  new run opens or the reader moves on. Only a run this window started opens
+   *  任务 by itself: a reload or a session switch leaves the panel where it was,
+   *  because the search is not news to the person who just came back to it. */
+  const [awaitingRun, setAwaitingRun] = useState(false);
+  /** The ids the list already held, so "new" means new and not merely "the
+   *  first list a slow poll happened to return". */
+  const seenRunIds = useRef<Set<string>>(new Set());
+  /** The instant the command was sent; a run older than it was already there. */
+  const awaitingSince = useRef(0);
   /** The create dialog, open with a typed goal when the command was diverted
    *  here because the runtime is not ready. */
   const [evolveCreate, setEvolveCreate] = useState<{
@@ -151,6 +164,11 @@ export function App({ initialToken }: Props) {
     checkpointMode?: "auto" | "confirm";
     goal?: string;
   } | undefined>();
+  /** A design command the dialog placed in the composer instead of sending.
+   *  Held here because the composer has two mounts — the welcome page and the
+   *  conversation — and the dialog opens over either. Cleared when the composer
+   *  sends, so a session switch cannot resurrect a token already used. */
+  const [seededCommand, setSeededCommand] = useState<SeededCommand>();
 
   // An open panel belongs to one session's searches, like a selected
   // subagent. The create dialog is deliberately left alone: it starts a run
@@ -158,7 +176,46 @@ export function App({ initialToken }: Props) {
   // opening as it boots is not a reason to close a dialog the user just opened.
   useEffect(() => {
     setEvolveRunId(undefined);
+    setAwaitingRun(false);
+    seenRunIds.current = new Set();
   }, [state.sessionId]);
+
+  // A start is only visible once the list is re-read, and the list poll is
+  // idle until something is active. Looking every few seconds until the new
+  // run lands is what makes the panel open at the start rather than at the
+  // next unrelated refresh.
+  useEffect(() => {
+    if (!awaitingRun) return;
+    void refreshEvolve();
+    const timer = window.setInterval(() => void refreshEvolve(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [awaitingRun, refreshEvolve]);
+
+  // Open a run this window started. Everything the list held before the
+  // command is recorded as seen, and a run older than the command does not
+  // count even if a slow load delivers it late.
+  useEffect(() => {
+    const fresh = awaitingRun
+      ? evolve.runs.find((run) => {
+        if (seenRunIds.current.has(run.id)) return false;
+        const created = Date.parse(run.createdAt);
+        return Number.isNaN(created) || created >= awaitingSince.current - 2_000;
+      })
+      : undefined;
+    for (const run of evolve.runs) seenRunIds.current.add(run.id);
+    if (fresh === undefined) return;
+    setAwaitingRun(false);
+    setEvolveRunId(fresh.id);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  }, [awaitingRun, evolve.runs]);
+
+  // 任务 is a tab an open panel shows; when the Session's runs go away (a new
+  // Session, a deleted run) the tab goes with them, and an empty mode would
+  // leave the column with nothing in it.
+  useEffect(() => {
+    if (panelGroup === "task" && evolve.runs.length === 0) setPanelGroup("artifacts");
+  }, [evolve.runs.length, panelGroup]);
 
   // A search is created by the server while the agent's turn is running, and
   // the list is not polled until one is active. The created event is therefore
@@ -495,7 +552,18 @@ export function App({ initialToken }: Props) {
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
-  const sendMessage = (content: string) => {
+  const sendMessage = (content: string, command?: string) => {
+    // The token came from the design dialog, which collected the goal, the
+    // search and the no-sandbox consent before placing it. Sending it is a
+    // question about the sentence only, so the detour below — which is for
+    // commands typed by hand — does not apply.
+    if (command !== undefined) {
+      setSeededCommand(undefined);
+      awaitingSince.current = Date.now();
+      setAwaitingRun(true);
+      void actions.send(composeEvolveMessage(command, content));
+      return;
+    }
     const goal = evolveCommandGoal(content);
     if (goal !== undefined
         && (goal === "" || evolve.status.state !== "ready"
@@ -506,6 +574,10 @@ export function App({ initialToken }: Props) {
         goal: goal === "" ? undefined : goal,
       });
       return;
+    }
+    if (goal !== undefined) {
+      awaitingSince.current = Date.now();
+      setAwaitingRun(true);
     }
     void actions.send(content);
   };
@@ -644,15 +716,27 @@ export function App({ initialToken }: Props) {
     setSettingsOpen(true);
   };
 
-  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId);
-  const evolveLive = evolve.runs.some((run) => isEvolveRunActive(run.status));
+  /** The run the 任务 tab shows: the one the reader picked, else the one that
+   *  wants attention, else the newest. The tab appears for any run, so there is
+   *  always something behind it when the Session has one. */
+  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId)
+    ?? evolve.runs.find((run) => isEvolveRunActive(run.status))
+    ?? evolve.runs[0];
 
-  /** The header button goes to the search that wants attention — a running
-   *  one, else the newest — and starts one only when the session has none. */
+  /** Open a run in the panel: the card and 会话设置 both land here, and neither
+   *  should have to open the panel first. */
+  const showEvolveRun = (id: string) => {
+    setEvolveRunId(id);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  };
+
+  /** 会话设置's row goes to the search that wants attention — a running one,
+   *  else the newest — and starts one only when the session has none. */
   const openEvolve = () => {
     const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
     if (target === undefined) setEvolveCreate({});
-    else setEvolveRunId(target.id);
+    else showEvolveRun(target.id);
   };
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
@@ -671,9 +755,10 @@ export function App({ initialToken }: Props) {
     onApprovalMode: (mode) => void actions.setApprovalMode(mode),
     onClearAttachments: actions.clearAttachments,
     onCreateProject: (name) => void actions.createProject(name),
+    onEvolve: openEvolve,
     onOpenSettings: () => openSettings("models"),
     // A skill that has a setup surface opens it instead of dropping its
-    // command into the draft — the same dialog the header capsule opens.
+    // command into the draft — the same dialog 会话设置's evolve row opens.
     onPickSkill: (skill) => {
       if (!isEvolveSkill(skill)) return false;
       setEvolveCreate({});
@@ -695,6 +780,7 @@ export function App({ initialToken }: Props) {
     projects: state.projects,
     providers: state.providers,
     running: state.running,
+    seededCommand,
     selectedModelId: state.selectedModelId,
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
@@ -745,9 +831,6 @@ export function App({ initialToken }: Props) {
           <SessionBar
             actions={actions}
             detail={state.detail}
-            evolveLive={evolveLive}
-            evolveState={evolve.status.state}
-            onEvolve={openEvolve}
             onExpandSidebar={expandSidebar}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
             // A Session outside every Project is not "in 最近会话": that is
@@ -756,14 +839,6 @@ export function App({ initialToken }: Props) {
             projectName={state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName}
             sidebarCollapsed={showExpand}
             workspaceOpen={workspaceOpen}
-          />
-          {/* A search keeps running after the turn that started it, so its
-              handle belongs to the session rather than to the transcript. The
-              shelf draws nothing at all for a session that has none. */}
-          <EvolveShelf
-            onNew={() => setEvolveCreate({})}
-            onOpen={setEvolveRunId}
-            runs={evolve.runs}
           />
           {landing ? (
             /* The page's category and its open topic row belong to one
@@ -774,6 +849,10 @@ export function App({ initialToken }: Props) {
               <Conversation
                 client={client}
                 detail={state.detail}
+                // A search keeps running after the turn that started it, so its
+                // card is the last thing the conversation produced. It draws
+                // nothing at all for a session that has no searches.
+                evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
                 loading={state.loadingSession}
                 onDecidePermission={(request, decision) => actions.decidePermission(request.id, decision)}
                 onOpenSubagent={openSubagentDetails}
@@ -802,6 +881,13 @@ export function App({ initialToken }: Props) {
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
           subagentStale={subagentStale}
+          task={evolveRun === undefined ? undefined : <EvolveDetail
+            client={client}
+            key={evolveRun.id}
+            onError={(message) => actions.toast(message, "error")}
+            onRunChanged={() => void refreshEvolve()}
+            run={evolveRun}
+          />}
           tabs={state.tabs}
           tool={openTool}
         />
@@ -827,16 +913,6 @@ export function App({ initialToken }: Props) {
 
       {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
 
-      {evolveRun === undefined ? null : (
-        <EvolveOverlay
-          client={client}
-          onClose={() => setEvolveRunId(undefined)}
-          onError={(message) => actions.toast(message, "error")}
-          onRunChanged={() => void refreshEvolve()}
-          run={evolveRun}
-        />
-      )}
-
       {evolveCreate === undefined ? null : (
         <EvolveCreateDialog
           archived={state.detail?.archivedAt !== undefined}
@@ -849,7 +925,12 @@ export function App({ initialToken }: Props) {
           onInitialize={() => void evolve.initialize()}
           onSend={(command) => {
             closeEvolveCreate();
-            void actions.send(command);
+            // The flags become a token in the composer and the goal becomes
+            // the sentence after it. The message leaves when the user says so,
+            // not when the dialog closes: the design usually needs a sentence
+            // of its own added after the goal.
+            const draft = splitEvolveCommand(command);
+            setSeededCommand({ command: draft.command, nonce: Date.now(), text: draft.goal });
           }}
           running={state.running}
           status={evolve.status}

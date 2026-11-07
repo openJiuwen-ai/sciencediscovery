@@ -15,15 +15,15 @@
 /**
  * The climb, drawn as one line.
  *
- * The accent line is **best so far**, not the score of each expansion. Joining
- * every candidate in expansion order draws a sawtooth: parallel expansions are
- * independent draws, so consecutive indices are not a trajectory, and the
- * zig-zag reads as instability while the run is actually climbing. Individual
- * gate scores stay as dots, and the test split — the one number measured on
- * data the search never saw — is a single diamond at the end.
+ * The handoff draws three layers: a blue staircase of the best score so far,
+ * the gate-measured evaluations behind it as dots, and the points that never
+ * ran as hollow red circles on the floor. Below the baseline the band is
+ * hatched, because "worse than where we started" is a place worth seeing
+ * rather than a place to clip away.
  *
- * A failed candidate is a hollow point on the floor, not a gap. A gap reads as
- * "nothing happened here"; what happened is that an expansion was spent.
+ * The x axis is the expansion index, not wall-clock time: a search fans out,
+ * so two points at neighbouring minutes are not a sequence, while the index
+ * says exactly how many ideas the run had spent.
  *
  * Hand-drawn SVG rather than a chart library: this is one step line, a few
  * hundred circles and two rules, and the app has no charting dependency it
@@ -31,6 +31,7 @@
  */
 
 import { TEXT } from "../../text.js";
+import { CrownGlyph } from "./glyphs.js";
 import {
   bestCandidate,
   formatScore,
@@ -45,81 +46,53 @@ interface Point {
 
 export interface ChartSeries {
   failed: number[];
-  gate: Point[];
-  rollout: Point[];
+  /** Measured by the acceptance gate — the filled blue points. */
+  significant: Point[];
 }
 
 const WIDTH = 820;
-const HEIGHT = 250;
-const PAD = { bottom: 34, left: 52, right: 26, top: 18 };
+const HEIGHT = 280;
+const PAD = { bottom: 46, left: 56, right: 20, top: 22 };
 
 export function ScoreChart({ view }: { view: EvolveRunView }) {
   const series = collectSeries(view);
-  const bounds = boundsOf(series, view);
-
-  if (!series.rollout.length && !series.gate.length && view.baselineScore === null) {
+  if (!series.significant.length && view.baselineScore === null) {
     return <p className="evolve-chart-empty">{TEXT.evolve.chart.empty}</p>;
   }
 
   const plotWidth = WIDTH - PAD.left - PAD.right;
   const plotHeight = HEIGHT - PAD.top - PAD.bottom;
   const floor = PAD.top + plotHeight;
+  const bounds = boundsOf(series, view);
   const x = (index: number) => PAD.left + plotWidth * (index / bounds.maxIndex);
   const y = (value: number) => {
-    // The window starts below the baseline, so anything worse than the
-    // baseline clamps to the floor — still visible as "tried, below the
-    // window" rather than dragging the axis down to zero for one dead node.
     const clamped = Math.min(bounds.max, Math.max(bounds.min, value));
     return PAD.top + plotHeight * (1 - (clamped - bounds.min) / (bounds.max - bounds.min || 1));
   };
 
-  const gate = [...series.gate].sort((left, right) => left.index - right.index);
+  const points = [...series.significant].sort((left, right) => left.index - right.index);
   // The best-so-far staircase: starts at the baseline and steps up where a
   // candidate first beats everything before it.
   let best = view.baselineScore ?? -Infinity;
   let line = "";
-  let areaStart = 0;
-  if (view.baselineScore !== null) {
-    line = `M${x(0).toFixed(1)},${y(view.baselineScore).toFixed(1)}`;
-    areaStart = x(0);
-  }
-  for (const point of gate) {
+  if (view.baselineScore !== null) line = `M${x(0).toFixed(1)},${y(view.baselineScore).toFixed(1)}`;
+  for (const point of points) {
     if (point.value <= best) continue;
-    if (!line) {
-      line = `M${x(point.index).toFixed(1)},${y(point.value).toFixed(1)}`;
-      areaStart = x(point.index);
-    } else {
-      line += ` H${x(point.index).toFixed(1)} V${y(point.value).toFixed(1)}`;
-    }
+    line = line
+      ? `${line} H${x(point.index).toFixed(1)} V${y(point.value).toFixed(1)}`
+      : `M${x(point.index).toFixed(1)},${y(point.value).toFixed(1)}`;
     best = point.value;
   }
   if (line) line += ` H${x(bounds.maxIndex).toFixed(1)}`;
-  const area = line
-    ? `${line} L${x(bounds.maxIndex).toFixed(1)},${floor.toFixed(1)} L${areaStart.toFixed(1)},${floor.toFixed(1)} Z`
-    : "";
 
-  const gateByIndex = new Map(series.gate.map((point) => [point.index, point.value]));
-  const rolloutOnly = series.rollout.filter((point) => gateByIndex.get(point.index) !== point.value);
   const bestScore = headlineScore(view);
   const bestNode = bestCandidate(view);
-
+  // Five vertical rules, as the handoff draws them, labelled by the expansion
+  // index that sits at each fraction of the run.
   const ticks = Array.from({ length: 5 }, (_unused, at) =>
-    bounds.min + ((bounds.max - bounds.min) * at) / 4);
+    Math.round((bounds.maxIndex * at) / 4));
 
   return <figure className="evolve-chart">
-    <figcaption className="evolve-chart-head">
-      <span className="evolve-chart-caption">{TEXT.evolve.chart.title}</span>
-      <span className="evolve-chart-legend">
-        <span className="evolve-key is-best">{TEXT.evolve.chart.best}</span>
-        <span className="evolve-key is-gate">{TEXT.evolve.chart.gate}</span>
-        <span className="evolve-key is-rollout">{TEXT.evolve.chart.rollout}</span>
-        {view.bestTestScore === undefined ? null : <span className="evolve-key is-test">
-          {TEXT.evolve.chart.test} {formatScore(view.bestTestScore)}
-        </span>}
-        <span className="evolve-key is-failed">{TEXT.evolve.chart.failed}</span>
-      </span>
-    </figcaption>
-
     <svg
       aria-label={TEXT.evolve.chart.aria(
         formatScore(view.baselineScore),
@@ -131,20 +104,46 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
       role="img"
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
     >
-      {ticks.map((tick, at) => <g key={at}>
+      <defs>
+        <pattern
+          height="10"
+          id="evolve-hatch"
+          patternTransform="rotate(45 0 0)"
+          patternUnits="userSpaceOnUse"
+          width="8"
+        >
+          <line className="evolve-chart-hatch-line" x1="0" x2="0" y1="0" y2="10" />
+        </pattern>
+      </defs>
+
+      {ticks.map((index, at) => <g key={at}>
         <line
           className="evolve-chart-grid"
-          x1={PAD.left}
-          x2={WIDTH - PAD.right}
-          y1={y(tick)}
-          y2={y(tick)}
+          x1={x(index)}
+          x2={x(index)}
+          y1={PAD.top}
+          y2={floor}
         />
-        <text className="evolve-chart-tick" textAnchor="end" x={PAD.left - 8} y={y(tick) + 3.5}>
-          {axisLabel(tick, bounds.max - bounds.min)}
+        <text
+          className="evolve-chart-x"
+          textAnchor={at === 0 ? "start" : at === ticks.length - 1 ? "end" : "middle"}
+          x={x(index)}
+          y={HEIGHT - 24}
+        >
+          {index}
         </text>
       </g>)}
 
-      {view.baselineScore === null ? null : <>
+      {view.baselineScore === null ? null : <rect
+        className="evolve-chart-below"
+        fill="url(#evolve-hatch)"
+        height={Math.max(0, floor - y(view.baselineScore))}
+        width={plotWidth}
+        x={PAD.left}
+        y={y(view.baselineScore)}
+      />}
+
+      {view.baselineScore === null ? null : <g>
         <line
           className="evolve-chart-baseline"
           x1={PAD.left}
@@ -153,16 +152,41 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
           y2={y(view.baselineScore)}
         />
         <text
-          className="evolve-chart-baseline-label"
+          className="evolve-chart-tick"
           textAnchor="end"
-          x={WIDTH - PAD.right}
-          y={y(view.baselineScore) - 6}
+          x={PAD.left - 8}
+          y={y(view.baselineScore) + 3.5}
         >
-          {TEXT.evolve.chart.baseline} {formatScore(view.baselineScore)}
+          {ruleLabel(view.baselineScore)}
         </text>
-      </>}
+        <text
+          className="evolve-chart-baseline-label"
+          textAnchor="start"
+          x={PAD.left}
+          y={y(view.baselineScore) + 16}
+        >
+          {TEXT.evolve.chart.baseline}
+        </text>
+      </g>}
 
-      {area ? <path className="evolve-chart-area" d={area} /> : null}
+      {bestScore === null ? null : <g>
+        <line
+          className="evolve-chart-best-line"
+          x1={PAD.left}
+          x2={WIDTH - PAD.right}
+          y1={y(bestScore)}
+          y2={y(bestScore)}
+        />
+        <text
+          className="evolve-chart-tick is-best"
+          textAnchor="end"
+          x={PAD.left - 8}
+          y={y(bestScore) + 3.5}
+        >
+          {ruleLabel(bestScore)}
+        </text>
+      </g>}
+
       {line ? <path className="evolve-chart-line" d={line} /> : null}
 
       {series.failed.map((index) => <circle
@@ -170,46 +194,32 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
         cx={x(index)}
         cy={floor}
         key={`failed-${index}`}
-        r={3.2}
+        r={3.4}
       >
         <title>{`#${index} · ${TEXT.evolve.chart.failed}`}</title>
       </circle>)}
 
-      {rolloutOnly.map((point) => <circle
-        className="evolve-chart-rollout"
+      {series.significant.map((point) => <circle
+        className={`evolve-chart-dot is-significant${bestNode?.nodeIndex === point.index ? " is-best" : ""}`}
         cx={x(point.index)}
         cy={y(point.value)}
-        key={`rollout-${point.index}`}
-        r={2.6}
+        key={`significant-${point.index}`}
+        r={3.8}
       >
-        <title>{`#${point.index} · ${TEXT.evolve.chart.rollout} ${formatScore(point.value)}`}</title>
-      </circle>)}
-
-      {series.gate.map((point) => <circle
-        className={`evolve-chart-dot${bestNode?.nodeIndex === point.index ? " is-best" : ""}`}
-        cx={x(point.index)}
-        cy={y(point.value)}
-        key={`gate-${point.index}`}
-        r={bestNode?.nodeIndex === point.index ? 4.4 : 3.2}
-      >
-        <title>{`#${point.index} · ${TEXT.evolve.chart.gate} ${formatScore(point.value)}`}</title>
+        <title>{`#${point.index} · ${TEXT.evolve.chart.significant} ${formatScore(point.value)}`}</title>
       </circle>)}
 
       {view.bestTestScore === undefined ? null : <g className="evolve-chart-test">
-        <rect
-          height={7.6}
-          transform={`rotate(45 ${x(bounds.maxIndex)} ${y(view.bestTestScore)})`}
-          width={7.6}
-          x={x(bounds.maxIndex) - 3.8}
-          y={y(view.bestTestScore) - 3.8}
-        />
-        <text
-          textAnchor="end"
-          x={x(bounds.maxIndex) - 10}
-          y={y(view.bestTestScore) - 10}
-        >
-          {TEXT.evolve.chart.test} {formatScore(view.bestTestScore)}
-        </text>
+        <circle cx={x(bounds.maxIndex)} cy={y(view.bestTestScore)} r={4.6} />
+        <title>{`${TEXT.evolve.chart.test} ${formatScore(view.bestTestScore)}`}</title>
+      </g>}
+
+      {bestNode === undefined || bestScore === null ? null : <g className="evolve-chart-best">
+        <circle cx={x(bestNode.nodeIndex)} cy={y(bestScore)} r={7.2} />
+        <g transform={`translate(${x(bestNode.nodeIndex) - 5} ${y(bestScore) - 5})`}>
+          <CrownGlyph size={10} />
+        </g>
+        <title>{`#${bestNode.nodeIndex} · ${TEXT.evolve.chart.best}`}</title>
       </g>}
 
       <line
@@ -219,64 +229,86 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
         y1={floor}
         y2={floor}
       />
-      <text className="evolve-chart-x" textAnchor="start" x={PAD.left} y={HEIGHT - 10}>0</text>
-      <text className="evolve-chart-x" textAnchor="end" x={WIDTH - PAD.right} y={HEIGHT - 10}>
-        {bounds.maxIndex}
+      <text className="evolve-chart-tick" textAnchor="end" x={PAD.left - 8} y={floor + 3.5}>0</text>
+      <text className="evolve-chart-tick is-top" textAnchor="end" x={PAD.left - 8} y={PAD.top + 3.5}>
+        {axisLabel(bounds.max, bounds.max - bounds.min)}
       </text>
-      <text className="evolve-chart-x-label" textAnchor="middle" x={PAD.left + plotWidth / 2} y={HEIGHT - 10}>
+      <text
+        className="evolve-chart-x-label"
+        textAnchor="middle"
+        x={PAD.left + plotWidth / 2}
+        y={HEIGHT - 4}
+      >
         {TEXT.evolve.chart.xAxis}
       </text>
     </svg>
+
+    <figcaption className="evolve-chart-legend">
+      <span className="evolve-key is-best">
+        <CrownGlyph size={13} />
+        {TEXT.evolve.chart.best}
+      </span>
+      <span className="evolve-key is-significant">{TEXT.evolve.chart.significant}</span>
+      <span className="evolve-key is-test">{TEXT.evolve.chart.test}</span>
+      <span className="evolve-key is-failed">{TEXT.evolve.chart.failed}</span>
+      <span className="evolve-key is-below">{TEXT.evolve.chart.belowBaseline}</span>
+    </figcaption>
   </figure>;
 }
 
 /** Pure, and exported so the reading of the events is testable without a DOM. */
 export function collectSeries(view: EvolveRunView): ChartSeries {
-  const gate: Point[] = [];
-  const rollout: Point[] = [];
+  const significant: Point[] = [];
   const failed: number[] = [];
   for (const candidate of view.candidates) {
     if (!candidate.valid) {
       failed.push(candidate.nodeIndex);
       continue;
     }
-    // An engine that measures once and ranks on the same number has no
-    // `gateScore`; falling back to `score` keeps one line rather than none.
-    const gateValue = candidate.gateScore ?? candidate.score;
-    if (gateValue !== null && gateValue !== undefined) {
-      gate.push({ index: candidate.nodeIndex, value: gateValue });
-    }
-    const rolloutValue = candidate.rolloutScore ?? candidate.score;
-    if (rolloutValue !== null && rolloutValue !== undefined) {
-      rollout.push({ index: candidate.nodeIndex, value: rolloutValue });
-    }
+    // A gate score is the one the acceptance decision read. A candidate the
+    // gate never measured has no comparable reading, so it is left out of the
+    // plot entirely rather than drawn with a different-looking score.
+    const value = candidate.gateScore;
+    if (value === null || value === undefined || !Number.isFinite(value)) continue;
+    significant.push({ index: candidate.nodeIndex, value });
   }
-  return { failed, gate, rollout };
+  return { failed, significant };
 }
 
 function boundsOf(
   series: ChartSeries,
   view: EvolveRunView,
 ): { max: number; maxIndex: number; min: number } {
-  const values = [...series.gate, ...series.rollout].map((point) => point.value);
+  const values = series.significant.map((point) => point.value);
   if (view.baselineScore !== null) values.push(view.baselineScore);
   if (view.bestTestScore !== undefined) values.push(view.bestTestScore);
 
-  const low = view.baselineScore ?? (values.length ? Math.min(...values) : 0);
+  const low = Math.min(0, view.baselineScore ?? (values.length ? Math.min(...values) : 0));
   const high = values.length ? Math.max(...values) : 1;
-  // A flat run would otherwise divide by zero and draw every point on the axis.
+  // A normalized score gets the handoff's 0–1 frame; anything else keeps a
+  // margin so the best point is not glued to the top edge.
+  const frame = high <= 1 && low >= 0;
   const span = high - low || Math.abs(high) * 0.2 || 0.1;
   return {
-    max: high + span * 0.16,
+    max: frame ? 1 : high + span * 0.16,
     maxIndex: Math.max(1, ...view.candidates.map((candidate) => candidate.nodeIndex)),
-    min: Math.max(0, low - span * 0.16),
+    min: frame ? 0 : low - span * 0.16,
   };
 }
 
 /** Axis labels gain a decimal only when the data needs it: `0.44` reads
  *  better than `0.440`, and a run whose scores differ in the third place still
  *  gets a usable axis. */
+/** The label beside the baseline and best rules: the handoff prints three
+ *  decimals there, because these two are readings rather than axis bounds. */
+function ruleLabel(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3);
+}
+
 function axisLabel(value: number, range: number): string {
+  // A whole-number bound is the frame the chart was drawn in, and the handoff
+  // writes it as `1`, not `1.00`.
+  if (Number.isInteger(value)) return String(value);
   if (range >= 2) return value.toFixed(1);
   if (range >= 0.2) return value.toFixed(2);
   return value.toFixed(3);
