@@ -273,18 +273,12 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
             value={elapsed ?? 0}
             limit={budget.maxSeconds}
           />
-          {budget.maxCostCents > 0 ? <BudgetRow
-            label={TEXT.evolve.budget.cost}
-            text={`${(view.costCents / 100).toFixed(2)} / ${(budget.maxCostCents / 100).toFixed(2)}`}
-            value={view.costCents}
-            limit={budget.maxCostCents}
-          /> : <BudgetRow
-            label={TEXT.evolve.budget.cost}
-            muted
-            text={TEXT.evolve.detail.noPriceTable}
-            value={0}
-            limit={1}
-          />}
+          <BudgetRow
+            label={TEXT.evolve.budget.nodes}
+            text={`${view.expansions} / ${budget.expansions}`}
+            value={view.expansions}
+            limit={budget.expansions}
+          />
         </div>
       </section>
     </div>
@@ -305,10 +299,9 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   </div>;
 }
 
-function BudgetRow({ label, limit, muted = false, text, value }: {
+function BudgetRow({ label, limit, text, value }: {
   label: string;
   limit: number;
-  muted?: boolean;
   text: string;
   value: number;
 }) {
@@ -325,7 +318,7 @@ function BudgetRow({ label, limit, muted = false, text, value }: {
       aria-valuemin={0}
       aria-valuenow={Math.round(ratio * 100)}
       aria-valuetext={text}
-      className={`evolve-budget-track${muted ? " is-muted" : ""}${over ? " is-over" : ""}`}
+      className={`evolve-budget-track${over ? " is-over" : ""}`}
       role="progressbar"
     >
       <div className="evolve-budget-fill" style={{ width: `${Math.round(ratio * 100)}%` }} />

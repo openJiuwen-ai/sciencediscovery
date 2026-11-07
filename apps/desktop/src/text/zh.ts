@@ -1296,16 +1296,15 @@ export const ZH = {
     detail: {
       best: "最优解",
       valid: "有效节点数/总数",
-      generations: "代际数",
+      generations: "层数",
       algorithm: "算法",
       tokens: "Token",
       chartTitle: "实时算法优化结果",
       treeTitle: "优化树",
       nodeList: "节点列表",
-      generation: (depth: number) => `代际 ${String(depth).padStart(2, "0")}`,
+      generation: (depth: number) => `层数 ${String(depth).padStart(2, "0")}`,
       bestTag: "最佳",
       budgetTitle: "预算",
-      noPriceTable: "未配置价格表",
       score: "优化分数",
       children: "子节点数",
       source: "代码变更",
@@ -1345,8 +1344,8 @@ export const ZH = {
 
     budget: {
       tokens: "Token",
-      elapsed: "延时",
-      cost: "费用",
+      elapsed: "耗时",
+      nodes: "节点",
     },
 
     notice: {

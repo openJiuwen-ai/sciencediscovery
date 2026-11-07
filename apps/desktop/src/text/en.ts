@@ -1261,7 +1261,6 @@ export const EN: Text = {
       generation: (depth: number) => `Gen ${String(depth).padStart(2, "0")}`,
       bestTag: "Best",
       budgetTitle: "Budget",
-      noPriceTable: "No price table",
       score: "Score",
       children: "Children",
       source: "Code changes",
@@ -1302,7 +1301,7 @@ export const EN: Text = {
     budget: {
       tokens: "Tokens",
       elapsed: "Elapsed",
-      cost: "Cost",
+      nodes: "Nodes",
     },
 
     notice: {
