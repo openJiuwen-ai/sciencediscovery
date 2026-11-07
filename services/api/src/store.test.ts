@@ -1340,6 +1340,20 @@ test("proxy settings project supported authenticated URLs while catalog and SQLi
       && !error.message.includes("leak-user")
       && !error.message.includes("leak-password"),
   );
+  // A path or query is never sent by any consumer, so saving one would store a
+  // setting the proxy never sees.
+  for (const [url, message] of [
+    ["http://leak-user:leak-password@proxy.example.test:8080/path", "The proxy URL cannot contain a path"],
+    ["http://leak-user:leak-password@proxy.example.test:8080/?token=private", "The proxy URL cannot contain a query"],
+  ] as const) {
+    await assert.rejects(
+      store.createProxyServer({ kind: "custom_url", name: "Invalid", url }),
+      (error: Error) => error.message === message
+        && !error.message.includes("leak-user")
+        && !error.message.includes("leak-password")
+        && !error.message.includes("private"),
+    );
+  }
 });
 
 test("recovering a large run stream does not load the whole file into the heap", { timeout: 120_000 }, async (context) => {

@@ -28,15 +28,22 @@ function value(env, key) { return (env[key] ?? env[key.toUpperCase()])?.trim(); 
 export function validateProxyUrl(url) {
   let parsed;
   try { parsed = new URL(url); } catch { throw new Error('Invalid proxy URL (value omitted)'); }
-  if (!['http:', 'https:', 'socks5:'].includes(parsed.protocol) || !parsed.hostname || parsed.hash || parsed.search) {
-    throw new Error('Proxy URL must use HTTP, HTTPS or SOCKS5 without query or fragment (value omitted)');
+  // A proxy URL names where to connect, nothing else: a path or query would be
+  // silently dropped by every consumer, so refusing it is the honest answer.
+  if (!['http:', 'https:', 'socks5:'].includes(parsed.protocol) || !parsed.hostname
+    || parsed.hash || parsed.search || (parsed.pathname !== '' && parsed.pathname !== '/')) {
+    throw new Error('Proxy URL must use HTTP, HTTPS or SOCKS5 and name only host and port (value omitted)');
   }
   return url;
 }
 
 export function resolveRoute(target, policy = { mode: 'environment' }, env = process.env) {
+  if (!policy || !['direct', 'environment', 'url'].includes(policy.mode)) throw new Error('Invalid proxy mode (value omitted)');
   const url = new URL(target);
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP(S) targets are supported');
+  // An explicit proxy that cannot name an address is a configuration error, not
+  // permission to go direct: silently unwrapping would leak the request.
+  if (policy.mode === 'url' && !policy.url) throw new Error('Proxy policy selects a url without one (value omitted)');
   if (isLoopback(url) || policy.mode === 'direct') return { mode: 'direct' };
   if (bypassesProxy(url, policy.noProxy ?? value(env, 'no_proxy'))) return { mode: 'direct' };
   const candidate = policy.mode === 'url' ? policy.url
@@ -54,7 +61,9 @@ export function proxyProcessEnvironment(policy = { mode: 'environment' }, base =
     const candidate = policy.mode === 'url' ? validateProxyUrl(policy.url) : value(base, name);
     if (candidate) env[name] = env[name.toUpperCase()] = validateProxyUrl(candidate);
   }
-  const bypass = [policy.noProxy ?? value(base, 'no_proxy'), 'localhost', '127.0.0.1', '[::1]'].filter(Boolean).join(',');
+  // Consumers match NO_PROXY entries against a bare hostname, so the bracketed
+  // IPv6 form would never match `::1`.
+  const bypass = [policy.noProxy ?? value(base, 'no_proxy'), 'localhost', '127.0.0.1', '::1'].filter(Boolean).join(',');
   env.no_proxy = env.NO_PROXY = bypass;
   return env;
 }

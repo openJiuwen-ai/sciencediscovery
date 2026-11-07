@@ -16,7 +16,16 @@ test("routes preserve explicit policy, bypass loopback and never expose error cr
   }
   assert.deepEqual(resolveRoute("https://example.test", { mode: "direct" }, env), { mode: "direct" });
   assert.throws(() => resolveRoute("https://external.test", { mode: "url", url: "invalid://secret" }), /Proxy URL/);
+  // A policy that names a proxy but no address is a fault, not permission to go direct.
+  assert.throws(() => resolveRoute("https://external.test", { mode: "url", url: "" }, env), /without one/);
+  // Only scheme, host and port reach the proxy: anything else would be dropped silently.
+  assert.throws(() => resolveRoute("https://external.test", { mode: "url", url: "http://proxy:8080/path" }, env), /host and port/);
+  assert.throws(() => resolveRoute("https://external.test", { mode: "url", url: "http://proxy:8080/?q=1" }, env), /host and port/);
   assert.equal(proxyProcessEnvironment({ mode: "direct" }, env).HTTPS_PROXY, undefined);
+  // NO_PROXY entries are matched against bare hostnames, so `[::1]` never matches.
+  const generated = proxyProcessEnvironment({ mode: "url", url: "http://proxy:8080" }, { no_proxy: "internal.test" });
+  assert.equal(generated.NO_PROXY, "internal.test,localhost,127.0.0.1,::1");
+  assert.equal(generated.no_proxy, generated.NO_PROXY);
   assert.doesNotMatch(redactNetworkError(new Error("request failed https://user:password@host/path?token=private", { cause: Object.assign(new Error("no route"), { code: "ECONNREFUSED" }) })), /password|private/);
   assert.match(redactNetworkError(Object.assign(new Error("failed"), { code: "ECONNREFUSED" })), /ECONNREFUSED/);
 });
