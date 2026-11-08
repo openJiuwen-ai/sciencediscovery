@@ -7,6 +7,7 @@
 // confirmation drain is out of scope for this feature).
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, session, shell as electronShell, Tray } from "electron";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -22,6 +23,8 @@ import { parseRegDword, parseRegQueryValue, proxyEnvFromSystem } from "./proxy.t
 import { COLD_BACKEND_TIMEOUT_MS, killStackTree, spawnStack, startupBudgetMs, summarizeStackFailure, waitHealthy, waitHealthyOrExited, type StackHandle } from "./stack.ts";
 import { shouldRetryUiLoad, UI_LOAD_RETRY_LIMIT, uiLoadRetryDelayMs, waitForUiOrigin } from "./ui-retry.ts";
 import { loadWindowState, saveWindowState } from "./window-state.ts";
+import { loadExportState, saveExportState } from "./export-state.ts";
+import { ExportDestinations } from "./export-tokens.ts";
 import {
   effectiveDataDir, loadWizardState, needsWizard, pidAlive, saveWizardState, type WizardState,
 } from "./wizard-state.ts";
@@ -1357,6 +1360,71 @@ ipcMain.handle("sd-shell:save-token", async (_event, token: string) => {
     watchAgentReady(currentEndpoints, dataDir);
   }
   return true;
+});
+
+// --- study-package export: native save dialog + destination-bound save --------
+// The renderer never learns a filesystem path: the dialog issues an opaque
+// token, the main process keeps the path, and every write/reveal resolves that
+// token. A renderer that sends a path of its own choosing is rejected, so the
+// sandbox/contextIsolation of the window is not bypassed. The dialog remembers
+// the last chosen directory across restarts via export-state.json.
+let lastExportDir: string | null = null;
+let lastExportDirLoaded = false;
+const exportDestinations = new ExportDestinations();
+
+function defaultExportDir(): string {
+  if (!lastExportDirLoaded) {
+    lastExportDirLoaded = true;
+    lastExportDir = loadExportState(app.getPath("userData"))?.lastExportDir ?? null;
+  }
+  if (lastExportDir) return lastExportDir;
+  try { return app.getPath("downloads"); } catch { return app.getPath("home"); }
+}
+
+ipcMain.handle("sd-shell:export-save-dialog", async (_event, args: unknown) => {
+  const { suggestedName } = (args ?? {}) as { suggestedName?: unknown };
+  const name = typeof suggestedName === "string" && suggestedName.trim()
+    ? suggestedName.trim()
+    : "research.sdresearch";
+  if (!mainWindow) return { canceled: true, token: null };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "导出研究包",
+    defaultPath: join(defaultExportDir(), name),
+    buttonLabel: "保存",
+    filters: [{ name: "ScienceDiscovery 研究包", extensions: ["sdresearch"] }],
+    properties: ["showOverwriteConfirmation", "createDirectory"],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true, token: null };
+  lastExportDir = dirname(result.filePath);
+  saveExportState(app.getPath("userData"), { lastExportDir });
+  const token = exportDestinations.issue(randomUUID(), result.filePath);
+  return { canceled: false, token };
+});
+
+ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
+  const { token, data } = (args ?? {}) as { token?: unknown; data?: unknown };
+  const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
+  // No token, or one this process never issued → refuse. There is no code path
+  // where the renderer supplies a path.
+  if (!destination) throw new Error("保存位置无效，请重新选择。");
+  let bytes: Uint8Array | null = null;
+  if (data instanceof Uint8Array) bytes = data;
+  else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+  if (!bytes) throw new Error("导出数据无效。");
+  writeFileSync(destination.path, bytes);
+  exportDestinations.markWritten(token as string);
+  return { ok: true };
+});
+
+ipcMain.handle("sd-shell:export-show-in-folder", async (_event, token: unknown) => {
+  const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
+  if (!destination) return { ok: false };
+  electronShell.showItemInFolder(destination.path);
+  return { ok: true };
+});
+
+ipcMain.handle("sd-shell:export-downloads-dir", () => {
+  try { return app.getPath("downloads"); } catch { return app.getPath("home"); }
 });
 
 const appStartAt = Date.now();

@@ -15,7 +15,7 @@ export type ResearchPackageExportOptions = {
 };
 export type ResearchPackageExportStatus = {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "canceled";
   filename: string;
   createdAt: string;
   updatedAt: string;
@@ -87,7 +87,10 @@ export class ResearchPackageExports {
   }
 
   private async persist(task: StoredTask): Promise<void> {
-    const temporary = resolve(this.root, `${task.id}.json.tmp`);
+    // A unique temp name: `cancel` and the in-flight `run` may both persist the
+    // same task concurrently, and a shared `.tmp` name would let one writer's
+    // rename consume the other's temp file (ENOENT).
+    const temporary = resolve(this.root, `${task.id}.${randomUUID()}.json.tmp`);
     await writeFile(temporary, JSON.stringify({ ...task, outputPath: undefined }), "utf8");
     await rename(temporary, resolve(this.root, `${task.id}.json`));
   }
@@ -107,20 +110,54 @@ export class ResearchPackageExports {
   }
 
   private async run(task: StoredTask, options: ResearchPackageExportOptions): Promise<void> {
+    // Read through a helper: assigning `status` narrows the property's type
+    // inside this method, which would make later "canceled" checks a
+    // no-overlap comparison (TS2367). Cancellation is written by `cancel()`
+    // from another tick, so the narrowed type is simply wrong here.
+    const canceled = (): boolean => task.status === "canceled";
+    const stopCanceled = (): void => { task.updatedAt = this.timestamp(); };
     try {
+      // A queued task cancelled before it reached the head of the queue must
+      // not spend work on packaging: it was already answered "canceled".
+      if (canceled()) return;
       task.status = "running"; task.updatedAt = this.timestamp(); await this.persist(task);
       const before = await this.currentRevision(options.projectId, options.sessionId);
+      if (canceled()) { stopCanceled(); return; }
       if (before !== options.revision) throw new Error("会话内容已更新，请使用最新大小预览重新导出。");
       const bytes = await this.createPackage(options);
+      // Cancellation requested while createPackage was running: drop the
+      // produced archive instead of persisting it.
+      if (canceled()) { stopCanceled(); return; }
       const after = await this.currentRevision(options.projectId, options.sessionId);
+      if (canceled()) { stopCanceled(); return; }
       if (after !== options.revision) throw new Error("导出期间会话内容发生变化，请基于最新内容重新导出。");
       const outputPath = resolve(this.root, `${task.id}.sdresearch`);
       await writeFile(outputPath, bytes, { flag: "wx" });
+      // A cancel can land while the final write is in flight; committing
+      // "completed" unconditionally would keep and advertise an archive the
+      // user cancelled, so drop it and stay cancelled.
+      if (canceled()) { await rm(outputPath, { force: true }); stopCanceled(); return; }
       task.status = "completed"; task.outputPath = outputPath; task.updatedAt = this.timestamp();
     } catch (reason) {
-      task.status = "failed"; task.error = reason instanceof Error ? reason.message : "证据包导出失败，请重试。"; task.updatedAt = this.timestamp();
+      // A user cancellation wins over a packaging failure (the failure may be
+      // the direct result of tearing the work down).
+      if (canceled()) { stopCanceled(); }
+      else { task.status = "failed"; task.error = reason instanceof Error ? reason.message : "证据包导出失败，请重试。"; task.updatedAt = this.timestamp(); }
     }
     try { await this.persist(task); } catch { /* Task result remains available for this process. */ }
+  }
+
+  /** Cancel a queued/running export; a terminal task is returned unchanged. */
+  async cancel(id: string, projectId: string): Promise<ResearchPackageExportStatus | undefined> {
+    await this.initialize();
+    await this.pruneExpiredTasks();
+    const task = this.tasks.get(id);
+    if (!task || task.projectId !== projectId) return undefined;
+    if (task.status === "queued" || task.status === "running") {
+      task.status = "canceled"; task.updatedAt = this.timestamp();
+      await this.persist(task);
+    }
+    return this.publicTask(task);
   }
 
   async get(id: string, projectId: string): Promise<ResearchPackageExportStatus | undefined> {
