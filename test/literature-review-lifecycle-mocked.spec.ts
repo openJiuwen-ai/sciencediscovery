@@ -72,7 +72,12 @@ test("LR-16 upstream 503 cancellation leaves the same session and shared MCP usa
 });
 
 async function api<T>(page: Page, path: string, method = "GET", data?: unknown): Promise<T> {
-  const response = await page.request.fetch(`${apiBaseUrl()}${path}`, { method, headers: authorizationHeader(), ...(data === undefined ? {} : { data }) });
+  // Only idempotent reads may retry connection resets. Keep HTTP errors and
+  // lifecycle assertions visible, and never replay cancellation/configuration writes.
+  const response = await page.request.fetch(`${apiBaseUrl()}${path}`, {
+    method, headers: authorizationHeader(), ...(data === undefined ? {} : { data }),
+    ...(method === "GET" ? { maxRetries: 2, timeout: 10_000 } : {}),
+  });
   expect(response.ok(), `${method} ${path}: ${response.status()}`).toBe(true);
   return response.json();
 }
