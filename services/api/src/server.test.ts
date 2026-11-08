@@ -4252,8 +4252,42 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   const stream = await run.text();
   const streamEvents = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
-    return data ? [JSON.parse(data) as { type: string }] : [];
+    return data ? [JSON.parse(data) as TestSseEvent] : [];
   });
+  // Keep the failing bridge evidence before teardown removes its workspace/CAS.
+  // A completed run and a tool.completed event do not imply a successful tool.
+  const checkWithToolEvidence = async (check: () => void): Promise<void> => {
+    try { check(); }
+    catch (error) {
+      try {
+        const executions = await jsonRequest<ExecutionRun[]>(
+          `${origin}/api/sessions/${sessionResult.body.id}/execution-runs`,
+          { headers: authorization, signal: AbortSignal.timeout(5_000) },
+        ).catch(() => ({ body: [], response: { status: null } }));
+        const output = await Promise.all(executions.body.map(async (execution) => {
+          const readOutput = async (hash: string) => {
+            try {
+              const response = await fetch(`${origin}/api/cas/${hash}`, { headers: authorization, signal: AbortSignal.timeout(5_000) });
+              return { status: response.status, text: (await response.text()).slice(0, 16_384) };
+            } catch { return { unavailable: true }; }
+          };
+          const [stdout, stderr] = await Promise.all([readOutput(execution.stdout.hash), readOutput(execution.stderr.hash)]);
+          return { id: execution.id, status: execution.status, exitCode: execution.exitCode, createdFiles: execution.createdFiles, modifiedFiles: execution.modifiedFiles, stdout, stderr };
+        }));
+        const toolEvents = streamEvents.filter(event => ["tool.started", "tool.output", "tool.completed", "run.failed", "run.completed"].includes(event.type));
+        const destination = resolve(process.env.CI_RESULTS_DIR || resolve(process.cwd(), ".tmp"), "gateway-python-tool-failure.json");
+        await mkdir(resolve(destination, ".."), { recursive: true });
+        const evidence = JSON.stringify({ backend: onJiuwenSwarm ? "jiuwenswarm" : "native", toolEvents, executionResponseStatus: executions.response.status, executions: output }, null, 2)
+          .replaceAll("ephemeral-test-token", "[redacted]")
+          .replaceAll("runner-test-token", "[redacted]")
+          .replaceAll("test-token", "[redacted]");
+        await writeFile(destination, evidence);
+        context.diagnostic(`Gateway/Python failure evidence: ${destination}`);
+      } catch { context.diagnostic("Could not collect Gateway/Python failure evidence"); }
+      throw error;
+    }
+  };
+
   const eventTypes = streamEvents.map((event) => event.type);
   assert.match(stream, /"type":"run.started"/);
   assert.match(stream, new RegExp(`"id":"${configuredModel.id}"`));
@@ -4267,6 +4301,16 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   assert.match(stream, /"type":"assistant.delta"/);
   assert.doesNotMatch(stream, /"type":"review.completed"/);
   assert.match(stream, /"type":"run.completed"/);
+  await checkWithToolEvidence(() => {
+    for (const name of ["run_shell", "declare_artifact"]) {
+      const completed = streamEvents.filter(event => event.type === "tool.completed" && (event.trace as { name?: string } | undefined)?.name === name);
+      assert.ok(completed.length > 0, `Missing completed ${name} call`);
+      for (const event of completed) {
+        const trace = event.trace as { status?: string; output?: string };
+        assert.equal(trace.status, "completed", `${name} failed: ${trace.output ?? "see saved tool output"}`);
+      }
+    }
+  });
   // At least the run's own 3 calls (initial, after the tool result, and after Python's second tool
   // call); the session's first-run title refinement (see "Session title refinement persists when the
   // naming model finishes after the run stream closes") shares this same model and can add a 4th,
@@ -4279,10 +4323,10 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
     `${origin}/api/sessions/${sessionResult.body.id}/files`,
     { headers: authorization },
   );
-  assert.deepEqual(
+  await checkWithToolEvidence(() => assert.deepEqual(
     filesResult.body.map((file) => file.path).toSorted(),
     ["a/out.csv", "analysis_chart.svg", "analysis_summary.csv", "b/out.csv", "input.csv"],
-  );
+  ));
   // The execution-run record lands after the tool's own "completed" round trip settles; under
   // JiuwenSwarm that trip goes through the bridge and can trail the stream's own run.completed by a
   // beat, so poll instead of assuming it is already there the instant the stream closes.
@@ -4294,9 +4338,11 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
       { headers: authorization },
     );
   }
-  assert.equal(runsResult.body.length, 1);
+  await checkWithToolEvidence(() => {
+    assert.equal(runsResult.body.length, 1);
+    assert.equal(runsResult.body[0]!.status, "succeeded");
+  });
   const execution = runsResult.body[0]!;
-  assert.equal(execution.status, "succeeded");
   assert.equal(execution.permissionEpochId, permissionDecision.body.permissionEpoch.id);
   assert.equal(execution.networkPolicy, "none");
   assert.equal(execution.cgroupMode, "none");
