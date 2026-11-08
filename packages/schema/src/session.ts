@@ -74,6 +74,8 @@ export interface ResearchSnapshot {
   storagePath?: string;
   snapshotChecksum?: string;
   continuationAvailable?: boolean;
+  /** True once the executor seeded the restored conversation into the model context (see #984). */
+  modelContextSeeded?: boolean;
   /** Original package scope; copying does not recover omitted history. */
   exportLevel?: "necessary" | "complete";
   historyLimited?: boolean;

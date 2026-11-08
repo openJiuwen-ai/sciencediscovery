@@ -23,6 +23,7 @@ import { DurableContextStore } from "@sciencediscovery/context";
 
 import { startModelGateway, withoutWithheldNotice, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
 import { importSkillsToJiuwenSwarm, reconcileJiuwenSwarmSkills, skillLoadedBy } from "./jiuwenswarm-skills.js";
+import { seedHistoryText } from "./history-seed.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { waitForRecording } from "./recording-wait.js";
 import { RunDeadlines } from "./run-deadlines.js";
@@ -611,8 +612,11 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const delegationRule = jiuwenSwarmSubagents ? [] : [toolNames.has("task")
       ? "Delegation for this run uses only the platform task tool. Swarm-native subagent tools are unavailable; ignore any generic instructions recommending them. Use task to delegate and collect results."
       : "Delegation is unavailable for this run. Ignore any generic instructions recommending Swarm-native subagent tools; complete the assigned work with the available tools."];
-    const systemPrompt = [withHostRule, ...replacementSections,
-      ...(this.options.unsandboxedExecution === true ? [UNSANDBOXED_SUBAGENT_SECTION] : []), ...delegationRule].join("\n\n");
+    const systemPromptSeed = this.options.seedModelContext && this.options.gatewayHistory?.length
+      ? seedHistoryText(this.options.gatewayHistory) : "";
+    const systemPrompt = [systemPromptSeed, withHostRule, ...replacementSections,
+      ...(this.options.unsandboxedExecution === true ? [UNSANDBOXED_SUBAGENT_SECTION] : []), ...delegationRule]
+      .filter(Boolean).join("\n\n");
     const nativeToolNames = [...(jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []), ...(jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_TOOLS : [])];
     const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/runs`, {
       method: "POST",

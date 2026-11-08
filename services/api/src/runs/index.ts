@@ -1328,6 +1328,7 @@ async function executeAgentRun(
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
     ...(approvalsByJiuwenSwarm ? { requestApproval } : {}),
     memoryGraphEnabled: memoryGraphSink.enabled,
+    seedModelContext: Boolean(session.researchSnapshot && !session.researchSnapshot.modelContextSeeded && promptHistory.length),
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
@@ -2494,6 +2495,9 @@ async function executeAgentRun(
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
+    if (agentOptions.seedModelContext && session.researchSnapshot) {
+      await store.setResearchSnapshots([{ sessionId, snapshot: { ...session.researchSnapshot, modelContextSeeded: true } }]);
+    }
     if (initialResult.suspended) {
       const request = listConfigurationInteractions(store, sessionId).find((item) =>
         item.runId === runId && CONFIGURATION_PENDING_STATES.has(item.state));
