@@ -122,7 +122,7 @@ export class PluginApiClient extends AuthApiClient {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${params}`);
   }
 
-  async getResearchPackagePreviews(projectId: string, sessionId: string): Promise<{
+  async getResearchPackagePreviews(projectId: string, sessionId: string, signal?: AbortSignal): Promise<{
     revision: string;
     necessary: Awaited<ReturnType<PluginApiClient["previewResearchPackage"]>>;
     complete: Awaited<ReturnType<PluginApiClient["previewResearchPackage"]>>;
@@ -131,7 +131,7 @@ export class PluginApiClient extends AuthApiClient {
     completeWithTrajectoryAndMemoryGraph: Awaited<ReturnType<PluginApiClient["previewResearchPackage"]>>;
   }> {
     try {
-      return await this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${new URLSearchParams({ sessionId, defaults: "1" })}`);
+      return await this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${new URLSearchParams({ sessionId, defaults: "1" })}`, { signal });
     } catch (error) {
       if (error instanceof ApiRequestError && error.code === "EXPORT_PREVIEW_PENDING") {
         throw new ApiRequestError(translateActive("researchPackage.previewPending"), error.status, error.code, error.details);
