@@ -49,6 +49,41 @@ test("a runtime contributes every tool, visible from the first step", () => {
   assert.deepEqual(names.sort(), ["create_evolve_run", "get_evolve_budget", "get_evolve_run"]);
 });
 
+test("the stop tool appears only when the deployment can stop a run", () => {
+  // Optional capability, like createIdeaResearch: a runtime that cannot stop a
+  // search must not offer a tool that pretends to.
+  assert.equal(
+    createEvolveTools(runtime()).some((tool) => tool.name === "stop_evolve_run"),
+    false,
+  );
+  const withStop = createEvolveTools(runtime({
+    stopEvolveRun: async (runId) => ({ runId, status: "stopping", stopping: true }),
+  }));
+  assert.equal(withStop.some((tool) => tool.name === "stop_evolve_run"), true);
+});
+
+test("the stop tool passes the run id through and reports what happened", async () => {
+  const asked: string[] = [];
+  const tools = createEvolveTools(runtime({
+    stopEvolveRun: async (runId) => { asked.push(runId); return { runId, status: "stopping", stopping: true }; },
+  }));
+  const stop = tools.find((tool) => tool.name === "stop_evolve_run")!;
+  const result = await stop.execute("call-1", { runId: "run-7" } as never, undefined as never);
+  assert.deepEqual(asked, ["run-7"]);
+  assert.match((result.content[0] as { text: string }).text, /Stopping search run-7/);
+});
+
+test("stopping a search that already finished says so instead of claiming a stop", async () => {
+  const tools = createEvolveTools(runtime({
+    stopEvolveRun: async (runId) => ({ runId, status: "completed", stopping: false }),
+  }));
+  const stop = tools.find((tool) => tool.name === "stop_evolve_run")!;
+  const result = await stop.execute("call-1", { runId: "run-7" } as never, undefined as never);
+  const text = (result.content[0] as { text: string }).text;
+  assert.match(text, /not running any more \(status: completed\)/);
+  assert.doesNotMatch(text, /^Stopping/);
+});
+
 test("the create tool names the approval the user will actually see", () => {
   // The card is the user's, so the description has to match the deployment:
   // "starts immediately" and "creates an approval card" are different promises.

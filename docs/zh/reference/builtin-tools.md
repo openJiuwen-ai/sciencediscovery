@@ -97,6 +97,7 @@
 | `create_evolve_run` | 部署注册了演进能力 | 提交搜索方案 —— 起点、打分模式、分片划分、预算与算法（`puct` 或 `openevolve`）。服务端负责校验、跑判别力探针并掌握预算；Agent 只负责提交。启动前会弹出审批卡片，搜索随后运行数分钟到数小时，并有自己的实时面板 |
 | `get_evolve_budget` | 部署注册了演进能力 | 读取当前 Session 模型上一次搜索实际会拿到的预算 —— run 将记录的 thinking 设置、每种算法的单次调用上限、以及整次 run 的 token 与时长上限。应在向用户请求花钱的 checkpoint 之前读取，使用户批准的是上限与总量，而不是被请求的设置 |
 | `get_evolve_run` | 部署注册了演进能力 | 读取某次搜索的状态与结果。不是等待机制 —— 面板会自行流式显示进度，轮询它只会花掉搜索需要的预算 |
+| `stop_evolve_run` | 部署注册了演进能力且能停止 run | `runId`（必填，`create_evolve_run` 返回的 id）。用户的评分公式或评估器改变时，先停掉正在跑的搜索再提新的：同时跑两个搜索会平分预算、各按不同公式打分，用户也无法判断哪个结果算数。停止一个已结束的搜索不会报错，只回它的终态 |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
 | `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |
