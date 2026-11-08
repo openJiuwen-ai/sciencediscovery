@@ -47,16 +47,18 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "zh-CN"));
   journey.scenario({ goal: "在同一个会话中查看运行、成功和失败，并能重新打开结果与文件。",
     preconditions: ["隔离 API/Runner 已启动", "只调用本地脚本模型，不使用真实模型密钥"] });
+  // These assertions inspect run_shell's own final output and failed state.
+  // Keep the controlled 6s/4s commands in the explicit foreground wait budget.
   const stub = await scriptedModel([
     [
       { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "**先生成一个可核对的本地报告**\n完整内部推理仅供展开查看。", delayMs: 7000,
-        arguments: { command: "echo LIVE_EVIDENCE; echo 'Error: source unavailable, retrying' >&2; sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
+        arguments: { wait_ms: 30_000, command: "echo LIVE_EVIDENCE; echo 'Error: source unavailable, retrying' >&2; sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
       { tool: "declare_artifact", arguments: { path: "results/report.md" } },
       { text: "报告已生成，内容是 CARD_OK。" },
     ],
     [
       { tool: "run_shell", reasoning: "检查失败结果仍然可以展开。", delayMs: 1000,
-        arguments: { command: "sleep 4; echo CARD_ERROR >&2; exit 7" } },
+        arguments: { wait_ms: 30_000, command: "sleep 4; echo CARD_ERROR >&2; exit 7" } },
       { text: "命令失败，错误标记 CARD_ERROR 已保留。" },
     ],
   ]);
@@ -197,6 +199,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await tool.locator(":scope > summary").click();
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         const output = tool.locator(".tool-io-section > summary").filter({ hasText: /^stdout$/ }).locator("..");
+        await expect(output.locator(":scope > summary"), "Foreground run_shell must expose retained stdout").toBeVisible({ timeout: 5_000 });
         await output.locator(":scope > summary").click();
         await expect(output.locator("pre")).toContainText("CARD_OK");
         await expect(output.locator("pre")).toContainText("LIVE_EVIDENCE");

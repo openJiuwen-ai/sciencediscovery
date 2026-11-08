@@ -7352,7 +7352,15 @@ test("model registry persists multiple profiles and assigns them per session", a
 test("Workspace HTTP writes wait for the active writer and publish refs before returning", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `workspace-admission-${randomUUID()}`);
   await mkdir(dataDir, { recursive: true });
-  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  let closeApi = async () => {};
+  let closeGraph = async () => {};
+  let closeStore = () => {};
+  context.after(async () => {
+    await closeApi();
+    await closeGraph();
+    closeStore();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const uploads: Record<string, unknown>[] = [];
   const graph = createHttpServer((request, response) => {
     let body = "";
@@ -7363,13 +7371,13 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
       response.end(JSON.stringify({ status: "healthy" }));
     });
   });
+  closeGraph = () => new Promise<void>((done) => { graph.close(() => done()); graph.closeAllConnections(); });
   await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
-  context.after(() => new Promise<void>((done) => graph.close(() => done())));
   const server = createApiServer({ ...testConfig(dataDir, "http://127.0.0.1:1"), memoryGraph: {
     url: `http://127.0.0.1:${(graph.address() as AddressInfo).port}`, internalToken: "test",
   } });
+  closeApi = () => closeApiServer(server);
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(() => new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const enabled = await fetch(`${origin}/api/memory/settings`, {
     method: "PUT", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
@@ -7382,7 +7390,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
   const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
     method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ modelId: model.id, title: "Admission" }),
   });
-  const store = new SessionStore(dataDir); await store.load();
+  const store = new SessionStore(dataDir); closeStore = () => store.close(); await store.load();
   const workspace = store.workspacePath(session.body.id);
   const versions = new VersionStore(dataDir);
   for (const multipart of [false, true]) {
