@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import { retryRead } from "./read-retry.ts";
 import { RunPollRecovery } from "./run-poll-recovery.js";
 import { RunChainSettler } from "./run-chain.ts";
 import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
@@ -504,7 +505,9 @@ export async function openProjectSession(
 /** Send one natural-language user request and return the persisted Run it creates. */
 export async function sendUserMessage(page: Page, sessionId: string, prompt: string): Promise<JourneyRun> {
   const runsPath = `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
-  const before = new Set((await apiJson<JourneyRun[]>(page, runsPath)).map((run) => run.id));
+  const readRuns = () => retryRead(`GET ${runsPath}`, timeoutMs =>
+    apiJson<JourneyRun[]>(page, runsPath, { timeoutMs }));
+  const before = new Set((await readRuns()).map((run) => run.id));
   const request = page.waitForRequest((candidate) =>
     candidate.method() === "POST" && /\/api\/sessions\/[^/]+\/messages$/.test(candidate.url()));
   await page.locator("form.composer").getByRole("textbox").fill(prompt);
@@ -513,7 +516,7 @@ export async function sendUserMessage(page: Page, sessionId: string, prompt: str
 
   let created: JourneyRun | undefined;
   await expect.poll(async () => {
-    created = (await apiJson<JourneyRun[]>(page, runsPath))
+    created = (await readRuns())
       .find((run) => !before.has(run.id) && run.prompt === prompt);
     return created?.id;
   }, { message: "the submitted user message should create a persisted Run", timeout: 20_000 }).toBeTruthy();
