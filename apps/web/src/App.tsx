@@ -5977,21 +5977,26 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setSessions(items);
           setArtifactSessions(allItems);
           setArtifactSessionCatalogProjectId(projectId);
-          // Open the imported read-only copy. The import has just told the user
-          // this package is a locked snapshot, so leaving the previous writable
-          // session on screen is what made one import look like two open
-          // sessions — and the writable one was the only one they could type
-          // into. A writable continuation is created only when they ask for it.
-          const imported = importedSessionIds.find((id) => items.some((item) => item.id === id));
-          if (imported) {
-            setWorkspaceView("session");
-            setOpenSubagentId(undefined);
-            setMessage("");
-            setActiveSessionId(imported);
+          const currentSessionId = activeSessionIdRef.current;
+          // The import wrote into the session the user was already looking at
+          // (the dialog imports into the current session when it can): there is
+          // nothing to open, and switching away from it would hide the history
+          // that was just restored into it.
+          if (currentSessionId && importedSessionIds.includes(currentSessionId)) {
+            await refreshSession(currentSessionId);
             return;
           }
-          const currentSessionId = activeSessionIdRef.current;
-          if (currentSessionId && importedSessionIds.includes(currentSessionId)) await refreshSession(currentSessionId);
+          // A separate read-only copy was created. Open it: the import has just
+          // told the user this package is a locked snapshot, and leaving the
+          // previous writable session on screen is what made one import look
+          // like two open sessions — with the writable one the only place to
+          // type. A writable continuation is still created only on request.
+          const imported = importedSessionIds.find((id) => items.some((item) => item.id === id));
+          if (!imported) return;
+          setWorkspaceView("session");
+          setOpenSubagentId(undefined);
+          setMessage("");
+          setActiveSessionId(imported);
         }}
         target={researchPackageDialog}
       />
