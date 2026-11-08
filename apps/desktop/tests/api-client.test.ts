@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { ApiClient, ApiRequestError, isAbortError, isAuthFailure } from "../src/api/client.js";
+import { ApiClient, ApiRequestError, isAbortError, isAuthFailure, isLegacyUnavailableError } from "../src/api/client.js";
 import { testModel } from "../src/api/models.js";
 import { MAX_FRAME_CHARACTERS, SseFrameDecoder, readSubagentSteps, readToolOutput, streamMessage } from "../src/api/stream.js";
 import type { RunStreamEvent, SessionRunEvent, SubagentStep } from "../src/api/types.js";
@@ -148,6 +148,25 @@ test("a non-JSON error body still produces a readable message", async () => {
         () => client.request("/api/models"),
         (reason: unknown) => {
           assert.equal((reason as ApiRequestError).message, "Request failed (502)");
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("the adapter's legacy_unavailable 502 is recognised, and only for that code", async () => {
+  const client = new ApiClient("t");
+  assert.equal(isLegacyUnavailableError(new ApiRequestError("legacy_unavailable", 502)), true);
+  assert.equal(isLegacyUnavailableError(new ApiRequestError("legacy_unavailable", 503)), false);
+  assert.equal(isLegacyUnavailableError(new Error("legacy_unavailable")), false);
+  await withFetch(
+    () => Promise.resolve(jsonResponse({ error: "legacy_unavailable", message: "ConnectError" }, 502)),
+    async () => {
+      await assert.rejects(
+        () => client.request("/api/models"),
+        (reason: unknown) => {
+          assert.equal(isLegacyUnavailableError(reason), true);
           return true;
         },
       );

@@ -8,6 +8,7 @@ import { downloadExport, importPackage, inspectPackage, packagePreview, readCopy
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
+import { exportPollStep } from "./research-package-poll.js";
 import "../styles/research-package.css";
 
 export interface PackageRequest {
@@ -109,8 +110,18 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   }, [client, copy?.id, copy?.state]);
   useEffect(() => {
     if (!exportTask || !["queued", "running"].includes(exportTask.task.status)) return;
-    let active = true; let timer: ReturnType<typeof setTimeout>;
-    const poll = () => { void readExport(client, exportTask.project, exportTask.task.id).then(task => { if (!active) return; setExportTask({ project: exportTask.project, task }); if (["queued", "running"].includes(task.status)) timer = setTimeout(poll, 1000); }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
+    let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
+    const poll = () => { void readExport(client, exportTask.project, exportTask.task.id).then(task => {
+      if (!active) return;
+      const step = exportPollStep(exportTask.project, exportTask.task, failures, { ok: true, task }, t);
+      failures = step.failures; setError(step.error); setExportTask(step.task);
+      if (!step.terminate) timer = setTimeout(poll, 1000);
+    }).catch(reason => {
+      if (!active) return;
+      const step = exportPollStep(exportTask.project, exportTask.task, failures, { ok: false, reason }, t);
+      failures = step.failures; setError(step.error); setExportTask(step.task);
+      if (!step.terminate) timer = setTimeout(poll, 3000);
+    }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, exportTask?.task.id, exportTask?.task.status]);
   async function perform(action: () => Promise<void>) {
