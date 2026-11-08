@@ -557,7 +557,7 @@ test("a finished continuation stays readable after its source session is deleted
   const mismatched = await rawRequest(`/api/sessions/not-the-source/research-continuations/${operation.id}`);
   assert.equal(mismatched.status, 404);
   // The source session may be gone; the durable operation must stay readable.
-  await request(`/api/sessions/${sourceId}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmationId: "" }) });
+  await request(`/api/sessions/${sourceId}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmationId: sourceId }) });
   const afterDelete = await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation;
   assert.equal(afterDelete.state, "ready");
   assert.equal(afterDelete.id, operation.id);

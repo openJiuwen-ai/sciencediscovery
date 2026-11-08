@@ -91,10 +91,18 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
-    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; failures = 0; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { requestId.current = crypto.randomUUID(); await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => {
+    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => {
+      if (!active) return;
+      const step = copyPollStep(copy, failures, { ok: true, copy: next }, t);
+      failures = step.failures; setCopy(step.copy);
+      if (!step.terminate) { timer = setTimeout(poll, 1000); return; }
+      requestId.current = crypto.randomUUID(); await onRefresh();
+      if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId);
+    }).catch(reason => {
       if (!active) return;
       const step = copyPollStep(copy, failures, { ok: false, reason }, t);
-      failures = step.failures; setCopy(step.copy); setError(step.error);
+      failures = step.failures; setCopy(step.copy);
+      if (step.error) setError(step.error);
       if (!step.terminate) timer = setTimeout(poll, 3000);
     }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
