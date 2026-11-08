@@ -18,11 +18,13 @@ function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-/** Minimal browser surface the mounted App touches; captures only the 5s Stop grace timer. */
+/** Minimal browser surface; track live 5s timers, including cancellation. */
 function installBrowserStubs() {
   const location = { pathname: "/", search: "", hash: "" };
-  const grace: Array<() => void> = [];
+  const grace = new Map<ReturnType<typeof setTimeout>, () => void>();
+  let nextTimerId = -1;
   const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
   const otherTimers = new Set<ReturnType<typeof setTimeout>>();
   const applyUrl = (url: string) => {
     const parsed = new URL(url, "http://localhost");
@@ -32,11 +34,20 @@ function installBrowserStubs() {
     localStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined, clear: () => undefined, key: () => null, length: 0 },
     document: { addEventListener: () => undefined, removeEventListener: () => undefined, querySelector: () => null, documentElement: { style: {} } },
     setTimeout: ((callback: () => void, delayMs?: number) => {
-      if (delayMs === 5_000) { grace.push(callback); return 0 as unknown as ReturnType<typeof setTimeout>; }
+      if (delayMs === 5_000) {
+        const id = nextTimerId-- as unknown as ReturnType<typeof setTimeout>;
+        grace.set(id, callback);
+        return id;
+      }
       const timer = realSetTimeout(callback, delayMs);
       otherTimers.add(timer);
       return timer;
     }) as typeof setTimeout,
+    clearTimeout: ((timer: ReturnType<typeof setTimeout>) => {
+      if (grace.delete(timer)) return;
+      otherTimers.delete(timer);
+      realClearTimeout(timer);
+    }) as typeof clearTimeout,
     window: {
       location,
       history: { replaceState: (_s: unknown, _t: string, url?: string | URL | null) => { if (url) applyUrl(String(url)); }, pushState: (_s: unknown, _t: string, url?: string | URL | null) => { if (url) applyUrl(String(url)); } },
@@ -47,9 +58,9 @@ function installBrowserStubs() {
     },
   });
   return {
-    graceCount: () => grace.length,
-    fireGrace: () => { for (const callback of grace.splice(0)) callback(); },
-    restore: () => { for (const timer of otherTimers) clearTimeout(timer); globalThis.setTimeout = realSetTimeout; },
+    graceCount: () => grace.size,
+    fireGrace: () => { const callbacks = [...grace.values()]; grace.clear(); for (const callback of callbacks) callback(); },
+    restore: () => { for (const timer of otherTimers) realClearTimeout(timer); grace.clear(); globalThis.setTimeout = realSetTimeout; globalThis.clearTimeout = realClearTimeout; },
   };
 }
 

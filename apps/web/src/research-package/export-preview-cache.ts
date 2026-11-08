@@ -4,14 +4,14 @@ import type { ApiClient } from "../api.js";
 type Preview = Awaited<ReturnType<ApiClient["previewResearchPackage"]>>;
 export type DefaultPreviews = Awaited<ReturnType<ApiClient["getResearchPackagePreviews"]>>;
 type Client = Pick<ApiClient, "previewResearchPackage" | "getResearchPackagePreviews">;
-type CacheState = { entries: Map<string, Promise<Preview>>; defaults: Map<string, DefaultPreviews>; pending: Map<string, Promise<DefaultPreviews>>; listeners: Set<() => void>; generations: Map<string, number>; sessionRevisions: Map<string, string> };
+type CacheState = { entries: Map<string, Promise<Preview>>; defaults: Map<string, DefaultPreviews>; pending: Map<string, Promise<DefaultPreviews>>; controllers: Map<string, AbortController>; listeners: Set<() => void>; generations: Map<string, number>; sessionRevisions: Map<string, string> };
 /** Per-client cache; results live until their evidence revision changes. */
 export class ExportPreviewCache {
   private static states = new WeakMap<Client, CacheState>();
   private state: CacheState;
   constructor(private client: Client) {
     let state = ExportPreviewCache.states.get(client);
-    if (!state) { state = { entries: new Map(), defaults: new Map(), pending: new Map(), listeners: new Set(), generations: new Map(), sessionRevisions: new Map() }; ExportPreviewCache.states.set(client, state); }
+    if (!state) { state = { entries: new Map(), defaults: new Map(), pending: new Map(), controllers: new Map(), listeners: new Set(), generations: new Map(), sessionRevisions: new Map() }; ExportPreviewCache.states.set(client, state); }
     this.state = state;
   }
   subscribe(listener: () => void) { this.state.listeners.add(listener); return () => { this.state.listeners.delete(listener); }; }
@@ -29,6 +29,8 @@ export class ExportPreviewCache {
     if (previous !== undefined) {
       this.state.generations.set(key, (this.state.generations.get(key) ?? 0) + 1);
       this.state.defaults.delete(key);
+      this.state.controllers.get(key)?.abort();
+      this.state.controllers.delete(key);
       this.state.pending.delete(key);
       for (const entryKey of this.state.entries.keys()) {
         try { const parts = JSON.parse(entryKey) as unknown[]; if (parts[0] === projectId && parts[1] === sessionId) this.state.entries.delete(entryKey); }
@@ -42,7 +44,10 @@ export class ExportPreviewCache {
     const pending = this.state.pending.get(key);
     if (pending) return pending;
     const generation = this.state.generations.get(key) ?? 0;
-    const work = this.client.getResearchPackagePreviews(projectId, sessionId).then((result) => {
+    const controller = new AbortController();
+    this.state.controllers.set(key, controller);
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const work = this.client.getResearchPackagePreviews(projectId, sessionId, controller.signal).then((result) => {
       if ((this.state.generations.get(key) ?? 0) === generation && this.state.defaults.get(key)?.revision !== result.revision) {
         this.state.defaults.set(key, result);
         if (this.state.defaults.size > 48) this.state.defaults.delete(this.state.defaults.keys().next().value!);
@@ -51,7 +56,11 @@ export class ExportPreviewCache {
       return result;
     });
     this.state.pending.set(key, work);
-    void work.finally(() => { if (this.state.pending.get(key) === work) this.state.pending.delete(key); }).catch(() => undefined);
+    void work.finally(() => {
+      clearTimeout(timeout);
+      if (this.state.pending.get(key) === work) this.state.pending.delete(key);
+      if (this.state.controllers.get(key) === controller) this.state.controllers.delete(key);
+    }).catch(() => undefined);
     return work;
   }
   get(projectId: string, sessionId: string, level: "necessary" | "complete", paths?: string[], includeFullTrajectory = false, revision?: string, includeFullMemoryGraph = false) {

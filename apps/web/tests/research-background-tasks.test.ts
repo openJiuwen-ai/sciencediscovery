@@ -101,8 +101,9 @@ test("background defaults warm all export variants and notify an open dialog onl
 
 test("content changes discard cached sizes immediately and cannot republish an older in-flight result", async () => {
   const responses: Array<(value: unknown) => void> = [];
+  const signals: AbortSignal[] = [];
   const client = {
-    getResearchPackagePreviews: () => new Promise((resolve) => { responses.push(resolve); }),
+    getResearchPackagePreviews: (_projectId: string, _sessionId: string, signal: AbortSignal) => new Promise((resolve) => { signals.push(signal); responses.push(resolve); }),
   } as unknown as ApiClient;
   const cache = new ExportPreviewCache(client);
   const defaults = (revision: string) => {
@@ -115,9 +116,44 @@ test("content changes discard cached sizes immediately and cannot republish an o
   assert.equal(cache.peekDefaults("p", "s")?.revision, "evidence-1");
   const obsolete = cache.refreshDefaults("p", "s");
   cache.notifySessionRevision("p", "s", "session-2");
+  assert.equal(signals[1]!.aborted, true, "obsolete previews release their browser connection");
   assert.equal(cache.peekDefaults("p", "s"), undefined, "show calculation state instead of a stale size");
   const latest = cache.refreshDefaults("p", "s");
+  assert.equal(signals[2]!.aborted, false, "the current preview remains active");
   responses[2]!(defaults("evidence-2")); await latest;
   responses[1]!(defaults("evidence-1")); await obsolete;
   assert.equal(cache.peekDefaults("p", "s")?.revision, "evidence-2");
+});
+
+
+test("a stalled default preview is aborted and a later refresh can retry", async () => {
+  const originalTimeout = globalThis.setTimeout;
+  let expire: (() => void) | undefined;
+  const signals: AbortSignal[] = [];
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+    if (ms === 10_000) expire = callback;
+    return originalTimeout(callback, ms);
+  }) as typeof setTimeout;
+  try {
+    const client = {
+      getResearchPackagePreviews: (_projectId: string, _sessionId: string, signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+      },
+    } as unknown as ApiClient;
+    const cache = new ExportPreviewCache(client);
+    const first = cache.refreshDefaults("p", "s");
+    assert.equal(cache.refreshDefaults("p", "s"), first, "concurrent consumers share one request");
+    const rejected = assert.rejects(first, /aborted/);
+    assert.ok(expire);
+    expire();
+    await rejected;
+    assert.equal(signals[0]!.aborted, true);
+    const retry = cache.refreshDefaults("p", "s");
+    assert.equal(signals.length, 2);
+    assert.equal(signals[1]!.aborted, false);
+    const retryRejected = assert.rejects(retry, /aborted/);
+    expire();
+    await retryRejected;
+  } finally { globalThis.setTimeout = originalTimeout; }
 });
