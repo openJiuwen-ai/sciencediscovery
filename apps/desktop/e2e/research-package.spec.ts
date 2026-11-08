@@ -138,10 +138,10 @@ for (const locale of ["zh-CN", "en"]) {
       await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
       await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
       await page.getByRole("button", { name: en ? "Start background export" : "开始后台导出" }).click();
-      await expect(page.locator(".research-package-status")).toContainText(en ? "Preparing the package" : "正在后台准备");
+      await expect(page.locator(".research-package-status")).toContainText(en ? "export in progress" : "个导出进行中");
       await capture("11-export-preparing");
       fail = true;
-      await expect(page.locator(".research-package-status")).toContainText(en ? "Export failed" : "导出失败");
+      await expect(page.locator(".research-package-flash")).toContainText(en ? "Export failed" : "导出失败");
       await expect(page.getByRole("button", { name: en ? "Download" : "下载", exact: true })).toHaveCount(0);
       await capture("12-export-failed");
     });
@@ -176,20 +176,19 @@ test("session menu exports research with two scope cards", async ({ page }, info
     await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "导出会话", "🗑删除"]);
     await page.getByRole("menuitem", { name: "导出会话" }).click();
   });
-  await test.step("2. Inspect both real UI cards and download the selected scope", async () => {
+  await test.step("2. Inspect both real UI cards and save the selected scope automatically", async () => {
     const dialog = page.getByRole("dialog", { name: "导出会话" });
     await expect(dialog.getByRole("button", { name: /^必要导出/ })).toContainText("2.0 KiB");
     await expect(dialog.getByRole("button", { name: /^完整导出/ })).toContainText("8.0 KiB");
     await expect(dialog).toContainText("整个会话及其研究材料");
     await dialog.getByRole("button", { name: /^完整导出/ }).click();
     await expect(dialog.getByText("工作区文件 · 1")).toBeVisible();
-    await dialog.getByRole("button", { name: "开始后台导出" }).click();
-    await expect(page.getByRole("status")).toContainText("conversation.sdresearch");
     const downloaded = page.waitForEvent("download");
-    await page.getByRole("button", { name: "下载", exact: true }).click();
+    await dialog.getByRole("button", { name: "开始后台导出" }).click();
     expect((await downloaded).suggestedFilename()).toBe("conversation.sdresearch");
+    await expect(page.locator(".research-package-flash")).toContainText("证据包已保存");
   });
-  await info.attach("journey-report", { body: "1. Session-menu placement verified.\n2. Both size cards, full research scope and package download verified.\n", contentType: "text/plain" });
+  await info.attach("journey-report", { body: "1. Session-menu placement verified.\n2. Both size cards, full research scope and automatic save with completion feedback verified.\n", contentType: "text/plain" });
 });
 
 test("hover import defaults to no project and allows an existing project", async ({ page }, info) => {

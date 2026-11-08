@@ -1214,12 +1214,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         return;
       }
-      const researchPackageExportMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package\/exports(?:\/([^/]+)(?:\/(download))?)?$/);
+      const researchPackageExportMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package\/exports(?:\/([^/]+)(?:\/(download|cancel))?)?$/);
       if (researchPackageExportMatch) {
         const projectId = decodeURIComponent(researchPackageExportMatch[1]!);
         if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
         const taskId = researchPackageExportMatch[2];
-        const isDownload = researchPackageExportMatch[3] === "download";
+        const action = researchPackageExportMatch[3];
+        const isDownload = action === "download";
+        const isCancel = action === "cancel";
         if (request.method === "POST" && !taskId) {
           const body = await readJson(request) as {
             sessionId?: unknown; level?: unknown; filePaths?: unknown; includeFullTrajectory?: unknown;
@@ -1260,6 +1262,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           stream.on("error", () => response.destroy());
           stream.pipe(response);
           return;
+        }
+        if (request.method === "POST" && taskId && isCancel) {
+          const task = await packageExports.cancel(taskId, projectId);
+          return task ? sendJson(response, 200, task) : sendError(response, 404, "Export task not found");
         }
         return sendError(response, 405, "Unsupported research package export operation");
       }

@@ -14,7 +14,7 @@ export interface PackageInspection {
 }
 export type CopyOperation = ResearchContinuationOperation;
 export interface ExportOperation {
-  id: string; status: "queued" | "running" | "completed" | "failed";
+  id: string; status: "queued" | "running" | "completed" | "failed" | "canceled";
   filename: string; error?: string;
 }
 const projectPath = (id: string) => `/api/projects/${encodeURIComponent(id)}/research-package`;
@@ -47,9 +47,12 @@ export function startExport(client: ApiClient, project: string, options: { sessi
 export function readExport(client: ApiClient, project: string, id: string) {
   return client.request<ExportOperation>(`${projectPath(project)}/exports/${encodeURIComponent(id)}`);
 }
-export async function downloadExport(client: ApiClient, project: string, task: ExportOperation) {
+export function cancelExport(client: ApiClient, project: string, id: string) {
+  return client.request<ExportOperation>(`${projectPath(project)}/exports/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+/** Pull the completed archive bytes; the caller decides where they are saved
+ *  (native save dialog in the shell, or a browser download as a fallback). */
+export async function readExportBlob(client: ApiClient, project: string, task: ExportOperation): Promise<Blob> {
   const response = await client.fetchStream(`${projectPath(project)}/exports/${encodeURIComponent(task.id)}/download`);
-  const url = URL.createObjectURL(await response.blob());
-  const anchor = document.createElement("a"); anchor.href = url; anchor.download = task.filename;
-  document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return response.blob();
 }
