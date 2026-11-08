@@ -81,7 +81,7 @@ test("a Session cannot be renamed to the sentinel that means it has no name", as
 
   // The service stores that title for a Session nobody has named, and the
   // column reads it as "no conversation yet". A conversation that took it as
-  // a name would leave the sidebar and 最近会话 with its messages intact, so
+  // a name would leave the sidebar and 会话 with its messages intact, so
   // the rename keeps the name it had and writes nothing.
   await expect(name).toHaveText("晶体结构分析");
   expect(mock.state.sessions[0]?.title).toBe("晶体结构分析");

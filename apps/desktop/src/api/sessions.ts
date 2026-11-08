@@ -258,7 +258,7 @@ export function deleteSession(client: ApiClient, sessionId: string): Promise<{ d
 
 /** A Project the user made goes away whole — its Sessions, their transcripts
  *  and their workspaces. The inbox is not a Project the user made: the service
- *  refuses it with a 409, so the sidebar never offers this for 最近会话. The id
+ *  refuses it with a 409, so the sidebar never offers this for 会话. The id
  *  is repeated back as confirmation, the same gate a Session has. */
 export function deleteProject(client: ApiClient, projectId: string): Promise<{ deleted: string }> {
   return client.request<{ deleted: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {

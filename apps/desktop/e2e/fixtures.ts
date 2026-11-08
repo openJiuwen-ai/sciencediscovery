@@ -285,7 +285,7 @@ export const DEFAULT_PROJECT: ProjectRecord = {
 };
 
 /** The Project standalone conversations live in. Its name is never shown — the
- *  interface calls it 最近会话 — so only its id matters here. */
+ *  interface calls it 会话 — so only its id matters here. */
 export const INBOX_PROJECT: ProjectRecord = {
   createdAt: CREATED_AT,
   id: "inbox-1",

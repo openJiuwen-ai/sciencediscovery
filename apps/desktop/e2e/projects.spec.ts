@@ -129,6 +129,6 @@ test("deleting the Project of the open Session leaves a draft in the inbox", asy
   // A draft, not a conversation that no longer exists: the bar is nameless and
   // the column has nothing left to list.
   await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
-  await expect(page.getByText("还没有最近会话", { exact: true })).toBeVisible();
+  await expect(page.getByText("还没有会话", { exact: true })).toBeVisible();
   await expect.poll(() => mock.state.sessions.length).toBe(0);
 });

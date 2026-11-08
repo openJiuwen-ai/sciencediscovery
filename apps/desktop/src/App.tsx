@@ -906,7 +906,7 @@ export function App({ initialToken }: Props) {
     onUpload: (files) => void upload(files),
     // No name when the next conversation goes into no Project: the strip then
     // shows its invitation to choose one, which is what the inbox means from
-    // the welcome page — 最近会话 is the column's word for the result, not a
+    // the welcome page — 会话 is the column's word for the result, not a
     // place the user would pick.
     projectName: state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName,
     projects: state.projects,
@@ -971,7 +971,7 @@ export function App({ initialToken }: Props) {
             detail={state.detail}
             onExpandSidebar={expandSidebar}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
-            // A Session outside every Project is not "in 最近会话": that is
+            // A Session outside every Project is not "in 会话": that is
             // the column's name for the list, not a place to print beside the
             // title, so the bar carries no Project at all for one.
             projectName={state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName}
