@@ -5961,6 +5961,19 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setSessions(items);
           setArtifactSessions(allItems);
           setArtifactSessionCatalogProjectId(projectId);
+          // Open the imported read-only copy. The import has just told the user
+          // this package is a locked snapshot, so leaving the previous writable
+          // session on screen is what made one import look like two open
+          // sessions — and the writable one was the only one they could type
+          // into. A writable continuation is created only when they ask for it.
+          const imported = importedSessionIds.find((id) => items.some((item) => item.id === id));
+          if (imported) {
+            setWorkspaceView("session");
+            setOpenSubagentId(undefined);
+            setMessage("");
+            setActiveSessionId(imported);
+            return;
+          }
           const currentSessionId = activeSessionIdRef.current;
           if (currentSessionId && importedSessionIds.includes(currentSessionId)) await refreshSession(currentSessionId);
         }}
