@@ -1011,7 +1011,12 @@ export function createRunnerServer(
         await resolveExecutionWorkspace(config, execution);
         const direct = url.pathname === "/direct-shell-executions";
         if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
-        if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
+        // A client's waiting deadline is not the process's lifetime, so managed
+        // executions run without one by default. An operator who explicitly set
+        // SCIENCE_AGENT_EXEC_TIMEOUT_MS still gets a lifetime bound; the fixed
+        // close/join watchdogs in runSandboxed handle the cases where the process
+        // ended but the Runner could not observe it.
+        if (!direct) execution.executionTimeoutMs = config.execTimeoutMs > 0 ? config.execTimeoutMs : 0;
         execution.maxOutputBytes ??= config.maxOutputBytes;
         const accepted = managedExecutions.submit(execution, (signal, log, expectedEnvironmentRevisionId) => direct
           ? executeDirectShell(executorConfig, execution, signal, log)

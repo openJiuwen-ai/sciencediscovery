@@ -264,6 +264,14 @@ export class ExecutionManager {
         retained += bytes.length;
       };
       try {
+        // Work admitted before an earlier execution was quarantined must not
+        // launch into a workspace (or onto a device) whose process state is
+        // still unverified; fail it instead of letting it run behind the fence.
+        if (this.legacyQuarantine || this.uncertainWorkspaces.has(key)
+          || npuDevices.some((device) => this.uncertainDevices.has(device))) {
+          throw new ExecutionManagerError("EXECUTION_RESOURCE_QUARANTINED",
+            "An earlier execution has unverified process state; affected workspace or NPU resources cannot accept new work", 409);
+        }
         if (this.failedWorkspaces.has(key)) throw new Error("Workspace version commit failed; repair storage before restarting the Runner");
         if (controller.signal.aborted) throw new Error("Execution cancelled before start");
         const expectedEnvironmentRevisionId = request.recoveryContext
@@ -275,6 +283,9 @@ export class ExecutionManager {
           // may still have an orphan writer, so do not guess which workspace is safe.
           throw new Error("RUNNER_EXECUTIONS_UNCONFIRMED: resolve unknown executions before controlled continuation");
         }
+        // Cancellation can arrive while recovery validation above was awaited;
+        // never launch a command the user already cancelled.
+        if (controller.signal.aborted) throw new Error("Execution cancelled before start");
         execution.state = "running";
         execution.startedAt = new Date().toISOString();
         this.save(execution);
@@ -282,6 +293,18 @@ export class ExecutionManager {
         execution.result = await operation(controller.signal, log, expectedEnvironmentRevisionId);
         execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 && !execution.result.networkDeniedHosts?.length ? "completed" : "failed";
       } catch (error) {
+        if ((error as { code?: string }).code === "PROCESS_TERMINATION_UNVERIFIED") {
+          // The kill did not join, so a writer may still hold the workspace.
+          // Publishing a snapshot or claiming a cancelled exit would both be
+          // fabrications: fence the workspace for verification, and let this
+          // queue item resolve so later work is rejected instead of wedged.
+          execution.state = "unknown";
+          delete execution.finishedAt;
+          execution.error = error instanceof Error ? error.message : String(error);
+          this.quarantine(execution);
+          this.save(execution);
+          return;
+        }
         execution.state = controller.signal.aborted ? "cancelled" : "failed";
         execution.error = error instanceof Error ? error.message : "Execution failed";
       }
@@ -290,9 +313,13 @@ export class ExecutionManager {
         terminationReason: changed ? controller.signal.aborted ? "cancelled" : execution.result ? "exited" : "operation_rejected_after_join" : "not_started" };
       // Journal process exit before asynchronous result publication. A crash here remains
       // unknown with truthful exit evidence, not a fabricated committed terminal result.
-      execution.state = "running";
-      this.save(execution);
-      execution.state = endedState;
+      // Nothing was launched when `changed` is false, so there is no journal to write
+      // and a record cancelled while queued must not briefly read as running again.
+      if (changed) {
+        execution.state = "running";
+        this.save(execution);
+        execution.state = endedState;
+      }
       try {
         if (changed) {
           const workspace = request.explicitHandoff ? undefined : await snapshotWorkspace(this.versions, request.workspaceRoot);
@@ -409,8 +436,24 @@ export class ExecutionManager {
 
   cancel(id: string, owner: ExecutionOwner): ManagedExecution {
     const execution = this.get(id, owner);
+    if (execution.state === "queued") {
+      // Nothing was launched, so cancelling needs no join and must not wait for
+      // the executions queued ahead of this one. Recording the terminal state
+      // now is deterministic; the aborted controller makes the later dispatch
+      // skip this command instead of running it.
+      execution.state = "cancelled";
+      execution.error = "Execution cancelled before start";
+      execution.finishedAt = new Date().toISOString();
+      if (execution.receipt) execution.evidence = { ...this.identity, revision: execution.receipt.revision,
+        processTerminated: true, terminationReason: "not_started" };
+      this.save(execution);
+      // The state above is already terminal, so abort explicitly: it is what
+      // makes the eventual dispatch skip the command instead of running it.
+      this.controllers.get(id)?.abort();
+      return this.get(id, owner);
+    }
     if (!terminal(execution.state)) this.controllers.get(id)?.abort();
-    return this.get(id, owner); // terminal only after process exit and version commit
+    return this.get(id, owner); // a running execution is terminal only after process exit and version commit
   }
 
   async close(): Promise<void> {

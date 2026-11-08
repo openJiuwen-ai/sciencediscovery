@@ -16,6 +16,7 @@ import { RefStore, VersionStore, withWorkspaceMutation, withWorkspaceRetirement,
 import type { ExecutionOwner, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { executionDigestVectors } from "../../../test/support/execution-digest-vectors.js";
 import { ExecutionManager, ExecutionManagerError, type ExecutionQuarantineDiagnostic } from "./execution-manager.js";
+import { ProcessTerminationUnverifiedError } from "./executor.js";
 
 const owner: ExecutionOwner = { agentId: "main", sessionId: "session" };
 function request(root: string, id: string): ShellExecutionRequest {
@@ -160,6 +161,46 @@ test("cancel waits for process join; queued cancellation never starts or replays
   assert.equal(queuedRan, false);
   assert.ok(manager.get("running", owner).version);
   assert.equal(manager.logs("running", owner).chunks[0]?.text, "progress");
+});
+
+test("cancelling a queued execution is terminal before its turn without starting the next one", async (context) => {
+  const { manager, workspace } = await fixture(context);
+  let release!: () => void;
+  const latch = new Promise<void>((done) => { release = done; });
+  manager.start(request(workspace, "head"), async () => { await latch; return result("head"); });
+  await until(() => manager.get("head", owner).state === "running");
+  manager.start(request(workspace, "waiting"), async () => assert.fail("a cancelled queued command launched"));
+  manager.start(request(workspace, "after-cancel"), async () => result("after-cancel"));
+  const cancelled = manager.cancel("waiting", owner);
+  assert.equal(cancelled.state, "cancelled", "no process was launched, so cancellation needs no join");
+  assert.ok(cancelled.finishedAt);
+  assert.equal(cancelled.evidence?.terminationReason, "not_started");
+  assert.equal(manager.get("after-cancel", owner).state, "queued",
+    "cancelling one queued command must not let the next one overtake the running head");
+  release();
+  await until(() => manager.get("after-cancel", owner).state === "completed");
+  assert.equal(manager.get("waiting", owner).state, "cancelled");
+});
+
+test("an execution whose process cannot be verified as terminated quarantines the workspace and advances the queue", async (context) => {
+  const { manager, workspace } = await fixture(context);
+  // The operation rejects only after the Runner gave up on observing the kill;
+  // the workspace may still have a writer, so the outcome is unknown, not a
+  // cancelled exit, and later queued work must be rejected rather than wedged.
+  manager.start(request(workspace, "unverified"), async (signal) => {
+    await new Promise<void>((done) => signal.addEventListener("abort", () => done(), { once: true }));
+    throw new ProcessTerminationUnverifiedError("Shell execution could not be verified as terminated after cancellation");
+  });
+  await until(() => manager.get("unverified", owner).state === "running");
+  manager.start(request(workspace, "behind"), async () => assert.fail("queued work launched into a quarantined workspace"));
+  manager.cancel("unverified", owner);
+  await until(() => manager.get("unverified", owner).state === "unknown");
+  await until(() => manager.get("behind", owner).state === "failed");
+  assert.match(manager.get("behind", owner).error!, /unverified process state/u);
+  assert.throws(() => manager.start(request(workspace, "blocked"), async () => assert.fail("admitted after quarantine")),
+    { code: "EXECUTION_RESOURCE_QUARANTINED" });
+  assert.equal(manager.get("unverified", owner).evidence?.processTerminated, undefined,
+    "an unverified kill must not claim the process terminated");
 });
 
 test("external file publication waits for cancelled process join and the execution ref commit", async (context) => {
