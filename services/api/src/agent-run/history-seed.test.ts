@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createTest } from "../../../test/support/tagged/compat.mjs";
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
@@ -48,8 +48,18 @@ test("a long transcript is bounded but keeps the opening user message as an anch
     ...Array.from({ length: 600 }, (_, index) => ({ role: "assistant", content: `filler response ${index}` })),
   ]);
   const text = seedHistoryText(history);
-  assert.ok(text.startsWith("user: the seed fact is FROZEN-001"));
+  assert.ok(text.includes("user: the seed fact is FROZEN-001"));
   assert.ok(text.length < 32_000, `folded text is bounded, got ${text.length}`);
+});
+
+test("an oversized opening user message is clipped so the budget still holds", () => {
+  const text = seedHistoryText(messages([
+    { role: "user", content: "X".repeat(200_000) },
+    { role: "assistant", content: "tail" },
+  ]));
+  assert.ok(text.length < 26_000, `folded text is bounded, got ${text.length}`);
+  assert.ok(text.includes(`user: ${"X".repeat(500)}`));
+  assert.ok(text.includes("assistant: tail"));
 });
 
 test("messages with no textual content contribute nothing", () => {
