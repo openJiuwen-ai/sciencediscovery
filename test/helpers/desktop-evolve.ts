@@ -121,6 +121,7 @@ export function requireModelSource(info: TestInfo): void {
 async function resolveModel(
   page: Page,
   name: string,
+  profile: Record<string, unknown> = {},
 ): Promise<{ model: DesktopModel; owned: boolean }> {
   const reuseId = process.env.E2E_MODEL_ID?.trim();
   if (reuseId) {
@@ -138,17 +139,37 @@ async function resolveModel(
   if (!baseUrl || !model || !llmToken) {
     throw new Error("requires E2E_MODEL_ID or E2E_LLM_BASE_URL, E2E_LLM_MODEL and E2E_LLM_TOKEN");
   }
-  const profile = await api<DesktopModel>(page, "/api/models", {
+  const created = await api<DesktopModel>(page, "/api/models", {
     data: {
       apiToken: llmToken,
-      apiVariant: process.env.E2E_LLM_VARIANT?.trim() || "openai",
+      // The shared real catalog names the variant `E2E_LLM_API_VARIANT`; the
+      // desktop-only suites predate that spelling, so both are read.
+      apiVariant: process.env.E2E_LLM_API_VARIANT?.trim()
+        || process.env.E2E_LLM_VARIANT?.trim() || "openai",
       baseUrl,
       model,
       name,
+      ...profile,
     },
     method: "POST",
   });
-  return { model: profile, owned: true };
+  return { model: created, owned: true };
+}
+
+/**
+ * What one journey calls its own records, and the model policy it runs under.
+ * The defaults keep the evolve smoke as it was; a shared-catalog case passes
+ * the same API variant and thinking policy the web journeys use.
+ */
+export interface DesktopFixtureOptions {
+  /** Base name for the Project, the Session and an owned model profile. */
+  name?: string;
+  /** Profile fields for an owned model that `E2E_LLM_*` does not carry, such
+   *  as `apiVariant`, `thinkingMode` and `thinkingEffort`. */
+  model?: Record<string, unknown>;
+  /** Fields set on the Session together with its model, such as the thinking
+   *  policy. A mode switch must stay in its own request. */
+  session?: Record<string, unknown>;
 }
 
 /**
@@ -157,20 +178,24 @@ async function resolveModel(
  * Python to build the evaluator, so the Session starts in `always_allow`; the
  * test is about the search, not about answering a permission card.
  */
-export async function createDesktopFixture(page: Page): Promise<DesktopFixture> {
+export async function createDesktopFixture(
+  page: Page,
+  options: DesktopFixtureOptions = {},
+): Promise<DesktopFixture> {
   const suffix = randomUUID().slice(0, 8);
-  const { model: profile, owned } = await resolveModel(page, `Desktop SRBench ${suffix}`);
+  const name = `${options.name ?? "Desktop SRBench"} ${suffix}`;
+  const { model: profile, owned } = await resolveModel(page, name, options.model);
   let project: DesktopProject | undefined;
   try {
     const created = await api<DesktopProject & { firstSession: DesktopSession; project?: DesktopProject }>(
       page,
       "/api/projects",
-      { data: { name: `Desktop SRBench ${suffix}` }, method: "POST" },
+      { data: { name }, method: "POST" },
     );
     project = created.project ?? created;
     const sessionPath = `/api/sessions/${encodeURIComponent(created.firstSession.id)}`;
     const session = await api<DesktopSession>(page, sessionPath, {
-      data: { modelId: profile.id, title: `Desktop SRBench ${suffix}` },
+      data: { ...options.session, modelId: profile.id, title: name },
       method: "PATCH",
     });
     // The service refuses a mode switch that shares a request with other
