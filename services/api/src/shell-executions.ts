@@ -480,9 +480,12 @@ export class ShellExecutions {
 
   /** True when the Runner has definitively refused to hand over an execution it
    *  had already accepted: 401/403 mean "not yours any more", 404 means "not
-   *  there". None of these become readable by waiting, so they are terminal. */
+   *  there". None of these become readable by waiting, so they are terminal.
+   *  Only when no result was captured yet: once `existingResult` has pinned the
+   *  bytes, a later refusal is a recoverable finalization failure, not an
+   *  unreadable result. */
   private acceptedButUnreadable(execution: Record, error: unknown): boolean {
-    if (!execution.accepted) return false;
+    if (!execution.accepted || execution.candidateResultRef) return false;
     const httpStatus = observationHttpStatus(observationFailureChain(error));
     return httpStatus === 401 || httpStatus === 403 || httpStatus === 404;
   }
@@ -979,4 +982,3 @@ export class ShellExecutions {
     return this.get(id, owner);
   }
 }
-
