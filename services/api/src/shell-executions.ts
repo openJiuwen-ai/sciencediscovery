@@ -167,6 +167,15 @@ const retryableObservationFailure = (error: unknown): boolean => {
     || (typeof failure.message === "string" && /fetch failed|operation was aborted|Remote runner is not connected/i.test(failure.message))
     || (typeof failure.code === "string" && /^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z0-9_]+)$/i.test(failure.code)));
 };
+/**
+ * A submission the Runner answered with a definite refusal: the command never
+ * entered its queue. A 4xx is that refusal; a transport failure or a 5xx is
+ * not, because the command may already have run.
+ */
+const submissionRejected = (error: unknown): boolean => {
+  const status = observationHttpStatus(observationFailureChain(error));
+  return status !== undefined && status >= 400 && status < 500;
+};
 const errorDetail = (error: unknown): string => {
   if (!(error instanceof Error)) return String(error);
   const chain = observationFailureChain(error);
@@ -452,6 +461,21 @@ export class ShellExecutions {
       lastError: { code, message: detail, retryable, ...(httpStatus ? { httpStatus } : {}) } };
     if (!retryable) delete execution.observation.nextRetryAt;
     this.save(execution);
+  }
+
+  /** The Runner answered a submission with a definite 4xx: the command never ran.
+   *  Settle it failed (committed) with a visible error instead of an unknown outcome. */
+  private rejectSubmission(execution: Record, error: unknown): void {
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    const code = httpStatus === 404 ? "EXECUTION_NOT_FOUND"
+      : httpStatus === 401 || httpStatus === 403 ? "AUTHORIZATION_REVOKED" : "SUBMISSION_REJECTED";
+    const detail = httpStatus === 404
+      ? "Runner did not find this execution for the requesting Agent; the command was not run"
+      : `Runner rejected the execution submission (HTTP ${httpStatus ?? "unknown"}); the command was not run`;
+    execution.observation = { ...execution.observation, status: "blocked",
+      failureCount: (execution.observation?.failureCount ?? 0) + 1,
+      lastError: { code, message: detail, retryable: false, ...(httpStatus ? { httpStatus } : {}) } };
+    this.finish(execution, { state: "failed", provenance: "committed", error: detail });
   }
 
   /** Observation and existing-result finalization only. This method cannot submit. */
@@ -745,6 +769,11 @@ export class ShellExecutions {
         if (recorded) {
           try { await this.commitFailure(execution, observed!, finalizeFailure); }
           catch (failure) { this.unavailable(execution, failure, "PROVENANCE_COMMIT_FAILED"); }
+        } else if (!execution.accepted && submissionRejected(error)) {
+          // The Runner refused the submission outright: the command never ran,
+          // so this is a definite failure, not an unknown outcome. Settle it
+          // failed so the tool call fails visibly instead of blocking the run.
+          this.rejectSubmission(execution, error);
         } else this.unavailable(execution, error, !execution.accepted ? "SUBMIT_OUTCOME_UNKNOWN" : observed && terminal(observed.state) ? "PROVENANCE_COMMIT_FAILED" : "OBSERVATION_UNAVAILABLE");
       } finally { acknowledge(); }
     }).catch(() => {
@@ -917,3 +946,4 @@ export class ShellExecutions {
     return this.get(id, owner);
   }
 }
+

@@ -186,6 +186,36 @@ test("a true submit-outcome-unknown still stays unconfirmed and blocks the works
   assert.equal(submissions, 1);
 });
 
+test("a Runner 4xx rejection on submission settles failed, not unknown, and the error is visible", async (context) => {
+  // #978: the Runner answered the submit call with a definite 4xx (e.g. 401
+  // "Execution not found for this Agent"). The command never ran, so this is a
+  // terminal failure with a visible error, not an unknown outcome that leaves
+  // the tool call and the run stuck in "running".
+  for (const [message, status] of [["Runner request failed (401)", 401], ["Execution not found for this Agent", 404]] as const) {
+    const f = await fixture(context);
+    let submissions = 0;
+    const runner = {
+      startShellExecution: async () => { submissions++; throw Object.assign(new Error(message), { statusCode: status }); },
+      getShellExecution: async () => { throw new Error("a rejected submission must not be observed again"); },
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.state, "failed", `${status}: a rejected submission is a failure`);
+    assert.equal(record.provenance, "committed", `${status}: the rejection is recorded, not left unconfirmed`);
+    assert.equal(record.accepted, false, `${status}: never accepted`);
+    assert.equal(record.result, undefined, `${status}: no execution result is fabricated`);
+    assert.equal(record.startedAt, undefined, `${status}: no start time for a command that never ran`);
+    assert.equal(record.finishedAt !== undefined, true, `${status}: a terminal record`);
+    assert.match(record.error ?? "", /command was not run/, `${status}: the error says the command did not run`);
+    assert.equal(record.observation?.lastError?.retryable, false, `${status}: a 4xx rejection is not retried`);
+    assert.equal(submissions, 1);
+    assert.equal(f.notices.unread(owner).length, 1, `${status}: a completion notice makes the failure visible`);
+    // The workspace is no longer blocked: the outcome is settled, not unknown.
+    await assert.doesNotReject(f.service.start(owner, identity, () => runner,
+      (id, dispatch) => dispatch(request(id)), recoveryContext));
+  }
+});
+
 test("a successful Runner observation clears the consecutive transport failure count", async (context) => {
   const f = await fixture(context);
   const waits: number[] = [];
@@ -1267,3 +1297,4 @@ test("context recovery uses committed exit status once and never invokes legacy 
     assert.equal(lost.submissions(), 1);
   }
 });
+
