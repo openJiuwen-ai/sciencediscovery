@@ -359,7 +359,7 @@ function RunStatusLine({ run }: { run: RunStreamState }) {
   }
   return (
     <>
-      {run.error && <RunFailureCard code={run.error.code} message={run.error.message} timeout={run.error.timeout} />}
+      {run.error && run.error.code !== "SESSION_MODEL_UNAVAILABLE" && <RunFailureCard code={run.error.code} message={run.error.message} timeout={run.error.timeout} />}
       {stop === undefined ? null : <StopDivider reason={stop.reason} word={stop.word} />}
       {run.error?.code === "SESSION_MODEL_UNAVAILABLE" && (
         <div className="message assistant is-notice">
