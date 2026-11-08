@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import type { ChildProcess } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 
 import { expect, type Page, type TestInfo } from "@playwright/test";
@@ -7,12 +8,19 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import {
+  API_ORIGIN,
+  cleanupDesktopFixture,
+  createDesktopFixture,
+  openDesktopSession,
+  seedDesktopOrigin,
+  sendMessage,
+  startDesktopEntry,
+  stopDesktopEntry,
+  type DesktopFixture,
+} from "./helpers/desktop-evolve.ts";
+import {
   cancelActiveSessionRuns,
-  cleanupJourney,
-  createProjectAndSession,
-  openProjectSession,
   RunChainTimeoutError,
-  sendUserMessage,
   waitForRunChainTerminal,
   type JourneyRun,
 } from "./helpers/journeys.ts";
@@ -190,33 +198,46 @@ function sourceStatusText(sources: McpSource[]): Array<{ id: string; status: str
   return sources.map((source) => ({ id: source.manifest.id, status: source.status.status }));
 }
 
+let desktop: ChildProcess | undefined;
+
+test.beforeAll(async () => {
+  desktop = await startDesktopEntry();
+});
+
+test.afterAll(async () => {
+  await stopDesktopEntry(desktop);
+});
+
 /**
  * E2E-META
  * Purpose: A real literature review run must answer an adult-versus-pediatric liver immune-pathway question from live
  *   PubMed and bioRxiv evidence, then hand off a 14-pathway count table, a grouped bar chart, and a report that flags
- *   contradictions. The Session runs with every skill and every specialist switched off.
+ *   contradictions. The run is driven through the desktop entry, which is the new front end, with every skill and
+ *   every specialist switched off.
  * Steps:
  *   1. Disable every built-in specialist and detach the Session's specialist and Reviewer, then set the Session to an
  *      empty skill whitelist and enable every literature MCP source.
- *   2. Submit the fixed research question with machine-checkable delivery instructions and wait for the main Run chain.
+ *   2. Open the Session in the desktop entry and submit the fixed research question with machine-checkable delivery
+ *      instructions, then wait for the main Run chain.
  *   3. Assert a successful PubMed MCP search with records and a successful bioRxiv preprint search, a readable
  *      14-row CSV, a PNG or SVG bar chart, and a report with Methods, Results, Contradictory findings and
  *      References plus at least four distinct citations. bioRxiv only searches a trailing window of up to 365 days,
  *      so the review may report no matching preprints as long as Methods names both databases.
  * Environment: Opt-in isolated real E2E stack at E2E_BASE_URL with a Runner scientific environment (Python and
- *   matplotlib), live literature MCP sources, and a registered real model.
+ *   matplotlib) and live literature MCP sources, plus the desktop Vite entry on 4178 proxied to that stack.
  * Type: real
  * LLM: Live generator through E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN. No judge model.
  * WebSearch: None. The Session's connector set contains only literature MCP sources; the Web connector is off.
  * PaperSources: Live arXiv, bioRxiv, Europe PMC, medRxiv and PubMed metadata/abstracts through their MCP tools.
  *   PubMed and bioRxiv must be ready; their records, rate limits and coverage vary.
  * MCP: All installed MCP sources whose manifest kind is "literature", exposed through the product's MCP flow.
- * OtherExternal: Local ScienceDiscovery API, Runner code execution and matplotlib rendering, browser UI and Artifact store.
+ * OtherExternal: Local ScienceDiscovery API, Runner code execution and matplotlib rendering, the desktop entry and
+ *   Artifact store.
  * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN.
  * CostSideEffects: Billable generation tokens, live literature API traffic, a temporary Project/Session/model, and
  *   local Artifact evidence. The Project and model are deleted and built-in specialist toggles are restored in finally.
  */
-test("Literature review: adult vs pediatric liver immune pathways with a 14-pathway chart", {
+test("desktop literature review: adult vs pediatric liver immune pathways with a 14-pathway chart", {
   tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@sandbox:bubblewrap"],
 }, async ({ journey, page }, info: TestInfo) => {
   const runBudget = positiveNumber("E2E_LIT_REVIEW_RUN_TIMEOUT_MS", 3_600_000);
@@ -227,13 +248,19 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
   if (existingModelId) {
     allowRealEnvException(info, "Explicit live model already registered on the isolated stack; credentials stay server-side.");
   }
-  const real = existingModelId ? undefined : requireRealEnv(info, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
-  await requireRealStack(info);
+  if (!existingModelId) requireRealEnv(info, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+  // Same origin the helper talks to: a health probe against a different port
+  // would gate on one stack and then drive another.
+  await requireRealStack(info, API_ORIGIN);
+  // The desktop app reads its token from localStorage, not from the shared
+  // storage state, so it has to be seeded before the first navigation.
+  await seedDesktopOrigin(page);
 
   const startedAt = new Date().toISOString();
   const metrics: Record<string, any> = {
     schema_version: 1,
-    case: "literature-immune-liver-real",
+    case: "desktop-literature-immune-liver-real",
+    entry: "desktop",
     question: researchQuestion,
     prompt,
     started_at: startedAt,
@@ -258,7 +285,7 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
     integration_status: "running",
   };
 
-  let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
+  let fixture: DesktopFixture | undefined;
   let runId: string | undefined;
   let initialRunId: string | undefined;
   let terminal = false;
@@ -271,10 +298,12 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
   let primaryError: unknown;
 
   journey.scenario({
-    goal: "Run the fixed adult-versus-pediatric liver immune-pathway literature review with every skill and specialist off, "
-      + "and verify that live PubMed/bioRxiv evidence reaches a 14-pathway CSV, a bar chart and a contradiction-aware report.",
+    goal: "Run the fixed adult-versus-pediatric liver immune-pathway literature review from the desktop entry with every "
+      + "skill and specialist off, and verify that live PubMed/bioRxiv evidence reaches a 14-pathway CSV, a bar chart and "
+      + "a contradiction-aware report.",
     preconditions: [
       "Opt-in isolated real stack with a registered live model",
+      "Desktop Vite entry on 4178 proxied to that stack",
       "PubMed and bioRxiv MCP sources ready",
       "All built-in specialists and every skill disabled",
     ],
@@ -326,26 +355,16 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
         const remaining = await requestJson<Specialist[]>(page, "/api/specialists");
         expect(remaining.filter((specialist) => specialist.enabled !== false), "Every specialist must be off").toEqual([]);
 
-        fixture = await createProjectAndSession(page, {
-          approvalMode: "always_allow",
-          projectName: `Literature immune liver ${Date.now()}`,
-          sessionTitle: "Adult vs pediatric liver immune pathways",
-          ...realModelThinking(),
-          ...(existingModelId
-            ? { modelId: existingModelId }
-            : {
-              model: {
-                apiToken: real!.E2E_LLM_TOKEN!,
-                baseUrl: real!.E2E_LLM_BASE_URL!,
-                model: real!.E2E_LLM_MODEL!,
-                name: `Literature immune liver ${Date.now()}`,
-                apiVariant: realModelApiVariant(),
-                ...realModelThinking(),
-              },
-            }),
+        const thinking = realModelThinking();
+        fixture = await createDesktopFixture(page, {
+          name: "Literature immune liver",
+          // The desktop entry reaches the same endpoint the web journeys use,
+          // so it carries the same wire variant and thinking policy.
+          model: { apiVariant: realModelApiVariant(), ...thinking },
+          session: thinking,
         });
         metrics.session_id = fixture.session.id;
-        metrics.generator_model_id = fixture.session.modelId ?? existingModelId ?? null;
+        metrics.generator_model_id = fixture.model?.id ?? existingModelId ?? null;
 
         const prefix = `/api/sessions/${encodeURIComponent(fixture.session.id)}`;
         const configured = await requestJson<{ enabledConnectorIds: string[]; enabledSkillIds: string[] }>(
@@ -388,11 +407,12 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
     if (!configuredLitSources.length || !fixture) return;
 
     await journey.step(
-      "Ask the fixed liver immune-pathway question and wait for the main Run chain",
-      "The live model runs the prompt with literature-only MCP tools and reaches a terminal main-Run chain.",
+      "Ask the fixed liver immune-pathway question from the desktop composer and wait for the main Run chain",
+      "The desktop entry opens the Session, the live model runs the prompt with literature-only MCP tools from the "
+        + "composer, and the main-Run chain reaches a terminal state.",
       async () => {
-        await openProjectSession(page, fixture!);
-        const run = await sendUserMessage(page, fixture!.session.id, prompt);
+        await openDesktopSession(page, fixture!);
+        const run = await sendMessage(page, fixture!.session.id, prompt);
         runId = run.id;
         initialRunId = run.id;
         metrics.initial_run_id = run.id;
@@ -607,7 +627,7 @@ test("Literature review: adult vs pediatric liver immune pathways with a 14-path
     await writeFile(path, JSON.stringify(metrics, null, 2));
     await info.attach("literature-immune-liver-metrics", { path, contentType: "application/json" });
     if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") {
-      await cleanupJourney(page, fixture).catch((error) => { metrics.cleanup_error = String(error); });
+      await cleanupDesktopFixture(fixture).catch((error) => { metrics.cleanup_error = String(error); });
     }
     if (metrics.cleanup_error && !primaryError) throw new Error(metrics.cleanup_error);
   }
