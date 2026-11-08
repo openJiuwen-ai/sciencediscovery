@@ -478,6 +478,32 @@ export class ShellExecutions {
     this.finish(execution, { state: "failed", provenance: "committed", error: detail });
   }
 
+  /** True when the Runner has definitively refused to hand over an execution it
+   *  had already accepted: 401/403 mean "not yours any more", 404 means "not
+   *  there". None of these become readable by waiting, so they are terminal. */
+  private acceptedButUnreadable(execution: Record, error: unknown): boolean {
+    if (!execution.accepted) return false;
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    return httpStatus === 401 || httpStatus === 403 || httpStatus === 404;
+  }
+
+  /** Settle an accepted execution whose result can no longer be read. It is
+   *  recorded as failed with committed provenance, and the message says what is
+   *  actually known: the command was accepted and may have run, but the Runner
+   *  will not return its result, so the workspace must be inspected before
+   *  anything is re-run. */
+  private failUnreadableResult(execution: Record, error: unknown): void {
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    const code = httpStatus === 404 ? "EXECUTION_NOT_FOUND" : "AUTHORIZATION_REVOKED";
+    const detail = "Runner accepted this command but would not return its result"
+      + ` (HTTP ${httpStatus ?? "unknown"}). The outcome could not be read;`
+      + " inspect the workspace before running anything again.";
+    execution.observation = { ...execution.observation, status: "blocked",
+      failureCount: (execution.observation?.failureCount ?? 0) + 1,
+      lastError: { code, message: detail, retryable: false, ...(httpStatus ? { httpStatus } : {}) } };
+    this.finish(execution, { state: "failed", provenance: "committed", error: detail });
+  }
+
   /** Observation and existing-result finalization only. This method cannot submit. */
   async reconcile(id: string, owner: ExecutionOwner, handlers = this.recovery, runner?: RunnerResolver, signal?: AbortSignal): Promise<AgentShellExecution> {
     let execution = this.record(id, owner);
@@ -774,6 +800,13 @@ export class ShellExecutions {
           // so this is a definite failure, not an unknown outcome. Settle it
           // failed so the tool call fails visibly instead of blocking the run.
           this.rejectSubmission(execution, error);
+        } else if (this.acceptedButUnreadable(execution, error)) {
+          // Accepted, but the Runner will not hand the finished execution over
+          // (401/403/404 — #998's finalization-stage "Execution not found for
+          // this Agent"). Nothing here is retryable and there is no result to
+          // wait for, so an unknown outcome only keeps the tool call and the
+          // run alive forever.
+          this.failUnreadableResult(execution, error);
         } else this.unavailable(execution, error, !execution.accepted ? "SUBMIT_OUTCOME_UNKNOWN" : observed && terminal(observed.state) ? "PROVENANCE_COMMIT_FAILED" : "OBSERVATION_UNAVAILABLE");
       } finally { acknowledge(); }
     }).catch(() => {

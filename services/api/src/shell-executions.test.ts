@@ -186,6 +186,39 @@ test("a true submit-outcome-unknown still stays unconfirmed and blocks the works
   assert.equal(submissions, 1);
 });
 
+test("an accepted execution whose result the Runner refuses to hand over settles failed, not unknown", async (context) => {
+  // #998: the 4th #978 reproduction is accepted=true at stage=finalization,
+  // where the Runner answers 401 "Execution not found for this Agent". Nothing
+  // there is retryable and there is no result to wait for: leaving it unknown
+  // kept the tool call silent and the run in "running" until the idle watchdog.
+  for (const status of [401, 403, 404] as const) {
+    const f = await fixture(context);
+    let id = "";
+    const runner = {
+      startShellExecution: async (r: ShellExecutionRequest) => {
+        id = r.executionId;
+        return { ...owner, id, state: "running", queuedAt: "now" };
+      },
+      // The command ran and finished; only the hand-off of its result fails.
+      getShellExecution: async () => ({ ...owner, id, state: "completed", queuedAt: "now", result: f.result, version: f.ref }),
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, async (executionId, dispatch) => {
+      await dispatch(request(executionId));
+      throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
+    });
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.accepted, true, `${status}: the Runner had accepted the command`);
+    assert.equal(record.state, "failed", `${status}: it must reach a terminal state`);
+    assert.equal(record.provenance, "committed", `${status}: the outcome is recorded, not left unconfirmed`);
+    assert.equal(record.finalization, "committed", `${status}: finalization is not left pending`);
+    assert.equal(record.finishedAt !== undefined, true, `${status}: a terminal record`);
+    assert.match(record.error ?? "", /would not return its result/, `${status}: the error says the result was unreadable`);
+    assert.match(record.error ?? "", /inspect the workspace/, `${status}: the error says what to do instead of retrying`);
+    assert.equal(record.observation?.lastError?.retryable, false, `${status}: not retried`);
+    assert.equal(f.notices.unread(owner).length, 1, `${status}: the failure is visible to the caller`);
+  }
+});
+
 test("a Runner 4xx rejection on submission settles failed, not unknown, and the error is visible", async (context) => {
   // #978: the Runner answered the submit call with a definite 4xx (e.g. 401
   // "Execution not found for this Agent"). The command never ran, so this is a
