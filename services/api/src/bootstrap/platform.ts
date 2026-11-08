@@ -29,6 +29,7 @@ import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
   EvolveGoal, EvolveRunProposal, ModelsDevPayload, ResolvedProxy,
 } from "@sciencediscovery/schema";
+import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -525,6 +526,24 @@ export function createPlatformServices(
       return source.length > BEST_SOURCE_LIMIT
         ? { ...summary, bestSource: source.slice(0, BEST_SOURCE_LIMIT), bestSourceTruncated: { chars: source.length }, resultArtifact }
         : { ...summary, bestSource: source, resultArtifact };
+    },
+    // Stopping is the one evolve action the agent could not take, so changing a
+    // scoring formula mid-search meant starting a second run beside the first:
+    // two searches, two frozen formulas, one budget. The route the desktop uses
+    // already existed; this is the same capability behind a tool, scoped to the
+    // session that is asking so a run id from elsewhere cannot be stopped.
+    stopEvolveRun: async (runId: string) => {
+      const wanted = runId.trim().replace(/^subtask:evolve:/, "");
+      const run = await evolutionStore.readRun(wanted);
+      if (!run || run.sessionId !== turn.sessionId) {
+        const known = (await evolutionStore.listRuns(turn.sessionId)).slice(0, 8)
+          .map((item) => `${item.id}（${item.status}）`).join("、");
+        throw new Error(`no such search in this session: ${wanted}. ${
+          known ? `The searches in this session: ${known}` : "This session has no searches yet."}`);
+      }
+      if (!isEvolveRunActive(run.status)) return { runId: run.id, status: run.status, stopping: false };
+      await evolveOrchestrator.stop(run.id);
+      return { runId: run.id, status: "stopping", stopping: true };
     },
   });
 
