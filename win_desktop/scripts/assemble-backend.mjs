@@ -29,6 +29,7 @@ import { replaceVenvTrampolines, copyVenvRuntimeDlls } from "./lib/venv-launcher
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
 import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
+import { readPycHeader, sourceOfPyc, recompileTimestampBytecode, pycModeVerdict } from "./lib/pyc-mode.mjs";
 
 const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -899,6 +900,76 @@ try {
 }
 
 
+// A1c bytecode-mode conversion (SIZEOPT W28-C): 7c asks compileall for
+// checked-hash, but compileall only REWRITES a .pyc it judges invalid, and the
+// 971 timestamp-mode files the copy chain carried in were all judged VALID in the
+// build tree (each .py kept its original mtime), so 7c correctly skipped them —
+// measured, four arms, logs/w28-evidence/w28c-compileall-mode-experiment.mjs.
+// They then ship in timestamp mode, which the installer invalidates on extraction
+// (NSIS restamps every .py to the install instant), so the first launch
+// recompiles them: measured 1,048 .pyc rewritten (problems W28-C).
+//
+// This converts exactly those files, in place, with the payload's own base
+// interpreter. It runs AFTER A1/A1b on purpose: both execute a payload python,
+// and an implicit import that has to compile a source writes TIMESTAMP-mode
+// bytecode by default — converting before them would let a self-check silently
+// undo the conversion (lesson L67). py_compile does not import, so the base
+// interpreter compiles every source regardless of which venv owns it; arm C of
+// logs/w28-evidence/w28c-arm-c-overwrite.txt measured all 971 (including the jw
+// venv and src zones) converting under the base python, recompiled=971 failed=0.
+//
+// Shape chosen by measurement, not assumption. Deleting the stale files and
+// letting compileall recreate them also works (w28c-fix-prototype.mjs) but
+// deletion costs ~500 ms/file on this machine's filesystem stack
+// (w28c-c2-unlink-cost.txt: workspace, its parent, and a different volume all
+// ~500 ms; only %TEMP% was fast), so 971 deletes ~= 8 minutes, while overwriting
+// in place costs 0.4 ms/file. Global `compileall -f` reaches the same end state
+// by recompiling all 37,998 sources (280 s, w28c-force-all-cost.txt) to fix 971
+// (8.4 s) — 33x the work for nothing.
+say("converting timestamp-mode bytecode to checked-hash (A1c)");
+{
+  // Walk the payload once for timestamp-mode .pyc, mapping each to its source.
+  // This is deliberately a SEPARATE walk from A5/A6's, which runs later and counts
+  // the RESULT: two independent numbers that must agree is the point — if A1c
+  // converts N and A6-mode still sees a non-zero count, something reintroduced
+  // timestamp bytecode after this step, and the gate names it instead of shipping.
+  const staleSources = [];
+  const staleStack = [out];
+  while (staleStack.length > 0) {
+    const dir = staleStack.pop();
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { staleStack.push(p); continue; }
+      if (!e.isFile() || !e.name.endsWith(".pyc")) continue;
+      const hdr = readPycHeader(p);
+      // null (short/unreadable header) is left for A6-mode to name; A1c only
+      // converts files it can positively identify as timestamp-mode.
+      if (hdr === null || hdr.isHash) continue;
+      const src = sourceOfPyc(p);
+      if (src && existsSync(src)) staleSources.push(src);
+    }
+  }
+  if (staleSources.length === 0) {
+    say("A1c: no timestamp-mode bytecode to convert (payload is already checked-hash)");
+  } else {
+    say(`A1c: converting ${staleSources.length} timestamp-mode .pyc to checked-hash`);
+    try {
+      const r = recompileTimestampBytecode(basePythonExe, staleSources, { env: compileEnv, log: say });
+      say(`A1c: recompiled ${r.recompiled}, failed ${r.failed}`);
+      // A partial conversion is a failed conversion: the files that did not
+      // convert still ship timestamp-mode and still recompile on first launch.
+      if (r.failed > 0) {
+        fail(`A1c bytecode-mode conversion had ${r.failed} failure(s) — see the FAIL lines above`);
+      }
+    } catch (error) {
+      fail(`A1c bytecode-mode conversion FAILED: ${error.message}`);
+    }
+  }
+}
+
+
 // A2 RequiredFiles manifest: every file an installer must contain, checked
 // before the build is accepted (field history: a missing patch directory
 // killed the stack cold start in a shipped installer).
@@ -980,6 +1051,10 @@ const topRel = []; // [len, relPath] kept sorted desc, capped at 10
 // WHICH subtree lost coverage.
 let pyCount = 0;
 let pycCount = 0;
+// A6-mode (W28-C) accumulates in the same walk: how many .pyc ship in
+// timestamp mode (invalidated by NSIS extraction) vs unparseable headers.
+let pycTimestampCount = 0;
+let pycUnparseableCount = 0;
 const pycByRegion = {};
 {
   const stack = [out];
@@ -997,6 +1072,15 @@ const pycByRegion = {};
         pyCount += 1;
       } else if (e.name.endsWith(".pyc")) {
         pycCount += 1;
+        // A6-mode piggybacks on this walk: read the 16-byte header for the
+        // invalidation mode. Measured over all 37,324 .pyc of a real tree:
+        // 9.6 s (0.26 ms/file) inside a ~57-minute build (w28c-precode-probe).
+        // A null header is short/unreadable -- counted and named by the gate,
+        // never silently passed (a mode nobody could read is not a mode that
+        // is fine).
+        const hdr = readPycHeader(p);
+        if (hdr === null) pycUnparseableCount += 1;
+        else if (!hdr.isHash) pycTimestampCount += 1;
       } else {
         continue;
       }
@@ -1071,6 +1155,34 @@ if (maxRel > maxRelBuild) {
 }
 
 // ---------------------------------------------------------------------------
+
+// A6-mode bytecode invalidation gate (SIZEOPT W28-C): A6 above proves the payload
+// CARRIES its bytecode; this proves the bytecode is in a mode the INSTALLED tree
+// can reuse. They are different properties and the release7 payload passed the
+// first while failing the second — 37,324 .pyc, all counted, 971 of them in
+// timestamp mode, which NSIS extraction invalidates on arrival (problems W28-C).
+//
+// The counts come from the same A5/A6 walk (readPycHeader per .pyc, accumulated
+// beside pycCount), so no second traversal. The walk measured the RESULT of A1c's
+// conversion; A1c measured its own input. Two independent numbers that must agree
+// — if A1c converted N files and this still sees a non-zero timestamp count,
+// something reintroduced timestamp bytecode between the two, and the build names
+// it instead of shipping it.
+//
+// Like A6 this prints on EVERY build: mode coverage is a trend quantity (a new
+// copy step, an upstream wheel built the wrong way) and a budget nobody sees
+// eroding fails all at once.
+{
+  const modeVerdict = pycModeVerdict({ pyc: pycCount, timestamp: pycTimestampCount, unparseable: pycUnparseableCount });
+  say(`A6 bytecode mode: ${pycCount - pycTimestampCount - pycUnparseableCount} checked-hash, ${pycTimestampCount} timestamp, ${pycUnparseableCount} unparseable (of ${pycCount} .pyc)`);
+  if (!modeVerdict.ok) {
+    fail(`payload bytecode mode failed: ${modeVerdict.reason}.\n` +
+      `  A1c converts timestamp-mode .pyc to checked-hash after the import self-checks. A non-zero count here means either A1c did not run over this file, or a later step reintroduced timestamp bytecode (an implicit import that had to compile a source writes timestamp mode by default). Check the A1c lines above.\n` +
+      `  Do NOT ship: the installed tree recompiles these on first launch (measured 1,048 .pyc rewritten, a multi-second cold-start regression, problems W28-C).`);
+  }
+}
+
+
 // 10. version.json manifest
 
 let repoCommit = "unknown";
