@@ -98,6 +98,17 @@ export const MAX_RUNNER_FILE_BYTES = 0;
 export const MAX_RUNNER_WORKSPACE_BYTES = DEFAULT_MAX_WORKSPACE_BYTES;
 /** Product default: executions are unlimited until explicitly configured. */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 0;
+/**
+ * How long the Runner waits for a launched process's terminal event once the
+ * process itself has already been observed. `close` only fires after every
+ * writer of the inherited stdio pipes is gone, so a descendant left behind by
+ * the command can delay it forever; `exit` can likewise stay unobserved after
+ * a kill when the process cannot be reaped. The command itself may still run
+ * without a deadline (see DEFAULT_EXECUTION_TIMEOUT_MS), but a process the
+ * Runner already saw end — or was told to end — must not keep the execution
+ * (and the Workspace queue behind it) pending.
+ */
+export const DEFAULT_TERMINATION_GRACE_MS = 10_000;
 
 /** Provenance label: no resource quotas; isolation is bubblewrap + seccomp. */
 export const RESOURCE_LIMIT_MODE = "none" as const;
@@ -130,6 +141,11 @@ export interface ExecutorConfig extends SandboxRuntimeConfig {
   maxWorkspaceBytes: number;
   /** Combined stdout+stderr retain budget; 0 disables truncation. */
   maxOutputBytes: number;
+  /**
+   * Bound on observing a process's terminal event after its own exit or after
+   * a kill. Tests shorten it; production uses DEFAULT_TERMINATION_GRACE_MS.
+   */
+  terminationGraceMs?: number;
   /**
    * [windows-desktop] operator-authorized workspace roots (in addition to
    * the data dir's projects/remote-workspaces) accepted by the workspace
@@ -593,6 +609,20 @@ function localPythonPackageBindArguments(packagePath: string | undefined): strin
   return packagePath ? ["--ro-bind", packagePath, LOCAL_PYTHON_PACKAGES_MOUNT] : [];
 }
 
+/**
+ * The Runner killed the process but never observed it exit. The command may
+ * still be writing to the workspace, so its terminal state cannot be claimed:
+ * callers must quarantine the workspace instead of publishing a snapshot.
+ */
+export class ProcessTerminationUnverifiedError extends Error {
+  readonly code = "PROCESS_TERMINATION_UNVERIFIED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProcessTerminationUnverifiedError";
+  }
+}
+
 async function runSandboxed(
   config: ExecutorConfig,
   launch: SandboxLaunch,
@@ -616,19 +646,45 @@ async function runSandboxed(
       let settled = false;
       let checkingQuota = false;
       let stopError: Error | undefined;
+      let exitTimer: NodeJS.Timeout | undefined;
+      let killTimer: NodeJS.Timeout | undefined;
+      const graceMs = config.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
 
       const finish = (error?: Error, exitCode = 1) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        clearTimeout(exitTimer);
+        clearTimeout(killTimer);
         clearInterval(quotaTimer);
         signal?.removeEventListener("abort", abort);
         if (error) reject(error);
         else resolveRun({ exitCode, stderr, stdout });
       };
+      // The commanded process is gone, but `close` may never arrive: any
+      // descendant that inherited stdout/stderr keeps them open. Its own exit
+      // is the outcome; whatever output already arrived stays, and a paused
+      // stream still holds its buffered bytes.
+      const settleExited = () => {
+        if (settled || !child) return;
+        stdout += drainPaused(child.stdout);
+        stderr += drainPaused(child.stderr);
+        // A normal exit is the outcome, including exit 0. A signal leaves
+        // exitCode null, so the abort, quota, or timeout reason still wins.
+        finish(child.exitCode !== null ? undefined : stopError, child.exitCode ?? 1);
+      };
       const stop = (error: Error) => {
         stopError ??= error;
         if (child) killSandboxProcess(child);
+        // SIGKILL is asynchronous, and a process in uninterruptible I/O — or a
+        // process group that already vanished — never reports `exit`. Bound the
+        // join so cancellation cannot leave the execution running forever.
+        killTimer ??= setTimeout(() => {
+          if (settled) return;
+          if (child && (child.exitCode !== null || child.signalCode !== null)) settleExited();
+          else finish(new ProcessTerminationUnverifiedError(
+            `${timeoutLabel} could not be verified as terminated after cancellation`));
+        }, graceMs);
       };
       // Do not release a writer or clean up its mounts until the process has exited.
       const abort = () => stop(new Error(`${timeoutLabel} aborted`));
@@ -645,11 +701,7 @@ async function runSandboxed(
               finish(stopError, 1);
             } else if (child.exitCode !== null || child.signalCode !== null) {
               // The process already finished and its close event was missed.
-              // A normal exit is the outcome, including exit 0. A signal leaves
-              // exitCode null, so the abort, quota, or timeout reason still wins.
-              stdout += drainPaused(child.stdout);
-              stderr += drainPaused(child.stderr);
-              finish(child.exitCode !== null ? undefined : stopError, child.exitCode ?? 1);
+              settleExited();
             }
           }, timeoutMs)
         : undefined;
@@ -698,6 +750,12 @@ async function runSandboxed(
           try { onOutput?.("stderr", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stderr, chunk, maxOutputBytes, Buffer.byteLength(stdout));
           stderr = next.text;
+        });
+        child.once("exit", () => {
+          // Normally `close` follows within a tick. A descendant holding the
+          // inherited stdio pipes can delay it indefinitely, so treat the
+          // observed exit as the terminal event after a bounded grace period.
+          exitTimer ??= setTimeout(settleExited, graceMs);
         });
         child.once("error", (error) => finish(error));
         child.once("close", (code) => finish(stopError, code ?? 1));
