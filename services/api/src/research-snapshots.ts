@@ -298,16 +298,13 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       for (const file of workspaceFiles) {
         const provenance = store.getWorkspaceFileProvenance(session.id, file.path);
         if (provenance) workspaceProvenance.push(provenance);
-        try {
-          // A size preview needs metadata, not every workspace payload or its checksum.
-          // Unknown hashes get a preview-only identity; the real export still hashes the bytes.
-          const objectPath = previewObjectSizes
-            ? addPreviewObject(provenance?.currentRevision.contentHash ?? sha256(Buffer.from(JSON.stringify([session.id, file.path, file.modifiedAt, file.size]))), file.size, "evidence")
-            : await addObject(await readFile(resolveWorkspaceFile(store.workspacePath(session.id), file.path)), "evidence");
-          workspace.push({ ...file, objectPath });
-        } catch (error) {
-          omissions.push(`workspace:${session.id}:${file.path}:${error instanceof Error ? error.message : "unreadable"}`);
-        }
+        // A size preview needs metadata, not every workspace payload or its checksum.
+        // Unknown hashes get a preview-only identity. For a real export the payload bytes
+        // are read after the retained files are known, so a deselected file is never read.
+        const objectPath = previewObjectSizes
+          ? addPreviewObject(provenance?.currentRevision.contentHash ?? sha256(Buffer.from(JSON.stringify([session.id, file.path, file.modifiedAt, file.size]))), file.size, "evidence")
+          : "";
+        workspace.push({ ...file, objectPath });
       }
       const validations = {
         artifactReviews: await store.listArtifactReviews(session.id),
@@ -412,6 +409,22 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       trajectory.index.historicalEntries = trajectory.index.untimedEntries;
       trajectory.details = trajectory.details.filter((detail) => agentIds.has(detail.entry.agentId));
       selectedSessionRecords.push({ ...record, ...history, runs, workspace: selectedWorkspace.workspace, workspaceProvenance, validations, runEvents: [], trajectory });
+    }
+    // Read retained workspace payload bytes only after selection: a deselected
+    // file is never read or hashed, and each retained file is read exactly once.
+    if (!previewObjectSizes) {
+      for (const record of selectedSessionRecords) {
+        const retained: typeof record.workspace = [];
+        for (const file of record.workspace) {
+          try {
+            file.objectPath = await addObject(await readFile(resolveWorkspaceFile(store.workspacePath(record.session.id), file.path)), "evidence");
+            retained.push(file);
+          } catch (error) {
+            omissions.push(`workspace:${record.session.id}:${file.path}:${error instanceof Error ? error.message : "unreadable"}`);
+          }
+        }
+        record.workspace = retained;
+      }
     }
     const filteredMemoryGraph = level === "complete" ? availableMemoryGraph : filterMemoryGraph(availableMemoryGraph, selectedArtifacts, new Set(selectedSessionRecords.flatMap((record) => (record.executionRuns ?? []).map((run) => run.id))));
     const packageMemoryGraph = level === "complete" && !includeFullMemoryGraph ? undefined : filteredMemoryGraph;
