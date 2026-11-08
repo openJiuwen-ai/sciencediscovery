@@ -538,3 +538,28 @@ test("imported trajectory retains exact input and complete reasoning after resta
   assert.equal(completed.state, "ready");
   await inspect(completed.entrySessionId!);
 });
+
+test("a finished continuation stays readable after its source session is deleted, and a mismatched source is 404", async (context) => {
+  const { rawRequest, request, project } = await fixture(context, true);
+  const target = await project();
+  const source = researchTrajectoryFixture();
+  const sourceId = target.firstSession.id;
+  await request(`/api/projects/${target.id}/research-package/import?sessionId=${sourceId}`, { method: "POST", body: Buffer.from(source.bytes) });
+  const operation = await (await request(`/api/sessions/${sourceId}/research-continuations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "delete-source-after-copy" }) })).json() as ResearchContinuationOperation;
+  let last = operation;
+  for (let attempt = 0; attempt < 100 && last.state === "copying"; attempt++) {
+    await new Promise((done) => setTimeout(done, 50));
+    last = await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation;
+  }
+  assert.equal(last.state, "ready", last.error ?? "Research continuation did not finish");
+  assert.ok(last.entrySessionId);
+  // A mismatched source id is a 404: the status route checks the operation's own source id.
+  const mismatched = await rawRequest(`/api/sessions/not-the-source/research-continuations/${operation.id}`);
+  assert.equal(mismatched.status, 404);
+  // The source session may be gone; the durable operation must stay readable.
+  await request(`/api/sessions/${sourceId}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmationId: "" }) });
+  const afterDelete = await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation;
+  assert.equal(afterDelete.state, "ready");
+  assert.equal(afterDelete.id, operation.id);
+  assert.equal(afterDelete.entrySessionId, last.entrySessionId);
+});

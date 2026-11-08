@@ -3,11 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
-import { ApiRequestError } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
 import { downloadExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
+import { copyPollStep } from "./research-package-copy-poll.js";
 import "../styles/research-package.css";
 
 export interface PackageRequest {
@@ -93,12 +93,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
     const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; failures = 0; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { requestId.current = crypto.randomUUID(); await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => {
       if (!active) return;
-      // A missing source session or operation is a terminal polling outcome:
-      // stop and clear the stale copy instead of retrying every three seconds.
-      if (reason instanceof ApiRequestError && reason.status === 404) { setCopy(undefined); setError(t.copyMissing); return; }
-      // Transient transport/service failures retry a bounded number of times.
-      if (++failures >= 5) { setCopy(undefined); setError(t.copyPollingFailed); return; }
-      timer = setTimeout(poll, 3000);
+      const step = copyPollStep(copy, failures, { ok: false, reason }, t);
+      failures = step.failures; setCopy(step.copy); setError(step.error);
+      if (!step.terminate) timer = setTimeout(poll, 3000);
     }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, copy?.id, copy?.state]);
