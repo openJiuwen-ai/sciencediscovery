@@ -110,25 +110,34 @@ export async function api<T>(
 }
 
 /** A real model is either an owned profile built from `E2E_LLM_*`, or a profile
- *  already on the stack named by `E2E_MODEL_ID`. */
+ *  already on the stack named by `E2E_MODEL_ID` (the shared real catalog's
+ *  `E2E_LLM_MODEL_ID` is accepted for the same purpose). */
 export function requireModelSource(info: TestInfo): void {
-  if (process.env.E2E_MODEL_ID?.trim()) return;
+  if (reuseIdFromEnv() !== undefined) return;
   const missing = ["E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN"]
     .filter((name) => !process.env[name]?.trim());
   if (missing.length) info.skip(true, `requires E2E_MODEL_ID or ${missing.join(", ")}`);
+}
+
+/** The id of a model profile this run reuses instead of creating one. The
+ *  shared real catalog spells the variable `E2E_LLM_MODEL_ID`; the
+ *  desktop-only suites predate that spelling, so both are read. */
+function reuseIdFromEnv(): string | undefined {
+  return process.env.E2E_MODEL_ID?.trim() || process.env.E2E_LLM_MODEL_ID?.trim();
 }
 
 async function resolveModel(
   page: Page,
   name: string,
   profile: Record<string, unknown> = {},
+  modelId?: string,
 ): Promise<{ model: DesktopModel; owned: boolean }> {
-  const reuseId = process.env.E2E_MODEL_ID?.trim();
+  const reuseId = modelId?.trim() || reuseIdFromEnv();
   if (reuseId) {
     const models = await api<DesktopModel[]>(page, "/api/models");
     const model = models.find((profile) => profile.id === reuseId);
     if (model === undefined) {
-      throw new Error(`E2E_MODEL_ID ${reuseId} is not a profile on ${API_ORIGIN}/api/models`);
+      throw new Error(`The requested model ${reuseId} is not a profile on ${API_ORIGIN}/api/models`);
     }
     return { model, owned: false };
   }
@@ -139,17 +148,20 @@ async function resolveModel(
   if (!baseUrl || !model || !llmToken) {
     throw new Error("requires E2E_MODEL_ID or E2E_LLM_BASE_URL, E2E_LLM_MODEL and E2E_LLM_TOKEN");
   }
+  // The profile is spread first so it can carry policy fields, and the
+  // credentials and identity are written after it so a caller cannot replace
+  // the endpoint, the token or the name through them.
+  const profileVariant = typeof profile.apiVariant === "string" ? profile.apiVariant.trim() : "";
   const created = await api<DesktopModel>(page, "/api/models", {
     data: {
+      ...profile,
       apiToken: llmToken,
-      // The shared real catalog names the variant `E2E_LLM_API_VARIANT`; the
-      // desktop-only suites predate that spelling, so both are read.
-      apiVariant: process.env.E2E_LLM_API_VARIANT?.trim()
+      apiVariant: profileVariant
+        || process.env.E2E_LLM_API_VARIANT?.trim()
         || process.env.E2E_LLM_VARIANT?.trim() || "openai",
       baseUrl,
       model,
       name,
-      ...profile,
     },
     method: "POST",
   });
@@ -164,6 +176,9 @@ async function resolveModel(
 export interface DesktopFixtureOptions {
   /** Base name for the Project, the Session and an owned model profile. */
   name?: string;
+  /** Id of a model profile already on the stack; when set, no profile is
+   *  created and `model` is ignored. */
+  modelId?: string;
   /** Profile fields for an owned model that `E2E_LLM_*` does not carry, such
    *  as `apiVariant`, `thinkingMode` and `thinkingEffort`. */
   model?: Record<string, unknown>;
@@ -184,7 +199,7 @@ export async function createDesktopFixture(
 ): Promise<DesktopFixture> {
   const suffix = randomUUID().slice(0, 8);
   const name = `${options.name ?? "Desktop SRBench"} ${suffix}`;
-  const { model: profile, owned } = await resolveModel(page, name, options.model);
+  const { model: profile, owned } = await resolveModel(page, name, options.model, options.modelId);
   let project: DesktopProject | undefined;
   try {
     const created = await api<DesktopProject & { firstSession: DesktopSession; project?: DesktopProject }>(

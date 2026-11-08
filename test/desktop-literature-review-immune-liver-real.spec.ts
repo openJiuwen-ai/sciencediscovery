@@ -358,9 +358,12 @@ test("desktop literature review: adult vs pediatric liver immune pathways with a
         const thinking = realModelThinking();
         fixture = await createDesktopFixture(page, {
           name: "Literature immune liver",
-          // The desktop entry reaches the same endpoint the web journeys use,
-          // so it carries the same wire variant and thinking policy.
-          model: { apiVariant: realModelApiVariant(), ...thinking },
+          // A pre-registered model is reused as it is; otherwise the desktop
+          // entry reaches the same endpoint the web journeys use, so the owned
+          // profile carries the same wire variant and thinking policy.
+          ...(existingModelId
+            ? { modelId: existingModelId }
+            : { model: { apiVariant: realModelApiVariant(), ...thinking } }),
           session: thinking,
         });
         metrics.session_id = fixture.session.id;
