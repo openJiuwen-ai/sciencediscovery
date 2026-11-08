@@ -33,6 +33,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
   const [copy, setCopy] = useState<CopyOperation>();
   const [exportTask, setExportTask] = useState<{ project: string; task: ExportOperation }>();
   const [messageId, setMessageId] = useState("");
@@ -114,12 +115,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     const poll = () => { void readExport(client, exportTask.project, exportTask.task.id).then(task => {
       if (!active) return;
       const step = exportPollStep(exportTask.project, exportTask.task, failures, { ok: true, task }, t);
-      failures = step.failures; setError(step.error); setExportTask(step.task);
+      failures = step.failures; setExportNotice(step.error); setExportTask(step.task);
       if (!step.terminate) timer = setTimeout(poll, 1000);
     }).catch(reason => {
       if (!active) return;
       const step = exportPollStep(exportTask.project, exportTask.task, failures, { ok: false, reason }, t);
-      failures = step.failures; setError(step.error); setExportTask(step.task);
+      failures = step.failures; setExportNotice(step.error); setExportTask(step.task);
       if (!step.terminate) timer = setTimeout(poll, 3000);
     }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
@@ -144,7 +145,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
     {copy ? <div className="research-package-status" role="status">{copy.state === "copying" ? t.copying : copy.state === "failed" ? copy.error ?? t.failed : t.ready}{copy.state === "ready" && copy.entrySessionId ? <button onClick={() => onOpen(copy.entrySessionId!)} type="button">{t.open}</button> : null}</div> : null}
     {exportTask ? <div className={`research-package-status${exportTask.task.status === "failed" ? " is-failed" : ""}`} role="status">{["queued", "running"].includes(exportTask.task.status) ? <span aria-hidden="true" className="spinner" /> : null}{exportTask.task.status === "completed" ? exportTask.task.filename : exportTask.task.status === "failed" ? exportTask.task.error ?? t.failed : t.preparing}{exportTask.task.status === "completed" ? <button onClick={() => void perform(() => downloadExport(client, exportTask.project, exportTask.task))} type="button">{t.download}</button> : null}</div> : null}
-    {error ? <p role="alert" className="research-package-error">{error}</p> : null}
+    {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
       <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></header>
       <div className="modal-body">
