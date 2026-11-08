@@ -966,13 +966,29 @@ test("global Runner management routes remotely, requires authentication and neve
     if (!connected) throw new Error("Runner disconnected");
     return { listEnvironments: async () => [{ id: "remote-only" }], deleteRemoteWorkspace: async (key: string) => { deleted.push(key); } } as unknown as RunnerClient;
   });
+  let transportClosed = false;
   const emptyCatalog: McpCatalog = { loadedAt: new Date().toISOString(), revision: "runner-management", servers: [] };
   const server = createApiServer({ ...testConfig(root), memoryGraph: { url: "", internalToken: "" } }, {
     remoteCompute: remote,
-    mcpTransport: { catalog: async () => emptyCatalog, reload: async () => emptyCatalog, invoke: async () => { throw new Error("No MCP in Runner settings test"); } },
+    mcpTransport: {
+      // Make dependency disposal outlive the HTTP close callback so the
+      // fixture cannot race its own data-directory removal.
+      close: async () => {
+        await new Promise<void>((done) => setTimeout(done, 20));
+        transportClosed = true;
+      },
+      catalog: async () => emptyCatalog,
+      reload: async () => emptyCatalog,
+      invoke: async () => { throw new Error("No MCP in Runner settings test"); },
+    },
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(async () => { await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => {
+    await closeApiServer(server);
+    store.close();
+    assert.equal(transportClosed, true, "API dependencies must finish closing before removing their data directory");
+    await rm(root, { recursive: true, force: true });
+  });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const prefix = `${origin}/api/remote-hosts/${host.id}`;
   assert.equal((await fetch(`${prefix}/environments`)).status, 401);
