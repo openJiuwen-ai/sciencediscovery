@@ -186,11 +186,12 @@ test("a true submit-outcome-unknown still stays unconfirmed and blocks the works
   assert.equal(submissions, 1);
 });
 
-test("an accepted execution whose result the Runner refuses to hand over settles failed, not unknown", async (context) => {
-  // #998: the 4th #978 reproduction is accepted=true at stage=finalization,
-  // where the Runner answers 401 "Execution not found for this Agent". Nothing
-  // there is retryable and there is no result to wait for: leaving it unknown
-  // kept the tool call silent and the run in "running" until the idle watchdog.
+test("an accepted execution the Runner refuses to hand over before any result settles failed, not unknown", async (context) => {
+  // #998: the 4th #978 reproduction is accepted=true, where the Runner answers
+  // the hand-over read with 401 "Execution not found for this Agent" before any
+  // result reaches the API. Nothing there is retryable and there is no result to
+  // wait for: leaving it unknown kept the tool call silent and the run in
+  // "running" until the idle watchdog.
   for (const status of [401, 403, 404] as const) {
     const f = await fixture(context);
     let id = "";
@@ -199,13 +200,13 @@ test("an accepted execution whose result the Runner refuses to hand over settles
         id = r.executionId;
         return { ...owner, id, state: "running", queuedAt: "now" };
       },
-      // The command ran and finished; only the hand-off of its result fails.
-      getShellExecution: async () => ({ ...owner, id, state: "completed", queuedAt: "now", result: f.result, version: f.ref }),
+      // The Runner never hands the finished execution over: the follow poll
+      // answers 401/403/404 and no result is captured.
+      getShellExecution: async () => {
+        throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
+      },
     } as unknown as RunnerClient;
-    const job = await f.service.start(owner, identity, () => runner, async (executionId, dispatch) => {
-      await dispatch(request(executionId));
-      throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
-    });
+    const job = await f.service.start(owner, identity, () => runner, (executionId, dispatch) => dispatch(request(executionId)));
     const record = await f.service.wait(job.id, owner, 1_000);
     assert.equal(record.accepted, true, `${status}: the Runner had accepted the command`);
     assert.equal(record.state, "failed", `${status}: it must reach a terminal state`);
@@ -216,6 +217,42 @@ test("an accepted execution whose result the Runner refuses to hand over settles
     assert.match(record.error ?? "", /inspect the workspace/, `${status}: the error says what to do instead of retrying`);
     assert.equal(record.observation?.lastError?.retryable, false, `${status}: not retried`);
     assert.equal(f.notices.unread(owner).length, 1, `${status}: the failure is visible to the caller`);
+  }
+});
+
+test("a Runner refusal after the result was captured keeps the captured result, not an unreadable failure", async (context) => {
+  // Once existingResult has pinned the bytes, a later 401/403/404 is a failed
+  // provenance finalization, not an unreadable result: the completed command
+  // must stay recoverable and the captured bytes must survive reconciliation.
+  for (const status of [401, 403, 404] as const) {
+    const f = await fixture(context);
+    let id = "";
+    const runner = {
+      health: async () => ({ runnerInstanceId: "original-ledger", runnerBootId: "boot-one", capabilities: { executionRecoveryVersion: 1 } }),
+      startShellExecution: async (r: ShellExecutionRequest) => {
+        id = r.executionId;
+        return { ...owner, id, state: "running", queuedAt: "now", receipt: receipt(1) };
+      },
+      getShellExecution: async () => recoveredTerminal(id, f),
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, async (executionId, dispatch) => {
+      await dispatch(request(executionId)); // pins the result via existingResult
+      throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
+    }, recoveryContext);
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.state, "unknown", `${status}: a captured result is not an unreadable failure`);
+    assert.equal(record.provenance, "unconfirmed", `${status}: the captured result is not committed as a loss`);
+    assert.equal(record.finalization, "failed", `${status}: finalization failed and stays recoverable`);
+    assert.doesNotMatch(record.error ?? "", /would not return its result/, `${status}: a completed command is not reported unreadable`);
+
+    // reconcile re-runs the finalizer on the same pinned bytes.
+    let finalized: ShellExecutionResult | undefined;
+    const recovered = await f.service.reconcile(job.id, owner, {
+      runner: () => runner,
+      finalize: async (_context: unknown, result: ShellExecutionResult) => { finalized = result; return result; },
+    });
+    assert.equal(recovered.state, "completed", `${status}: reconciliation completes with the captured result`);
+    assert.equal(finalized?.stdout, "done", `${status}: the pinned result bytes are re-used`);
   }
 });
 
@@ -1330,4 +1367,3 @@ test("context recovery uses committed exit status once and never invokes legacy 
     assert.equal(lost.submissions(), 1);
   }
 });
-
