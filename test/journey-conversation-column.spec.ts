@@ -142,7 +142,12 @@ test.describe("conversation column", { tag: ["@isolation:session", "@category:e2
         let release!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
         const route = `**/api/sessions/${fixture!.session.id}`;
-        await page.route(route, async request => { await gate; await request.continue(); });
+        let intercepted = false;
+        await page.route(route, async request => {
+          intercepted = true;
+          await gate;
+          await request.continue();
+        });
         try {
           // Reload the Session's own address rather than "/". A bare "/" does
           // not name a Session, so the app falls back to the first one in the
@@ -151,9 +156,11 @@ test.describe("conversation column", { tag: ["@isolation:session", "@category:e2
           // under test never loads. The deep link is the app's normal restore
           // path: a Session named by the URL wins over the "first item" default.
           await page.goto(`/projects/${encodeURIComponent(fixture!.project.id)}/sessions/${encodeURIComponent(fixture!.session.id)}`, { waitUntil: "domcontentloaded" });
+          // Confirm the gate holds this read before measuring the skeleton.
+          await expect.poll(() => intercepted, { timeout: 10_000 }).toBe(true);
           const skeleton = page.locator(".message-skeleton");
           await expect(skeleton).toBeVisible();
-          const skeletonBox = (await skeleton.boundingBox())!;
+          const skeletonBox = (await skeleton.boundingBox({ timeout: 5_000 }))!;
           expect(skeletonBox.width).toBe(1000);
           const pane = (await page.locator(".conversation").boundingBox())!;
           expect(Math.abs(skeletonBox.x + skeletonBox.width / 2 - pane.x - pane.width / 2)).toBeLessThanOrEqual(1);
