@@ -22,7 +22,7 @@
 export const ZH = {
   researchPackage: {
     continueUnavailable: "此导入记录尚未完整恢复，暂不能继续聊天。请查看导入省略项并恢复缺失服务后重新导入。", sourceUnavailable: "会话或所属项目已不存在。请刷新会话列表后重试。",
-    projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入最近会话，也可以选择一个已有项目。", necessaryContents: "会话记录 · 当前文件与产物 · 依赖证据", completeContents: "会话记录 · 文件与产物版本 · 已有研究历史",
+    projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入「会话」，也可以选择一个已有项目。", necessaryContents: "会话记录 · 当前文件与产物 · 依赖证据", completeContents: "会话记录 · 文件与产物版本 · 已有研究历史",
     newOptions: "新建会话选项", projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", sessionScope: "导出整个会话及其研究材料，不只是页面上的聊天文字。", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
     title: "科研证据包", import: "导入会话", export: "导出会话", continue: "继续聊天", branch: "创建新分支聊天", source: "返回来源会话",
     readOnly: "导入证据快照 · 只读。创建独立副本后，可使用已有材料继续研究。", copying: "正在复制研究记录，可切换会话…", ready: "研究副本已准备好", failed: "操作失败", open: "打开会话", download: "下载", preparing: "正在后台准备证据包…", close: "关闭",
@@ -58,8 +58,8 @@ export const ZH = {
     project: "项目",
     /** The standalone-conversation section, and the title the app shows
      *  wherever a Session outside a Project has to name one. */
-    recent: "最近会话",
-    noRecent: "还没有最近会话",
+    recent: "会话",
+    noRecent: "还没有会话",
     noProjects: "还没有项目",
     newProject: "新建项目",
     projectName: "项目名称",
@@ -284,7 +284,7 @@ export const ZH = {
     chooseProject: "选择项目",
     /** The entry that files the next conversation outside every Project. */
     noProject: "不在任何项目中",
-    noProjectNote: "这个会话会出现在「最近会话」里",
+    noProjectNote: "这个会话会出现在「会话」里",
     categories: {
       research: "文献调研",
       experiment: "实验设计",

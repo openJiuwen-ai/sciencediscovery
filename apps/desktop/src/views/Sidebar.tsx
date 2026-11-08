@@ -77,7 +77,7 @@ const PAGE_SIZE = 6;
  * Session belongs to.
  *
  * 项目 comes first — every Project the user made is a fold with its own `+`,
- * which starts a Session inside it. Below it, 最近会话 holds the conversations
+ * which starts a Session inside it. Below it, 会话 holds the conversations
  * that belong to no Project: the inbox's Sessions, where the top button and the
  * first message land. That distinction is the point of the screen: a
  * conversation is standalone until someone puts it in a Project, and a Project
@@ -86,7 +86,7 @@ const PAGE_SIZE = 6;
  * thing.
  *
  * This column used to end with a 会话 section that held nothing but a running
- * Session, if any. 最近会话 takes its place, and the running Session keeps its
+ * Session, if any. 会话 takes its place, and the running Session keeps its
  * spinner on its own row instead of being listed twice.
  */
 export function Sidebar({
@@ -145,7 +145,7 @@ export function Sidebar({
       return;
     }
     // The sentinel is the service's name for "nobody has named this". Storing
-    // it as a Session's name would make a conversation the column and 最近会话
+    // it as a Session's name would make a conversation the column and 会话
     // are built not to list: the row would leave the sidebar while its
     // messages stayed. 未命名会话 is what the field shows for an unnamed
     // Session, and Enter on that text is not a rename to it either.

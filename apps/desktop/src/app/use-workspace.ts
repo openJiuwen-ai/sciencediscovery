@@ -157,7 +157,7 @@ export interface WorkspaceState {
   /** The Projects the user made, oldest first. The inbox is not here. */
   projects: Project[];
   providers: ModelProvider[];
-  /** The inbox's Sessions, newest first — the sidebar's 最近会话 section. */
+  /** The inbox's Sessions, newest first — the sidebar's 会话 section. */
   recent: Session[];
   /** The run that is streaming right now, or the one that was still going when
    *  the session was opened. Finished runs are not here — they are in
@@ -710,7 +710,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * The inbox is read alongside the user's Projects even though the server
    * leaves it out of `GET /api/projects`: this map is replaced whole on every
    * refresh (after each create, rename and delete), so a listing that skipped
-   * it would empty 最近会话 the first time the user did anything. */
+   * it would empty 会话 the first time the user did anything. */
   const refreshSessionLists = useCallback(async (): Promise<Session[] | undefined> => {
     try {
       const inbox = inboxRef.current ?? (await ensureInbox(client));
@@ -1775,7 +1775,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       try {
         // The inbox is where a launch with no Project begins. It is created
         // here rather than a Project invented for the user: a fresh install
-        // now opens with no Projects at all, and 最近会话 is simply where the
+        // now opens with no Projects at all, and 会话 is simply where the
         // first conversation lands.
         const inbox = await ensureInbox(client);
         inboxRef.current = inbox;
@@ -1858,7 +1858,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     return listed;
   }, [sessionsByProject]);
 
-  // 最近会话 is the inbox's own list, not every Session in the workspace: the
+  // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
   const recent = useMemo(
     () => (inboxProject === undefined ? [] : byRecency(listedByProject[inboxProject.id] ?? [])),

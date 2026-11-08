@@ -75,11 +75,13 @@ test("with no Project chosen the chip is an invitation, not a name", () => {
       projects={PROJECTS}
     />,
   );
-  // 最近会话 names where the Session ends up; it is not a destination the user
+  // 会话 names where the Session ends up; it is not a destination the user
   // can pick, so the chip asks for one instead of naming the inbox.
   assert.match(markup, /class="composer-strip-project is-placeholder"/);
   assert.match(markup, /class="composer-strip-label">选择项目</);
-  assert.doesNotMatch(markup, /最近会话/);
+  const chip = markup.match(/composer-strip-label">([^<]*)</);
+  assert.equal(chip?.[1], TEXT.landing.projectDirectory);
+  assert.ok(!markup.includes(TEXT.sidebar.recent));
 });
 
 test("every Project is offered in order, and the one in effect is checked", () => {
