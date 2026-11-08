@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RunFailureCode, TimeoutKind } from "@sciencediscovery/schema";
+import type { TimeoutKind } from "@sciencediscovery/schema";
 
 import type { ChatMessage } from "./api/types.js";
 import type { RunStreamState } from "./run-stream/model.js";
@@ -22,7 +22,7 @@ import { TEXT } from "./text.js";
 
 type FailureTimeout = { kind: TimeoutKind; timeoutMs: number };
 
-function isRunFailureCode(code: string | undefined): code is RunFailureCode {
+function isRunFailureCode(code: string | undefined): code is keyof typeof TEXT.runFailure.titles {
   return code !== undefined && Object.hasOwn(TEXT.runFailure.titles, code);
 }
 

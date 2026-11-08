@@ -307,8 +307,8 @@ describe("a stopped run ends on a hairline, not a notice", () => {
 
   it("offers model selection recovery for a queued run with a deleted model", () => {
     const html = render({ error: { code: "SESSION_MODEL_UNAVAILABLE", message: "The session model is not available" }, status: "failed", terminal: true });
-    assert.match(html, /SESSION_MODEL_UNAVAILABLE/u);
-    assert.match(html, /原模型已删除，请重新选择/u);
+    assert.equal(html.match(/原模型已删除，请重新选择/gu)?.length, 1);
+    assert.doesNotMatch(html, /run-failure-row/u);
   });
 
   it("keeps the marked notice for what actually went wrong", () => {
