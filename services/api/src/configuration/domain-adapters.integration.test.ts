@@ -417,7 +417,7 @@ test("CFG-T20/21: revoking automatic authorization during verification prevents 
 
 test("CFG-01/02/14: finite adapters preserve inherited connectors, unrelated fields, and reversal restores absence", async context => {
   const h = await harness(context);
-  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
+  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "security.approval_mode", "security.automatic_configuration", "security.default_approval", "security.network", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
   await h.store.replaceGlobalSettings({ enabledConnectorIds: ["uniprot"], semanticReviewEnabled: false });
   const view = await h.framework.propose(h.session.id, { capabilityId: "connector.enable", values: { connectorId: "pubmed" } });
   assert.deepEqual(h.store.getSessionSettings(h.session.id).effective.enabledConnectorIds, ["uniprot"]);
@@ -578,4 +578,35 @@ test("review connector JSON errors are domain input errors and no-op differs fro
   const snapshot = h.store.configurationSnapshot(h.session.id, "connector.enable", "pubmed"), scope = { kind: "session" as const, id: h.session.id };
   assert.equal(adapter.preview(adapter.normalize({ connectorId: "pubmed", restoreConnectorIds: "[]" }), snapshot, scope).ready, true);
   assert.equal(adapter.preview(adapter.normalize({ connectorId: "pubmed", restoreInheritance: true }), snapshot, scope).ready, true);
+});
+
+test("CFG-XBUG-07: disabling and re-enabling before a scheduler tick cannot revive an old automatic authorization", async context => {
+  const h = await harness(context), old = await dueAutomaticProposal(h);
+  await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: false });
+  await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: true });
+  await assert.rejects(h.framework.decide(h.session.id, old.id, { revision: old.revision, previewDigest: old.previewDigest!, decision: "apply" }, undefined, "auto"), { code: "CONFIGURATION_AUTO_NOT_AUTHORIZED" });
+  assert.equal(h.store.getSessionSettings(h.session.id).effective.enabledConnectorIds.includes("pubmed"), false);
+  assert.equal(h.framework.service.get(h.session.id, old.id).autoApplyAt, undefined);
+});
+
+test("CFG-XBUG-07: countdown withdrawal persists with versioned timeline/work records and preserves other Sessions", async context => {
+  const h = await harness(context), old = await dueAutomaticProposal(h);
+  await h.store.updateSession(h.other.id, { autoApplyLowRiskConfiguration: true });
+  const run = await h.store.createSessionRun({ sessionId: h.other.id, prompt: "Other owned session", settingsSnapshot: h.store.resolveRuntimeSettings(h.other.id).effective });
+  const other = await h.framework.propose(h.other.id, { capabilityId: "connector.enable", values: { connectorId: "pubmed" }, runId: run.id }); assert.ok(other.autoApplyAt);
+  const beforeVersion = h.framework.service.get(h.session.id, old.id).stateVersion;
+  await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: false }); await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: true });
+  const saved = h.framework.service.get(h.session.id, old.id); assert.equal(saved.autoApplyAt, undefined); assert.equal(saved.stateVersion, beforeVersion + 1);
+  assert.equal(h.store.getConnectorConfigurationRequest(h.session.id, old.id)?.autoApplyAt, undefined); assert.equal(h.framework.service.get(h.other.id, other.id).autoApplyAt, other.autoApplyAt);
+  const db = h.store.getConfigurationDatabase(); assert.equal(db.prepare("SELECT state_version FROM configuration_timeline_v3 WHERE request_id=?").get(old.id)?.state_version, saved.stateVersion);
+  assert.ok(db.prepare("SELECT 1 FROM configuration_work_v3 WHERE request_id=?").get(old.id));
+  const reopened = await h.reopen(), restored = new ConversationalConfigurationFramework(reopened, { nativeExecutor: true, connector: () => ({ name: "PubMed", ready: true }) });
+  assert.equal(restored.service.get(h.session.id, old.id).autoApplyAt, undefined); assert.equal(reopened.getSession(h.session.id)?.autoApplyLowRiskConfiguration, true);
+});
+
+test("CFG-XBUG-07: revocation does not prohibit a new independently scheduled proposal", async context => {
+  const h = await harness(context), old = await dueAutomaticProposal(h); await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: false });
+  await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: true });
+  await h.framework.decide(h.session.id, old.id, { revision: old.revision, previewDigest: old.previewDigest!, decision: "dismiss" });
+  const fresh = await dueAutomaticProposal(h); assert.notEqual(fresh.id, old.id); assert.ok(fresh.autoApplyAt); assert.equal(h.framework.service.get(h.session.id, old.id).autoApplyAt, undefined);
 });

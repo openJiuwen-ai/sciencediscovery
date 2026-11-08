@@ -20,6 +20,27 @@ async function fixture(context: { after(action: () => Promise<void>): void }) {
   return { store, session, run, framework, scheduled };
 }
 
+test("CFG-XE2E-04: security.approval_mode continues its bound task using the approved receipt", async context => {
+  const h = await fixture(context);
+  let cleanups = 0;
+  h.framework.options.sessionApprovalCleanup = async () => { cleanups++; };
+  const frozen = structuredClone(h.run.settingsSnapshot);
+  let card = await h.framework.propose(h.session.id, {
+    protocolVersion: 3, runId: h.run.id, capabilityId: "security.approval_mode", values: { approvalMode: "always_allow" },
+  });
+  assert.ok(card.securityConsent);
+  card = await h.framework.confirmSecurity(h.session.id, card.id, { revision: card.revision, targetDigest: card.securityConsent.targetDigest, acknowledged: true });
+  const applied = await h.framework.decide(h.session.id, card.id, {
+    revision: card.revision, previewDigest: card.previewDigest!, selectedOptionId: "persist", decision: "apply",
+  });
+  assert.equal(cleanups, 1);
+  assert.equal(applied.activation.mode, "next_execution");
+  assert.equal(applied.activation.state, "active");
+  assert.equal(applied.resumption.state, "queued");
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  assert.doesNotThrow(() => verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] }));
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
 test("CFG-XE2E-04: web.credential continues its bound task using the approved receipt", async context => {
   const h = await fixture(context);
   await h.store.updateWebSettings({ providerApiKeys: { jina: "synthetic-continuation-fixture" } });
@@ -37,6 +58,33 @@ test("CFG-XE2E-04: web.credential continues its bound task using the approved re
   assert.doesNotThrow(() => verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] }));
   assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
 });
+test("CFG-X10c: independent consent and save resume the bound task without applying automation to it", async context => {
+  const h = await fixture(context);
+  const frozen = structuredClone(h.run.settingsSnapshot);
+  const card = await h.framework.propose(h.session.id, {
+    protocolVersion: 3, runId: h.run.id, capabilityId: "security.automatic_configuration",
+    values: { autoApplyLowRiskConfiguration: true },
+  });
+  assert.ok(card.securityConsent);
+  assert.ok(card.previewDigest);
+  const decision = { revision: card.revision, previewDigest: card.previewDigest, selectedOptionId: "persist", decision: "apply" as const };
+  await assert.rejects(h.framework.decide(h.session.id, card.id, decision), { code: "SECURITY_CONSENT_REQUIRED" });
+  assert.equal(h.scheduled.length, 0);
+  const confirmed = await h.framework.confirmSecurity(h.session.id, card.id, {
+    revision: card.revision, targetDigest: card.securityConsent.targetDigest, acknowledged: true,
+  });
+  assert.ok(confirmed.previewDigest);
+  const approvedDecision = { ...decision, revision: confirmed.revision, previewDigest: confirmed.previewDigest };
+  const applied = await h.framework.decide(h.session.id, card.id, approvedDecision);
+  assert.equal(applied.activation.mode, "next_request");
+  assert.equal(applied.activation.state, "needs_user_action");
+  assert.equal(applied.resumption.state, "queued");
+  await h.framework.decide(h.session.id, card.id, approvedDecision);
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] });
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
+
 
 test("CFG-X09a: saving a bound Reviewer setting resumes the task without changing its snapshot", async context => {
   const h = await fixture(context);

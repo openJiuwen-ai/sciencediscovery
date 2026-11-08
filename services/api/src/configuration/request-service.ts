@@ -9,6 +9,7 @@ import { normalizeConfigurationFields } from "./schema-normalizer.js";
 import { canonical, ConfigurationError, digest, displayText, integer, invalid, object, string } from "./validation.js";
 import { choosePlan, defaultChoices, makeChoiceReceipt, normalizeChoices, projectChoiceReceipt, selectedChoice } from "./choices.js";
 import { configurationNeedKey } from "./need-key.js";
+import { configurationNeedsSecurityConsent } from "./security-consent.js";
 
 const editable = new Set(["collecting_input", "awaiting_confirmation", "needs_fix", "stale", "failed"]);
 export interface ConfigurationRequestServiceOptions {
@@ -140,7 +141,7 @@ export class ConfigurationRequestService {
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) invalid("Verification target cannot contain credentials or query data");
       return url.href;
     });
-    if (!["before_first_run", "same_run", "next_run", "next_request", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
+    if (!["before_first_run", "same_run", "next_run", "next_request", "next_execution", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
     const maxRequests = integer(verification.maxRequests, "maxRequests", 0);
     if (maxRequests > 10 || typeof source.ready !== "boolean") invalid("Verification budget exceeds the supported limit");
     return { fields, changes, disposition: source.disposition ?? (source.ready ? "change" : "missing_input"),
@@ -148,24 +149,32 @@ export class ConfigurationRequestService {
       verificationPlan: { targets, actions: verification.actions.map((action) => string(action, "verification action", 500)), maxRequests, mayCharge: verification.mayCharge },
       activationMode: snapshot.runId && source.activationMode === "before_first_run" ? "next_run" : source.activationMode, ready: source.ready && !fields.some((field) => field.kind === "credential" && field.required && field.status !== "provided"),
       ...(source.endpointAuthorization ? { endpointAuthorization: structuredClone(source.endpointAuthorization) } : {}),
+      ...(source.securityConsent ? { securityConsent: this.securityConsent(source.securityConsent) } : {}),
       ...(source.data ? { data: structuredClone(source.data) } : {}) };
   }
   private refreshDigest(record: ConfigurationRecord): void {
     record.view.previewDigest = digest({ id: record.view.id, revision: record.view.revision, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, input: record.input, scope: record.view.scope, target: record.target, plan: record.plan, resourceVersions: record.resourceVersions, stopGeneration: record.stopGeneration, credentialHandle: record.credentialHandle,
       ...(record.view.protocolVersion === 3 ? { protocolVersion: 3, options: record.view.options, selectedOptionId: record.view.selectedOptionId, needKey: record.view.needKey } : {}) });
   }
+  private securityConsent(input: NonNullable<ConfigurationPlan["securityConsent"]>): NonNullable<ConfigurationPlan["securityConsent"]> {
+    const value = object(input, ["targetDigest", "statement"], "securityConsent");
+    const targetDigest = string(value.targetDigest, "securityConsent.targetDigest", 100);
+    if (!/^sha256:[a-f0-9]{64}$/.test(targetDigest)) invalid("Invalid security consent target");
+    return { targetDigest, statement: string(value.statement, "securityConsent.statement", 1500) };
+  }
   private actions(record: ConfigurationRecord): ConfigurationRequestView["allowedActions"] {
     const view = record.view;
     if (view.state === "collecting_input" || view.state === "needs_fix" || view.state === "stale" || view.state === "failed") return ["preview", "dismiss"];
     if (view.state === "awaiting_confirmation") return ["preview", "apply", "dismiss"];
     if (view.state === "validating" || view.state === "applying") return ["query"];
-    if (view.state === "applied") return [...(this.registry.get(view.capabilityId).previewReversal && (!selectedChoice(record) || selectedChoice(record)?.kind === "persisted_apply") ? ["reversal" as const] : []), ...(["pending", "failed", "needs_user_action"].includes(view.resumption.state) ? ["continue" as const] : [])];
+    if (view.state === "applied") return [...(this.registry.get(view.capabilityId).previewReversal && (!selectedChoice(record) || selectedChoice(record)?.kind === "persisted_apply") ? ["reversal" as const] : []), ...(["pending", "failed", "needs_user_action"].includes(view.resumption.state) || view.activation.mode === "next_execution" && view.activation.state === "failed" ? ["continue" as const] : [])];
     return [];
   }
   /** Every field below is an explicit whitelist; internal record extensions stay server-only. */
   private project(record: ConfigurationRecord): ConfigurationRequestView {
     const view = record.view;
     const endpointAuthorization = this.host.projectEndpointAuthorization?.(record);
+    const securityConsent = this.host.projectSecurityConsent?.(record);
     return structuredClone({
       ...(view.protocolVersion === 3 ? { protocolVersion: 3 as const, options: normalizeChoices(view.options ?? []), selectedOptionId: view.selectedOptionId, needKey: view.needKey,
         ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
@@ -174,6 +183,7 @@ export class ConfigurationRequestService {
       ...(view.fields.some(field => field.kind === "credential") ? { credentialTargetDigest: digest([view.capabilityId, record.plan.data?.credentialTarget ?? record.target, view.fields.filter(field => field.kind === "credential").map(field => field.id)]) } : {}),
       capabilityId: view.capabilityId, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, state: view.state,
       ...(endpointAuthorization ? { endpointAuthorization } : {}),
+      ...(securityConsent ? { securityConsent } : {}),
       ...(view.autoApplyAt ? { autoApplyAt: view.autoApplyAt } : {}),
       ...(view.decisionSource ? { decisionSource: view.decisionSource } : {}),
       reason: { code: view.reason.code, message: view.reason.message },
@@ -202,7 +212,9 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    const capabilityId = String(value.capabilityId);
+    if (input.protocolVersion !== 3 && (configurationNeedsSecurityConsent(capabilityId) ||
+        ["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(capabilityId)))
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

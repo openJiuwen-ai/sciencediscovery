@@ -6,10 +6,11 @@ import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
 export interface ConfigurationActivationHost {
   /** Current Stop/version/approved revision checks, repeated after any asynchronous activation. */
   isCurrent(record: ConfigurationRecord, receipt: ConfigurationApplyReceipt): Promise<boolean>;
+  prepareDeferredActivation?(record: ConfigurationRecord, receipt: ConfigurationApplyReceipt): Promise<void>;
   /** Only the approved delta. Do not reload the complete mutable Session configuration. */
   activate(record: ConfigurationRecord, receipt: ConfigurationApplyReceipt): Promise<ConfigurationActivationEvidence>;
   saveActivation(requestId: string, result: { state: "active" | "failed" | "suppressed" | "needs_user_action"; evidence?: ConfigurationActivationEvidence; code?: string }): Promise<void>;
-  enqueueResume(record: ConfigurationRecord, evidence: ConfigurationActivationEvidence): Promise<void>;
+  enqueueResume(record: ConfigurationRecord, evidence?: ConfigurationActivationEvidence): Promise<void>;
 }
 
 /** CFG-T28: saved configuration, active runtime and queued continuation are independent durable stages. */
@@ -23,7 +24,24 @@ export class ConfigurationActivationCoordinator {
       await this.host.saveActivation(record.view.id, { state: "suppressed", code: "activation_baseline_changed" });
       return "suppressed";
     }
-    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "requires_restart") {
+    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "requires_restart" || record.plan.activationMode === "next_execution") {
+      try {
+        if (record.plan.activationMode === "next_execution" && !this.host.prepareDeferredActivation) throw new Error("Execution policy activation requires a host preparation adapter");
+        await this.host.prepareDeferredActivation?.(record, receipt);
+      }
+      catch {
+        await this.host.saveActivation(record.view.id, { state: "failed", code: "deferred_preparation_failed" });
+        return "failed";
+      }
+      if (!await this.host.isCurrent(record, receipt)) {
+        await this.host.saveActivation(record.view.id, { state: "suppressed", code: "activation_baseline_changed" });
+        return "suppressed";
+      }
+      if (record.plan.activationMode === "next_execution") {
+        await this.host.saveActivation(record.view.id, { state: "active" });
+        if (record.view.runId) await this.host.enqueueResume(record);
+        return "active";
+      }
       await this.host.saveActivation(record.view.id, { state: "needs_user_action", code: record.plan.activationMode });
       return "needs_user_action";
     }
