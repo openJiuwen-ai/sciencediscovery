@@ -83,3 +83,45 @@ test("research copy integrity rejects a reviewer reference that was not restored
   const sessions = new Map([["source", targetSession]]);
   assert.throws(() => verifyResearchCopy(source, target, ids, sessions, "project"), /validation\.reviewerAuditTasks\.reviewIds\[missing-review\]/);
 });
+
+for (const settled of ["failed", "succeeded"] as const) test(`duplicate execution observations (unconfirmed → ${settled}) are matched by position, not by first ID`, () => {
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id("source");
+  const unconfirmed = { id: "exec", status: "unconfirmed", environmentRevisionId: "system-shell-bwrap-v1" };
+  const settledRow = { id: "exec", status: settled, environmentRevisionId: null };
+  const source = { sessions: [{ session: { id: "source" }, executionRuns: [unconfirmed, settledRow] }] };
+  const restore = (row: Record<string, unknown>) => ({
+    ...remapRunEvent(row, ids), id: ids.id(String(row.id)), environmentRevisionId: ids.optional(String(row.environmentRevisionId ?? "")) ?? null,
+  });
+  const target = { sessions: [{ session: { id: targetId }, executionRuns: [restore(unconfirmed), restore(settledRow)] }] };
+  const sessions = new Map([["source", targetId]]);
+  assert.doesNotThrow(() => verifyResearchCopy(source, target, ids, sessions, "project"));
+});
+
+test("duplicate execution observations still reject a changed settled observation", () => {
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id("source");
+  const unconfirmed = { id: "exec", status: "unconfirmed", environmentRevisionId: "system-shell-bwrap-v1" };
+  const settledRow = { id: "exec", status: "failed", environmentRevisionId: null };
+  const source = { sessions: [{ session: { id: "source" }, executionRuns: [unconfirmed, settledRow] }] };
+  const restore = (row: Record<string, unknown>) => ({
+    ...remapRunEvent(row, ids), id: ids.id(String(row.id)), environmentRevisionId: ids.optional(String(row.environmentRevisionId ?? "")) ?? null,
+  });
+  const target = { sessions: [{ session: { id: targetId }, executionRuns: [restore(unconfirmed), { ...restore(settledRow), status: "succeeded" }] }] };
+  const sessions = new Map([["source", targetId]]);
+  assert.throws(() => verifyResearchCopy(source, target, ids, sessions, "project"), /executionRuns\.status/);
+});
+
+test("duplicate execution observations still reject a missing settled observation", () => {
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id("source");
+  const unconfirmed = { id: "exec", status: "unconfirmed", environmentRevisionId: "system-shell-bwrap-v1" };
+  const settledRow = { id: "exec", status: "failed", environmentRevisionId: null };
+  const source = { sessions: [{ session: { id: "source" }, executionRuns: [unconfirmed, settledRow] }] };
+  const restore = (row: Record<string, unknown>) => ({
+    ...remapRunEvent(row, ids), id: ids.id(String(row.id)), environmentRevisionId: ids.optional(String(row.environmentRevisionId ?? "")) ?? null,
+  });
+  const target = { sessions: [{ session: { id: targetId }, executionRuns: [restore(unconfirmed)] }] };
+  const sessions = new Map([["source", targetId]]);
+  assert.throws(() => verifyResearchCopy(source, target, ids, sessions, "project"), /executionRuns count/);
+});

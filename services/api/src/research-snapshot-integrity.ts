@@ -60,10 +60,23 @@ export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, i
     for (const kind of ["executionRuns", "promptManifests", "artifactDerivations", "subagents", "shellExecutions", "claims", "evidenceLinks", "evidenceItems"]) {
       const expected = rows(original[kind]), actual = rows(copy[kind]);
       equal(`${kind} count`, expected.length, actual.length);
+      // Execution history is append-only: one ID can carry an `unconfirmed`
+      // observation followed by its settled outcome. Pair source and target
+      // observations by (id, position) so each is verified against its own
+      // restored twin, never the first row that happens to share the ID.
+      const byId = new Map<string, Row[]>();
+      for (const item of actual) {
+        const list = byId.get(String(item.id)) ?? [];
+        list.push(item);
+        byId.set(String(item.id), list);
+      }
+      const consumed = new Map<string, number>();
       for (const row of expected) {
         const mapped = remapRunEvent(row, ids);
-        const restored = actual.find((item) => item.id === ids.id(String(row.id)));
+        const key = ids.id(String(row.id));
+        const restored = (byId.get(key) ?? [])[consumed.get(key) ?? 0];
         if (!restored) throw new Error(`Research copy missing ${kind}`);
+        consumed.set(key, (consumed.get(key) ?? 0) + 1);
         // Content and immutable object identities; runtime receipts are deliberately not replayed.
         for (const field of ["content", "text", "code", "stdout", "stderr", "envSnapshot", "inputs", "systemPrompt", "steps", "result", "origin", "sessionId", "turnId", "parentTurnId", "toolCallId", "environmentRevisionId", "executionRunIds", "claimId", "evidenceItemId", "reviewRunId", "createdAt", "startedAt", "finishedAt", "status", "state", "queuedAt", "accepted", "provenance", "path"]) {
           if (field in row) {
