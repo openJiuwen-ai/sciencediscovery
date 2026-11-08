@@ -1128,12 +1128,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const continuationMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/research-continuations(?:\/([^/]+))?$/);
       if (continuationMatch) {
         const sourceId = decodeURIComponent(continuationMatch[1]!);
+        // A durable operation stays readable after its source session is gone:
+        // the status route reads the operation file (and checks its source id)
+        // instead of requiring the session to still exist.
+        if (request.method === "GET" && continuationMatch[2]) return sendJson(response, 200, await getContinuation(sourceId, continuationMatch[2]));
         if (!store.getSession(sourceId)) return sendError(response, 404, "Session not found");
         if (request.method === "POST" && !continuationMatch[2]) {
           const body = await readJson<{ requestId: string }>(request);
           return sendJson(response, 202, await startContinuation(sourceId, body.requestId));
         }
-        if (request.method === "GET" && continuationMatch[2]) return sendJson(response, 200, await getContinuation(sourceId, continuationMatch[2]));
         return sendError(response, 405, "Unsupported continuation operation");
       }
       if (url.pathname === "/api/evolve/status" && request.method === "GET") {
