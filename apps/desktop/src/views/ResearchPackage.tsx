@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
+import { ApiRequestError } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
 import { downloadExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { TEXT } from "../text.js";
@@ -89,8 +90,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   }, [client, dialog, detail?.id, projectId, level, trajectory, graph, files]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
-    let active = true; let timer: ReturnType<typeof setTimeout>;
-    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { requestId.current = crypto.randomUUID(); await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
+    let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
+    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; failures = 0; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { requestId.current = crypto.randomUUID(); await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => {
+      if (!active) return;
+      // A missing source session or operation is a terminal polling outcome:
+      // stop and clear the stale copy instead of retrying every three seconds.
+      if (reason instanceof ApiRequestError && reason.status === 404) { setCopy(undefined); setError(t.copyMissing); return; }
+      // Transient transport/service failures retry a bounded number of times.
+      if (++failures >= 5) { setCopy(undefined); setError(t.copyPollingFailed); return; }
+      timer = setTimeout(poll, 3000);
+    }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, copy?.id, copy?.state]);
   useEffect(() => {
