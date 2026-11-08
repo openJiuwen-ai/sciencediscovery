@@ -61,7 +61,7 @@ export function ExecutionBlockCards({ client, sessionId }: { client: ApiClient; 
       requestTimer = setTimeout(() => controller?.abort(), 5_000);
       try {
         const result = await client.listExecutionBlocks(sessionId, controller.signal);
-        if (active) { setBlocks(result); setError(""); }
+        if (active && !controller.signal.aborted) { setBlocks(result); setError(""); }
       } catch (reason) { if (active) setError(String(reason)); }
       finally {
         clearTimeout(requestTimer);

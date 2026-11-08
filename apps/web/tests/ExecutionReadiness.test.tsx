@@ -134,3 +134,22 @@ test("changing sessions aborts the old repair-card read", async () => {
   } finally { await act(async () => view.unmount()); }
   assert.equal(signals[1]?.aborted, true);
 });
+
+test("switching sessions cancels the old read and ignores its late result", async () => {
+  let resolveOld!: (value: unknown[]) => void;
+  const signals: AbortSignal[] = [];
+  const client = { listExecutionBlocks: async (session: string, signal: AbortSignal) => {
+    signals.push(signal);
+    if (session === "old") return new Promise(resolve => { resolveOld = resolve; });
+    return [{ id: "new", kind: "mcp", runnerId: "MCP", reason: "current session", alternatives: [] }];
+  } } as unknown as ApiClient;
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(ExecutionBlockCards, { client, sessionId: "old" })); });
+  try {
+    await act(async () => view.update(createElement(ExecutionBlockCards, { client, sessionId: "new" })));
+    assert.equal(signals[0]!.aborted, true);
+    await act(async () => resolveOld([{ id: "old", runnerId: "local", reason: "obsolete", alternatives: [] }]));
+    assert.match(JSON.stringify(view.toJSON()), /current session/);
+    assert.doesNotMatch(JSON.stringify(view.toJSON()), /obsolete/);
+  } finally { await act(async () => view.unmount()); }
+});
