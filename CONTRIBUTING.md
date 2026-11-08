@@ -26,8 +26,6 @@ See [Local mode](docs/en/getting-started/deployment.md#local-source-mode-linux--
 variable, and troubleshooting, and [JiuwenSwarm migration: status and hand-over](docs/en/reference/jiuwenswarm-migration-status.md)
 for what is verified and what is still open.
 
-Before changing polling, background previews, async tool assertions, or CI batches, read [Async requests and CI contracts](docs/en/developer-docs/async-ci-contracts.md).
-
 ## Development commands
 
 ```bash
