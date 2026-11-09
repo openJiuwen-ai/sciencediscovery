@@ -385,6 +385,21 @@ export class ShellExecutions {
     if (value.receipt) { execution.receipt = value.receipt; execution.expectedRunnerInstanceId = value.receipt.runnerInstanceId; }
     if (value.evidence) execution.evidence = value.evidence;
     if (value.startedAt && !execution.startedAt) execution.startedAt = new Date().toISOString();
+    // A retry of a pinned, already-failed commit must not reopen the outcome for
+    // the duration of the attempt: the package carries `state`, so a projection
+    // read mid-attempt would see `running`/`pending` for a record whose outcome
+    // never changed (#1018 review F2). Receipts and evidence still advance; the
+    // verdict the export reads does not.
+    if (this.retryingPinnedCommit(execution)) {
+      execution.observation = {
+        ...execution.observation, status: "fresh", lastObservedAt: new Date().toISOString(),
+        lastRunnerState: value.state,
+        // The attempt counter survives, or the budget below can never run out.
+        failureCount: execution.observation?.failureCount ?? 0,
+      };
+      this.save(execution);
+      return;
+    }
     execution.observation = { status: "fresh", lastObservedAt: new Date().toISOString(), lastRunnerState: value.state, failureCount: 0, nextRetryAt: new Date(Date.now() + 1_000).toISOString() };
     execution.state = value.state === "queued" ? "queued" : value.state === "unknown" ? "unknown" : "running";
     execution.finalization = "pending";
@@ -392,6 +407,13 @@ export class ShellExecutions {
     delete execution.error;
     delete execution.finishedAt;
     this.save(execution);
+  }
+
+  /** True while a record is retrying a commit that has already failed once. */
+  private retryingPinnedCommit(execution: Record): boolean {
+    return execution.finalization === "failed"
+      && Boolean(execution.candidateResultRef)
+      && execution.observation?.lastError?.code === "PROVENANCE_COMMIT_FAILED";
   }
 
   private assertTerminalEvidence(observed: ManagedExecution): void {
@@ -454,7 +476,9 @@ export class ShellExecutions {
     // which kept a session's export revision moving forever (#1018). The record
     // stays `unknown` and keeps blocking new work — an unconfirmed outcome is
     // settled by an explicit cancel, not by a timeout — it just stops churning.
-    const commitRetryExhausted = fallback === "PROVENANCE_COMMIT_FAILED" && failureCount > COMMIT_RETRY_LIMIT;
+    // `>=`, not `>`: the limit is a number of attempts, so the fifth exhausting
+    // attempt stops the loop and the message below names the same number.
+    const commitRetryExhausted = fallback === "PROVENANCE_COMMIT_FAILED" && failureCount >= COMMIT_RETRY_LIMIT;
     // Never retain arbitrary HTTP bodies, command arguments or authentication values.
     const transportCode = observationFailureChain(error).map(failure => failure.code)
       .find((value): value is string => typeof value === "string" && /^(?:E[A-Z0-9_]{1,30}|UND_ERR_[A-Z0-9_]+)$/.test(value));
