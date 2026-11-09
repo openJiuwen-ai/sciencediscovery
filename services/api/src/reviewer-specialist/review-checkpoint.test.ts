@@ -217,6 +217,35 @@ test("a narrative report with no citation at all still declares the claim gap", 
   assert.match(reviewerCheckpointPromptContent(result.reviews), /Not checked: claim support —/u);
 });
 
+test("a Deep review that issued no citation task keeps the claim gap", async () => {
+  // #669 review F9: `completed` does not mean a claim was compared with a
+  // source. A report with no parsable citation runs zero citation tasks, both
+  // inconclusive flags stay false, and the stage still reports `completed` — so
+  // dropping the gap there would make an uncited report read as claim-checked.
+  const { cas, store } = fixture("分析结果支持该结论。\n");
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Deep review",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      modelIdentity: "model-1",
+      execute: async () => JSON.stringify({ citation: { findings: [], status: "COMPLETED" }, computation: { findings: [], status: "COMPLETED" } }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = result.reviews[0];
+  assert.equal(review?.reviewLevel, "deep");
+  assert.deepEqual(review?.citationTasks ?? [], [], "no citation produced a task");
+  const claimGap = review?.notChecked?.find((gap) => gap.check === "claim_support");
+  assert.ok(claimGap, "a Deep review that compared nothing still declares the claim gap");
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Not checked: claim support —/u);
+});
+
 test("Reviewer checkpoint excludes Artifacts and versions created by another Session in the same Project", async () => {
   const { artifact, cas, store, version } = fixture();
   const foreignArtifact: ScientificArtifact = {
