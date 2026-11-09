@@ -613,12 +613,18 @@ function linkReusedReview(
  * The coverage gaps a Deep review keeps from its Quick pass.
  *
  * `claim_support` is dropped only when the Deep stage actually compared a claim
- * with a source. Two things are needed for that, and neither alone is enough:
- * the stage must have completed, and it must have issued at least one completed
- * citation task. A report with no parsable citation runs zero citation tasks,
- * both inconclusive flags stay false and the stage still reports `completed` —
- * dropping the gap there would make an uncited report the one record that reads
- * as claim-checked.
+ * with a source. That needs the stage to have completed **and** to show evidence
+ * of a comparison, which can come from either stage:
+ *
+ * - a citation task that completed or was reused (the citation stage read a
+ *   paper), or
+ * - a persisted source assessment (the computation stage compared a numeric
+ *   claim with its evidence).
+ *
+ * Completion alone proves nothing: a report with no parsable citation runs zero
+ * citation tasks, both inconclusive flags stay false and the stage still reports
+ * `completed`, so dropping the gap there would make an uncited report the one
+ * record that reads as claim-checked.
  *
  * Every other gap stands: `computation` still did not run when the memory graph
  * is disabled, and a Deep review must not claim it did.
@@ -626,9 +632,12 @@ function linkReusedReview(
 function deepCoverage(quickReview: ArtifactReviewRun,
   stageStatus: ArtifactReviewRun["smartStatus"],
   citationTasks: NonNullable<ArtifactReviewRun["citationTasks"]> = [],
+  sourceAssessments: NonNullable<ArtifactReviewRun["sourceAssessments"]> = [],
 ): { notChecked?: ArtifactReviewRun["notChecked"] } {
-  const comparedAClaim = stageStatus === "completed"
-    && citationTasks.filter((task) => task.status === "completed" || task.status === "reused").length > 0;
+  const comparedAClaim = stageStatus === "completed" && (
+    citationTasks.some((task) => task.status === "completed" || task.status === "reused")
+    || sourceAssessments.length > 0
+  );
   const gaps = (quickReview.notChecked ?? [])
     .filter((gap) => gap.check !== "claim_support" || !comparedAClaim);
   // An empty object, not `{ notChecked: undefined }`: the spread must drop the
@@ -1179,7 +1188,7 @@ async function reviewArtifactSmart(
     // The Quick pass declared claim support unchecked because it cannot read a
     // source; this stage just did. Carrying that gap into a Deep record would
     // mark the review partial for work it performed.
-    ...deepCoverage(quickReview, smartStatus, citationTasks),
+    ...deepCoverage(quickReview, smartStatus, citationTasks, sourceAssessments),
     decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
     findings,
     finishedAt: new Date().toISOString(),
@@ -1355,7 +1364,7 @@ async function runReviewerCheckpointUnlocked(
         const findings = [...quickReview.findings, ...smartFindings];
         const linkedReview: ArtifactReviewRun = {
           ...quickReview,
-          ...deepCoverage(quickReview, reusableSmart.smartStatus, reusableSmart.citationTasks),
+          ...deepCoverage(quickReview, reusableSmart.smartStatus, reusableSmart.citationTasks, reusableSmart.sourceAssessments),
           decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
           findings,
           reviewFingerprint: fingerprint,
