@@ -32,7 +32,10 @@ export interface ExecutionObservation {
   lastRunnerState?: ManagedExecution["state"];
   failureCount: number;
   nextRetryAt?: string;
-  lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number };
+  lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number;
+    /** The underlying failure, kept so the record is diagnosable on its own
+     *  instead of only carrying the sentence that explains its consequence. */
+    cause?: string };
 }
 
 export interface ManagedExecution extends ExecutionOwner {
