@@ -94,3 +94,7 @@ data-*/
 .test-runs/
 .ci-results/
 .b5merge/
+
+# Transient probe of the gateway boundary walk (services/gateway/tests/test_architecture_boundaries.py);
+# a killed run cannot unlink it, so it must never show up as an untracked source file.
+/services/api/src/probe-boundary-*.mdx

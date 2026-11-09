@@ -20,6 +20,7 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 
 import os
 import re
+import signal
 import sys
 import unittest
 from pathlib import Path
@@ -170,11 +171,15 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
     # creates and removes.
     PROBE_ROOT = REPOSITORY_ROOT / "services" / "api" / "src"
     PROBE_SUFFIX = ".mdx"
+    # A killed run cannot clean up after itself, so the pattern is ignored by git and
+    # the next run sweeps what a dead process left behind. Keep both in sync.
+    PROBE_PATTERN = f"probe-boundary-*{PROBE_SUFFIX}"
 
     def setUp(self) -> None:
         self.TEMP_ROOT.mkdir(parents=True, exist_ok=True)
         self.probe = self.TEMP_ROOT / f"probe-boundary-{os.getpid()}.ts"
         self.addCleanup(self.probe.unlink, missing_ok=True)
+        self._remove_stale_probes()
 
     def relative_probe(self) -> str:
         return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
@@ -188,6 +193,50 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         `.ts` files under `packages/` and `services/`.
         """
         return self.PROBE_ROOT / f"probe-boundary-{os.getpid()}{self.PROBE_SUFFIX}"
+
+    def _remove_stale_probes(self) -> None:
+        """Delete probes a killed run left behind, never one a live run is using.
+
+        `SIGKILL` cannot be caught, so this sweep — not the handler below — is what
+        keeps a dead run's probe from reaching the next one. A pid that still answers
+        `kill(pid, 0)` may be a parallel shard mid-test, so its file stays.
+        """
+        for stale in self.PROBE_ROOT.glob(self.PROBE_PATTERN):
+            try:
+                owner = int(stale.stem.rsplit("-", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if owner == os.getpid():
+                continue
+            try:
+                os.kill(owner, 0)
+            except ProcessLookupError:
+                stale.unlink(missing_ok=True)
+            except PermissionError:
+                continue
+
+    def _guard_probe_against_signals(self) -> None:
+        """Unlink the probe on `SIGINT`/`SIGTERM`, then let the signal do its work.
+
+        The handler is installed before the probe exists so no window misses it, and
+        it restores the previous handler and re-raises the same signal, because a
+        cancelled job must still fail rather than exit zero.
+        """
+        previous: dict[int, object] = {}
+
+        def restore() -> None:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+        def on_signal(signum: int, _frame: object) -> None:
+            self.probe.unlink(missing_ok=True)
+            restore()
+            os.kill(os.getpid(), signum)
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, on_signal)
+        self.addCleanup(restore)
 
     def test_a_generated_workspace_is_not_walked(self) -> None:
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
@@ -219,6 +268,7 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         while vendor naming escaped the boundary entirely. Pin the positive half:
         a file the walk should report is reported.
         """
+        self._guard_probe_against_signals()
         self.probe = self.positive_probe_path()
         self.addCleanup(self.probe.unlink, missing_ok=True)
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
@@ -234,6 +284,28 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         with mock.patch.object(sys.modules[__name__], "_files", only_the_probe):
             failures = _node_boundary_failures()
         self.assertIn(f"content: {self.relative_probe()}", failures)
+
+    def test_the_positive_probe_lives_in_the_root_the_issue_names(self) -> None:
+        # The assertions above only say the walk still speaks; this one says where.
+        # Without it, moving the probe back to `apps/web` (or anywhere the egress
+        # worker never scans) would keep the whole class green.
+        relative = self.positive_probe_path().relative_to(REPOSITORY_ROOT).as_posix()
+        self.assertIn("services/api/src/", relative)
+        self.assertTrue(relative.endswith(self.PROBE_SUFFIX))
+
+    def test_the_walk_enumerates_and_reads_the_positive_probe(self) -> None:
+        """The `.mdx` suffix is only sound while the walk still treats it as text.
+
+        Changing the suffix, or a rule that skips non-source files under
+        `services/api/src`, would silently stop the positive half from ever seeing
+        the probe — so this asserts the walk lists the file and reports its content.
+        """
+        self.probe = self.positive_probe_path()
+        self.addCleanup(self.probe.unlink, missing_ok=True)
+        self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
+        self.assertIn(self.probe.suffix.lower(), TEXT_SUFFIXES)
+        self.assertIn(self.probe, list(_files(self.PROBE_ROOT)))
+        self.assertIn(f"content: {self.relative_probe()}", _node_boundary_failures())
 
     def test_the_positive_probe_is_not_written_where_the_egress_worker_scans(self) -> None:
         # The egress contract test reads every `.ts` under packages/ and services/.
