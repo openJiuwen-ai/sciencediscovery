@@ -521,7 +521,13 @@ export class ShellExecutions {
   /** Observation and existing-result finalization only. This method cannot submit. */
   async reconcile(id: string, owner: ExecutionOwner, handlers = this.recovery, runner?: RunnerResolver, signal?: AbortSignal): Promise<AgentShellExecution> {
     let execution = this.record(id, owner);
-    if (execution.historical || execution.provenance === "committed" || this.active.has(id) || (!handlers && !runner) || this.closed) return this.get(id, owner);
+    // `finish()` is the only writer of `finalization: "committed"`, and a cancel
+    // settlement is deliberately left `provenance: "unconfirmed"`, so provenance alone
+    // does not identify it. Without this term the status read the workspace guard tells
+    // the agent to make (`get`/`wait` reconcile before reading) would push a settled
+    // record back to `unknown` and re-block the workspace — #1012 again.
+    if (execution.historical || execution.provenance === "committed" || execution.finalization === "committed"
+      || this.active.has(id) || (!handlers && !runner) || this.closed) return this.get(id, owner);
     if (!this.acquire(id)) return this.get(id, owner);
     const heartbeat = this.heartbeat(id);
     let following = false;
