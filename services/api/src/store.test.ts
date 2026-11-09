@@ -145,6 +145,35 @@ test("a write that never finishes is reported rather than hanging shutdown", asy
   await pending;
 });
 
+test("a write that fails during the drain is reported, not rethrown, and leaves no timer armed", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-failing-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Failing write test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  store$.writeArrayFile = async () => {
+    entered();
+    await new Promise((done) => setTimeout(done, 50));
+    throw Object.assign(new Error("injected write failure"), { code: "ENOENT" });
+  };
+  const pending = store.appendMessage(session.id, "user", "boom").catch((error: Error) => error.message);
+  await inWrite;
+  const startedAt = Date.now();
+  // A rejection inside the race would skip the timer cleanup, and the timer is
+  // deliberately not unref'd, so a leaked one would hold the process for the
+  // whole bound. Resolving well before it is the observable half of that.
+  assert.equal(await store$.whenWritesSettle(5_000), true, "the drain reports on a failed write instead of rejecting");
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed < 2_000, `the drain returned when the write settled (${elapsed}ms), not at the bound`);
+  assert.equal(await pending, "injected write failure", "the failure still reaches the write's own caller");
+});
+
 test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));

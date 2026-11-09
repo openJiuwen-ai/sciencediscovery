@@ -2177,8 +2177,14 @@ export class SessionStore {
     const timedOut = new Promise<false>((resolveTimeout) => {
       timer = setTimeout(() => resolveTimeout(false), timeoutMs);
     });
-    const settled = await Promise.race([drained, timedOut]);
-    if (timer) clearTimeout(timer);
+    // Cleared on every exit path: the timer is not unref'd (see above), so one
+    // left armed by a throw would keep the process alive for the whole bound.
+    let settled: boolean;
+    try {
+      settled = await Promise.race([drained, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (!settled) {
       const abandoned = this.arrayWrites.size + this.streamAppendQueues.size;
       console.warn(`Store shutdown stopped waiting for ${abandoned} in-flight write(s) after ${timeoutMs}ms`);
@@ -2258,11 +2264,16 @@ export class SessionStore {
 
   private async writeArray(path: string, values: unknown[]): Promise<void> {
     const work = this.writeArrayFile(path, values);
-    this.arrayWrites.add(work);
+    // The set holds an error-swallowing barrier, not `work` itself: the drain
+    // races it against a timeout, and a rejection inside that race would skip
+    // the timer cleanup and the abandoned-write report below. The failure still
+    // reaches this method's caller through `await work`.
+    const barrier = work.then(() => undefined, () => undefined);
+    this.arrayWrites.add(barrier);
     try {
       await work;
     } finally {
-      this.arrayWrites.delete(work);
+      this.arrayWrites.delete(barrier);
     }
   }
 
