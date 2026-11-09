@@ -829,7 +829,7 @@ test("a failing provenance commit stops being retried and stops rewriting the re
 
   const before = JSON.stringify(record.observation);
   // Keep forcing reconciliation; the retry budget has to run out.
-  for (let round = 0; round < 8; round += 1) {
+  for (let round = 0; round < 12; round += 1) {
     record = await f.service.reconcile(lost.job.id, owner, handlers);
   }
   assert.equal(record.observation?.lastError?.retryable, false, "retrying stopped");

@@ -28,7 +28,7 @@ import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { listWorkspaceFiles } from "./artifacts/index.js";
 
 /** True for the per-session shell-execution ledger under `execution-runs/`.
- *  Excluded from the revision's file walk; its meaning is projected instead. */
+ *  Its content still counts; only its mtime is excluded (see `inspect`). */
 function isExecutionLedgerPath(path: string): boolean {
   return /[\\/]execution-runs[\\/][^\\/]+\.json$/u.test(path);
 }
@@ -212,20 +212,22 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
     const sessions = store.researchSessions(projectId).filter((session) =>
       (!session.researchSnapshot || session.researchSnapshot.state === "ready") &&
       (!sessionId || session.id === sessionId || dependencies?.has(session.id)));
-    const files: Array<[string, number, number, number]> = [];
+    const files: Array<[string, string]> = [];
     const inspect = async (path: string): Promise<void> => {
-      // The execution ledger is bookkeeping, and a retrying execution rewrites
-      // it every few seconds. Its meaning reaches the revision through
-      // `revisionSnapshot()` below, which projects only the fields a package
-      // carries; hashing its mtime here made the revision move while the
-      // session did not (#1018).
-      if (isExecutionLedgerPath(path)) return;
       let info;
       try { info = await lstat(path); }
       catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return; throw error; }
       if (info.isSymbolicLink()) return;
       if (info.isDirectory()) { for (const child of await readdir(path)) await inspect(resolve(path, child)); }
-      else if (info.isFile()) files.push([path, info.size, info.mtimeMs, info.ctimeMs]);
+      else if (info.isFile() && isExecutionLedgerPath(path)) {
+        // The execution ledger is package content, so it must still be able to
+        // invalidate a revision — but its mtime moves when the same bytes are
+        // rewritten, which is how a session got stuck at EXPORT_PREVIEW_PENDING
+        // (#1018). Hash its content instead: an identical rewrite changes
+        // nothing, a real execution change still does.
+        files.push([path, `sha256:${sha256(await readFile(path))}`]);
+      }
+      else if (info.isFile()) files.push([path, `${info.size}:${info.mtimeMs}:${info.ctimeMs}`]);
     };
     for (const session of sessions) {
       for (const path of store.sessionDataPaths(session.id)) await inspect(path);
