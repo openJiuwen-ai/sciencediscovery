@@ -51,11 +51,30 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     })),
   }] };
   // Callers wait for a call by name rather than polling a clock: the transport
-  // resolves every rendezvous whose target the call reached.
-  const callWaiters: { target: number; resolve: () => void }[] = [];
-  const nextCall = (target: number) => calls >= target
-    ? Promise.resolve()
-    : new Promise<void>(resolve => { callWaiters.push({ target, resolve }); });
+  // resolves every waiter whose call has arrived. The wait keeps the bound and the
+  // diagnosis a polling gate had, so a regression fails with the state it was
+  // waiting for instead of stalling the worker.
+  interface CallWaiter { target: number; resolve: () => void }
+  const callWaiters: CallWaiter[] = [];
+  const nextCall = (target: number, wait: FaultWait = {}): Promise<void> => {
+    if (calls >= target) return Promise.resolve();
+    const startedAt = performance.now();
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter: CallWaiter = {
+        target,
+        resolve: () => { clearTimeout(timer); resolve(); },
+      };
+      timer = setTimeout(() => {
+        const index = callWaiters.indexOf(waiter);
+        if (index >= 0) callWaiters.splice(index, 1);
+        const elapsed = Math.round(performance.now() - startedAt);
+        const diagnosis = wait.diagnose?.();
+        reject(new Error(`Timed out waiting for local fault injection after ${elapsed} ms${diagnosis ? `: ${diagnosis}` : ""}`));
+      }, wait.timeoutMs ?? FAULT_OBSERVATION_DEADLINE_MS);
+      callWaiters.push(waiter);
+    });
+  };
   const gateway: McpTransportClient = { catalog: async () => catalogData, reload: async () => catalogData,
     invoke: async (request, signal) => {
       calls += 1;
@@ -133,48 +152,26 @@ interface FaultWait {
   /** Read on timeout only, so a red gate says what it was waiting for. */
   diagnose?: () => string;
 }
-// The escape hatch for a wait this suite cannot observe directly; the fault
-// observations below use the transport rendezvous instead. Its own contract
-// tests are the callers, and one of them runs under
-// `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still — so the
-// deadline is measured with performance.now() rather than Date.now().
-async function waitFor(predicate: () => boolean, wait: FaultWait = {}) {
-  const startedAt = performance.now();
-  const timeoutMs = wait.timeoutMs ?? FAULT_OBSERVATION_DEADLINE_MS;
-  while (performance.now() - startedAt < timeoutMs) {
-    if (predicate()) return;
-    await new Promise(resolve => setTimeout(resolve, 1));
-  }
-  const elapsed = Math.round(performance.now() - startedAt);
-  const diagnosis = wait.diagnose?.();
-  assert.fail(`Timed out waiting for local fault injection after ${elapsed} ms${diagnosis ? `: ${diagnosis}` : ""}`);
-}
 function describeSettled(settled: readonly unknown[]): string {
   return settled.map(error => error instanceof McpInvocationError
     ? error.invocation.error?.code ?? error.message
     : (error as Error)?.message ?? String(error)).join(", ");
 }
+function describeInvocations(invocations: readonly McpInvocation[]): string {
+  return invocations.map(invocation => invocation.error?.code ?? "ok").join(", ");
+}
 
-test("the fault wait tolerates a loaded runner instead of a 200 ms budget", async () => {
-  // CI runs four UT worker processes (`UT_WORKERS = 4`, one Node file each), so the injected fault
-  // can land hundreds of milliseconds late. A fixed wall-clock budget turns that
-  // into a red gate on an unrelated pull request; a deadline does not.
-  let observed = false;
-  const timer = setTimeout(() => { observed = true; }, 500);
-  try { await waitFor(() => observed); } finally { clearTimeout(timer); }
-  // A genuinely missing fault still fails fast rather than hanging the layer.
-  await assert.rejects(() => waitFor(() => false, { timeoutMs: 50 }), /Timed out waiting for local fault injection/);
-});
-
-test("the fault wait stays bounded while Date is mocked", async t => {
-  // This test and `cooldown admits one recovery probe…` below run under
-  // `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still. A deadline
-  // read from Date never arrives there, so a probe that is never admitted would spin
-  // instead of failing the gate.
+test("the call rendezvous stays bounded and says what it waited for", async t => {
+  // The rendezvous replaces a polling gate, so it inherits the gate's duties: a
+  // fault that never arrives must fail with the observed state, not stall the
+  // worker until the slice deadline. Date is mocked here because the wait may not
+  // depend on it — the deadline is charged to performance.now(), which the file's
+  // cooldown cases leave real.
   t.mock.timers.enable({ apis: ["Date"] });
+  const f = await fixture(t);
   const startedAt = performance.now();
   await assert.rejects(
-    () => waitFor(() => false, { timeoutMs: 100, diagnose: () => "calls=0 settled=[]" }),
+    () => f.nextCall(1, { timeoutMs: 100, diagnose: () => "calls=0 settled=[]" }),
     /Timed out waiting for local fault injection after \d+ ms: calls=0 settled=\[\]/,
   );
   assert.ok(performance.now() - startedAt < 5_000, "the deadline must not depend on the mocked Date");
@@ -188,11 +185,12 @@ test("parallel 429 callers share cooldown, drain their queue and do not retry in
     await new Promise<void>(resolve => { finish = resolve; });
     return failure("rate-limited", 60_000);
   });
+  const settled: unknown[] = [];
   const requests = Array.from({ length: 12 }, (_, i) => f.invoke(`parallel-${i}`, "arxiv", `sibling-${i}`)
-    .catch((error: unknown) => error));
+    .catch((error: unknown) => { settled.push(error); return error; }));
   // The first request entering the transport is an event this test triggers, so
   // wait for that call by name instead of polling a clock for it.
-  await f.nextCall(1);
+  await f.nextCall(1, { diagnose: () => `calls=${f.calls()} settled=[${describeSettled(settled)}]` });
   await settle(); finish();
   const errors = await Promise.all(requests);
   assert.equal(f.calls(), 1);
@@ -263,7 +261,7 @@ test("cooldown admits one recovery probe, excludes siblings and restores access 
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
   const probe = f.invoke("probe");
-  await f.nextCall(2);
+  await f.nextCall(2, { diagnose: () => `calls=${f.calls()} invocations=[${describeInvocations(f.invocations)}]` });
   const siblings = await Promise.all(Array.from({ length: 8 }, (_, i) => f.invoke(`probe-peer-${i}`).catch(error => error)));
   assert.ok(siblings.every((error: McpInvocationError) => error.invocation.error?.sourceHealth?.decision === "probe-in-flight"));
   assert.equal(f.calls(), 2);
@@ -307,7 +305,8 @@ test("queue exhaustion, timeout and cancellation free resources for subsequent r
   const f = await fixture(t);
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
-  const active = f.invoke("active"); await f.nextCall(1);
+  const active = f.invoke("active");
+  await f.nextCall(1, { diagnose: () => `calls=${f.calls()} invocations=[${describeInvocations(f.invocations)}]` });
   const controller = new AbortController();
   const cancelled = f.invoke("cancelled", "arxiv", "session", controller.signal).catch(error => error);
   await settle(); controller.abort(new DOMException("Cancelled", "AbortError"));
