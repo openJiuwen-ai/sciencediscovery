@@ -623,6 +623,14 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
         const sourceSessions = Array.isArray(records.sessions) ? records.sessions : [];
         const targetBySource = new Map<string, string>();
         const omissions = [...imported.receipt.omissions];
+        // A dimension the package format does not carry is not an omission the
+        // package declared, so the receipt said nothing and the searches simply
+        // disappeared (#1019). Say it here: the reader must learn that the
+        // imported session has no evolve content, not infer it from an empty list.
+        const evolve = (records as { evolve?: { runs?: unknown } }).evolve;
+        if (!Array.isArray(evolve?.runs) || evolve.runs.length === 0) {
+          omissions.push("This package does not carry evolution (evolve) search runs: their candidate trees, scores and budgets are not restored. Re-run the search at the source, or export again from a version that includes them.");
+        }
         if (!records.memoryGraph && !records.memoryGraphSummary) omissions.push("This package contains no scientific memory snapshot; export it again from the source with the updated version to restore scientific memory.");
         else if (!records.memoryGraph && records.memoryGraphSummary) omissions.push("This package contains a scientific memory summary, not the full graph; its nodes and relationships cannot be restored.");
         const ids = new ResearchPackageIds();
