@@ -213,20 +213,27 @@ function evidencePackage(legacy = false, withEvolve = false) {
       workspace: [{ path: "results/result.csv", objectPath: sha256(latest), size: latest.length, modifiedAt: date }, { path: "analysis.ipynb", objectPath: sha256(notebook), size: notebook.length, modifiedAt: date }],
       validations: { reviews: [{ id: "review-source", sessionId: "source-one", kind: "integrity", status: "passed", turnId: "run-source", createdAt: date, finishedAt: date, findings: [] }], artifactReviews: [{ id: "artifact-review-source", sessionId: "source-one", artifactId: "artifact-source", artifactVersionId: "version-two", artifactContentHash: sha256(latest), artifactLogicalName: "results/result.csv", checkpointId: "checkpoint-source", decision: "ACCEPT_AND_PROCEED", createdAt: date, finishedAt: date, findings: [], reviewerSpecialistVersion: "1", status: "completed" }] },
     }, { session: { id: "source-two", title: "分支会话", specialistId: "unavailable-specialist" }, messages: [{ id: "branch-prompt", role: "user", content: "分支研究", createdAt: date }], workspace: [] }],
-    artifacts: [{ id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] }],
-    ...(withEvolve ? [{
-      id: "artifact-evolve", projectId: "source-project", createdInSessionId: "source-one",
-      createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/83cbb6de/main.py",
-      logicalName: "evolve/83cbb6de/main.py", kind: "code", origin: "agent", currentVersion: 1,
-      createdAt: date, updatedAt: date,
-      versions: [{
-        id: "version-evolve", artifactId: "artifact-evolve", sessionId: "source-one",
-        projectId: "source-project", version: 1, createdAt: date,
-        content: { hash: sha256(evolveSource), size: evolveSource.length }, mediaType: "text/x-python",
-        sourcePath: "evolve/83cbb6de/main.py", inputArtifactVersionIds: [], executionRunIds: [],
-        turnId: "run-source", ...(legacy ? {} : { objectPath: sha256(evolveSource) }),
-      }],
-    }] : []),
+    artifacts: [
+      { id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] },
+      // A run's result is published as `evolve/<run>/<entrypoint>` with
+      // `kind: "other"` and `origin: "llm_declared"` (see `evolveArtifactName`
+      // and the publisher in `bootstrap/platform.ts`); mirror that exactly or the
+      // import rejects the kind as unsupported.
+      ...(withEvolve ? [{
+        id: "artifact-evolve", projectId: "source-project", createdInSessionId: "source-one",
+        createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/83cbb6de/main.py",
+        logicalName: "evolve/83cbb6de/main.py", kind: "other", origin: "llm_declared", currentVersion: 1,
+        createdAt: date, updatedAt: date,
+        versions: [{
+          id: "version-evolve", artifactId: "artifact-evolve", sessionId: "source-one",
+          projectId: "source-project", version: 1, createdAt: date,
+          content: { hash: sha256(evolveSource), size: evolveSource.length },
+          mediaType: "text/plain; charset=utf-8",
+          sourcePath: "evolve/83cbb6de/main.py", inputArtifactVersionIds: [], executionRunIds: [],
+          turnId: "run-source", ...(legacy ? {} : { objectPath: sha256(evolveSource) }),
+        }],
+      }] : []),
+    ],
   }, objects: [first, latest, notebook, ...(withEvolve ? [evolveSource] : [])].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
 }
 
