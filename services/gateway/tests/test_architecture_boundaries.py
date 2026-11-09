@@ -70,6 +70,26 @@ def _files(root: Path):
             yield path
 
 
+# services/api/src/mcp/datasource-egress-contract.test.ts walks every `.ts` file
+# under these roots and reads each one, skipping only the directories below and
+# tolerating no file that vanished between the listing and the read. A probe
+# planted there is read by a worker that knows nothing about it: the read fails
+# with ENOENT once addCleanup unlinks it, and a killed run leaves a vendor token
+# behind in a tracked source directory.
+EGRESS_SCANNED_ROOTS = ("packages", "services")
+EGRESS_IGNORED_DIRECTORIES = {"dist", "node_modules", ".tmp"}
+
+
+def _egress_scan_reads(path: Path) -> bool:
+    """Whether the datasource egress contract worker opens this file."""
+    if path.suffix != ".ts":
+        return False
+    relative = path.relative_to(REPOSITORY_ROOT)
+    if relative.parts[0] not in EGRESS_SCANNED_ROOTS:
+        return False
+    return not any(part in EGRESS_IGNORED_DIRECTORIES for part in relative.parts[:-1])
+
+
 def _node_boundary_failures() -> list[str]:
     failures: list[str] = []
     for root in NODE_ROOTS:
@@ -153,6 +173,10 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
     def relative_probe(self) -> str:
         return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
 
+    def positive_probe_path(self) -> Path:
+        """Where the positive case plants the file the walk must report."""
+        return self.API_ROOT / "src" / f"probe-boundary-{os.getpid()}.ts"
+
     def test_a_generated_workspace_is_not_walked(self) -> None:
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
         failures = _node_boundary_failures()
@@ -183,7 +207,7 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         while vendor naming escaped the boundary entirely. Pin the positive half:
         a file the walk should report is reported.
         """
-        self.probe = self.API_ROOT / "src" / f"probe-boundary-{os.getpid()}.ts"
+        self.probe = self.positive_probe_path()
         self.addCleanup(self.probe.unlink, missing_ok=True)
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
         original = _files
@@ -198,6 +222,16 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         with mock.patch.object(sys.modules[__name__], "_files", only_the_probe):
             failures = _node_boundary_failures()
         self.assertIn(f"content: {self.relative_probe()}", failures)
+
+    def test_the_positive_probe_is_not_written_where_the_egress_worker_scans(self) -> None:
+        # The egress contract test reads every `.ts` under packages/ and services/.
+        # A probe there races that read and can outlive a killed run, so the probe
+        # must sit outside both roots.
+        self.assertFalse(
+            _egress_scan_reads(self.positive_probe_path()),
+            f"{self.positive_probe_path().relative_to(REPOSITORY_ROOT).as_posix()} is read by the "
+            "datasource egress worker while it exists; plant the probe under apps/web instead",
+        )
 
 
 if __name__ == "__main__":
