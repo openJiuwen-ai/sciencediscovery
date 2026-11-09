@@ -609,8 +609,22 @@ function linkReusedReview(
   };
 }
 
-async function reviewArtifactQuick(
-  checkpoint: ReviewCheckpoint,
+/**
+ * The coverage gaps a Deep review keeps from its Quick pass.
+ *
+ * `claim_support` is dropped: the Quick pass declared it unchecked because it
+ * cannot read a source, and the Deep stages are exactly what reads one. Every
+ * other gap stands — `computation` still did not run when the memory graph is
+ * disabled, and a Deep review must not claim it did.
+ */
+function deepCoverage(quickReview: ArtifactReviewRun): { notChecked?: ArtifactReviewRun["notChecked"] } {
+  const gaps = (quickReview.notChecked ?? []).filter((gap) => gap.check !== "claim_support");
+  // An empty object, not `{ notChecked: undefined }`: the spread must drop the
+  // Quick pass's field entirely, not leave a key holding nothing.
+  return gaps.length ? { notChecked: gaps } : {};
+}
+
+async function reviewArtifactQuick(  checkpoint: ReviewCheckpoint,
   logicalName: string,
   version: ScientificArtifactVersion,
   content: Buffer,
@@ -672,11 +686,18 @@ async function reviewArtifactQuick(
     // a format pass. Recording the gap keeps the card, the saved review and the
     // main-Agent feedback from reading as claim verification (#669 workstream C).
     const notChecked: NonNullable<ArtifactReviewRun["notChecked"]> = [];
-    if (narrativeReview && citation.decision !== "SKIPPED") {
+    if (narrativeReview) {
+      // Every narrative Quick review, cited or not. `SKIPPED` means the
+      // precheck found no citation at all — the case where nothing about claim
+      // support was examined is the one that must not read as a pass.
       notChecked.push({
         check: "claim_support",
-        reason: "Quick review parses citation format and provenance only; no source was read to "
-          + "confirm the claims. Run a Deep review to check whether each claim is supported.",
+        reason: citation.decision === "SKIPPED"
+          ? "The report contains no citation this review could parse, so claim support was not "
+            + "checked at all. Cite the sources and run a Deep review to check whether each claim "
+            + "is supported."
+          : "Quick review parses citation format and provenance only; no source was read to "
+            + "confirm the claims. Run a Deep review to check whether each claim is supported.",
       });
     }
     if (!graphReviewEnabled) {
@@ -1143,6 +1164,10 @@ async function reviewArtifactSmart(
   const findings = [...quickReview.findings, ...semanticFindings];
   const review: ArtifactReviewRun = {
     ...quickReview,
+    // The Quick pass declared claim support unchecked because it cannot read a
+    // source; this stage just did. Carrying that gap into a Deep record would
+    // mark the review partial for work it performed.
+    ...deepCoverage(quickReview),
     decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
     findings,
     finishedAt: new Date().toISOString(),
@@ -1318,6 +1343,7 @@ async function runReviewerCheckpointUnlocked(
         const findings = [...quickReview.findings, ...smartFindings];
         const linkedReview: ArtifactReviewRun = {
           ...quickReview,
+          ...deepCoverage(quickReview),
           decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
           findings,
           reviewFingerprint: fingerprint,
