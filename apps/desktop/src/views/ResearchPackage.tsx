@@ -349,7 +349,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           else if (task.status === "failed") { patchExport(task.id, { phase: "pack-failed", error: task.error }); pushFlash("error", task.error ?? t.failed); }
           else if (task.status === "canceled") { patchExport(task.id, { phase: "canceled" }); pushFlash("error", t.exportCanceled); }
         });
-        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) { onOpen(source); const restored = await client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(source)}`); if (restored.researchSnapshot?.continuationAvailable !== true || restored.researchSnapshot.state !== "ready") return; const operation = await startCopy(client, source, crypto.randomUUID()); setCopy(operation); if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); } } });
+        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) onOpen(source); });
       }}>{busy ? t.working : dialog === "export" ? t.startExport : dialog === "import" ? t.confirmImport : t.branch}</button></footer>
     </section></div> : null}
   </>;
