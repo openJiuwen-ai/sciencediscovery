@@ -13,6 +13,18 @@ import { createResearchPackage, importResearchPackage, sha256, type ResearchPack
 import { createApiServer, closeApiServer } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
+
+test("only a package that proves an evolve search ran reports the missing searches", async () => {
+  // #1019: `evolve/<run>/<entrypoint>` is how a run's result is published, so its
+  // presence is the package's own evidence that a search existed. A literature
+  // session that never ran one must not report a loss that never happened.
+  const { packageRanEvolve } = await import("./research-snapshots.js");
+  assert.equal(packageRanEvolve([{ name: "results/result.csv" }]), false);
+  assert.equal(packageRanEvolve([]), false);
+  assert.equal(packageRanEvolve(undefined), false);
+  assert.equal(packageRanEvolve([{ name: "evolve/83cbb6de/main.py" }]), true);
+  assert.equal(packageRanEvolve([{ name: "results/a.csv" }, { name: "evolve/a539ffc0/run.py" }]), true);
+});
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createServer } from "node:http";
 import { researchHistoryFixture, researchTrajectoryFixture } from "../../../test/support/research-package.fixture.js";
