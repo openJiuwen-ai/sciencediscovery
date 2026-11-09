@@ -100,11 +100,13 @@ assert_no_release_build_paths() { # <release artifact>
   #
   # `$HOME` is deliberately not scanned here. The uncompressed payload tree is
   # already scanned for it (build-payload.sh's assert_no_build_paths) with the
-  # upstream-SBOM filter, and the SEA launcher blob records the builder's HOME
-  # for its own bootstrapping in a way that is identical on every CI runner
-  # (`/home/runner`), so it names no specific machine. Only the repository root
-  # and the output directory — paths unique to this build — identify the
-  # builder, so they stay unconditional.
+  # upstream-SBOM filter. The only `/home/runner` bytes that can survive into
+  # this assembled artifact are the two upstream SBOM regions that filter
+  # approves — the `path+file:///home/runner/...` prefixes in pydantic_core and
+  # watchfiles — stored verbatim by zstd. Those name the generic CI runner, not
+  # the machine that built this release, so re-scanning `$HOME` here only ever
+  # re-matches whitelisted references. The repository root and the output
+  # directory are unique to this build, so they stay unconditional.
   for needle in "$repository_root" "$output_dir" "${USERPROFILE:-}"; do
     if [[ -z "$needle" ]]; then continue; fi
     pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$(){}?+|/]/\\&/g')"
