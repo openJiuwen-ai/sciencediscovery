@@ -201,6 +201,22 @@ test("Quick checkpoint skips graph-linked checks when the graph is disabled", as
   assert.doesNotMatch(record, /^Status: PASSED$/mu);
 });
 
+test("a narrative report with no citation at all still declares the claim gap", async () => {
+  // #669's own failure mode: nothing about claim support was examined, and this
+  // is precisely the case where the citation precheck returns SKIPPED. Keeping
+  // the gap conditional on a parsed citation would leave the worst case silent.
+  const { cas, store } = fixture("分析结果支持该结论。\n");
+  const result = await runReviewerCheckpoint({ cas, parentRunId: "run-1", reason: "Quick review", sessionId: "session-1", store });
+
+  const review = result.reviews[0];
+  assert.equal(review?.decision, "ACCEPT_AND_PROCEED");
+  assert.deepEqual(review?.checks, []);
+  const claimGap = review?.notChecked?.find((gap) => gap.check === "claim_support");
+  assert.ok(claimGap, "an uncited narrative report declares what was not checked");
+  assert.match(claimGap.reason, /no citation this review could parse/u);
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Not checked: claim support —/u);
+});
+
 test("Reviewer checkpoint excludes Artifacts and versions created by another Session in the same Project", async () => {
   const { artifact, cas, store, version } = fixture();
   const foreignArtifact: ScientificArtifact = {
@@ -499,6 +515,10 @@ test("Deep computation accepts a generated Artifact claim only with issued E4 lo
   assert.equal(result.reviews[0]?.smartStatus, "completed");
   assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.assessment.assessment, "SUPPORTED");
   assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.claim.requiredEvidenceLevel, "E4");
+  // The Deep stages read the source; the Quick pass's claim gap must not be
+  // inherited, or a review that did the work is reported as partial.
+  const gaps = result.reviews[0]?.notChecked ?? [];
+  assert.equal(gaps.some((gap) => gap.check === "claim_support"), false);
 });
 
 test("Deep checkpoint reuses an identical locked Artifact without rereading CAS or graph", async () => {
