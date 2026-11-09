@@ -445,6 +445,37 @@ test("cancelling an unconfirmed execution settles it instead of blocking the wor
   assert.equal(submissions, 1, "a cancelled unknown no longer blocks new work");
 });
 
+test("a cancelled unconfirmed execution is not reopened by the recovery scan", async (context) => {
+  // The settlement only holds if the scan leaves it alone: `scanPending` used to
+  // select anything whose provenance was not `committed`, so the next tick
+  // reopened a cancelled record as `unknown` and the workspace blocked again.
+  const f = await fixture(context);
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    cancelShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.equal(settled.state, "cancelled");
+
+  f.service.configureRecovery({ runner: () => runner, finalize: async (_context: unknown, result: ShellExecutionResult) => result });
+  await f.service.reconcilePending(undefined, true);
+  const after = await f.service.get(job.id, owner);
+  assert.equal(after.state, "cancelled", "a settled record is not reopened");
+  assert.equal(after.provenance, "unconfirmed");
+  assert.equal(after.finalization, "committed");
+  assert.equal(after.finishedAt, settled.finishedAt);
+  assert.equal(after.observation?.lastError?.code, settled.observation?.lastError?.code);
+
+  // A context-carrying submission is the shape the workspace guard checks.
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id)), recoveryContext));
+  assert.equal(submissions, 1, "the workspace accepts work after the cancel and a full scan");
+});
+
 test("a confirmed-running execution still reports a failed cancel", async (context) => {
   // The best-effort path is only for an outcome nobody can read. A Runner that
   // refuses to cancel work it knows about must keep failing loudly.
