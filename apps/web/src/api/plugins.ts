@@ -17,7 +17,7 @@ export interface ResearchPackageExportProfileView {
 }
 export interface ResearchPackageExportTaskView {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "canceled";
   filename: string;
   createdAt: string;
   updatedAt: string;
