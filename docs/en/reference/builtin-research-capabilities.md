@@ -57,7 +57,7 @@ Citation and computation review reach one of four conclusions for each claim, an
 | Unverifiable (`INCONCLUSIVE`) | Full text or more context is needed, or the source was unavailable (identity unresolved, provider down, timeout, access denied) | **Not** that the claim is false. A provider failure is a limit on verification, not evidence of fabrication |
 | Not checked (`notChecked`) | This review did not run that check, and the record names the reason | It must never be read as a pass. A Quick review checks citation format and provenance only; it never reads a source to decide support |
 
-Both `INCONCLUSIVE` and `notChecked` keep their reason and the affected claim or citation, and appear in the saved review record and in the main Agent's feedback; neither is collapsed into "passed".
+`INCONCLUSIVE` keeps its reason and the affected claim or citation; `notChecked` keeps the check's name and its reason. Both appear in the saved review record and in the main Agent's feedback; neither is collapsed into "passed".
 
 ## Extension paths
 

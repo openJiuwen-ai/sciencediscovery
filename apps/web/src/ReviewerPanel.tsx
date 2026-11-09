@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
+import { reviewDeclaredGap, reviewUnverifiedDelivery } from "@sciencediscovery/schema";
 import type { ArtifactReviewRun, ReviewerSkipReason } from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState } from "react";
 
@@ -58,6 +58,11 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   if (review.decision === "ACCEPT_AND_PROCEED" && reviewUnverifiedDelivery(review)) {
     return { label: t("reviewer.result.scopeLimited"), tone: "warning" };
   }
+  // A review that declared a check it did not perform is partial by its own
+  // account, so the card says the same thing the record does (#669 review F3).
+  if (review.decision === "ACCEPT_AND_PROCEED" && reviewDeclaredGap(review)) {
+    return { label: t("reviewer.result.partialCoverage"), tone: "warning" };
+  }
   if (review.decision === "ACCEPT_AND_PROCEED") {
     return {
       label: isCitationOnlyQuickReview(review)
@@ -94,6 +99,20 @@ const FINDING_KEYS: Record<string, MessageKey> = {
   DELIVERABLE_EMPTY: "reviewer.finding.deliverableEmpty",
   DELIVERABLE_MISSING: "reviewer.finding.deliverableMissing",
 };
+
+const GAP_KEYS: Record<string, MessageKey> = {
+  claim_support: "reviewer.notChecked.claim_support",
+  citation_identity: "reviewer.notChecked.citation_identity",
+  computation: "reviewer.notChecked.computation",
+};
+
+/** A check this build does not know degrades to a readable form, the same way
+ *  an unmapped finding code does — never to a raw message key. */
+function gapLabel(check: string, t: Translate): string {
+  const key = GAP_KEYS[check];
+  if (key) return t(key);
+  return check.replace(/_/gu, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
 function findingType(code: string, t: Translate): string {
   const key = FINDING_KEYS[code];
@@ -199,7 +218,7 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
             <ul>
               {review.notChecked.map((gap) => (
                 <li key={gap.check}>
-                  <b>{t(`reviewer.notChecked.${gap.check}` as MessageKey)}</b>
+                  <b>{gapLabel(gap.check, t)}</b>
                   <span>{gap.reason}</span>
                 </li>
               ))}
@@ -312,7 +331,11 @@ function batchSummary(
   const outdated = (review: ArtifactReviewRun) => review.stale === true;
   const passed = reviews.filter((review) => review.status !== "failed"
     && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
-    && !reviewUnverifiedDelivery(review) && !outdated(review)).length;
+    && !reviewUnverifiedDelivery(review) && !reviewDeclaredGap(review) && !outdated(review)).length;
+  // Counted apart from "passed" for the same reason unverified delivery is.
+  const partialCoverage = reviews.filter((review) => review.status !== "failed"
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
+    && !reviewUnverifiedDelivery(review) && reviewDeclaredGap(review) && !outdated(review)).length;
   const deliveryUnverified = reviews.filter((review) => unverifiedDelivery(review) && !outdated(review)).length;
   const outdatedCount = reviews.filter(outdated).length;
   // A superseded verdict is history: it belongs to the outdated count only, not to
@@ -325,6 +348,7 @@ function batchSummary(
     t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
     passed ? t("reviewer.passedCount", { count: passed }) : undefined,
     deliveryUnverified ? t("reviewer.deliveryUnverifiedCount", { count: deliveryUnverified }) : undefined,
+    partialCoverage ? t("reviewer.partialCoverageCount", { count: partialCoverage }) : undefined,
     outdatedCount ? t("reviewer.outdatedCount", { count: outdatedCount }) : undefined,
     warning ? t(warning === 1 ? "reviewer.warningCountOne" : "reviewer.warningCount", { count: warning }) : undefined,
     revision ? t("reviewer.revisionCount", { count: revision }) : undefined,

@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 
-import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
+import { reviewDeclaredGap, reviewUnverifiedDelivery } from "@sciencediscovery/schema";
 import type {
   ArtifactReviewCompleteness,
   ArtifactReviewRun,
@@ -134,7 +134,7 @@ export function reviewerCheckpointPromptContent(
   const scopeLimited = reviews.some((review) => reviewUnverifiedDelivery(review));
   // A review that declared a check it did not perform is a partial review by its
   // own account: its passes must not be read as the whole verdict (#669 C1).
-  const partial = reviews.some((review) => (review.notChecked?.length ?? 0) > 0);
+  const partial = reviews.some(reviewDeclaredGap);
   const overall = inProgress ? "PARTIAL" : findings.length ? "REVISION_REQUIRED" : scopeLimited || partial ? "SCOPE_LIMITED" : "PASSED";
   const lines = reviews.flatMap((review) => [
     `- Artifact: ${review.artifactLogicalName} (version id: ${review.artifactVersionId}, decision: ${review.decision}, level: ${review.reviewLevel ?? "quick"}${review.smartStatus ? `, deep status: ${review.smartStatus}` : ""})`,
@@ -617,8 +617,13 @@ function linkReusedReview(
  * other gap stands — `computation` still did not run when the memory graph is
  * disabled, and a Deep review must not claim it did.
  */
-function deepCoverage(quickReview: ArtifactReviewRun): { notChecked?: ArtifactReviewRun["notChecked"] } {
-  const gaps = (quickReview.notChecked ?? []).filter((gap) => gap.check !== "claim_support");
+function deepCoverage(quickReview: ArtifactReviewRun,
+  stageStatus: ArtifactReviewRun["smartStatus"]): { notChecked?: ArtifactReviewRun["notChecked"] } {
+  // Only a Deep stage that actually completed read the sources. An inconclusive
+  // stage (provider timeout, cooldown, invalid output) dropped nothing but the
+  // gap, and would then be the one record reading as an unqualified pass.
+  const gaps = (quickReview.notChecked ?? [])
+    .filter((gap) => gap.check !== "claim_support" || stageStatus !== "completed");
   // An empty object, not `{ notChecked: undefined }`: the spread must drop the
   // Quick pass's field entirely, not leave a key holding nothing.
   return gaps.length ? { notChecked: gaps } : {};
@@ -1167,7 +1172,7 @@ async function reviewArtifactSmart(
     // The Quick pass declared claim support unchecked because it cannot read a
     // source; this stage just did. Carrying that gap into a Deep record would
     // mark the review partial for work it performed.
-    ...deepCoverage(quickReview),
+    ...deepCoverage(quickReview, smartStatus),
     decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
     findings,
     finishedAt: new Date().toISOString(),
@@ -1343,7 +1348,7 @@ async function runReviewerCheckpointUnlocked(
         const findings = [...quickReview.findings, ...smartFindings];
         const linkedReview: ArtifactReviewRun = {
           ...quickReview,
-          ...deepCoverage(quickReview),
+          ...deepCoverage(quickReview, reusableSmart.smartStatus),
           decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
           findings,
           reviewFingerprint: fingerprint,
