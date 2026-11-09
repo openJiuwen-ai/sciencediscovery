@@ -43,6 +43,7 @@ interface SubagentRecord {
   id: string;
   input: { description: string };
   status: string;
+  steps: Array<{ toolName?: string }>;
   turnCount: number;
 }
 
@@ -115,6 +116,8 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
     preconditions: ["隔离 Web/API 已启动", "模型由本旅程自带的 HTTP 桩驱动：主脚本委派一个 general-purpose 子任务再跑一条命令，子脚本跑两条前台命令"],
   });
   const marker = `FG-${Date.now()}`;
+  let releaseProgress!: () => void;
+  const progressObserved = new Promise<void>((resolve) => { releaseProgress = resolve; });
   const stub = await scriptedModel([
     [
       {
@@ -130,8 +133,9 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       { text: `主任务和子任务都已在前台完成，标记 ${marker}。` },
     ],
   ], [
-    { arguments: { command: `printf '%s' '${marker}-child-1'` }, delayMs: 4_000, tool: "run_shell" },
-    { arguments: { command: `printf '%s' '${marker}-child-2'` }, delayMs: 3_000, tool: "run_shell" },
+    { arguments: { command: `printf '%s' '${marker}-child-1'` }, tool: "run_shell" },
+    // Keep the child active until the browser observes its actual first tool.
+    { arguments: { command: `printf '%s' '${marker}-child-2'` }, waitFor: progressObserved, tool: "run_shell" },
     { text: `两条命令都跑完了，标记 ${marker}。` },
   ]);
   let fixture: JourneyFixture | undefined;
@@ -149,8 +153,14 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       const run = await sendUserMessage(page, fixture!.session.id, "把两条检查命令交给助手在前台跑完，再跑一条主命令，然后总结。");
       const card = page.locator("section[aria-label='Subagent 活动'] article.subagent-card.running").first();
       await expect(card).toBeVisible({ timeout: 60_000 });
+      // Model/startup time is not UI propagation time: first establish that
+      // there is a real tool step whose progress the card should display.
+      await expect.poll(async () => (await subagents(page, fixture!.session.id))
+        .some((child) => child.status === "running" && child.steps.some((step) => step.toolName === "run_shell")),
+      { message: "the child should start its foreground shell step", timeout: 60_000 }).toBe(true);
       await expect(card.locator("small")).toContainText(/run_shell|FG-/, { timeout: 10_000 });
       await expect(card.locator("small")).not.toContainText("正在启动");
+      releaseProgress();
       expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("completed");
     });
 
@@ -183,6 +193,7 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       expect((await runs(page, fixture!.session.id)).filter((run) => run.automaticWake)).toEqual([]);
     });
   } finally {
+    releaseProgress();
     try { await closeWakeGateAndCleanup(page, playwright, fixture); }
     finally { await stub.stop(); }
   }
