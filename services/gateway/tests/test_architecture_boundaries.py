@@ -18,6 +18,7 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
+import atexit
 import os
 import re
 import signal
@@ -180,6 +181,9 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         self.probe = self.TEMP_ROOT / f"probe-boundary-{os.getpid()}.ts"
         self.addCleanup(self.probe.unlink, missing_ok=True)
         self._remove_stale_probes()
+        # Installed once per case, before any probe exists, so every test that writes
+        # one is covered — including tests added later.
+        self._guard_probe_against_signals()
 
     def relative_probe(self) -> str:
         return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
@@ -216,15 +220,22 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
                 continue
 
     def _guard_probe_against_signals(self) -> None:
-        """Unlink the probe on `SIGINT`/`SIGTERM`, then let the signal do its work.
+        """Unlink the probe on exit, `SIGINT` and `SIGTERM`, then let the signal work.
 
-        The handler is installed before the probe exists so no window misses it, and
-        it restores the previous handler and re-raises the same signal, because a
-        cancelled job must still fail rather than exit zero.
+        Installed before any probe exists so no window misses it. A signal handler
+        restores the previous handler and re-raises the same signal, because a
+        cancelled job must still fail rather than exit zero; the `atexit` hook covers
+        a `sys.exit` or an interpreter that ends without running unittest cleanups.
+        Both read `self.probe` when they fire, so they unlink the probe the current
+        test actually wrote.
         """
         previous: dict[int, object] = {}
 
+        def on_exit() -> None:
+            self.probe.unlink(missing_ok=True)
+
         def restore() -> None:
+            atexit.unregister(on_exit)
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
 
@@ -233,6 +244,7 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
             restore()
             os.kill(os.getpid(), signum)
 
+        atexit.register(on_exit)
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous[signum] = signal.getsignal(signum)
             signal.signal(signum, on_signal)
@@ -268,7 +280,6 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         while vendor naming escaped the boundary entirely. Pin the positive half:
         a file the walk should report is reported.
         """
-        self._guard_probe_against_signals()
         self.probe = self.positive_probe_path()
         self.addCleanup(self.probe.unlink, missing_ok=True)
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
