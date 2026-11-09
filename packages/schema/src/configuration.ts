@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
+export type ConfigurationCapabilityId = "web.credential" | "web.configure" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "mcp.metadata" | "mcp.timeout" | "mcp.remove_header" | "mcp.remove_env" | "mcp.header_credential" | "mcp.availability" | "mcp.delete" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -99,7 +99,7 @@ export interface ConfigurationRequestView {
   verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
   previewDigest?: string;
   activation: {
-    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "requires_restart";
+    mode: "before_first_run" | "same_run" | "next_run" | "next_invocation" | "requires_restart" | "next_request";
     state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
     effectiveRevision?: string;
   };

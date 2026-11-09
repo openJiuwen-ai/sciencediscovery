@@ -2454,6 +2454,32 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpHeaderCredentialSource?: (target: string) => import("./configuration/mcp-header-credential-adapter.js").McpHeaderCredentialSnapshot;
+  setConfigurationMcpHeaderCredentialSource(source: (target: string) => import("./configuration/mcp-header-credential-adapter.js").McpHeaderCredentialSnapshot): void { this.configurationMcpHeaderCredentialSource = source; }
+  configurationMcpHeaderCredential(target: string) { return this.configurationMcpHeaderCredentialSource?.(target) ?? { items: [], current: undefined, header: undefined, version: undefined, target: "", destination: undefined }; }
+  private configurationMcpDeletionSource?: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot;
+  setConfigurationMcpDeletionSource(source: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot): void { this.configurationMcpDeletionSource = source; }
+  configurationMcpDeletion(id: string) { return this.configurationMcpDeletionSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpEnvironmentRemovalSource?: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot;
+  setConfigurationMcpEnvironmentRemovalSource(source: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot): void { this.configurationMcpEnvironmentRemovalSource = source; }
+  configurationMcpEnvironmentRemoval(target: string) { return this.configurationMcpEnvironmentRemovalSource?.(target) ?? { items: [], current: undefined, variable: undefined, caseSensitive: process.platform !== "win32", version: undefined }; }
+
+  private configurationMcpHeaderRemovalSource?: (target: string) => import("./configuration/mcp-header-removal-adapter.js").McpHeaderRemovalSnapshot;
+  setConfigurationMcpHeaderRemovalSource(source: (target: string) => import("./configuration/mcp-header-removal-adapter.js").McpHeaderRemovalSnapshot): void { this.configurationMcpHeaderRemovalSource = source; }
+  configurationMcpHeaderRemoval(target: string) { return this.configurationMcpHeaderRemovalSource?.(target) ?? { items: [], current: undefined, header: undefined, version: undefined }; }
+  private configurationMcpAvailabilitySource?: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot;
+  setConfigurationMcpAvailabilitySource(source: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot): void { this.configurationMcpAvailabilitySource = source; }
+  configurationMcpAvailability(id: string) { return this.configurationMcpAvailabilitySource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpTimeoutSource?: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot;
+  setConfigurationMcpTimeoutSource(source: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot): void { this.configurationMcpTimeoutSource = source; }
+  configurationMcpTimeout(id: string) { return this.configurationMcpTimeoutSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpMetadataSource?: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot;
+  setConfigurationMcpMetadataSource(source: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot): void { this.configurationMcpMetadataSource = source; }
+  configurationMcpMetadata(id: string) { return this.configurationMcpMetadataSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
 
   setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
@@ -2556,7 +2582,9 @@ export class SessionStore {
     const timeoutSettings = this.getTimeoutSettings();
     const quotaSettings = this.getQuotaSettings();
     const ideaTreeSettings = this.getIdeaTreeSettings();
+    const mcpMetadata = capabilityId === "mcp.header_credential" ? this.configurationMcpHeaderCredential(target) : capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : capabilityId === "mcp.remove_header" ? this.configurationMcpHeaderRemoval(target) : capabilityId === "mcp.remove_env" ? this.configurationMcpEnvironmentRemoval(target) : capabilityId === "mcp.availability" ? this.configurationMcpAvailability(target) : capabilityId === "mcp.delete" ? this.configurationMcpDeletion(target) : undefined;
     let systemVersions: Record<string, string> | undefined;
+    if (mcpMetadata) systemVersions = { mcpMetadata: mcpMetadata.version ?? version([target, null]) };
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
@@ -2594,6 +2622,7 @@ export class SessionStore {
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
       } : resourceVersions),
       data: {
+        ...(mcpMetadata ? { mcpMetadata } : {}),
         capabilityId, target, sessionId, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,

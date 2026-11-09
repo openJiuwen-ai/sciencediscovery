@@ -140,7 +140,7 @@ export class ConfigurationRequestService {
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) invalid("Verification target cannot contain credentials or query data");
       return url.href;
     });
-    if (!["before_first_run", "same_run", "next_run", "next_request", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
+    if (!["before_first_run", "same_run", "next_run", "next_invocation", "requires_restart", "next_request"].includes(source.activationMode)) invalid("Invalid activation mode");
     const maxRequests = integer(verification.maxRequests, "maxRequests", 0);
     if (maxRequests > 10 || typeof source.ready !== "boolean") invalid("Verification budget exceeds the supported limit");
     return { fields, changes, disposition: source.disposition ?? (source.ready ? "change" : "missing_input"),
@@ -155,6 +155,7 @@ export class ConfigurationRequestService {
       ...(record.view.protocolVersion === 3 ? { protocolVersion: 3, options: record.view.options, selectedOptionId: record.view.selectedOptionId, needKey: record.view.needKey } : {}) });
   }
   private actions(record: ConfigurationRecord): ConfigurationRequestView["allowedActions"] {
+    if (!this.registry.lookup(record.view.capabilityId)) return ["query"];
     const view = record.view;
     if (view.state === "collecting_input" || view.state === "needs_fix" || view.state === "stale" || view.state === "failed") return ["preview", "dismiss"];
     if (view.state === "awaiting_confirmation") return ["preview", "apply", "dismiss"];
@@ -165,6 +166,7 @@ export class ConfigurationRequestService {
   /** Every field below is an explicit whitelist; internal record extensions stay server-only. */
   private project(record: ConfigurationRecord): ConfigurationRequestView {
     const view = record.view;
+    const adapter = this.registry.lookup(view.capabilityId);
     const endpointAuthorization = this.host.projectEndpointAuthorization?.(record);
     return structuredClone({
       ...(view.protocolVersion === 3 ? { protocolVersion: 3 as const, options: normalizeChoices(view.options ?? []), selectedOptionId: view.selectedOptionId, needKey: view.needKey,
@@ -178,14 +180,15 @@ export class ConfigurationRequestService {
       ...(view.decisionSource ? { decisionSource: view.decisionSource } : {}),
       reason: { code: view.reason.code, message: view.reason.message },
       scope: view.scope.kind === "global" ? { kind: "global" } : { kind: view.scope.kind, id: view.scope.id },
-      fields: normalizeConfigurationFields(view.fields, this.registry.get(view.capabilityId).fieldPolicy),
+      fields: normalizeConfigurationFields(view.fields, adapter?.fieldPolicy),
       changes: view.changes.map(({ field, before, after }) => ({ field, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) })),
       impact: { resourceLocation: view.impact.resourceLocation, effectiveScope: view.impact.effectiveScope, message: view.impact.message },
       verificationPlan: { targets: [...view.verificationPlan.targets], actions: [...view.verificationPlan.actions], maxRequests: view.verificationPlan.maxRequests, mayCharge: view.verificationPlan.mayCharge },
       ...(view.previewDigest ? { previewDigest: view.previewDigest } : {}),
       activation: { mode: view.activation.mode, state: view.activation.state, ...(view.activation.effectiveRevision ? { effectiveRevision: view.activation.effectiveRevision } : {}) },
       resumption: { state: view.resumption.state, ...(view.resumption.runId ? { runId: view.resumption.runId } : {}) },
-      ...(view.error ? { error: { code: view.error.code, message: view.error.message, ...(view.error.field ? { field: view.error.field } : {}), retryable: view.error.retryable } } : {}),
+      ...(!adapter ? { error: { code: "CONFIGURATION_BACKEND_UNAVAILABLE", message: "This capability is unavailable in the current backend. Its historical record remains read-only.", retryable: false } }
+        : view.error ? { error: { code: view.error.code, message: view.error.message, ...(view.error.field ? { field: view.error.field } : {}), retryable: view.error.retryable } } : {}),
       allowedActions: this.actions(record), createdAt: view.createdAt, updatedAt: view.updatedAt,
       ...(view.expiresAt ? { expiresAt: view.expiresAt } : {}),
     });
@@ -202,7 +205,7 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    if (["web.credential", "web.configure", "skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.header_credential", "mcp.availability", "mcp.delete", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

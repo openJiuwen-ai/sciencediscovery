@@ -16,6 +16,129 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03g: changing the credential header clears plaintext and requires a new endpoint review", async () => {
+  const view = request({ capabilityId: "mcp.header_credential", endpointAuthorization: { endpointTarget: "opaque-owned-recipient", revision: 2, host: "owned.invalid", classification: "public_https", status: "confirmed" }, fields: [
+    { id: "serverId", kind: "enum", label: "MCP", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }] },
+    { id: "headerName", kind: "enum", label: "Header", required: true, value: "authorization", choices: [{ id: "authorization", label: "Authorization" }, { id: "x-key", label: "X-Key" }] },
+    { id: "apiToken", kind: "credential", label: "Replacement header value", required: true, status: "missing" },
+  ] }), renderer = await mount(view, actions());
+  try {
+    await act(async () => renderer.root.findByProps({ type: "password" }).props.onChange({ target: { value: "Bearer synthetic-new" } }));
+    await act(async () => renderer.root.findByProps({ name: "headerName" }).props.onChange({ target: { value: "x-key" } })); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    await act(async () => renderer.root.findByProps({ name: "headerName" }).props.onChange({ target: { value: "authorization" } })); assert.equal(renderer.root.findByProps({ type: "password" }).props.value, "");
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03f: changing the MCP deletion target clears its independent confirmation", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.delete", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const check = renderer.root.findByProps({ name: "confirmDelete" }); assert.equal(check.props.checked, false); assert.equal(check.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03e: changing a STDIO target clears its saved environment name without a secret input", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_env", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing STDIO custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "envName", label: "Saved environment override to remove", kind: "enum", required: true, value: "OWNED_TOKEN", choices: [{ id: "OWNED_TOKEN", label: "OWNED_TOKEN" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /Saved environment override to remove/u); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } })); const field = renderer.root.findByProps({ name: "envName" }); assert.equal(field.props.value, ""); assert.equal(field.props.disabled, true); assert.equal(field.props.required, false);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03d: changing the server clears and unlocks the dependent header selection", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const header = renderer.root.findByProps({ name: "headerName" }); assert.equal(header.props.value, ""); assert.equal(header.props.required, false); assert.equal(header.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03d: saved MCP header removal labels names, without a credential value input", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "headerName", before: "authorization · 2 names; values hidden", after: "Removed" }], fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization · 2 names" }] },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Saved header name to remove/u); assert.match(text, /values hidden/u); assert.equal(renderer.root.findByProps({ name: "headerName" }).type, "select"); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+});
+
+test("CFG-X03c: MCP availability uses its own global boolean label and manual impact", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Available globally/u); assert.match(text, /Set shared MCP availability/u); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.type, "checkbox"); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.checked, true);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03b: MCP timeout labels disclose seconds and subsequent-call timing", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.timeout", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "timeoutSeconds", before: "37", after: "81" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "timeoutSeconds", label: "Call timeout (seconds)", kind: "number", required: true, value: 81 },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Call timeout \(seconds\)/u); assert.match(text, /Applies to subsequent MCP calls/u); assert.equal(renderer.root.findByProps({ name: "timeoutSeconds" }).props.type, "number");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-name wording", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.metadata", scope: { kind: "global" }, changes: [{ field: "name", before: "Old", after: "Owned MCP" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "name", label: "MCP server name", kind: "text", required: true, value: "Owned MCP" },
+    { id: "description", label: "MCP server description", kind: "text", required: false, value: "Owned metadata" },
+  ] }), actions(), () => undefined, "zh");
+  const labels = renderer.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(labels.some(label => label.includes("MCP 服务名称"))); assert.ok(labels.some(label => label.includes("MCP 服务描述"))); assert.ok(!labels.some(label => label.includes("服务商名称")));
+  assert.ok(renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "MCP 服务名称"));
+  assert.equal(renderer.root.findByProps({ name: "description" }).type, "textarea");
+  await act(async () => renderer.root.findByProps({ name: "description" }).props.onChange({ target: { value: "Owned metadata\nSecond line" } }));
+  assert.equal(renderer.root.findByProps({ name: "description" }).props.value, "Owned metadata\nSecond line");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03a: Chinese MCP availability and deletion cards use their own labels", async () => {
+  const availability = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const availabilityLabels = availability.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(availabilityLabels.some(label => label.includes("全局可用")));
+  assert.ok(availabilityLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!availabilityLabels.some(label => label.includes("启用全局审阅专家")));
+  assert.ok(availability.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "全局可用"));
+  assert.match(JSON.stringify(availability.toJSON()), /设置 MCP 全局可用性/u);
+  assert.equal(availability.root.findByProps({ name: "enabled" }).props.type, "checkbox");
+  await act(async () => availability.unmount());
+
+  const deletion = await mount(request({ capabilityId: "mcp.delete", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "serverId", before: "Owned MCP", after: "Deleted" }, { field: "confirmDelete", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const deletionLabels = deletion.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(deletionLabels.some(label => label.includes("删除此共享服务及其已保存引用")));
+  assert.ok(deletionLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!deletionLabels.some(label => /Existing custom MCP server|Delete this shared server/u.test(label)));
+  const deletionDiff = deletion.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(label => label.children.join(""));
+  assert.ok(deletionDiff.includes("已有自定义 MCP 服务"));
+  assert.ok(deletionDiff.includes("删除此共享服务及其已保存引用"));
+  assert.match(JSON.stringify(deletion.toJSON()), /删除自定义 MCP 服务/u);
+  await act(async () => deletion.unmount());
+});
+
 test("CFG-X02b: changing Web provider clears the typed key and cannot recover it by switching back", async () => {
   const renderer = await mount(request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
     { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }, { id: "exa", label: "Exa" }] },
@@ -84,6 +207,13 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
   return renderer!;
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
+
+test("CFG generic saved restart-only settings do not claim verified runtime activation", async () => {
+  const renderer = await mount(request({ capabilityId: "web.configure", state: "applied", runId: undefined,
+    allowedActions: [], activation: { mode: "requires_restart", state: "needs_user_action" } }));
+  assert.match(JSON.stringify(renderer.toJSON()), /Configure Web search and fetching · Saved · Restart required/);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Verified active/); await act(async () => renderer.unmount());
+});
 
 test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
   const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,
@@ -917,4 +1047,85 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+
+const mcpCopyRegistered = {
+  "source": {
+    "mcp.delete": {
+      "resourceLocation": "Encrypted custom MCP configuration and local OAuth/reference stores",
+      "effectiveScope": "Every Global, Project, Session and Specialist reference to this custom server",
+      "message": "Independent manual confirmation required. Delete this custom server, its local OAuth state and saved selection references. Other servers remain. The deletion journal recovers interrupted local cleanup without replaying tools. This action has no automatic undo and does not revoke remote credentials. Saving performs no discovery, MCP/network request or process start/stop. Existing connections or already running work may continue until later ordinary catalog/reconnect cleanup; future calls cannot use this removed server. A bound original configuration wait may continue normally; no old tool/task is replayed."
+    },
+    "mcp.header_credential": {
+      "resourceLocation": "Encrypted custom MCP configuration",
+      "effectiveScope": "This shared server's saved credential header"
+    }
+  },
+  "headerPrefix": "Independent manual confirmation and separate recipient approval are required. Recipient: ",
+  "headerSuffix": ". The saved path/query may contain secrets and is hidden but bound to this approval; review it in the formal editor first. Replace all case aliases with one header. Other headers, OAuth, URL, transport, enabled state, timeout, proxy and Session/tool/network permissions remain. Saving performs no probe, RPC, network request or process operation. Old discovery is invalidated; later ordinary connection/testing uses the replacement and may interrupt old work. Existing connections may retain the old value until reconnect. This is not remote credential revocation or verified authentication. A bound original configuration wait may continue normally; no old tool/task is replayed.",
+  "credentialDescription": "Printable ASCII only, no outer spaces, controls or leading $ environment reference. Use removal to delete a header."
+} as const;
+function mcpCopyFixture(capabilityId: "mcp.delete" | "mcp.header_credential" = "mcp.delete"): ConfigurationRequestView {
+  return {
+    id: "copy", projectId: "project", sessionId: "session", revision: 2, stateVersion: 2, schemaVersion: 1, adapterVersion: 1,
+    capabilityId, state: "awaiting_confirmation", reason: { code: "CONFIGURATION_REQUIRED", message: "A configuration change is required" },
+    scope: { kind: "global" }, fields: capabilityId === "mcp.delete" ? [
+      { id: "serverId", kind: "enum", label: "Existing custom MCP server", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "User supplied 名称" }] },
+      { id: "confirmDelete", kind: "boolean", label: "Delete this shared server and its saved references", required: true, value: true },
+    ] : [
+      { id: "serverId", kind: "enum", label: "Existing HTTP/SSE custom MCP server", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "User supplied 名称" }] },
+      { id: "headerName", kind: "enum", label: "Existing credential header", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization · 2 stored name(s)" }] },
+      { id: "apiToken", kind: "credential", label: "Replacement header value", required: true, status: "provided", description: mcpCopyRegistered.credentialDescription },
+    ], changes: [], impact: { ...mcpCopyRegistered.source[capabilityId], message: capabilityId === "mcp.delete" ? mcpCopyRegistered.source["mcp.delete"].message : mcpCopyRegistered.headerPrefix + "http://127.0.0.1:12345" + mcpCopyRegistered.headerSuffix },
+    verificationPlan: { targets: [], actions: [], maxRequests: 0, mayCharge: false }, previewDigest: "sha256:unchanged",
+    activation: { mode: "next_invocation", state: "not_requested" }, resumption: { state: "not_requested" },
+    allowedActions: ["preview", "apply", "dismiss"], createdAt: "2026-11-09T00:00:00Z", updatedAt: "2026-11-09T00:00:00Z",
+  };
+}
+
+
+test("MCP Chinese deletion rendering leaves the exact decision payload unchanged", async () => {
+  const source = mcpCopyFixture();
+  const view = { ...source, protocolVersion: 3 as const, selectedOptionId: "persist", options: [
+    { id: "persist", kind: "persisted_apply" as const, label: "Apply configuration", description: "Save", available: true },
+    { id: "dismiss", kind: "dismiss" as const, label: "Not now", description: "Skip", available: true },
+  ], changes: [{ field: "serverId", before: "User supplied 名称 · custom-owned", after: "Deleted, including local OAuth state and saved references; no automatic undo" }] };
+  const before = JSON.stringify(view), decisions: unknown[] = [];
+  const renderer = await mount(view, actions({ decide: async input => { decisions.push(input); return { ...view, state: "applied", allowedActions: ["query"] }; } }), () => {}, "zh");
+  try {
+    const html = JSON.stringify(renderer.toJSON());
+    assert.match(html, /需要变更配置/); assert.match(html, /无法自动撤销/); assert.match(html, /不会撤销远端凭据/);
+    assert.doesNotMatch(html, /Independent manual confirmation required|A configuration change is required/);
+    await act(async () => button(renderer, "确认选择并继续").props.onClick());
+    assert.deepEqual(decisions, [{ revision: view.revision, previewDigest: view.previewDigest, decision: "apply", selectedOptionId: "persist" }]);
+    assert.equal(JSON.stringify(view), before);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("MCP Chinese credential display keeps password write-only and exact recipient consent", async () => {
+  const source = mcpCopyFixture("mcp.header_credential"), target = "opaque-owned-exact-target";
+  const view = { ...source, endpointAuthorization: { endpointTarget: target, host: "127.0.0.1", classification: "loopback" as const, status: "required" as const, revision: source.revision } };
+  const before = JSON.stringify(view), consents: unknown[] = [];
+  const renderer = await mount(view, actions({ consent: async input => { consents.push(input); return { ...view, endpointAuthorization: { ...view.endpointAuthorization, status: "confirmed" } }; } }), () => {}, "zh");
+  try {
+    const text = JSON.stringify(renderer.toJSON());
+    assert.match(text, /需要独立手动确认/); assert.match(text, /另行批准凭据接收方/);
+    assert.ok(text.includes("http://127.0.0.1:12345"));
+    assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    const consentButton = renderer.root.findAllByType("button").find(item => item.children.join("") === "允许此精确端点")!;
+    assert.ok(consentButton); await act(async () => consentButton.props.onClick());
+    assert.deepEqual(consents, [{ revision: view.revision, endpointTarget: target }]);
+    assert.equal(JSON.stringify(view), before);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("saved Chinese MCP receipt translates the same complete risk copy", async () => {
+  const view = { ...mcpCopyFixture(), state: "applied" as const, allowedActions: ["query" as const] };
+  const renderer = await mount(view, actions(), () => {}, "zh");
+  try {
+    const text = JSON.stringify(renderer.toJSON());
+    assert.match(text, /加密的自定义 MCP 配置及本地 OAuth/); assert.match(text, /不会重放任何旧工具或任务/);
+    assert.doesNotMatch(text, /Independent manual confirmation required/);
+  } finally { await act(async () => renderer.unmount()); }
 });

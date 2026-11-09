@@ -156,7 +156,12 @@ test("CFG HTTP: invalid connection previews return a safe baseUrl field error be
 test("CFG HTTP: first connection is preview-only until confirmation, applies once, and establishes the global default", async (context) => {
   const f = await fixture(context);
   const capabilities = await f.ok<{ items: Array<{ id: string }>; executor: string }>(`/api/sessions/${f.session.id}/configuration/capabilities`);
-  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
+  const capabilityIds = new Set(capabilities.items.map((item) => item.id));
+  for (const id of ["connector.enable", "environment.sources", "idea_tree.configure", "mcp.availability", "mcp.delete", "mcp.header_credential", "mcp.metadata", "mcp.remove_env", "mcp.remove_header", "mcp.timeout", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]) assert.ok(capabilityIds.has(id), `Missing configuration capability: ${id}`);
+  assert.equal(capabilityIds.has("memory.credential"), false, "Deferred Neo4j credential configuration must not be exposed");
+  const deferred = await f.call(f.path(), { protocolVersion: 3, capabilityId: "memory.credential", values: { operation: "replace" } });
+  assert.equal(deferred.status, 409);
+  assert.equal(deferred.body.code, "CONFIGURATION_CAPABILITY_UNAVAILABLE");
   assert.equal(capabilities.executor, "native");
   const initial = await f.proposal("model.connect");
   assert.equal(initial.state, "collecting_input");

@@ -131,6 +131,8 @@ Inspector -> 指定 Session + 显式选择单台服务器 ------------+    -> Mc
 
 配置写入数据目录的 `custom-mcp-servers.enc`，OAuth 凭据写入 `mcp-oauth.enc`，复用 `model-secrets.key` 加密。写入采用队列、临时文件和重命名，文件创建权限为 `0600`。这是静态存储保护，不是对后端宿主机管理员的秘密隔离。
 
+在记下任何配置操作之前，该文件仍是服务器条目的普通映射，旧版本可以读取。第一次记下操作日志的设置修改会写入 `sciencediscovery-custom-mcp-v2` 封装，第一次删除会写入 `sciencediscovery-custom-mcp-v3`。第一次删除之后，这种较新的格式会永久保留，即使已经没有待处理的删除也是如此。旧版本无法读取这两种封装，只要升级后的文件还在，API 就不会启动。没有自动降级：恢复升级前的 `custom-mcp-servers.enc`，或从空存储重新添加服务器。无法读取的单条操作日志会被忽略，已保存的服务器仍然加载；操作身份仍可识别的那一行会保持围栏，不会再次应用。面向使用者的回退步骤见[配置自定义 MCP](../advanced-setup/configure-custom-mcp.md#回退到旧版本)。
+
 列表接口保留 env/header 的键名，但把值返回为 `null`；已保存的 OAuth Client Secret 同样不回填明文，访问令牌和刷新令牌不返回前端。env/header 的更新契约如下：
 
 | 提交内容 | 保存语义 |

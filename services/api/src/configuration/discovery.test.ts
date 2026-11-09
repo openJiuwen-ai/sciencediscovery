@@ -133,3 +133,13 @@ test("CFG-Q03: Idea Tree current values expose only supported runtime controls",
   assert.equal(value.current.maxDepth, saved.maxDepth);
   assert.equal(value.current.maxNodes, saved.maxNodes);
 });
+
+test("CFG-Q02: deferred Neo4j credentials are not discoverable or describable", async context => {
+  const h = await fixture(context);
+  for (const query of ["neo4j password", "记忆图谱密码"]) {
+    const found = await h.query({ action: "search", query });
+    assert.ok(found.items.every((item: { capabilityId?: string }) => item.capabilityId !== "memory.credential"));
+  }
+  assert.equal(h.framework.service.registry.lookup("memory.credential"), undefined);
+  assert.throws(() => h.framework.service.registry.get("memory.credential"), { code: "CONFIGURATION_CAPABILITY_UNAVAILABLE" });
+});

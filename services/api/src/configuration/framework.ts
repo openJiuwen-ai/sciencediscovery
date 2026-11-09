@@ -12,6 +12,11 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createMcpEnvironmentRemovalAdapter, type McpEnvironmentRemovalPort } from "./mcp-env-removal-adapter.js";
+import { createMcpHeaderRemovalAdapter, type McpHeaderRemovalPort } from "./mcp-header-removal-adapter.js";
+import { createMcpAvailabilityAdapter, type McpAvailabilityPort } from "./mcp-availability-adapter.js";
+import { createMcpTimeoutAdapter, type McpTimeoutPort } from "./mcp-timeout-adapter.js";
+import { createMcpMetadataAdapter, type McpMetadataPort } from "./mcp-metadata-adapter.js";
 import { createWebCredentialAdapter } from "./web-credential-adapter.js";
 import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
@@ -20,6 +25,7 @@ import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
+import { ConfigurationExternalCommitCoordinator } from "./external-commit.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
 import { randomUUID } from "node:crypto";
@@ -30,7 +36,17 @@ import { CONFIGURATION_PENDING_STATES, configurationDecisionReady } from "./inte
 import { ModelDestinationAuthorizer } from "./model-destination.js";
 import type { ConfigurationConnectorRegistration } from "./connector-directory.js";
 
+import { createMcpDeletionAdapter, type McpDeletionPort } from "./mcp-delete-adapter.js";
+import { createMcpHeaderCredentialAdapter, type McpHeaderCredentialPort } from "./mcp-header-credential-adapter.js";
+
 export interface ConfigurationFrameworkOptions {
+  mcpDeletion?: McpDeletionPort;
+  mcpHeaderCredential?: McpHeaderCredentialPort;
+  mcpMetadata?: McpMetadataPort;
+  mcpTimeout?: McpTimeoutPort;
+  mcpHeaderRemoval?: McpHeaderRemovalPort;
+  mcpEnvironmentRemoval?: McpEnvironmentRemovalPort;
+  mcpAvailability?: McpAvailabilityPort;
   connectors?(sessionId: string): readonly ConfigurationConnectorRegistration[];
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
   nativeExecutor: boolean;
@@ -45,7 +61,7 @@ export function configurationFramework(store: SessionStore, options?: Configurat
   if (!current) {
     current = new ConversationalConfigurationFramework(store, options ?? { connector: () => undefined, nativeExecutor: false });
     frameworks.set(store, current);
-  } else if (options) current.options = options;
+  } else if (options) current.configure(options);
   return current;
 }
 
@@ -160,7 +176,8 @@ export class ConversationalConfigurationFramework {
         },
         resolvePreviewCredential: input => {
           try {
-            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
+            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken",
+              normalization: this.credentialNormalization(input.sessionId, input.requestId) });
             return input.credentialHandle;
           } catch (error) {
             if (!(error instanceof Error) || error.message !== "CREDENTIAL_DRAFT_EXPIRED") throw error;
@@ -176,11 +193,60 @@ export class ConversationalConfigurationFramework {
           }
           if (change.credentialHandle) this.credentials.rebind(change.credentialHandle, {
             sessionId: change.sessionId, requestId: change.requestId, revision: change.fromRevision,
-            target: change.oldTarget, fieldId: "apiToken",
+            target: change.oldTarget, fieldId: "apiToken", normalization: this.credentialNormalization(change.sessionId, change.requestId),
           }, change.toRevision);
           else if (change.oldTarget !== change.newTarget) this.credentials.clearRequest(change.requestId);
         },
       } });
+    this.attachMcpMetadata();
+  }
+
+  configure(options: ConfigurationFrameworkOptions): void {
+    this.options = { ...options, mcpHeaderCredential: options.mcpHeaderCredential ?? this.options.mcpHeaderCredential, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval, mcpEnvironmentRemoval: options.mcpEnvironmentRemoval ?? this.options.mcpEnvironmentRemoval, mcpAvailability: options.mcpAvailability ?? this.options.mcpAvailability, mcpDeletion: options.mcpDeletion ?? this.options.mcpDeletion };
+    this.attachMcpMetadata();
+  }
+
+  private attachMcpMetadata(): void {
+    const headersCredential = this.options.mcpHeaderCredential;
+    if (headersCredential && !this.service.registry.list().some(adapter => adapter.id === "mcp.header_credential")) {
+      this.store.setConfigurationMcpHeaderCredentialSource(target => headersCredential.configurationHeaderCredential(target));
+      this.service.registry.register(createMcpHeaderCredentialAdapter(headersCredential, this.credentials, context => {
+        const record = this.repository.get(context.requestId, context.sessionId);
+        if (!record || record.view.revision !== context.revision) { throw new ConfigurationError("STALE_ENDPOINT_CONSENT", "Review the current saved MCP recipient", 409, "serverId"); }
+        this.destinations.assert(record, true);
+      }));
+    }
+    const deletion = this.options.mcpDeletion;
+    if (deletion && !this.service.registry.list().some(adapter => adapter.id === "mcp.delete")) {
+      this.store.setConfigurationMcpDeletionSource(id => deletion.configurationDeletion(id));
+      this.service.registry.register(createMcpDeletionAdapter(deletion));
+    }
+    const environment = this.options.mcpEnvironmentRemoval;
+    if (environment && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_env")) {
+      this.store.setConfigurationMcpEnvironmentRemovalSource(target => environment.configurationEnvironmentRemoval(target));
+      this.service.registry.register(createMcpEnvironmentRemovalAdapter(environment));
+    }
+    const headers = this.options.mcpHeaderRemoval;
+    if (headers && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_header")) {
+      this.store.setConfigurationMcpHeaderRemovalSource(target => headers.configurationHeaderRemoval(target));
+      this.service.registry.register(createMcpHeaderRemovalAdapter(headers));
+    }
+    const availability = this.options.mcpAvailability;
+    if (availability && !this.service.registry.list().some(adapter => adapter.id === "mcp.availability")) {
+      this.store.setConfigurationMcpAvailabilitySource(id => availability.configurationMetadata(id));
+      this.service.registry.register(createMcpAvailabilityAdapter(availability));
+    }
+    const timeout = this.options.mcpTimeout;
+    if (timeout && !this.service.registry.list().some(adapter => adapter.id === "mcp.timeout")) {
+      this.store.setConfigurationMcpTimeoutSource(id => timeout.configurationTimeout(id));
+      this.service.registry.register(createMcpTimeoutAdapter(timeout));
+    }
+    const port = this.options.mcpMetadata;
+    if (!port || this.service.registry.list().some(adapter => adapter.id === "mcp.metadata")) return;
+    // Pin one authority to the framework lifetime; option refreshes cannot move
+    // an already submitted operation into a different authority's journal.
+    this.store.setConfigurationMcpMetadataSource(id => port.configurationMetadata(id));
+    this.service.registry.register(createMcpMetadataAdapter(port));
   }
 
   private snapshot(sessionId: string, capabilityId: import("@sciencediscovery/schema").ConfigurationCapabilityId, target: string) {
@@ -206,7 +272,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.header_credential", "mcp.availability", "mcp.delete"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
@@ -275,6 +341,11 @@ export class ConversationalConfigurationFramework {
     return this.service.get(sessionId, id);
   }
 
+  private credentialNormalization(sessionId: string, id: string): "trim" | "exact" {
+    const record = this.service.getRecord(sessionId, id);
+    return this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialNormalization ?? "trim";
+  }
+
   async provideCredential(sessionId: string, id: string, input: ConfigurationCredentialInput, key?: string) {
     object(input, ["expectedRevision", "fieldId", "secret"], "credential"); integer(input.expectedRevision, "expectedRevision");
     string(input.fieldId, "fieldId", 100);
@@ -292,7 +363,7 @@ export class ConversationalConfigurationFramework {
       this.destinations.assert(record, true);
       if (record.stopGeneration !== this.store.notifications.generation(sessionId)) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped", 409);
       return this.credentials.provide({ sessionId, requestId: id, revision: input.expectedRevision,
-        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target) }, input.secret, key);
+        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target), normalization: this.credentialNormalization(sessionId, id) }, input.secret, key);
     });
   }
 
@@ -346,9 +417,10 @@ export class ConversationalConfigurationFramework {
       }
     });
     const result = await this.service.decide(sessionId, id, input, key);
-    if (result.state === "applied" || result.state === "dismissed") {
-      this.credentials.clearRequest(id);
+    if (result.state === "applied" || result.state === "dismissed" || result.state === "applying") {
+      if (result.state !== "applying") this.credentials.clearRequest(id);
       await this.settle(sessionId, id);
+      if (["applied", "dismissed", "cancelled", "expired"].includes(this.service.get(sessionId, id).state)) this.credentials.clearRequest(id);
     }
     if (result.state === "expired" || result.state === "cancelled") await this.reconcileLifecycle(sessionId, id);
     return this.service.get(sessionId, id);
@@ -423,7 +495,11 @@ export class ConversationalConfigurationFramework {
   }
 
   private async settleSerial(sessionId: string, id: string): Promise<ConfigurationRequestView> {
-    const record = this.service.getRecord(sessionId, id);
+    let record = this.service.getRecord(sessionId, id);
+    if (record.view.state === "applying") {
+      await new ConfigurationExternalCommitCoordinator(this.store, this.repository, this.service.registry).settle(sessionId, id);
+      record = this.service.getRecord(sessionId, id);
+    }
     if (!["applied", "dismissed"].includes(record.view.state)) return this.service.get(sessionId, id);
     const stopped = record.stopGeneration !== this.store.notifications.generation(sessionId) || !this.store.notifications.canWake(sessionId);
     if (stopped && record.view.runId) {

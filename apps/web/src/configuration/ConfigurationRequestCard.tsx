@@ -9,6 +9,7 @@ import { ApiRequestError } from "../api/auth.js";
 import { useLocale } from "../i18n/index.js";
 import { ProcessRecord } from "../ProcessRecord.js";
 import { configurationMessages } from "./messages.js";
+import { mcpConfigurationText, mcpConfigurationChoiceLabel, mcpConfigurationChangeText } from "./mcp-copy.js";
 
 export interface ConfigurationRequestActions {
   consent?(input: { revision: number; endpointTarget: string }, key: string): Promise<ConfigurationRequestView>;
@@ -48,6 +49,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const runActive = sourceRunActive && request.liveWait !== true;
   const { locale } = useLocale();
   const m = configurationMessages(locale);
+  const capabilityFieldLabel = (fieldId: string, fallback: string) => {
+    const table = Object.hasOwn(m.fieldsByCapability, request.capabilityId) ? m.fieldsByCapability[request.capabilityId] : undefined;
+    return table ? ownMessage(table, fieldId, fallback) : fallback;
+  };
   const id = useId();
   const [values, setValues] = useState(() => fieldValues(request));
   const [selectedOptionId, setSelectedOptionId] = useState(request.selectedOptionId);
@@ -66,7 +71,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "serverId", "webProvider", "operation", "headerName"];
+  const dependentRemovalField = ["mcp.remove_header", "mcp.header_credential"].includes(request.capabilityId) ? "headerName" : request.capabilityId === "mcp.remove_env" ? "envName" : request.capabilityId === "mcp.delete" ? "confirmDelete" : undefined;
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -105,7 +111,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId)
+    || request.capabilityId === "mcp.header_credential" && request.fields.some(field => field.kind === "credential");
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -148,9 +155,13 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     credentialDraft.current = undefined;
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
-    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
-      ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) })); }
+    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => {
+      const next: ConfigurationValues = { ...current, [field.id]: value,
+        ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
+          ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) };
+      if (dependentRemovalField && field.id === "serverId" && current.serverId !== value) delete next[dependentRemovalField];
+      return next;
+    }); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -279,30 +290,32 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
     `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
   const choiceLabel = request.choiceReceipt ? describeChoice(request.choiceReceipt) : undefined;
-  const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
+  const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : mcpConfigurationText(locale, request, "reason", request.reason.message);
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const savedForRestart = request.state === "applied" && request.activation.mode === "requires_restart"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "web.credential"
     ? m.mode.domainNextRequest : m.mode[request.activation.mode];
-  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
+  const summary = savedForNextRun || savedForRestart || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
-      <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
-      <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
+      <dt>{m.resource}</dt><dd>{mcpConfigurationText(locale, request, "resourceLocation", request.impact.resourceLocation)}</dd>
+      <dt>{m.scopeLabel}</dt><dd>{mcpConfigurationText(locale, request, "effectiveScope", request.impact.effectiveScope) || scope}</dd>
       <dt>{m.activationLabel}</dt><dd>{activationModeLabel}</dd>
     </dl>
-    <p>{request.impact.message}</p>
+    <p>{mcpConfigurationText(locale, request, "message", request.impact.message)}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{(request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{capabilityFieldLabel(change.field, (request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field)}</strong>: <span>{mcpConfigurationChangeText(locale, request, change.field, "before", change.before) ?? m.unset}</span> → <span>{mcpConfigurationChangeText(locale, request, change.field, "after", change.after) ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -388,18 +401,22 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
-        const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
+        const translatedLabel = ownMessage(m.field, field.id, field.label);
+        const loadingRemovalName = field.id === dependentRemovalField && values.serverId !== fieldValues(request).serverId;
+        const common = { id: inputId, name: field.id, disabled: !editable || loadingRemovalName, required: field.required && !loadingRemovalName,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{capabilityFieldLabel(field.id, translatedLabel ?? field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
               placeholder={field.status === "provided" ? m.providedPlaceholder : field.placeholder}
               onChange={(event) => edit(field, event.target.value)} /> : <p>{authorization?.classification === "public_http" ? m.endpointBlocked : m.endpointRequired}</p>}
-            <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.description}` : ""}</p>
-          </> : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
+            <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.id === "apiToken" ? mcpConfigurationText(locale, request, "credentialDescription", field.description) : field.description}` : ""}</p>
+          </> : field.kind === "text" && request.capabilityId === "mcp.metadata" && field.id === "description" ? <textarea {...common} rows={4}
+            value={String(values[field.id] ?? "")} placeholder={field.placeholder} onChange={(event) => edit(field, event.target.value)} />
+          : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
             onChange={(event) => edit(field, Array.from(event.target.selectedOptions, option => option.value))}>
             {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
@@ -407,7 +424,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
               ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
-                ? ownMessage(m.credentialOperation, choice.id, choice.label) : choice.label}</option>)}
+                ? ownMessage(m.credentialOperation, choice.id, choice.label) : mcpConfigurationChoiceLabel(locale, request, field.id, choice.id, choice.label)}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
             : <input {...common} type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
               value={values[field.id] === undefined ? "" : String(values[field.id])} placeholder={field.placeholder}
