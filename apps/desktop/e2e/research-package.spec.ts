@@ -233,7 +233,12 @@ test("hover import defaults to no project and allows an existing project", async
       await expect(dialog.getByLabel("项目归属")).toHaveValue("");
       if (project === "project-1") await dialog.getByLabel("项目归属").selectOption(project);
       await dialog.locator("input[type=file]").setInputFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
-      await expect(dialog).toContainText("恢复的研究");
+      // The review pane describes the package, not where it came from: the
+      // filename, the object count and the read-only hint. The source session's
+      // title is deliberately not rendered any more.
+      await expect(dialog.locator(".research-import-meta")).toContainText("study.sdresearch");
+      await expect(dialog.locator(".research-import-meta")).toContainText("2 个内容对象");
+      await expect(dialog.locator(".research-import-review")).not.toContainText("恢复的研究");
       await dialog.getByRole("button", { name: "确认导入" }).click();
       // Import opens the read-only snapshot; it does not auto-create a writable copy.
       await expect(page.locator(".task-head-title")).toHaveText("恢复的研究");
