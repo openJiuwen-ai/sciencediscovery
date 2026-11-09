@@ -645,7 +645,7 @@ function deepCoverage(quickReview: ArtifactReviewRun,
   return gaps.length ? { notChecked: gaps } : {};
 }
 
-async function reviewArtifactQuick(  checkpoint: ReviewCheckpoint,
+async function reviewArtifactQuick(checkpoint: ReviewCheckpoint,
   logicalName: string,
   version: ScientificArtifactVersion,
   content: Buffer,
