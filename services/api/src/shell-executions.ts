@@ -345,7 +345,8 @@ export class ShellExecutions {
   private async scanPending(runnerId?: string, force = false): Promise<void> {
     if (this.closed || !this.recovery) return;
     const rows = this.db.prepare(`SELECT record FROM shell_executions
-      WHERE json_extract(record, '$.provenance') != 'committed' AND (json_type(record, '$.originalExecutionContext') = 'object' OR json_type(record, '$.recoveryContext.permissionEpoch') = 'object')
+      WHERE json_extract(record, '$.provenance') != 'committed' AND json_extract(record, '$.state') = 'unknown'
+      AND (json_type(record, '$.originalExecutionContext') = 'object' OR json_type(record, '$.recoveryContext.permissionEpoch') = 'object')
       AND (? IS NULL OR json_extract(record, '$.runnerId') = ?)
       AND (? OR coalesce(json_extract(record, '$.observation.lastError.retryable'), 1) != 0)
       AND (? OR coalesce(json_extract(record, '$.observation.nextRetryAt'), '') <= ?)
@@ -456,13 +457,11 @@ export class ShellExecutions {
       : `${exhausted ? exhausted[0] : fallback === "PROVENANCE_COMMIT_FAILED"
         ? "Existing execution result could not be committed; retry uses the same result"
         : "Runner observation is unavailable; the original execution was not replayed"}${transportCode ? ` (${transportCode})` : ""}`;
-    // Keep the real cause on the record. The canned sentence above explains what
-    // it means for the workspace; without the underlying text the next occurrence
-    // is still undiagnosable from the record alone (#1012).
-    const cause = error instanceof Error && error.message && !detail.includes(error.message)
-      ? ` — ${errorDetail(error)}`
-      : "";
-    execution.error = `${detail}${cause}`;
+    // Diagnosability without opening the redaction boundary this function
+    // documents above: only allowlisted identifiers are retained, never the
+    // message chain (which can wrap a Runner response body or a token).
+    const safeCause = transportCode ?? (error instanceof RecoveryError ? error.code : undefined);
+    execution.error = detail;
     execution.state = "unknown";
     execution.provenance = "unconfirmed";
     execution.finalization = fallback === "PROVENANCE_COMMIT_FAILED" ? "failed" : "pending";
@@ -470,7 +469,7 @@ export class ShellExecutions {
     execution.observation = { ...execution.observation, status: "blocked", failureCount,
       ...(retryable ? { nextRetryAt: new Date(Date.now() + Math.min(1_000 * 2 ** Math.min(failureCount - 1, 6), 60_000)).toISOString() } : {}),
       lastError: { code, message: detail, retryable,
-        ...(cause ? { cause: cause.slice(3) } : {}), ...(httpStatus ? { httpStatus } : {}) } };
+        ...(safeCause && safeCause !== code ? { cause: safeCause } : {}), ...(httpStatus ? { httpStatus } : {}) } };
     if (!retryable) delete execution.observation.nextRetryAt;
     this.save(execution);
   }
