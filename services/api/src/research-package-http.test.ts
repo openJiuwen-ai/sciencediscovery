@@ -225,6 +225,9 @@ test("complete package restores conversations, files, versions and reviews acros
   assert.equal(receipt.artifactCount, 1);
   assert.equal(receipt.importedSessionIds.length, 2);
   assert.ok(receipt.omissions.some((item) => item.includes("no scientific memory snapshot")));
+  // #1019: a dimension the package cannot carry must be named, not silently absent.
+  assert.ok(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")),
+    "the receipt names the dimension the package cannot carry");
   const detail = await (await request(`/api/sessions/${targetId}`)).json() as { title: string; messages: { id: string; content: string }[] };
   assert.equal(detail.title, "原始研究");
   assert.deepEqual(detail.messages.map((item) => item.content), ["第一轮科研问题", "第一轮结论", "第二轮科研问题", "第二轮结论"]);
