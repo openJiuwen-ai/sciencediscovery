@@ -33,8 +33,9 @@ export interface ExecutionObservation {
   failureCount: number;
   nextRetryAt?: string;
   lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number;
-    /** The underlying failure, kept so the record is diagnosable on its own
-     *  instead of only carrying the sentence that explains its consequence. */
+    /** An allowlisted identifier for the underlying failure — a transport code or a
+     *  `RecoveryError` code — never free text, so the record stays diagnosable without
+     *  carrying an HTTP body, command arguments or a credential. */
     cause?: string };
 }
 
