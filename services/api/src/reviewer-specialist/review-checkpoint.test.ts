@@ -550,6 +550,50 @@ test("Deep computation accepts a generated Artifact claim only with issued E4 lo
   assert.equal(gaps.some((gap) => gap.check === "claim_support"), false);
 });
 
+test("a Deep review that only recorded a source assessment still closes the claim gap", async () => {
+  // The relaxation that followed F9: `completed` alone proves nothing, but a persisted
+  // source assessment does — the computation stage compared a numeric claim with its E4
+  // evidence while the report issued no citation task at all. Closing the gap here is
+  // what keeps a Deep review that did the work from being reported as partial.
+  const { cas, store, version } = fixture("Response rate was 42% [artifact1].");
+  version.references = [{ id: "generated-data-1", kind: "artifact", label: "artifact1", version: 1 }];
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Deep computation evidence",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      execute: async (request) => JSON.stringify({ computation: {
+        assessment: "SUPPORTED",
+        findings: [],
+        locatorIds: [...request.prompt.matchAll(/locator:[a-f0-9]+/gu)].map((match) => match[0]),
+        rationale: "The output data records 42%.",
+        status: "COMPLETED",
+      } }),
+      modelIdentity: "model-1",
+      probeComputation: async () => ({
+        materials: [
+          { content: "response_rate,42%", locator: { executionId: "execution-1", field: "artifact_content", outputPath: "outputs/result.csv" }, sourceId: "artifact-version:data-1", sourceType: "artifact" },
+          { content: "print('42%')", locator: { executionId: "execution-1", field: "source_code" }, sourceId: "execution:execution-1", sourceType: "code" },
+          { content: "42%", locator: { executionId: "execution-1", field: "stdout" }, sourceId: "execution:execution-1", sourceType: "execution" },
+        ],
+        status: "available" as const,
+      }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = result.reviews[0];
+  assert.equal(review?.smartStatus, "completed");
+  assert.deepEqual(review?.citationTasks ?? [], [], "the report produced no citation task");
+  assert.equal(review?.sourceAssessments?.[0]?.assessment.assessment, "SUPPORTED", "the assessment is the comparison");
+  assert.equal(review?.notChecked?.some((gap) => gap.check === "claim_support"), false,
+    "a claim was compared with a source, so the Quick gap is closed");
+});
+
 test("Deep checkpoint reuses an identical locked Artifact without rereading CAS or graph", async () => {
   const { cas, casReadCount, saved, store, version } = fixture();
   let executions = 0;
@@ -832,6 +876,9 @@ test("Deep Citation rejects an E1 verdict for a numeric claim that requires E3 e
   assert.equal(record?.claim.requiredEvidenceLevel, "E3");
   assert.equal(record?.assessment.assessment, "INCONCLUSIVE");
   assert.match(record?.assessment.rationale ?? "", /No issued E3 source locator/u);
+  // The other half of the same rule: an assessment that compared nothing must not close
+  // the gap, or a Deep review that read no usable source would read as claim-checked.
+  assert.equal(result.reviews[0]?.notChecked?.some((gap) => gap.check === "claim_support"), true);
   assert.equal(executions, 0);
 });
 
