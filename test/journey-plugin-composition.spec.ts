@@ -86,6 +86,9 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       await dialog.getByLabel("artifact-json plugin",{exact:true}).selectOption("disabled");
       await dialog.getByRole("button",{name:/Save .*settings|保存.*设置/}).click();
       await expect.poll(async()=> (await api(page,root)).settings.effective.plugins.plan.enabled).toBe(false);
+      // Plan was already disabled before Save. Wait for the changed setting
+      // so reload cannot abort the still-pending configuration write.
+      await expect.poll(async()=> (await api(page,root)).settings.overrides.plugins?.["artifact-json"]?.enabled).toBe(false);
       await page.reload();
       await page.locator("details.plugin-settings > summary").click();
       await expect(page.getByLabel("connector.uniprot plugin",{exact:true})).toHaveCount(0);
