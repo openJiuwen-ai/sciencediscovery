@@ -98,15 +98,24 @@ assert_no_release_build_paths() { # <release artifact>
   # whose own `/roots/list_changed` contains that string while disclosing
   # nothing. A path that really leaked always begins and ends a component.
   #
-  # `$HOME` is deliberately not scanned here. The uncompressed payload tree is
-  # already scanned for it (build-payload.sh's assert_no_build_paths) with the
-  # upstream-SBOM filter. The only `/home/runner` bytes that can survive into
-  # this assembled artifact are the two upstream SBOM regions that filter
-  # approves — the `path+file:///home/runner/...` prefixes in pydantic_core and
-  # watchfiles — stored verbatim by zstd. Those name the generic CI runner, not
-  # the machine that built this release, so re-scanning `$HOME` here only ever
-  # re-matches whitelisted references. The repository root and the output
-  # directory are unique to this build, so they stay unconditional.
+  # `$HOME` is deliberately not scanned here. The `/home/runner` bytes that can
+  # survive into this assembled artifact are the two upstream SBOM regions that
+  # filter-upstream-sbom-paths.mjs approves — the `path+file:///home/runner/...`
+  # prefixes in pydantic_core and watchfiles — which zstd stores verbatim. They
+  # name the generic CI runner, not the machine that built this release, so a
+  # `$HOME` scan here could only ever re-match approved references.
+  #
+  # What that gives up, stated plainly: the assembled artifact is not checked
+  # for `$HOME` at all, and the payload scan (build-payload.sh's
+  # assert_no_build_paths) covers only non-binary text and excludes the
+  # `jiuwenswarm/` and `adapter/` trees from its `$HOME` needle — so a bare
+  # `$HOME` path inside those two shipped trees is caught by neither pass. That
+  # is accepted because the value is the generic runner home; #1006's second
+  # option, scanning the decompressed payload where the filters can apply, is
+  # the way to get that coverage back.
+  #
+  # The repository root and the output directory are unique to this build, so
+  # they stay unconditional.
   for needle in "$repository_root" "$output_dir" "${USERPROFILE:-}"; do
     if [[ -z "$needle" ]]; then continue; fi
     pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$(){}?+|/]/\\&/g')"
