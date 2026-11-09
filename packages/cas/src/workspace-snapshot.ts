@@ -9,14 +9,22 @@ import { assertRef, type AgentStateRef, type DataRef, type VersionStore, type Wo
 import { withWorkspaceMutation } from "./workspace-lease.js";
 
 export interface SnapshotFile { path: string; content: DataRef; executable: number }
+export interface WorkspaceSnapshotManifest { files: SnapshotFile[]; excludedPaths: string[] }
 
 /** An immutable manifest, never a scan of the live Workspace. Symlinks are not
  * traversed; paths must be representable by the public UTF-8 path contract. */
 export async function workspaceSnapshotFiles(store: VersionStore, tree: AgentStateRef, paths?: string[]): Promise<SnapshotFile[]> {
+  return (await workspaceSnapshotManifest(store, tree, paths)).files;
+}
+
+/** Read exclusions from this committed tree, including custom snapshot policies;
+ * never infer them from current defaults or mutable Workspace contents. */
+export async function workspaceSnapshotManifest(store: VersionStore, tree: AgentStateRef, paths?: string[]): Promise<WorkspaceSnapshotManifest> {
   if (paths?.some((path) => !path || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === ".."))) {
     throw new Error("Snapshot paths must be relative Workspace paths");
   }
   const files: SnapshotFile[] = [];
+  const excludedPaths: string[] = [];
   const walk = async (ref: AgentStateRef, prefix: string): Promise<void> => {
     const record = await store.readRecord<WorkspaceTree>(ref, "WorkspaceTree");
     for (const entry of record.value.entries) {
@@ -28,11 +36,12 @@ export async function workspaceSnapshotFiles(store: VersionStore, tree: AgentSta
       const path = prefix ? `${prefix}/${name}` : name;
       if (paths?.length && !paths.some((selected) => path === selected || path.startsWith(`${selected}/`) || selected.startsWith(`${path}/`))) continue;
       if (entry.type === "directory") await walk(entry.tree, path);
+      else if (entry.type === "excluded") excludedPaths.push(path);
       else if (entry.type === "file") { assertRef(entry.content, "data"); files.push({ path, content: entry.content, executable: entry.executable }); }
     }
   };
   await walk(tree, "");
-  return files;
+  return { files, excludedPaths };
 }
 
 /** Verify the streamed bytes too: a corrupt store must never publish a target file. */

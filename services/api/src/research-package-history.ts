@@ -50,10 +50,12 @@ export async function exportHistory(store: SessionStore, sessionId: string): Pro
 }
 
 /** Only actual CAS references, not arbitrary hashes of settings or package specs. */
-export function casHashes(value: unknown): string[] {
+export function casHashes(value: unknown, visited = new WeakSet<object>()): string[] {
   const hashes = new Set<string>();
   const visit = (item: unknown) => {
     if (!item || typeof item !== "object") return;
+    if (visited.has(item)) return;
+    visited.add(item);
     const record = item as Record<string, unknown>;
     if (typeof record.hash === "string" && typeof record.size === "number") hashes.add(record.hash);
     for (const [key, child] of Object.entries(record)) {
@@ -65,10 +67,12 @@ export function casHashes(value: unknown): string[] {
   return [...hashes];
 }
 
-export function versionRefs(value: unknown): ObjectRef[] {
+export function versionRefs(value: unknown, visited = new WeakSet<object>()): ObjectRef[] {
   const refs = new Map<string, ObjectRef>();
   const visit = (item: unknown) => {
     if (!item || typeof item !== "object") return;
+    if (visited.has(item)) return;
+    visited.add(item);
     const row = item as Record<string, unknown>;
     if ((row.pool === "data" || row.pool === "agent-state") && typeof row.digest === "string" && /^sha256:[a-f0-9]{64}$/.test(row.digest)
       && typeof row.size === "number" && typeof row.mediaType === "string" && !row.runnerId) {

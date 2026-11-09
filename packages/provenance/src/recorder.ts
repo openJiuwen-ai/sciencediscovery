@@ -22,7 +22,7 @@ import {
   type ArtifactVersionInput,
 } from "@sciencediscovery/artifact-manager";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
-import { canonicalize, CasStore, VersionStore, workspaceSnapshotFiles, type AgentStateRef } from "@sciencediscovery/cas";
+import { canonicalize, CasStore, VersionStore, workspaceSnapshotManifest, type AgentStateRef } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
   ArtifactOrigin,
@@ -663,10 +663,15 @@ export class ProvenanceRecorder {
     const workspaceRevisions: WorkspaceFileRevisionInput[] = [];
     if (!options.paths.length) return;
     if (!options.workspaceSnapshot) throw new Error("Runner did not return a committed Workspace snapshot; file provenance was not inferred from mutable files");
-    const manifest = await workspaceSnapshotFiles(this.versions, options.workspaceSnapshot, options.paths);
+    const manifest = await workspaceSnapshotManifest(this.versions, options.workspaceSnapshot, options.paths);
+    const files = new Map(manifest.files.map((file) => [file.path, file]));
     for (const path of options.paths) {
+      // Runner's quota/change scan includes caches and installed dependencies.
+      // They are not restorable artifacts when this immutable receipt excludes
+      // their directory. Keep the receipt and Runner result unchanged for audit.
+      if (manifest.excludedPaths.some((directory) => path.startsWith(`${directory}/`))) continue;
       const logicalPath = options.artifactPathPrefix ? `${options.artifactPathPrefix}/${path}` : path;
-      const file = manifest.find((entry) => entry.path === path);
+      const file = files.get(path);
       if (!file) throw new Error(`Execution output is absent from its committed snapshot: ${path}`);
       await this.versions.verifyRef(file.content);
       const content = { hash: file.content.digest.slice(7), size: file.content.size };

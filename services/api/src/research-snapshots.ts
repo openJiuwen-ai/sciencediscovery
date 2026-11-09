@@ -16,9 +16,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, stat, lstat, readdir, utimes } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { RefStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
+import { setImmediate } from "node:timers/promises";
+import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
-import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
 import type { ArtifactAnnotation, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
@@ -37,6 +38,11 @@ import { emptyPackageTrajectory, importedTrajectoryAccess, remapPackageTrajector
 import { casHashes, versionRefs, remapRunEvent, remapRunStreamId, remapReferences, remapMessages, exportHistory, ResearchPackageIds, restoreHistory, restoreEvidenceItems, remapMemorySnapshot, remapWorkspaceProvenance, type PackageHistory } from "./research-package-history.js";
 
 type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder">;
+type PreviewSizing = {
+  objectSizes: Map<string, number>; additionalRecordBytes: number;
+  hashes: Set<string>; refs: Map<string, ObjectRef>;
+  jsonSizes: WeakMap<object, number>; casVisited: WeakSet<object>; refsVisited: WeakSet<object>;
+};
 
 export type ExportSessionRecord = PackageHistory & {
   session: Omit<Session, "settingsOverrides"> & { settingsOverrides?: undefined };
@@ -77,20 +83,25 @@ function necessaryTrajectoryEntries(trajectory: Pick<PackageTrajectory, "index">
   return entries.filter((entry) => entry === latestInput || entry === latestOutput || entry.kind === "tool" || entry.kind === "mcp");
 }
 
+function necessaryTrajectoryDetail(detail: TrajectoryDetail): TrajectoryDetail {
+  const entry = detail.entry;
+  if (entry.kind === "input" && detail.context) {
+    const input = detail.context.input;
+    return { entry, value: { exportSummary: true, summary: "必要导出：最近一次模型输入。" }, context: { input, blocks: contextBlocks(input, {}), assembly: {}, state: {} } };
+  }
+  const serialized = typeof detail.value === "string" ? detail.value : JSON.stringify(detail.value, null, 2) ?? "";
+  const limit = entry.kind === "output" ? serialized.length : 2000;
+  return { entry, value: { exportSummary: true, summary: serialized.slice(0, limit), truncated: serialized.length > limit,
+    note: "必要导出轨迹摘要；完整事件、思考分片及工具原始输出请使用完整导出。" } };
+}
+
 function trimTrajectory(trajectory: PackageTrajectory, runs: Set<string>): PackageTrajectory {
   const selected = necessaryTrajectoryEntries(trajectory, runs);
   const detailsById = new Map(trajectory.details.map((detail) => [detail.entry.id, detail]));
   const details = selected.flatMap<TrajectoryDetail>((entry) => {
     const detail = detailsById.get(entry.id);
     if (!detail) return [];
-    if (entry.kind === "input" && detail.context) {
-      const input = detail.context.input;
-      return [{ entry, value: { exportSummary: true, summary: "必要导出：最近一次模型输入。" }, context: { input, blocks: contextBlocks(input, {}), assembly: {}, state: {} } }];
-    }
-    const serialized = typeof detail.value === "string" ? detail.value : JSON.stringify(detail.value, null, 2) ?? "";
-    const limit = entry.kind === "output" ? serialized.length : 2000;
-    return [{ entry, value: { exportSummary: true, summary: serialized.slice(0, limit), truncated: serialized.length > limit,
-      note: "必要导出轨迹摘要；完整事件、思考分片及工具原始输出请使用完整导出。" } }];
+    return [necessaryTrajectoryDetail(detail)];
   });
   const selectedIds = new Set(selected.map((entry) => entry.id));
   const untimed = (trajectory.index.untimedEntries ?? trajectory.index.historicalEntries ?? []).filter((entry) => selectedIds.has(entry.id));
@@ -207,7 +218,9 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       shells: sessions.map((session) => store.shellExecutions.snapshot(session.id)), environments: store.listEnvironmentRevisions(),
       memory: [memoryGraphEnabled(), memoryGraphClient.snapshotRevision(sessions.map((session) => session.id))] });
   };
-  const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, previewObjectSizes?: Map<string, number>, includeFullTrajectory = true, includeFullMemoryGraph = true): Promise<ExportInput> => {
+  const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal): Promise<ExportInput> => {
+    signal.throwIfAborted();
+    const previewObjectSizes = preview?.objectSizes;
     const project = store.getProject(projectId);
     if (!project) throw new SessionStoreHttpError("Project not found", 404);
     const availableSessions = store.researchSessions(projectId);
@@ -220,7 +233,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       if (!objects.has(path)) objects.set(path, { path, bytes, kind });
       return path;
     };
-    const addPreviewObject = (path: string, size: number, kind: "artifact" | "evidence") => {
+    const addPreviewObject = (path: string, size: number, kind: "artifact" | "evidence" | "log") => {
       previewObjectSizes!.set(path, size);
       objects.set(path, { path, bytes: new Uint8Array(), kind });
       return path;
@@ -279,17 +292,28 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
     });
     const sessionRecords: ExportSessionRecord[] = [];
     const trajectoryViews = new Map<string, Awaited<ReturnType<typeof sessionTrajectory>>>();
-    const hydrateTrajectory = async (record: ExportSessionRecord, entries: TrajectoryEntry[]) => {
+    const hydrateTrajectory = async (record: ExportSessionRecord, entries: TrajectoryEntry[], summarize = false) => {
       const view = trajectoryViews.get(record.session.id)!;
       const details: TrajectoryDetail[] = [];
+      let counted = 0;
       for (const entry of entries) {
+        signal.throwIfAborted();
         const detail = await view.detail(entry.id);
         if (!detail) throw new Error(`Missing trajectory detail: ${entry.id}`);
-        details.push(detail);
+        if (preview) {
+          const retained = summarize ? necessaryTrajectoryDetail(detail) : detail;
+          // The records skeleton keeps []; add its elements and commas only.
+          // Retain compact refs and weak size memo entries, never all details.
+          preview.additionalRecordBytes += jsonByteLength(retained, preview.jsonSizes) + (counted++ ? 1 : 0);
+          for (const hash of casHashes(retained, preview.casVisited)) preview.hashes.add(hash);
+          for (const ref of versionRefs(retained, preview.refsVisited)) preview.refs.set(`${ref.pool}:${ref.digest}`, ref);
+          if (counted % 32 === 0) await setImmediate();
+        } else details.push(detail);
       }
       return { ...record.trajectory, details };
     };
     for (const session of sessions) {
+      signal.throwIfAborted();
       const messages = await store.readMessages(session.id);
       const runs = await store.listSessionRuns(session.id);
       const workspaceFiles = await listWorkspaceFiles(store, session.id, true);
@@ -314,7 +338,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       };
       const history = await exportHistory(store, session.id);
       const runEvents = await Promise.all(runs.map(async (run) => ({ runId: run.id, streams: await store.exportRunStreams(session.id, run.id) })));
-      const view = await sessionTrajectory(store, session.id, new AbortController().signal);
+      const view = await sessionTrajectory(store, session.id, signal);
       trajectoryViews.set(session.id, view);
       const trajectory: PackageTrajectory = { index: view.index, details: [], runIds: runs.map((run) => run.id) };
       sessionRecords.push({
@@ -402,7 +426,8 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       const runIds = new Set(runs.map((run) => run.id));
       const history = necessaryHistory(record, turnIds, executionIds, reviewIds);
       const agentIds = new Set([`main:${record.session.id}`, ...(history.subagents ?? []).map((child) => `subagent:${child.id}`)]);
-      const trajectory = trimTrajectory(await hydrateTrajectory(record, necessaryTrajectoryEntries(record.trajectory, runIds)), runIds);
+      const selectedEntries = necessaryTrajectoryEntries(record.trajectory, runIds).filter(entry => agentIds.has(entry.agentId));
+      const trajectory = trimTrajectory(await hydrateTrajectory(record, selectedEntries, true), runIds);
       trajectory.index.agents = trajectory.index.agents.filter((agent) => agentIds.has(agent.id));
       trajectory.index.entries = trajectory.index.entries.filter((entry) => agentIds.has(entry.agentId));
       trajectory.index.untimedEntries = trajectory.index.untimedEntries?.filter((entry) => agentIds.has(entry.agentId));
@@ -447,28 +472,37 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
     if (level === "necessary") omissions.push("必要导出保留当前结果及依赖证据；不包含完整历史版本、思考分片和原始事件流。直接溯源引用的执行代码和日志保留原文，其余历史执行默认不带。继续研究仅复制本包已有内容。");
     const usedEnvironments = new Set(selectedSessionRecords.flatMap((record) => [...(record.executionRuns ?? []), ...(record.shellExecutions ?? []).flatMap((row) => row.result ? [row.result] : [])].flatMap((run) => run.environmentRevisionId ? [run.environmentRevisionId] : [])));
     const environmentRevisions = store.listEnvironmentRevisions().filter((revision) => usedEnvironments.has(revision.id));
-    const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph })]);
+    const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }), ...(preview?.hashes ?? [])]);
     for (const hash of objects.keys()) if (!needed.has(hash)) objects.delete(hash);
     for (const hash of needed) {
+      signal.throwIfAborted();
       if (objects.has(hash)) continue;
-      try { await addObject(await provenanceRecorder.cas.read(hash), "log"); }
-      catch { omissions.push(`cas:${hash}:unavailable source object`); }
+      try {
+        if (previewObjectSizes) {
+          let size = 0;
+          for await (const chunk of provenanceRecorder.cas.stream(hash)) { signal.throwIfAborted(); size += chunk.byteLength; }
+          addPreviewObject(hash, size, "log");
+        } else await addObject(await provenanceRecorder.cas.read(hash), "log");
+      }
+      catch { signal.throwIfAborted(); omissions.push(`cas:${hash}:unavailable source object`); }
     }
     const versions = new VersionStore(store.dataDir);
     const versionObjects = new Map<string, ReturnType<typeof versionRefs>[number]>();
-    const pending = versionRefs(selectedSessionRecords);
+    const pending = [...versionRefs(selectedSessionRecords), ...(preview?.refs.values() ?? [])];
     while (pending.length) {
+      signal.throwIfAborted();
       const ref = pending.shift()!;
       const key = `${ref.pool}:${ref.digest}`;
       if (versionObjects.has(key)) continue;
       versionObjects.set(key, ref);
       try {
         const bytes = await versions.read(ref);
-        await addObject(bytes, "log");
+        if (previewObjectSizes) addPreviewObject(ref.digest.slice(7), bytes.byteLength, "log");
+        else await addObject(bytes, "log");
         if (ref.mediaType.includes("json")) {
           try { pending.push(...versionRefs(JSON.parse(bytes.toString("utf8")))); } catch { /* Opaque evidence remains byte-exact. */ }
         }
-      } catch { omissions.push(`version:${key}:unavailable source object`); }
+      } catch { signal.throwIfAborted(); omissions.push(`version:${key}:unavailable source object`); }
     }
     return {
       source: { projectId, title: project.name, sessionIds: sessions.map((item) => item.id) },
@@ -491,9 +525,10 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
     };
   };
 
-  const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision) => {
-      const objectSizes = new Map<string, number>();
-      const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, objectSizes, includeFullTrajectory, includeFullMemoryGraph);
+  const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal) => {
+      const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, hashes: new Set(), refs: new Map(),
+        jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet() };
+      const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
       const records = input.records as { sessions?: Array<{ session: { id: string }; workspace?: Array<{ path: string }> }> };
       if (sessionId && level === "necessary" && !selectedFiles) {
         previewDependencies.set(sessionId, new Set(records.sessions?.map((record) => record.session.id)));
@@ -501,7 +536,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       }
       const selectedPaths = new Set(records.sessions?.find((record) => record.session.id === sessionId)?.workspace?.map((file) => file.path));
       return {
-        revision, estimatedBytes: estimateResearchPackageBytes(input, objectSizes), estimateKind: "uncompressed" as const,
+        revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes), estimateKind: "uncompressed" as const,
         files: sessionId ? (await listWorkspaceFiles(store, sessionId, true)).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],
         exportProfile: input.exportProfile, omissions: [...(input.omissions ?? [])],
       };

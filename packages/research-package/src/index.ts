@@ -274,9 +274,10 @@ export function createResearchPackageProvider(): ResearchPackageProvider {
 export { canonical, sha256 };
 
 /** Uncompressed estimate: never compress an archive solely to display a size. */
-export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>): number {
+export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>, additionalRecordBytes = 0): number {
+  if (!Number.isSafeInteger(additionalRecordBytes) || additionalRecordBytes < 0) throw new Error("Invalid additional record size");
   const padded = (size: number) => TAR_BLOCK + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
-  const recordBytes = jsonByteLength(input.records);
+  const recordBytes = jsonByteLength(input.records) + additionalRecordBytes;
   const readmeBytes = Buffer.byteLength(input.readme ?? "# ScienceDiscovery Research Package\n\nThis package contains immutable research evidence. Package bytes are not executed during import.\n");
   // Inventory and manifest metadata are small compared with evidence payloads.
   const manifestEstimate = jsonByteLength({ source: input.source, omissions: input.omissions, exportProfile: input.exportProfile })

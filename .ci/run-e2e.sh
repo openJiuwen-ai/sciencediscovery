@@ -357,6 +357,12 @@ for busy_port in "${busy_ports[@]}"; do
 done
 
 # Give journey provenance checks the exact invocation used by this launcher.
+if [[ "$group" == real ]]; then
+  # Isolated real-test API only. Other Node children and normal product startup
+  # do not enable the observers; no prompt, URL or credential is collected.
+  export SD_CI_DIAGNOSTICS_DIR="$results_root/api-diagnostics"
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=\"$repository_root/.ci/api-diagnostics.mjs\""
+fi
 printf -v E2E_STARTUP_COMMAND '%q ' ./scripts/start-stack.sh "${stack_arguments[@]}"
 export E2E_STARTUP_COMMAND="${E2E_STARTUP_COMMAND% }"
 setsid ./scripts/start-stack.sh "${stack_arguments[@]}" > "$stack_log" 2>&1 &

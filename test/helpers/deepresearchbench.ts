@@ -72,7 +72,7 @@ export async function evaluateReport(config: ReturnType<typeof evaluationConfig>
   if (config.mode === "off") return { status: "disabled" };
   let executionError = false;
   try {
-    await promisify(execFile)(config.python, [...config.args, "--input", input, "--output", output], { timeout, killSignal: "SIGKILL" });
+    await promisify(execFile)(config.python, [...config.args, "--input", input, "--output", output, "--budget-ms", String(timeout)], { timeout, killSignal: "SIGKILL" });
   } catch { executionError = true; }
   const result = await readFile(`${output}/scorecard.json`, "utf8").then(JSON.parse).catch(() => ({ status: "error" }));
   if (executionError && !["failed", "error"].includes(result.status)) result.status = "error";

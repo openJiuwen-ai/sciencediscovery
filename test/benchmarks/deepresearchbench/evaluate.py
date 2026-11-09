@@ -13,6 +13,7 @@ import threading
 import time
 
 from race_contract import ContractClient, VERSION as CONTRACT_VERSION
+from source_reader import read_source
 
 UPSTREAM_COMMIT = "852f4022d1f98fb707222e395405136e8f0e8d52"
 DIMS = ("comprehensiveness", "insight", "instruction_following", "readability")
@@ -165,21 +166,16 @@ def evaluate(args, result):
     groups = source.get("citations_deduped")
     if not isinstance(groups, dict):
         raise ValueError("FACT deduplication failed")
-    import requests
+    source_cache = {}
     for url, group in groups.items():
         # Same Jina request/content format as upstream, with a finite timeout.
         # A fetch error is unknown, never a successful citation or a fabricated zero.
         try:
             if not url.startswith(("https://", "http://")):
                 raise ValueError("Invalid citation URL")
-            response = requests.get(f"https://r.jina.ai/{url}", headers={
-                "Accept": "application/json", "Authorization": api.READ_API_KEY,
-                "X-Timeout": "60000", "X-With-Generated-Alt": "true"}, timeout=(15, 90))
-            response.raise_for_status()
-            data = response.json()["data"]
-            if not data.get("content", "").strip():
-                raise ValueError("Empty source")
-            group["url_content"] = "\n\n".join(data.get(k, "") or "" for k in ("title", "description", "content"))
+            group["source_read"] = {}
+            group["url_content"] = read_source(url, api.READ_API_KEY, deadline=getattr(args, "deadline", None),
+                                               cache=source_cache, diagnostic=group["source_read"])
             group["article_id"] = task["id"]
             verdict = validate.validate((url, group), lang)
             group.update(validate_res=verdict["validate_res"], validate_error=verdict["error"])
@@ -196,10 +192,13 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--mode", choices=["race", "full"], default="full")
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--budget-ms", type=float, help="Overall evaluator budget; the parent also enforces a hard process deadline")
     parser.add_argument("--min-race", type=float, default=40)
     parser.add_argument("--min-fact", type=float, default=70)
     parser.add_argument("--min-coverage", type=float, default=80)
     args = parser.parse_args()
+    if args.budget_ms is not None and (not math.isfinite(args.budget_ms) or args.budget_ms <= 0):
+        parser.error("--budget-ms must be positive and finite")
     args.upstream = args.upstream.resolve()
     if any(not math.isfinite(v) or not 0 <= v <= 100 for v in (args.min_race, args.min_fact, args.min_coverage)):
         parser.error("Quality thresholds must be in [0, 100]")
@@ -212,6 +211,7 @@ def main():
     os.umask(0o077)
     args.output.mkdir(parents=True, exist_ok=False)  # Never reuse cached scores from another attempt.
     started = time.monotonic()
+    args.deadline = started + args.budget_ms / 1000 if args.budget_ms is not None else None
     thresholds = {"race": args.min_race, "fact": args.min_fact, "coverage": args.min_coverage}
     result = {"schema_version": 1, "status": "running", "mode": args.mode, "thresholds": thresholds,
               "race": {"status": "not_run"}, "fact": {"status": "not_run"}, "judge_calls": []}

@@ -11,7 +11,7 @@ import type { TestContext } from "node:test";
 
 import { snapshotWorkspace, VersionStore, type WorkspaceTree } from "./versioning.js";
 import { committedWorkspaceSnapshot, withWorkspaceMutation } from "./workspace-lease.js";
-import { materializeWorkspaceSnapshot, streamSnapshotFile, workspaceSnapshotFiles } from "./workspace-snapshot.js";
+import { materializeWorkspaceSnapshot, streamSnapshotFile, workspaceSnapshotFiles, workspaceSnapshotManifest } from "./workspace-snapshot.js";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "workspace-snapshot-"));
@@ -89,6 +89,26 @@ test("snapshot streaming detects corrupted CAS bytes instead of publishing them 
   const [file] = await workspaceSnapshotFiles(versions, tree);
   await writeFile(versions.objectPath(file!.content), "other");
   await assert.rejects(async () => { for await (const _ of streamSnapshotFile(versions, file!.content)) { /* drain */ } }, /integrity failure/);
+});
+
+test("manifest reports only explicit committed exclusions, with selection and custom policy intact", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await mkdir(join(workspace, "project", "__pycache__"), { recursive: true });
+  await mkdir(join(workspace, "cache"));
+  await writeFile(join(workspace, "project", "__pycache__", "solution.pyc"), "bytecode");
+  await writeFile(join(workspace, "cache", "data"), "cached");
+  await writeFile(join(workspace, "report.pyc"), "a regular output despite its suffix");
+  const snapshot = await snapshotWorkspace(versions, workspace, { exclude: ["cache"] });
+  await rm(join(workspace, "cache"), { recursive: true });
+  const manifest = await workspaceSnapshotManifest(versions, snapshot);
+  assert.deepEqual(manifest.excludedPaths, ["cache"]);
+  assert.deepEqual(manifest.files.map(f => f.path), ["project/__pycache__/solution.pyc", "report.pyc"]);
+  assert.deepEqual(await workspaceSnapshotFiles(versions, snapshot), manifest.files);
+  assert.deepEqual(await workspaceSnapshotManifest(versions, snapshot, ["cache/data"]), { files: [], excludedPaths: ["cache"] });
+  assert.deepEqual((await workspaceSnapshotManifest(versions, snapshot, ["project"])).excludedPaths, []);
+  for (const path of ["../cache/data", "cache/../report.pyc", "cache\\data"]) {
+    await assert.rejects(workspaceSnapshotManifest(versions, snapshot, [path]), /relative Workspace/);
+  }
 });
 
 test("failed writes publish actual partial effects and provide a committed receipt", async (t) => {

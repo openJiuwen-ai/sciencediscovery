@@ -13,6 +13,31 @@ import { openSessionTrajectory, orderEvents, type RecordedEvent } from "./server
 import { readAgentJournal, type JournalEvent } from "./journal.js";
 import { internalEntry } from "./presentation.js";
 
+test("trajectory projections share context, isolate event states and evict old contexts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "trajectory-projection-"));
+  const store = new VersionStore(directory), agentId = "main:s";
+  try {
+    const stateRef = await store.putRecord("AgentStateSnapshot", { agentId, api_key: "secret", turn: 0 });
+    const nextState = await store.putRecord("AgentStateSnapshot", { agentId, turn: 1 });
+    const modelContext = await store.putRecord("ModelContextSnapshot", { input: { systemPrompt: "rules", history: [] } });
+    const contexts = await Promise.all(Array.from({ length: 130 }, (_, turn) => store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn })));
+    const events: RecordedEvent[] = contexts.map((contextRef, i) => ({ id: String(i), agentId, runId: "r", sequence: i,
+      createdAt: "2026-10-24T00:00:00Z", event: { type: "model.completed", evidence: { agentId, contextRef, stateRef, agentRunId: "r" } } }));
+    events.push({ ...events[0]!, id: "override", event: { type: "model.completed", evidence: { agentId, contextRef: contexts[0], stateRef: nextState, agentRunId: "r" } } });
+    const view = await openSessionTrajectory(directory, { sessionId: "s", agents: [{ id: agentId, label: "Main" }], events }, new AbortController().signal);
+    const first = (await view.detail("event:0"))!;
+    const override = (await view.detail("event:override"))!;
+    assert.equal(first.context!.input, override.context!.input);
+    assert.notEqual(first.context, override.context);
+    assert.deepEqual(first.context!.state, { agentId, api_key: "[REDACTED]", turn: 0 });
+    assert.deepEqual(override.context!.state, { agentId, turn: 1 });
+    for (let i = 1; i < contexts.length; i++) await view.detail(`event:${i}`);
+    const reloaded = (await view.detail("event:0"))!;
+    assert.notEqual(first.context!.input, reloaded.context!.input, "old projections must be evicted by the entry bound");
+    assert.deepEqual(first, reloaded, "eviction must preserve the detail contract");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("exact admitted system sections preserve order and separators, not rejected proposals", () => {
   const input = { systemPrompt: "rules\nscience", history: [{ role: "user", content: "question" }], tools: [{ name: "search" }] };
   const assembly = { trace: { used: "dynamic", admitted: { sections: [

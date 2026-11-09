@@ -85,7 +85,13 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       for(const id of ["plan","skill","mcp","scheduler","connector.uniprot","connector.pubmed"]) await expect(dialog.getByLabel(id+" plugin",{exact:true})).toHaveCount(0);
       await dialog.getByLabel("artifact-json plugin",{exact:true}).selectOption("disabled");
       await dialog.getByRole("button",{name:/Save .*settings|保存.*设置/}).click();
-      await expect.poll(async()=> (await api(page,root)).settings.effective.plugins.plan.enabled).toBe(false);
+      // The save handler is asynchronous; do not reload until the exact
+      // project override we changed is visible in the authoritative API
+      // snapshot. The internal Plan flag was already false before this save,
+      // so polling it could let a stale response pass and make this journey
+      // intermittently observe the inherited JSON-viewer value after reload.
+      await expect.poll(async()=> (await api(page,root)).settings.overrides.plugins?.["artifact-json"]?.enabled,
+        { message: "project artifact-json override must be persisted before reload" }).toBe(false);
       await page.reload();
       await page.locator("details.plugin-settings > summary").click();
       await expect(page.getByLabel("connector.uniprot plugin",{exact:true})).toHaveCount(0);

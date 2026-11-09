@@ -2781,6 +2781,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        exportPreviews.cancel(projectMatch[1]!);
         void Promise.all(impact.sessionIds.map(sid => ideaResearch.cleanup(projectMatch[1]!, sid))).catch(error => {
           console.warn("Could not clean up deleted Project research:", error);
         });
@@ -3134,6 +3135,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         await reviewerAuditCoordinator.cancelSession(sessionMatch[1]!);
         const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        exportPreviews.cancel(researchProjectId, sessionMatch[1]!);
         void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
           console.warn("Could not clean up deleted Session research:", error);
         });

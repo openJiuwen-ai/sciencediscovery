@@ -2,8 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { createTest } from "../support/tagged/compat.mjs";
-import { failureHeadline, plainText } from "./test-failure.ts";
+import { failureHeadline, plainText, runTestCleanup } from "./test-failure.ts";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+
+test("cleanup retains both the primary error and cleanup error without hiding either", async () => {
+  const primary = new Error("original API poll timeout");
+  const cleanup = new Error("cleanup failed");
+  await assert.rejects(runTestCleanup({ error: primary }, async () => { throw cleanup; }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [primary, cleanup]);
+    assert.equal(error.cause, primary);
+    assert.match(error.message, /original API poll timeout/);
+    assert.match(error.message, /cleanup failed/);
+    return true;
+  });
+  await assert.rejects(runTestCleanup(undefined, async () => { throw cleanup; }), error => error === cleanup);
+  await runTestCleanup({ error: primary }, async () => {});
+});
 
 // The shape Playwright gives a failed `expect(…, message).toBe(…)`: colored for a terminal, then the stack.
 const assertion = [

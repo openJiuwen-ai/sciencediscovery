@@ -4,7 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -190,6 +190,59 @@ test("shell output retry after lost commit acknowledgement preserves immutable d
   assert.equal(f.outputs.size, 1);
   assert.equal(f.derivations.size, 1);
   assert.equal([...f.derivations.values()][0]!.content.hash, hash("original"));
+});
+
+test("cache changes finalize with ordinary outputs and recover without reexecuting the command", async (t) => {
+  const f = await fixture(t);
+  const caches = ["__pycache__/new.pyc", "project/__pycache__/modified.pyc", "deps/package/data", "node_modules/pkg/index.js", ".venv/lib/data"];
+  for (const path of caches) {
+    await mkdir(join(f.context.workspaceRoot, path, ".."), { recursive: true });
+    await writeFile(join(f.context.workspaceRoot, path), "cache");
+  }
+  await writeFile(join(f.context.workspaceRoot, "report.txt"), "original report");
+  const snapshot = await snapshotWorkspace(new VersionStore(f.root), f.context.workspaceRoot);
+  const result = { ...f.result, createdFiles: [caches[0]!, "report.txt"], modifiedFiles: caches.slice(1), workspaceSnapshot: snapshot };
+  f.loseNextDerivationAcknowledgement();
+  await assert.rejects(f.recorder.commitExistingShellExecutionResult(f.context, result, f.reader), /lost derivation/);
+  // A resumed finalizer must use the committed exclusion evidence even if the
+  // live directory has disappeared, and must keep the original report bytes.
+  await rm(join(f.context.workspaceRoot, "project"), { recursive: true });
+  await writeFile(join(f.context.workspaceRoot, "report.txt"), "later report");
+  const returned = await new ProvenanceRecorder(f.root, f.store).commitExistingShellExecutionResult(f.context, result, f.reader);
+  assert.deepEqual(returned, result, "raw change lists and execution receipt remain intact");
+  assert.equal(f.runs.size, 1);
+  assert.equal(f.derivations.size, 1);
+  assert.equal(f.outputs.size, 1);
+  assert.equal([...f.derivations.values()][0]!.path, "report.txt");
+  assert.equal([...f.derivations.values()][0]!.content.hash, hash("original report"));
+});
+
+test("excluded-looking names and symlinks cannot hide a genuinely missing output", async (t) => {
+  const f = await fixture(t);
+  await mkdir(join(f.context.workspaceRoot, "__pycache__"));
+  await symlink("__pycache__", join(f.context.workspaceRoot, "cache-link"));
+  const snapshot = await snapshotWorkspace(new VersionStore(f.root), f.context.workspaceRoot, { exclude: [] });
+  for (const path of ["missing.txt", "__pycache__/missing.pyc", "nested/__pycache__/missing.pyc", "cache-link/missing.pyc"]) {
+    const context = { ...f.context, executionId: path };
+    const result = { ...f.result, executionId: path, createdFiles: [path], workspaceSnapshot: snapshot };
+    await assert.rejects(f.recorder.commitExistingShellExecutionResult(context, result, f.reader), /absent from its committed snapshot/);
+  }
+  assert.equal(f.outputs.size, 0);
+  assert.equal(f.derivations.size, 0);
+  const excluded = await snapshotWorkspace(new VersionStore(f.root), f.context.workspaceRoot);
+  const result = { ...f.result, executionId: "boundary", createdFiles: ["__pycache__-copy/missing.pyc"], workspaceSnapshot: excluded };
+  await assert.rejects(f.recorder.commitExistingShellExecutionResult({ ...f.context, executionId: "boundary" }, result, f.reader), /absent from its committed snapshot/);
+});
+
+test("a snapshot that retains bytecode still registers it as an ordinary output", async (t) => {
+  const f = await fixture(t);
+  const path = "__pycache__/retained.pyc";
+  await mkdir(join(f.context.workspaceRoot, "__pycache__"));
+  await writeFile(join(f.context.workspaceRoot, path), "retained");
+  const snapshot = await snapshotWorkspace(new VersionStore(f.root), f.context.workspaceRoot, { exclude: [] });
+  await f.recorder.commitExistingShellExecutionResult(f.context, { ...f.result, createdFiles: [path], workspaceSnapshot: snapshot }, f.reader);
+  assert.equal(f.outputs.size, 1);
+  assert.equal([...f.derivations.values()][0]!.content.hash, hash("retained"));
 });
 
 test("remote shell output references stay in the Runner namespace without local CAS reads", async (t) => {
