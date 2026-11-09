@@ -368,6 +368,20 @@ export function reviewUnverifiedDelivery(
   return !isStructureOnlyReview(review);
 }
 
+/**
+ * True when the review itself declared a check it did not perform.
+ *
+ * The Reviewer panel's verdict, its counters and the main-Agent record all have
+ * to agree about the same review; this is the one predicate they read, so a
+ * gap-bearing review cannot be labelled "passed" on the card while the record
+ * says `SCOPE_LIMITED` (#669 review F3).
+ */
+export function reviewDeclaredGap(
+  review: Pick<ArtifactReviewRun, "notChecked">,
+): boolean {
+  return (review.notChecked?.length ?? 0) > 0;
+}
+
 /** A review that only parsed the file: no citation, computation or delivery claim. */
 export function isStructureOnlyReview(review: Pick<ArtifactReviewRun, "checks">): boolean {
   const checks = review.checks ?? [];

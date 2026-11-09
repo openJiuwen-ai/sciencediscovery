@@ -209,7 +209,7 @@ test("a narrative report with no citation at all still declares the claim gap", 
   const result = await runReviewerCheckpoint({ cas, parentRunId: "run-1", reason: "Quick review", sessionId: "session-1", store });
 
   const review = result.reviews[0];
-  assert.equal(review?.decision, "ACCEPT_AND_PROCEED");
+  assert.equal(review?.decision, "SKIPPED", "nothing applicable ran, so the review claims nothing");
   assert.deepEqual(review?.checks, []);
   const claimGap = review?.notChecked?.find((gap) => gap.check === "claim_support");
   assert.ok(claimGap, "an uncited narrative report declares what was not checked");
