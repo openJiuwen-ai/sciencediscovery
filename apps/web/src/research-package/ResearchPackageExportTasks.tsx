@@ -6,6 +6,7 @@ import { downloadBlob } from "../artifact-download.js";
 import type { ToastTone } from "../Toasts.js";
 import type { ResearchPackageExportTaskView } from "../api/plugins.js";
 import { translateActive } from "../i18n/index.js";
+import { exportPollStep } from "./export-poll.js";
 
 type TrackedExport = Pick<ResearchPackageExportTaskView, "id" | "filename" | "createdAt"> & { projectId: string };
 const STORAGE_KEY = "sciencediscovery.research-package-exports.v1";
@@ -41,6 +42,20 @@ function removeResearchPackageExport(taskId: string): void {
   writeTasks(readTasks().filter((item) => item.id !== taskId));
 }
 
+/** Consecutive poll failures per task, so one task's outage cannot spend
+ *  another task's retry budget. Module-scoped like the task list itself: the
+ *  monitor stays mounted at app scope. */
+const failures = new Map<string, number>();
+
+const POLL_TEXT = () => ({
+  exportCanceled: translateActive("researchPackage.exportCanceled"),
+  exportFailed: translateActive("researchPackage.exportFailed"),
+  exportMissing: translateActive("researchPackage.exportMissing"),
+  exportPollingFailed: translateActive("researchPackage.exportPollingFailed"),
+  legacyUnavailable: translateActive("researchPackage.legacyUnavailable"),
+  retryBackgroundExport: translateActive("researchPackage.retryBackgroundExport"),
+});
+
 /** The monitor stays mounted at app scope, so exports survive session navigation. */
 export function ResearchPackageExportMonitor({ client, onToast }: {
   client: ApiClient;
@@ -64,17 +79,35 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
           try {
             const status = await client.getResearchPackageExport(task.projectId, task.id);
             if (!active) return;
+            const step = exportPollStep(failures.get(task.id) ?? 0, { ok: true, status: status.status }, POLL_TEXT());
+            failures.set(task.id, step.failures);
+            if (!step.drop) continue;
+            failures.delete(task.id);
             if (status.status === "completed") {
               const blob = await client.downloadResearchPackageExport(task.projectId, task.id);
               if (!active) return;
               downloadBlob(blob, status.filename || task.filename);
               removeResearchPackageExport(task.id);
               onToast("success", translateActive("researchPackage.exportComplete"), translateActive("researchPackage.exportDownloaded", { filename: status.filename || task.filename }));
-            } else if (status.status === "failed") {
-              removeResearchPackageExport(task.id);
-              onToast("error", translateActive("researchPackage.exportFailed"), status.error || translateActive("researchPackage.retryBackgroundExport"));
+              continue;
             }
-          } catch { /* Keep the task and retry after transient network or auth failures. */ }
+            removeResearchPackageExport(task.id);
+            if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
+          } catch (reason) {
+            if (!active) return;
+            // A pruned task, a legacy outage and an ordinary transport failure
+            // are different outcomes; the old `catch {}` treated them all as
+            // "retry forever" (#981 on the web).
+            const step = exportPollStep(failures.get(task.id) ?? 0, { ok: false, reason }, POLL_TEXT());
+            failures.set(task.id, step.failures);
+            if (!step.drop) {
+              if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
+              continue;
+            }
+            failures.delete(task.id);
+            removeResearchPackageExport(task.id);
+            if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
+          }
         }
       } finally { polling.current = false; }
     };
