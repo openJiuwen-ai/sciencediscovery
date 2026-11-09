@@ -132,12 +132,19 @@ export function reviewerCheckpointPromptContent(
   // The Reviewer panel answers "was delivery verified" through the same function,
   // so a card and this record cannot disagree about the same review.
   const scopeLimited = reviews.some((review) => reviewUnverifiedDelivery(review));
-  const overall = inProgress ? "PARTIAL" : findings.length ? "REVISION_REQUIRED" : scopeLimited ? "SCOPE_LIMITED" : "PASSED";
+  // A review that declared a check it did not perform is a partial review by its
+  // own account: its passes must not be read as the whole verdict (#669 C1).
+  const partial = reviews.some((review) => (review.notChecked?.length ?? 0) > 0);
+  const overall = inProgress ? "PARTIAL" : findings.length ? "REVISION_REQUIRED" : scopeLimited || partial ? "SCOPE_LIMITED" : "PASSED";
   const lines = reviews.flatMap((review) => [
     `- Artifact: ${review.artifactLogicalName} (version id: ${review.artifactVersionId}, decision: ${review.decision}, level: ${review.reviewLevel ?? "quick"}${review.smartStatus ? `, deep status: ${review.smartStatus}` : ""})`,
     ...(review.findings.length
       ? review.findings.map((finding) => `  - [${finding.severity}] ${finding.code}: ${finding.message}`)
       : ["  - No findings."]),
+    // Stated next to "No findings", not in a footer: the two lines together are
+    // the honest answer, and a reader who stops after the first one must not
+    // conclude the claims were verified.
+    ...(review.notChecked ?? []).map((gap) => `  - Not checked: ${gap.check.replace(/_/gu, " ")} — ${gap.reason}`),
     ...(review.completeness
       ? [deliverableSummaryLine(review.completeness)]
       : []),
@@ -660,6 +667,25 @@ async function reviewArtifactQuick(
     const decision = findings.length
       ? "REVISE_AND_RETRY" as const
       : checks.length ? "ACCEPT_AND_PROCEED" as const : "SKIPPED" as const;
+    // Say what this level cannot see. Quick reads citation format and links
+    // provenance; it never compares a claim with its source, so a pass here is
+    // a format pass. Recording the gap keeps the card, the saved review and the
+    // main-Agent feedback from reading as claim verification (#669 workstream C).
+    const notChecked: NonNullable<ArtifactReviewRun["notChecked"]> = [];
+    if (narrativeReview && citation.decision !== "SKIPPED") {
+      notChecked.push({
+        check: "claim_support",
+        reason: "Quick review parses citation format and provenance only; no source was read to "
+          + "confirm the claims. Run a Deep review to check whether each claim is supported.",
+      });
+    }
+    if (!graphReviewEnabled) {
+      notChecked.push({
+        check: "computation",
+        reason: "The memory graph is disabled for this session, so numeric claims were not "
+          + "compared with their Evidence.",
+      });
+    }
     const review: ArtifactReviewRun = {
       artifactContentHash: version.content.hash,
       artifactId: version.artifactId,
@@ -678,6 +704,7 @@ async function reviewArtifactQuick(
       ],
       reviewerSpecialistVersion: QUICK_REVIEWER_VERSION,
       reviewLevel: "quick",
+      ...(notChecked.length ? { notChecked } : {}),
       sessionId: checkpoint.sessionId,
       status: "completed",
       ...(checkpoint.toolCallId ? { toolCallId: checkpoint.toolCallId } : {}),
