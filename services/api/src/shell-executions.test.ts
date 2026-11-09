@@ -813,6 +813,54 @@ test("failed finalization retries pinned bytes across restart despite later Runn
   assert.equal(final.state, "completed"); assert.equal(lost.submissions(), 1); assert.equal(reads, 2);
 });
 
+test("a failing provenance commit stops being retried and stops rewriting the record", async context => {
+  // #1018: the record was rescheduled every few seconds forever, and each retry
+  // rewrote the ledger. An export revision hashes that ledger, so the session
+  // became permanently un-exportable. The outcome still must not settle by
+  // itself — that needs an explicit cancel — but the churn has to end.
+  const f = await fixture(context);
+  const lost = await lostAck(f, async id => recoveredTerminal(id, f));
+  const handlers = { runner: () => lost.runner,
+    finalize: async () => { throw new Error("storage unavailable"); } };
+  let record = await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.equal(record.finalization, "failed");
+  assert.equal(record.state, "unknown");
+  assert.equal(record.observation?.lastError?.retryable, true, "the first attempts still retry");
+
+  const before = JSON.stringify(record.observation);
+  // Keep forcing reconciliation; the retry budget has to run out.
+  for (let round = 0; round < 8; round += 1) {
+    record = await f.service.reconcile(lost.job.id, owner, handlers);
+  }
+  assert.equal(record.observation?.lastError?.retryable, false, "retrying stopped");
+  assert.equal(record.observation?.nextRetryAt, undefined, "nothing schedules another attempt");
+  assert.match(record.observation?.lastError?.message ?? "", /Retrying the commit stopped after 5 attempts/);
+  assert.equal(record.state, "unknown", "the outcome stays unconfirmed until someone cancels it");
+  assert.notEqual(JSON.stringify(record.observation), before);
+});
+
+test("the export revision projection ignores retry bookkeeping", async context => {
+  // The projection is what the revision hashes: two records that differ only in
+  // `nextRetryAt` / `failureCount` must project identically, or a stuck retry
+  // keeps the revision moving.
+  const f = await fixture(context);
+  const lost = await lostAck(f, async id => recoveredTerminal(id, f));
+  const handlers = { runner: () => lost.runner, finalize: async () => { throw new Error("storage unavailable"); } };
+  await f.service.reconcile(lost.job.id, owner, handlers);
+  const first = f.service.revisionSnapshot(owner.sessionId);
+  const record = await f.service.get(lost.job.id, owner);
+  assert.equal(first.length, 1);
+  assert.deepEqual(Object.keys(first[0]!).sort(),
+    ["accepted", "error", "finalization", "finishedAt", "id", "provenance", "resultRef", "startedAt", "state"]);
+  assert.equal(first[0]!.state, "unknown");
+  assert.equal(first[0]!.error, "PROVENANCE_COMMIT_FAILED");
+
+  // Same record, one more retry: the projection is unchanged.
+  await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.deepEqual(f.service.revisionSnapshot(owner.sessionId), first);
+  assert.equal(record.id, first[0]!.id);
+});
+
 test("provenance conflict is a non-retryable block and background scans never re-finalize it", async context => {
   const f = await fixture(context); let finalizeAttempts = 0;
   const lost = await lostAck(f, async id => recoveredTerminal(id, f));
