@@ -301,6 +301,11 @@ export { MAIN_RUN_STREAM } from "./store/run-streams.js";
 const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
 const NEWLINE_BYTE = 0x0a;
 
+/** How long shutdown waits for in-flight array writes before it says it gave up.
+ *  Far longer than a write takes, far shorter than a person's patience with a
+ *  hung quit. */
+const WRITE_DRAIN_TIMEOUT_MS = 10_000;
+
 const SESSION_DATA_CATEGORIES = [
   "messages",
   "execution records",
@@ -2148,13 +2153,33 @@ export class SessionStore {
   }
 
   /** Resolves once every in-flight array write (session-runs, messages, …) has
-   *  finished. `closeApiServer` awaits this before closing the store so that a
-   *  caller removing the data directory right after cannot race a
-   *  write-temp-then-rename that is still between its two steps. */
-  async whenWritesSettle(): Promise<void> {
-    while (this.arrayMutationQueues.size > 0) {
-      await Promise.all([...this.arrayMutationQueues.values()]);
+   *  finished. `closeApiServer` awaits this immediately before closing the store
+   *  so that a caller removing the data directory right after cannot race a
+   *  write-temp-then-rename that is still between its two steps.
+   *
+   *  Bounded: a run that was never cancelled can keep writing status, and a
+   *  shutdown must not hang on it. The wait is capped and reports the writes it
+   *  abandoned, so a shutdown never claims a cleanliness it did not get. */
+  async whenWritesSettle(timeoutMs = WRITE_DRAIN_TIMEOUT_MS): Promise<boolean> {
+    const drained = (async () => {
+      while (this.arrayMutationQueues.size > 0) {
+        await Promise.all([...this.arrayMutationQueues.values()]);
+      }
+      return true;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Not unref'd: the race's other arm is a promise the event loop does not
+    // hold, so an unref'd timer would let the process exit mid-shutdown instead
+    // of reaching this bound. It is cleared as soon as the race settles.
+    const timedOut = new Promise<false>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout(false), timeoutMs);
+    });
+    const settled = await Promise.race([drained, timedOut]);
+    if (timer) clearTimeout(timer);
+    if (!settled) {
+      console.warn(`Store shutdown stopped waiting for ${this.arrayMutationQueues.size} in-flight array write(s) after ${timeoutMs}ms`);
     }
+    return settled;
   }
 
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
