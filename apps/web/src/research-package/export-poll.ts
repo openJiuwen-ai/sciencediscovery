@@ -27,8 +27,36 @@ export interface ExportPollOutcome {
 /** How many consecutive transient failures before the task is given up. */
 export const EXPORT_POLL_FAILURE_LIMIT = 5;
 
+/**
+ * One step for the `completed` answer: fetch and save the archive.
+ *
+ * Kept separate from `exportPollStep` on purpose. That step resets the count on
+ * any answered status — correct for a poll, wrong for a download, because a
+ * status that keeps answering `completed` would reset it on every tick and the
+ * download's own failures could never reach the limit. Sharing the counter was
+ * exactly the loop this was meant to remove.
+ */
+export function exportCompletionStep(
+  failures: number,
+  result: { ok: true } | { ok: false; reason: unknown },
+  t: ExportPollText,
+  limit = EXPORT_POLL_FAILURE_LIMIT,
+): ExportPollOutcome {
+  if (result.ok) return { drop: true, failures: 0 };
+  const next = failures + 1;
+  if (next >= limit) {
+    return {
+      drop: true,
+      failures: next,
+      notice: { detail: t.retryBackgroundExport, title: t.exportDownloadFailed, tone: "error" },
+    };
+  }
+  return { drop: false, failures: next };
+}
+
 /** The failure kinds this poll can tell apart. */
 export interface ExportPollText {
+  exportDownloadFailed: string;
   exportFailed: string;
   exportMissing: string;
   exportPollingFailed: string;
