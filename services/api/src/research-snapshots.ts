@@ -26,6 +26,12 @@ import type { ArtifactAnnotation, ArtifactReviewRun, ChatMessage, EnvironmentRev
 import { createLocalSessionTitle } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { listWorkspaceFiles } from "./artifacts/index.js";
+
+/** True for the per-session shell-execution ledger under `execution-runs/`.
+ *  Excluded from the revision's file walk; its meaning is projected instead. */
+function isExecutionLedgerPath(path: string): boolean {
+  return /[\\/]execution-runs[\\/][^\\/]+\.json$/u.test(path);
+}
 import { SessionStoreHttpError } from "./store.js";
 import type { createPlatformServices } from "./bootstrap/platform.js";
 import { createContinuationOperations } from "./research-continuations.js";
@@ -208,6 +214,12 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       (!sessionId || session.id === sessionId || dependencies?.has(session.id)));
     const files: Array<[string, number, number, number]> = [];
     const inspect = async (path: string): Promise<void> => {
+      // The execution ledger is bookkeeping, and a retrying execution rewrites
+      // it every few seconds. Its meaning reaches the revision through
+      // `revisionSnapshot()` below, which projects only the fields a package
+      // carries; hashing its mtime here made the revision move while the
+      // session did not (#1018).
+      if (isExecutionLedgerPath(path)) return;
       let info;
       try { info = await lstat(path); }
       catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return; throw error; }
@@ -229,7 +241,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
     return jsonDigest({ project: store.getProject(projectId), sessions, files, heads,
       artifacts: store.listProjectArtifacts(projectId), revisions: sessions.map((session) => [...store.snapshotWorkspaceFileRevisions(session.id)]),
       subagents: sessions.map((session) => store.listSubagents(session.id)),
-      shells: sessions.map((session) => store.shellExecutions.snapshot(session.id)), environments: store.listEnvironmentRevisions(),
+      shells: sessions.map((session) => store.shellExecutions.revisionSnapshot(session.id)), environments: store.listEnvironmentRevisions(),
       memory: [memoryGraphEnabled(), memoryGraphClient.snapshotRevision(sessions.map((session) => session.id))] });
   };
   const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal): Promise<ExportInput> => {

@@ -93,6 +93,9 @@ const RUNNER_REQUEST_TIMEOUT_MS = 10_000;
  *  waits behind it (#1012). Two seconds is enough for a Runner that has the
  *  record; one that does not answers immediately with 404. */
 const CANCELLED_UNCONFIRMED_TIMEOUT_MS = 2_000;
+/** Attempts at committing an already-produced result before the record stops
+ *  being rewritten. See `unavailable()`. */
+const COMMIT_RETRY_LIMIT = 5;
 class RecordedRunnerFailure extends Error {}
 
 /**
@@ -444,8 +447,14 @@ export class ShellExecutions {
     const retryable = !["AUTHORIZATION_REVOKED", "EXECUTION_NOT_FOUND", "ORIGINAL_RUNNER_MISMATCH",
       "EXECUTION_IDENTITY_MISMATCH", "EXECUTION_ID_CONFLICT", "RESULT_DIGEST_MISMATCH", "EXECUTION_RESULT_CONFLICT",
       "PROCESS_STATE_UNVERIFIABLE", "RECOVERY_CONTEXT_UNAVAILABLE"].includes(code)
-      && (httpStatus === undefined || httpStatus >= 500);
-    const failureCount = (execution.observation?.failureCount ?? 0) + 1;
+      && (httpStatus === undefined || httpStatus >= 500);    const failureCount = (execution.observation?.failureCount ?? 0) + 1;
+    // A failed provenance commit is deterministic: the same bytes are committed
+    // again, so a storage problem either clears within a few attempts or never.
+    // Past this limit the retry only rewrites the ledger every few seconds,
+    // which kept a session's export revision moving forever (#1018). The record
+    // stays `unknown` and keeps blocking new work — an unconfirmed outcome is
+    // settled by an explicit cancel, not by a timeout — it just stops churning.
+    const commitRetryExhausted = fallback === "PROVENANCE_COMMIT_FAILED" && failureCount > COMMIT_RETRY_LIMIT;
     // Never retain arbitrary HTTP bodies, command arguments or authentication values.
     const transportCode = observationFailureChain(error).map(failure => failure.code)
       .find((value): value is string => typeof value === "string" && /^(?:E[A-Z0-9_]{1,30}|UND_ERR_[A-Z0-9_]+)$/.test(value));
@@ -467,10 +476,13 @@ export class ShellExecutions {
     execution.finalization = fallback === "PROVENANCE_COMMIT_FAILED" ? "failed" : "pending";
     delete execution.finishedAt;
     execution.observation = { ...execution.observation, status: "blocked", failureCount,
-      ...(retryable ? { nextRetryAt: new Date(Date.now() + Math.min(1_000 * 2 ** Math.min(failureCount - 1, 6), 60_000)).toISOString() } : {}),
-      lastError: { code, message: detail, retryable,
+      ...(retryable && !commitRetryExhausted ? { nextRetryAt: new Date(Date.now() + Math.min(1_000 * 2 ** Math.min(failureCount - 1, 6), 60_000)).toISOString() } : {}),
+      lastError: { code, message: commitRetryExhausted
+        ? `${detail}. Retrying the commit stopped after ${COMMIT_RETRY_LIMIT} attempts; cancel this execution to release the workspace`
+        : detail,
+        retryable: retryable && !commitRetryExhausted,
         ...(safeCause && safeCause !== code ? { cause: safeCause } : {}), ...(httpStatus ? { httpStatus } : {}) } };
-    if (!retryable) delete execution.observation.nextRetryAt;
+    if (!retryable || commitRetryExhausted) delete execution.observation.nextRetryAt;
     this.save(execution);
   }
 
@@ -626,6 +638,35 @@ export class ShellExecutions {
     const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
     return this.db.prepare(`SELECT record FROM shell_executions WHERE ${where} ORDER BY rowid`).all(...args)
       .map((row) => publicRecord(readRecord(String(row.record))));
+  }
+
+  /**
+   * The executions as the export revision should see them: only what a package
+   * would carry, never the retry bookkeeping.
+   *
+   * `snapshot()` includes `observation.nextRetryAt` and `failureCount`, which a
+   * rescheduled retry rewrites every few seconds while the session itself is
+   * unchanged. Hashing that made the revision move forever, so a session with
+   * one execution stuck in the commit-retry loop could never be exported
+   * (#1018). A real change — state, provenance, finalization, the error code or
+   * the committed result — still changes this projection.
+   */
+  revisionSnapshot(sessionId: string): Array<{
+    accepted: boolean; error: string | undefined; finalization: string | undefined;
+    finishedAt: string | undefined; id: string; provenance: string;
+    resultRef: unknown; startedAt: string | undefined; state: string;
+  }> {
+    return this.snapshot(sessionId).map((record) => ({
+      accepted: record.accepted,
+      error: (record.observation?.lastError as { code?: string } | undefined)?.code,
+      finalization: record.finalization,
+      finishedAt: record.finishedAt,
+      id: record.id,
+      provenance: record.provenance,
+      resultRef: record.resultRef,
+      startedAt: record.startedAt,
+      state: record.state,
+    }));
   }
 
   list(owner: ExecutionOwner): AgentShellExecution[] {
