@@ -377,7 +377,7 @@ test("mocked E2E keeps the complete HTML and results upload", async () => {
   assert.deepEqual(upload.paths, [".ci-results"]);
   assert.deepEqual(upload.excluded, []);
   assert.equal(upload.hidden, true);
-  assert.equal(upload.condition, "${{ always() && needs.policy.outputs.docs_only != 'true' }}");
+  assert.equal(upload.condition, "${{ always() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}");
   assert.equal(upload.missing, "warn");
   assert.equal(upload.retention, 14);
 });

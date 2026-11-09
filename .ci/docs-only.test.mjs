@@ -236,7 +236,7 @@ test('documentation-only PR, push and queue run docs and merge-gate without heav
   assert.match(gateStep, /CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
   assert.match(jobs['merge-gate'], /name: merge-gate\n/);
   const upload = artifacts.find(step => step.includes('upload-artifact'));
-  const normal = selection('pull_request', ['services/api/src/main.ts']);
+  const normal = selection('merge_group', ['services/api/src/main.ts']);
   assert.equal(eligible(condition(upload), normal, { success: false }), true, 'failed tests must still upload evidence');
   for (const step of artifacts.filter(step => step !== upload)) {
     assert.equal(eligible(condition(step), normal), true, 'normal profiles must retain E2E artifact accounting');
@@ -253,6 +253,12 @@ test('documentation-only drafts still check docs and keep the heavy jobs and gat
   }
 });
 
+test('code-changing drafts run L1 without builds, E2E or the aggregate gate', () => {
+  const needs = selection('pull_request', ['services/api/src/main.ts'], { draft: true });
+  assert.equal(needs.l1.result, 'success');
+  for (const name of [...unaffected, 'merge-gate']) assert.equal(needs[name].result, 'skipped', name);
+});
+
 test('mixed, non-documentation and unknown diffs preserve all existing profile selections and gate rules', () => {
   for (const event of ['pull_request', 'push', 'merge_group', 'workflow_dispatch', 'workflow_call']) {
     for (const profile of ['pr', 'merge', 'daily', 'release']) {
@@ -263,13 +269,17 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
           .map(path => ['.agents/skills/foo/SKILL.md', path])]) {
         const needs = selection(event, paths, { profile });
         const selectedProfile = needs.policy.outputs.profile;
-        for (const name of ['l1', 'ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
-        for (const name of ['binary', 'docker']) assert.equal(needs[name].result, selectedProfile === 'pr' ? 'skipped' : 'success');
+        for (const name of ['l1', 'ut', 'st', 'coverage', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
+        for (const name of ['e2e-plan', 'e2e']) assert.equal(needs[name].result, selectedProfile === 'pr' ? 'skipped' : 'success');
+        for (const name of ['binary', 'docker']) assert.equal(needs[name].result, selectedProfile === 'merge' ? 'skipped' : 'success');
         assert.equal(needs['real-merge'].result, selectedProfile === 'merge' ? 'success' : 'skipped');
         assert.equal(needs['real-scheduled'].result, ['daily', 'release'].includes(selectedProfile) ? 'success' : 'skipped');
         assert.deepEqual(gate(selectedProfile, needs), []);
+        const artifacts = jobs['merge-gate'].split(/\n      - /).filter(step => /download-artifact|mocked-report|upload-artifact/.test(step));
+        for (const step of artifacts) assert.equal(eligible(condition(step), needs), selectedProfile !== 'pr', `${selectedProfile}: E2E artifacts`);
         for (const name of ['ut', 'st', 'e2e-plan', 'e2e']) {
-          assert.ok(gate(selectedProfile, { ...needs, [name]: { result: 'skipped' } }).length, `${event}: ${name}`);
+          const result = needs[name].result === 'skipped' ? 'success' : 'skipped';
+          assert.ok(gate(selectedProfile, { ...needs, [name]: { result } }).length, `${event}: ${name}`);
         }
       }
     }
