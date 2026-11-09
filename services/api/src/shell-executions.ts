@@ -1007,7 +1007,7 @@ export class ShellExecutions {
    * be running out there.
    */
   async cancel(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient): Promise<AgentShellExecution> {
-    const execution = this.record(id, owner);
+    let execution = this.record(id, owner);
     // Unknown after restart may still be running remotely; cancellation is safe, resubmission is not.
     if (!execution.historical && (!terminal(execution.state) || execution.state === "unknown")) {
       const unconfirmed = execution.state === "unknown";
@@ -1023,15 +1023,38 @@ export class ShellExecutions {
           ...correlation(execution), failure: errorDetail(error), state: execution.state,
         });
       }
-      if (unconfirmed) {
-        const reason = execution.error ?? "the outcome was never confirmed";
+      if (unconfirmed) this.settleCancelled(id, owner, execution);
+    }
+    return this.get(id, owner);
+  }
+
+  /** Settle a record the caller cancelled although its outcome was never confirmed.
+   *
+   *  An observer write can land while the Runner call above is pending — `reconcile`
+   *  runs before every `execution_status` and `wait`, and each of those rewrites an
+   *  `unknown` record — so `finish`'s revision CAS can come back `STALE_OBSERVER`.
+   *  Cancelling is idempotent, so re-read and repeat instead of answering 500 and
+   *  settling nothing: this is the one action the whole change exists to make
+   *  reliable, and the race is the normal shape of the #1012 flow rather than an
+   *  exotic one. */
+  private settleCancelled(id: string, owner: ExecutionOwner, start: Record): void {
+    let execution = start;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const reason = execution.error ?? "the outcome was never confirmed";
+      try {
         this.finish(execution, {
           error: `Cancelled before the Runner confirmed the outcome; it may have run. (${reason})`,
           provenance: "unconfirmed",
           state: "cancelled",
         });
+        return;
+      } catch (error) {
+        if (!(error instanceof RecoveryError) || error.code !== "STALE_OBSERVER" || attempt === 2) throw error;
+        execution = this.record(id, owner);
+        // Another writer reached a final verdict first; the caller wanted this
+        // execution stopped and it is settled, so accept what is stored.
+        if (execution.finalization === "committed" && terminal(execution.state)) return;
       }
     }
-    return this.get(id, owner);
   }
 }

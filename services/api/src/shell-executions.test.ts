@@ -507,6 +507,45 @@ test("an explicit status read does not reopen a cancelled record", async (contex
   assert.equal(submissions, 1, "the workspace accepts work after the status read");
 });
 
+test("a concurrent observer write during cancel does not fail the settlement", async (context) => {
+  // `reconcile` runs before every `execution_status` / `wait`, and each of those
+  // rewrites an `unknown` record, so the settlement's revision CAS can lose. The
+  // cancel is idempotent, so it must re-read and settle rather than answering 500
+  // with nothing settled — the guard's own message tells the agent to poll the
+  // status, so this overlap is the normal shape of the #1012 flow.
+  const f = await fixture(context);
+  const started: { id: string }[] = [];
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    getShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+    cancelShellExecution: async () => {
+      // An observer write lands while the cancel request is in flight.
+      await f.service.reconcile(started[0]!.id, owner,
+        { runner: () => runner, finalize: async (_context: unknown, result: ShellExecutionResult) => result });
+      throw Object.assign(new Error("Execution not found"), { statusCode: 404 });
+    },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  started.push(job);
+  assert.equal(job.state, "unknown");
+  const before = await f.service.get(job.id, owner);
+
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.ok((settled.observation?.failureCount ?? 0) > (before.observation?.failureCount ?? 0),
+    "the observer really rewrote the record mid-cancel");
+  assert.equal(settled.state, "cancelled", "the cancel still settles instead of rejecting");
+  assert.equal(settled.provenance, "unconfirmed");
+  assert.equal(settled.finalization, "committed");
+  assert.equal(settled.finishedAt !== undefined, true);
+
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id)), recoveryContext));
+  assert.equal(submissions, 1, "the workspace accepts work after the racing cancel");
+});
+
 test("a confirmed-running execution still reports a failed cancel", async (context) => {
   // The best-effort path is only for an outcome nobody can read. A Runner that
   // refuses to cancel work it knows about must keep failing loudly.
