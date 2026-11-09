@@ -37,6 +37,41 @@ test("managed micromamba download retries transient HTTP failures", async () => 
   assert.deepEqual(bytes, Buffer.from([1, 2, 3]));
 });
 
+test("managed micromamba download backs off exponentially through a minute-long outage", async () => {
+  const delays = [];
+  let calls = 0;
+  const bytes = await downloadBytesWithRetry("https://example.invalid/micromamba", {
+    fetchImplementation: async () => {
+      calls += 1;
+      if (calls < 6) return new Response("gateway timeout", { status: 504 });
+      return new Response(Uint8Array.from([4, 5, 6]), { status: 200 });
+    },
+    sleep: async (delayMs) => { delays.push(delayMs); },
+    timeoutMs: 1_000,
+  });
+
+  assert.equal(calls, 6);
+  assert.deepEqual(bytes, Buffer.from([4, 5, 6]));
+  // Default schedule: doubling from two seconds, capped at thirty.
+  assert.deepEqual(delays, [2_000, 4_000, 8_000, 16_000, 30_000]);
+
+  calls = 0;
+  delays.length = 0;
+  await assert.rejects(
+    downloadBytesWithRetry("https://example.invalid/micromamba", {
+      fetchImplementation: async () => {
+        calls += 1;
+        return new Response("gateway timeout", { status: 504 });
+      },
+      sleep: async (delayMs) => { delays.push(delayMs); },
+      timeoutMs: 1_000,
+    }),
+    /download failed \(504\)/,
+  );
+  assert.equal(calls, 6);
+  assert.equal(delays.length, 5);
+});
+
 test("managed micromamba download does not retry permanent HTTP failures", async () => {
   let calls = 0;
   await assert.rejects(

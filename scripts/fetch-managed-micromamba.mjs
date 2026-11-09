@@ -21,9 +21,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
-const DOWNLOAD_ATTEMPTS = 3;
+// GitHub release downloads fail in bursts (502/504 for tens of seconds), and the
+// Docker job builds cold on purpose, so it has no cache to fall back on. Back off
+// exponentially to cover about a minute of outage: 2, 4, 8, 16 and 30 seconds.
+const DOWNLOAD_ATTEMPTS = 6;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 const RETRY_DELAY_MS = 2_000;
+const MAX_RETRY_DELAY_MS = 30_000;
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultManifestPath = resolve(scriptDirectory, "../services/runner/src/micromamba-releases.json");
@@ -188,6 +192,8 @@ export async function downloadBytesWithRetry(url, {
   attempts = DOWNLOAD_ATTEMPTS,
   fetchImplementation = fetch,
   retryDelayMs = RETRY_DELAY_MS,
+  maxRetryDelayMs = MAX_RETRY_DELAY_MS,
+  sleep = (delayMs) => new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs)),
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -208,12 +214,11 @@ export async function downloadBytesWithRetry(url, {
       return Buffer.from(await response.arrayBuffer());
     } catch (error) {
       if (attempt === attempts || !retryableError(error)) throw error;
+      const delayMs = Math.min(retryDelayMs * 2 ** (attempt - 1), maxRetryDelayMs);
       process.stderr.write(
-        `Managed micromamba download attempt ${attempt}/${attempts} failed: ${errorMessage(error)}; retrying.\n`,
+        `Managed micromamba download attempt ${attempt}/${attempts} failed: ${errorMessage(error)}; retrying in ${Math.round(delayMs / 1000)}s.\n`,
       );
-      if (retryDelayMs > 0) {
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs * attempt));
-      }
+      if (delayMs > 0) await sleep(delayMs);
     }
   }
   throw new Error("Managed micromamba download exhausted all attempts");
