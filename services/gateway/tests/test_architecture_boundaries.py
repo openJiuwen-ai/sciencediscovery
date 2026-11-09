@@ -164,6 +164,9 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
 
     TEMP_ROOT = REPOSITORY_ROOT / "services" / "api" / ".tmp"
     API_ROOT = REPOSITORY_ROOT / "services" / "api"
+    # The egress contract test scans packages/ and services/ only, so a probe here
+    # is invisible to it while the walk (NODE_ROOTS includes apps/web) still sees it.
+    PROBE_ROOT = REPOSITORY_ROOT / "apps" / "web"
 
     def setUp(self) -> None:
         self.TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -174,8 +177,13 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
 
     def positive_probe_path(self) -> Path:
-        """Where the positive case plants the file the walk must report."""
-        return self.API_ROOT / "src" / f"probe-boundary-{os.getpid()}.ts"
+        """Where the positive case plants the file the walk must report.
+
+        It sits under `apps/web`, which `_node_boundary_failures` walks but the
+        datasource egress contract test does not scan, so no other worker reads a
+        file this case creates and removes.
+        """
+        return self.PROBE_ROOT / f"probe-boundary-{os.getpid()}.ts"
 
     def test_a_generated_workspace_is_not_walked(self) -> None:
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
@@ -215,7 +223,7 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         def only_the_probe(root: Path):
             # Keep the real listing (so IGNORED_DIRECTORIES still governs) and drop
             # every other file, so the assertion cannot depend on the working tree.
-            if root == self.API_ROOT:
+            if root == self.PROBE_ROOT:
                 return (path for path in original(root) if path == self.probe)
             return original(root)
 
