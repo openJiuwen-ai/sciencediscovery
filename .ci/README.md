@@ -129,48 +129,49 @@ The recorded host memory is capacity, not measured peak usage.
 
 ### Parallel mocked browser workers
 
-The mocked matrix is frozen from the same `e2e` slice, with four independent
-jobs (`max-parallel: 4`, `fail-fast: false`). No case list lives in the workflow:
+The mocked matrix is frozen from the same `e2e` slice. Its five fixture/state
+partitions remain independent jobs (`max-parallel: 4`, `fail-fast: false`):
+`standard-config`, `standard-journeys`, `research`, `literature`, and `governed`.
+No case list lives in the workflow, and changing execution concurrency never
+changes the frozen identities or permits a skip.
 
-| Worker | Fixture | Existing browser cases | Supplemental checks |
-| --- | --- | ---: | --- |
-| `standard-config` | `standard` | 19 | 9 JiuwenSwarm checks, once |
-| `standard-journeys` | `standard` | 25 | None |
-| `research` | `research` | 20 | None |
-| `literature` | `literature` | 6 | None |
+Within a partition, independent spec files are balanced by case count across
+at most two isolated product stacks. Global configuration changes require
+serial execution **on the same installation**; they can overlap on separate
+installations. Tests inside each file remain serial: files such as
+`issue-37-composer-height`, `issue-44-background-timeline`, and
+`issue-44-session-stop` own `beforeAll` data and explicitly ordered tests.
+Every file keeps its hooks and frozen order in one batch. Fresh-library
+journeys run first in their own pristine stack, before global mutations. The
+nine JiuwenSwarm checks run once, on the first global batch, in their existing
+order. Research/literature instance configuration and fault injection never
+reach a standard stack.
 
-Standard mocked specs declare `isolation:global` for shared configuration,
-`isolation:session` for independent session journeys, or `isolation:fresh` for
-a journey that requires a pristine Skill library. Missing classifications fail
-planning. The fresh-library file stays first among global-state files; the
-reporter rejects a different order or multiple Playwright workers. Every file
-and its steps retain their serial execution order. Each CI job has its own
-checkout, service ports, runtime data, JiuwenSwarm home and reports; both
-standard workers still use the **standard fixture**, not a research fixture.
-Backend selection is independent and does not change the 70 browser identities.
+`pnpm ci:e2e -- --shard standard-config` runs one evidence partition, with
+its pristine batch followed by up to two concurrent global batches. Without
+`--shard`, the same bounded pool executes the complete mocked plan. Use
+`--workers 1` for serial diagnosis; the default is two independent stacks,
+not two Playwright workers sharing one API. Playwright keeps `workers: 1`,
+`fullyParallel: false`, and `retries: 0`.
 
-`pnpm ci:e2e -- --shard standard-config` runs one evidence partition. Its
-fresh-library cases execute first in a dedicated pristine stack, followed by
-the global configuration cases and the single supplemental pass in a second
-stack. Without `--shard`, the local entry point retains the full serial suite
-and the same isolation boundary.
+Each batch has its own token, data directory, Python service environment,
+JiuwenSwarm registry/instance, and reports. The harness reserves a block for
+API, Runner, memory graph, legacy API, MCP fault proxy, and all four Swarm
+ports before launch. It writes the Swarm assignment through the pinned SDK's
+instance registry/bootstrap API; product launcher environment filtering stays
+unchanged. Only the shared pinned Swarm installation's setup is locked; the
+running journeys overlap. Node dependencies, build, browser preparation and
+collection finish once before the pool starts. `e2e/tagged/browser-timing.json`
+records each batch's elapsed time and assigned ports.
 
-Managed scientific-environment readiness is a prerequisite of the journeys
-that use it, rather than a gate before every browser batch. J3 and the real
-request journey poll the existing setup status for at most 180 seconds, with
-each request limited to 10 seconds and the remaining total budget. A failed,
-disabled or expired setup cannot satisfy the journey's ready precondition;
-unrelated journeys can still run and report their own results.
+Managed scientific-environment readiness remains a prerequisite only of the
+journeys that use it. J3 and the real request journey poll the setup status;
+a failed, disabled or expired setup cannot satisfy that precondition.
+Concurrent invocations must still use separate `CI_RESULTS_DIR` and
+`CI_RUNTIME_DIR`. The harness chooses ports for its owned instances; direct
+`.ci/run-e2e.sh` invocations can retain explicit port overrides.
 
-Concurrent local invocations must use prepared dependencies and distinct
-`CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
-On one host, let each JiuwenSwarm instance finish binding its automatically
-allocated ports before starting the next stack; separate CI runners do not
-share this port allocator. Browser runs can then overlap.
-The driver writes HTML into the worker's results directory, so reports cannot
-overwrite each other. Leave Playwright `workers: 1` and `retries: 0` unchanged.
-
-The existing `merge-gate` reconciles all four artifacts against the parent
+The existing `merge-gate` reconciles all fixture artifacts against the parent
 plan, requires exactly one PASS for every identity and verifies all nine
 supplemental checks, including their order (`skills` before `skill-switch`).
 Missing artifacts, changed identities/backends, skips or failed drivers fail

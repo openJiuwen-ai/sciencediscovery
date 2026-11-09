@@ -152,13 +152,35 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
-  // The summary step reads the stack that actually runs the checks, named by
-  // the same batch key the run writes under.
-  const checkKey = mockedBatches(plan()).find(batch => batch.checks.length).key;
-  assert.ok(job('e2e').includes(`checks=.ci-results/${checkKey}/e2e/jiuwenswarm-checks.log`));
+  // Batch counts depend on the collected files. Summarize the actual check
+  // log instead of guessing one batch's directory in the workflow.
+  assert.match(job('e2e'), /find \.ci-results -name jiuwenswarm-checks\.log -type f/);
   const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
   for (const block of [real, job('merge-gate')]) {
     assert.match(block, /path: \.ci-mocked-results\n/);
     assert.match(block, /node \.ci\/mocked-report.mjs \.ci-mocked-plan\/plan.json \.ci-mocked-results/);
   }
+});
+
+test('independent files get separate stacks while file hooks, fresh state and checks retain their owners', () => {
+  const entries = [
+    descriptor('fresh', ['isolation:fresh']),
+    ...['a', 'b', 'c', 'd'].flatMap(file => [0, 1, 2].map(i => ({
+      ...descriptor(`${file}-${i}`, ['isolation:global']), source: `test/${file}.spec.ts`,
+    }))),
+    ...['session-a', 'session-b'].map(id => descriptor(id, ['isolation:session'])),
+  ];
+  const p = plan(entries), batches = mockedBatches(p);
+  assert.deepEqual(batches.flatMap(b => b.entries.map(e => e.key)).sort(), p.entries.map(e => e.key).sort());
+  const global = batches.filter(b => b.key.includes('-global'));
+  assert.equal(global.length, 2);
+  assert.deepEqual(global.map(b => b.entries.length), [6, 6]);
+  for (const source of new Set(p.entries.map(e => e.source))) {
+    assert.equal(batches.filter(b => b.entries.some(e => e.source === source)).length, 1, source);
+  }
+  for (const batch of batches) {
+    assert.deepEqual(batch.entries, p.entries.filter(e => batch.entries.includes(e)));
+  }
+  assert.deepEqual(batches.filter(b => b.checks.length).map(b => b.key), ['mocked-standard-config-global-1']);
+  assert.equal(batches.filter(b => b.key.startsWith('mocked-standard-journeys')).length, 2);
 });
