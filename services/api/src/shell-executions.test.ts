@@ -871,6 +871,10 @@ test("a failing authoritative-failure commit is bounded too, not just an existin
   assert.match(record.observation?.lastError?.message ?? "", /Retrying the commit stopped after 5 attempts/);
   assert.equal(record.state, "unknown", "the outcome stays unconfirmed until someone cancels it");
   assert.equal(record.provenance, "unconfirmed");
+  // The explanation has to be in the field a client renders. `observation` is not read
+  // by the panel, so a stop described only there is invisible to the user.
+  assert.match(f.service.list(owner)[0]?.error ?? "", /Retrying the commit stopped after 5 attempts/);
+  assert.equal(f.service.list(owner)[0]?.finalization, "failed");
 });
 
 test("the export projection holds its blocked value while a commit retry is in flight", async context => {
