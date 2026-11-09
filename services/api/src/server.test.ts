@@ -158,7 +158,7 @@ test("closing an API during startup waits for evolution initialization", async (
     release();
     EvolutionStore.prototype.initialize = originalInitialize;
     if (server) await (closing ?? closeApiServer(server));
-    await rm(root, { force: true, recursive: true });
+    await removeDataDir(root);
   }
 });
 
@@ -483,6 +483,20 @@ async function waitForRemoval(path: string, timeoutMs = 10_000): Promise<void> {
   }
 }
 
+/**
+ * Remove a test data directory whose server has already been closed.
+ *
+ * Closing a server does not cancel the detached writes its stores started, so a
+ * file can land between `rm`'s readdir and its rmdir; Node reports the leftover
+ * directory as `ENOTEMPTY` and the after hook then fails a test that passed.
+ * `fs.rm` retries exactly those transient codes (ENOTEMPTY/EBUSY/EPERM/EMFILE)
+ * when it is asked to, so every data-directory teardown goes through here
+ * instead of a bare `rm` call.
+ */
+async function removeDataDir(root: string): Promise<void> {
+  await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+}
+
 async function removeTestRoot(root: string): Promise<void> {
   const api = testApiOrigins.get(root);
   if (api) {
@@ -510,10 +524,10 @@ async function removeTestRoot(root: string): Promise<void> {
     await api.close();
     testApiOrigins.delete(root);
   }
-  // maxRetries: a server torn down just before this may still have detached
-  // async writes in flight (e.g. the fire-and-forget evolution store init);
-  // a concurrent file landing between readdir and rmdir surfaces ENOTEMPTY.
-  await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+  // The fixture server is closed above, but its stores may still have detached
+  // writes in flight (e.g. the fire-and-forget evolution store init), which is
+  // the ENOTEMPTY race `removeDataDir` absorbs.
+  await removeDataDir(root);
 }
 
 async function startTestApi(
@@ -593,7 +607,7 @@ test("desktop skill switches import a new package and preserve global state on r
     else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
     if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
     else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
-    await rm(root, { recursive: true, force: true });
+    await removeDataDir(root);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -1037,7 +1051,7 @@ test("global Runner management routes remotely, requires authentication and neve
     await closeApiServer(server);
     store.close();
     assert.equal(transportClosed, true, "API dependencies must finish closing before removing their data directory");
-    await rm(root, { recursive: true, force: true });
+    await removeDataDir(root);
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const prefix = `${origin}/api/remote-hosts/${host.id}`;
@@ -1088,7 +1102,7 @@ test("updating SSH credentials immediately probes with the newly stored username
   context.after(async () => {
     // Drain asynchronous API cleanup before removing the stores it still owns.
     await closeApiServer(server);
-    await rm(tempRoot, { force: true, recursive: true });
+    await removeDataDir(tempRoot);
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
@@ -7359,7 +7373,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
     await closeApi();
     await closeGraph();
     closeStore();
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir(dataDir);
   });
   const uploads: Record<string, unknown>[] = [];
   const graph = createHttpServer((request, response) => {
