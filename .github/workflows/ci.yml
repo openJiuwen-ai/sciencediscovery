@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Cumulative gates: PR L1/L2; merge_group L3; daily L4; release L5.
+# CI profiles: PR L1/L2 and builds; merge_group L3 E2E; daily L4; release L5.
 # The shared source catalog owns selection. backend selects execution only.
 # Configure the stable merge-gate check as required on PRs and merge groups.
 # Reviewed queue candidates receive scoped test credentials without a second
@@ -23,7 +23,7 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # Drafts run policy and L1. UT/ST, mocked E2E, coverage, binary, Docker and
+  # Drafts run policy and L1. UT/ST, coverage, binary, Docker and
   # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
   # events enable the remaining jobs according to the selected profile.
   pull_request:
@@ -58,7 +58,7 @@ on:
         type: string
         default: ""
       profile:
-        description: "Cumulative policy: pr=L2, merge=L3, daily=L4, release=L5"
+        description: "CI policy: pr=L2 and builds, merge=L3 E2E, daily=L4, release=L5"
         type: string
         default: pr
       backend:
@@ -94,6 +94,7 @@ jobs:
     outputs:
       profile: ${{ steps.policy.outputs.profile }}
       backend: ${{ steps.policy.outputs.backend }}
+      mocked: ${{ steps.policy.outputs.mocked }}
       real: ${{ steps.policy.outputs.real }}
       distribution: ${{ steps.policy.outputs.distribution }}
       docs_only: ${{ steps.policy.outputs.docs_only }}
@@ -147,7 +148,7 @@ jobs:
   e2e-plan:
     name: Freeze mocked E2E matrix
     needs: [policy, l1]
-    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -488,7 +489,7 @@ jobs:
   e2e:
     needs: [policy, l1, e2e-plan]
     name: L2 E2E (mocked, ${{ matrix.shard }})
-    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -866,20 +867,20 @@ jobs:
         with:
           node-version: 22.19.0
       - uses: actions/download-artifact@v4
-        if: ${{ needs.policy.outputs.docs_only != 'true' }}
+        if: ${{ needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         with:
           name: mocked-e2e-plan
           path: .ci-mocked-plan
       - uses: actions/download-artifact@v4
-        if: ${{ needs.policy.outputs.docs_only != 'true' }}
+        if: ${{ needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         with:
           pattern: mocked-e2e-results-*
           path: .ci-mocked-results
       - name: Reconcile mocked results
-        if: ${{ needs.policy.outputs.docs_only != 'true' }}
+        if: ${{ needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results .ci-results
       - name: Upload combined E2E results
-        if: ${{ always() && needs.policy.outputs.docs_only != 'true' }}
+        if: ${{ always() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results

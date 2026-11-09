@@ -26,18 +26,23 @@ test dependencies are supplied only by the checkout mounted at `/src`.
 Category (UT/ST/E2E), model/judge cost and execution backend remain independent.
 No workflow maintains its own list of case titles.
 
-| Tier | Event / authorization | Cumulative content | Gate / job ceiling |
+| Tier | Event / authorization | Workflow jobs | Gate / job ceiling |
 | --- | --- | --- | --- |
 | L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
-| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
-| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + binary smoke and Docker distribution gates; mocked and real E2E are skipped; no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
+| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L1/UT/ST rerun on the group SHA + mocked E2E + nine short real API journeys (including Runner wait/finish decisions); binary and Docker jobs are skipped | Required before automatic merge; mock E2E 90 minutes; basic worker 60 minutes including setup, target 10–15 minutes of test time |
+| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + binary smoke and Docker distribution gates + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
 | L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
 research; it is no longer equal to the hermetic PR policy. Release failures
 must not be worked around by moving the tag.
+
+The local test profiles remain cumulative. Workflow job selection is separate:
+PR runs build distributions without E2E; the merge queue runs E2E without
+distribution builds; daily/release run both. `pnpm ci:e2e` still runs the mocked
+slice locally with the default `pr` profile.
 
 Run only the desired slice, or the complete cumulative profile:
 
@@ -220,8 +225,9 @@ GitHub Actions, and enable **Require merge queue**. Enabling the queue alone
 does not make CI required; without required checks, it need not wait for L3.
 Require approval of the current PR head and dismiss stale approvals. Start
 with queue build concurrency 1 and **Only merge non-failing pull requests**.
-Allow enough queue status-check time for L1/L2 + real setup/testing and the
-parallel distribution jobs. Do not require a queue-only check on the PR before
+Allow enough queue status-check time for L1/UT/ST + mocked and real setup/testing.
+Binary and Docker distribution jobs run in PR and daily/release profiles.
+Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
