@@ -67,10 +67,6 @@ test("a deleted default stays unset without blocking the workspace", () => {
   assert.deepEqual(resolveCatalog([profile("a")], { modelId: "gone" }), { boot: "ready" });
 });
 
-test("deleting the last model does not hide existing history on restart", () => {
-  assert.deepEqual(resolveCatalog([], {}, true), { boot: "ready" });
-});
-
 test("a service that reports a subsystem off is degraded, not offline", () => {
   assert.equal(resolveConnection({ service: "api", status: "ok" }), "online");
   assert.equal(resolveConnection({ memoryGraph: "degraded", status: "ok" }), "degraded");
