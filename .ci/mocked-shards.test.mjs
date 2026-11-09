@@ -1,9 +1,11 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { mockedBatches, mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
@@ -59,6 +61,26 @@ test('the complete local run can execute every mocked partition serially', () =>
   assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-global').entries.every(entry => entry.tags.includes('isolation:global')));
   assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-config-global').checks, swarmChecks);
   assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-journeys').checks, []);
+});
+
+test('the Actions matrix creates large partitions before short fixtures without changing its members', t => {
+  const entries = [
+    ...Array.from({ length: 7 }, (_, i) => descriptor(`session-${i}`, ['isolation:session'])),
+    ...Array.from({ length: 4 }, (_, i) => descriptor(`global-${i}`, ['isolation:global'])),
+    ...Array.from({ length: 2 }, (_, i) => descriptor(`research-${i}`, ['fixture:research'])),
+    descriptor('literature', ['fixture:literature']), descriptor('governed', ['fixture:governed']),
+  ];
+  const root = mkdtempSync(join(tmpdir(), 'mocked-matrix-order-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const input = join(root, 'plan.json'), output = join(root, 'output'), p = plan(entries);
+  writeFileSync(input, JSON.stringify(p));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./mocked-matrix.mjs', import.meta.url)), input], {
+    env: { ...process.env, GITHUB_OUTPUT: output }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const matrix = JSON.parse(readFileSync(output, 'utf8').trim().replace(/^matrix=/, ''));
+  assert.deepEqual(matrix.include.map(row => row.shard), ['standard-journeys', 'standard-config', 'research', 'governed', 'literature']);
+  assert.deepEqual(matrix.include.map(row => row.shard).sort(), mockedShards(p).map(shard => shard.name).sort());
 });
 
 test('fresh-library journeys precede global mutation and cannot run with multiple workers', () => {

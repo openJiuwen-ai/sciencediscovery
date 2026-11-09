@@ -134,6 +134,10 @@ partitions remain independent jobs (`max-parallel: 4`, `fail-fast: false`):
 `standard-config`, `standard-journeys`, `research`, `literature`, and `governed`.
 No case list lives in the workflow, and changing execution concurrency never
 changes the frozen identities or permits a skip.
+The matrix creates partitions in descending collected case count, with a
+stable name tie-break: long partitions should not wait for short fixtures to
+release one of the four slots. Runner availability still determines actual
+start times.
 
 Within a partition, independent spec files are balanced by case count across
 at most two isolated product stacks. Global configuration changes require
