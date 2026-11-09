@@ -88,6 +88,11 @@ const RUNNER_CONFLICT_MESSAGES: Readonly<{
   EXECUTION_RESULT_CONFLICT: "Runner execution result conflict",
 };
 const RUNNER_REQUEST_TIMEOUT_MS = 10_000;
+/** A cancel for an execution the Runner may no longer hold must not hold the
+ *  caller open: the caller is already ending this work, and a project delete
+ *  waits behind it (#1012). Two seconds is enough for a Runner that has the
+ *  record; one that does not answers immediately with 404. */
+const CANCELLED_UNCONFIRMED_TIMEOUT_MS = 2_000;
 class RecordedRunnerFailure extends Error {}
 
 /**
@@ -973,11 +978,47 @@ export class ShellExecutions {
     return runner(execution.runnerId).shellExecutionLogs(id, owner, cursor, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
   }
 
+  /**
+   * Cancel one execution.
+   *
+   * For an unconfirmed outcome (`state="unknown"`) the Runner call is
+   * best-effort: that execution may already be gone from the Runner's ledger,
+   * and a cancel that waits on a Runner which will never answer is what left the
+   * request line unfinished in #1012, with the project delete parked behind it
+   * until the adapter's read deadline. The caller asked to end this work, so the
+   * record settles as `cancelled` locally either way — otherwise the workspace
+   * guard keeps refusing every new command in it and the only recovery is
+   * restarting the stack.
+   *
+   * Only an explicit cancel settles an unknown record. The guard keeps its
+   * meaning for everyone who has not asked: work that never reported may still
+   * be running out there.
+   */
   async cancel(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient): Promise<AgentShellExecution> {
     const execution = this.record(id, owner);
     // Unknown after restart may still be running remotely; cancellation is safe, resubmission is not.
     if (!execution.historical && (!terminal(execution.state) || execution.state === "unknown")) {
-      await runner(execution.runnerId).cancelShellExecution(id, owner, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
+      const unconfirmed = execution.state === "unknown";
+      try {
+        await runner(execution.runnerId).cancelShellExecution(id, owner,
+          AbortSignal.timeout(unconfirmed ? CANCELLED_UNCONFIRMED_TIMEOUT_MS : RUNNER_REQUEST_TIMEOUT_MS));
+      } catch (error) {
+        // A confirmed-running execution keeps failing loudly: the caller needs to
+        // know the Runner did not take the cancel. An unconfirmed one has no
+        // Runner answer to wait for, so the local settlement below is the answer.
+        if (!unconfirmed) throw error;
+        this.log.warn("shell_execution_cancel_unconfirmed", {
+          ...correlation(execution), failure: errorDetail(error), state: execution.state,
+        });
+      }
+      if (unconfirmed) {
+        const reason = execution.error ?? "the outcome was never confirmed";
+        this.finish(execution, {
+          error: `Cancelled before the Runner confirmed the outcome; it may have run. (${reason})`,
+          provenance: "unconfirmed",
+          state: "cancelled",
+        });
+      }
     }
     return this.get(id, owner);
   }

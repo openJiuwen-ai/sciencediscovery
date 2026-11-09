@@ -414,6 +414,50 @@ test("explicit cancellation retains committed result and stopped Agent inbox wit
   assert.equal(f.notices.timers(owner)[0]!.state, "cancelled");
 });
 
+test("cancelling an unconfirmed execution settles it instead of blocking the workspace forever", async (context) => {
+  // #1012: the record was left `unknown` by a failed commit, the workspace guard
+  // then refused every new command in it, and `cancel` only forwarded to the
+  // Runner — which no longer held the execution, so the request never answered
+  // and the project delete waited behind it until the adapter deadline.
+  const f = await fixture(context);
+  let cancelled = 0;
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    cancelShellExecution: async () => { cancelled++; throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  assert.equal(job.state, "unknown", "the lost submission is still unconfirmed");
+
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.equal(cancelled, 1, "the Runner is still asked to cancel");
+  assert.equal(settled.state, "cancelled", "the local record reaches a terminal state anyway");
+  assert.equal(settled.provenance, "unconfirmed", "the outcome was never confirmed and the record says so");
+  assert.equal(settled.finalization, "committed");
+  assert.equal(settled.finishedAt !== undefined, true);
+  assert.match(settled.error ?? "", /Cancelled before the Runner confirmed the outcome/);
+
+  // The workspace is usable again: the guard no longer finds an unknown record.
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id))));
+  assert.equal(submissions, 1, "a cancelled unknown no longer blocks new work");
+});
+
+test("a confirmed-running execution still reports a failed cancel", async (context) => {
+  // The best-effort path is only for an outcome nobody can read. A Runner that
+  // refuses to cancel work it knows about must keep failing loudly.
+  const f = await fixture(context);
+  const runner = {
+    cancelShellExecution: async () => { throw Object.assign(new Error("Runner refused"), { statusCode: 500 }); },
+    getShellExecution: async () => new Promise(() => undefined),
+    startShellExecution: async (r: ShellExecutionRequest) => ({ ...owner, id: r.executionId, state: "running", queuedAt: "now" }),
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, async (id, dispatch) => dispatch(request(id)));
+  await assert.rejects(f.service.cancel(job.id, owner, () => runner), /Runner refused/);
+});
+
 test("lost submission and API restart are unknown, never command replay", async (context) => {
   const f = await fixture(context); let submitted = 0;
   const runner = { startShellExecution: async () => { submitted++; throw new Error("lost response"); } } as unknown as RunnerClient;
