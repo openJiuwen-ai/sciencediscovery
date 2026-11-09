@@ -158,7 +158,7 @@ test("closing an API during startup waits for evolution initialization", async (
     release();
     EvolutionStore.prototype.initialize = originalInitialize;
     if (server) await (closing ?? closeApiServer(server));
-    await rm(root, { force: true, recursive: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -593,7 +593,7 @@ test("desktop skill switches import a new package and preserve global state on r
     else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
     if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
     else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -1037,7 +1037,7 @@ test("global Runner management routes remotely, requires authentication and neve
     await closeApiServer(server);
     store.close();
     assert.equal(transportClosed, true, "API dependencies must finish closing before removing their data directory");
-    await rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const prefix = `${origin}/api/remote-hosts/${host.id}`;
@@ -1088,7 +1088,7 @@ test("updating SSH credentials immediately probes with the newly stored username
   context.after(async () => {
     // Drain asynchronous API cleanup before removing the stores it still owns.
     await closeApiServer(server);
-    await rm(tempRoot, { force: true, recursive: true });
+    await removeTestRoot(tempRoot);
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
@@ -7359,7 +7359,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
     await closeApi();
     await closeGraph();
     closeStore();
-    await rm(dataDir, { recursive: true, force: true });
+    await removeTestRoot(dataDir);
   });
   const uploads: Record<string, unknown>[] = [];
   const graph = createHttpServer((request, response) => {
@@ -7894,7 +7894,7 @@ test("cancelling a run while a subagent approval is pending persists its termina
 test("stopping a child Agent closes only its wake gate and joins its active model call", { tags: ["status:unreviewed"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `subagent-stop-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { pauseSubagent: true });
   context.after(() => fixture.releaseSubagent());

@@ -301,7 +301,7 @@ export { MAIN_RUN_STREAM } from "./store/run-streams.js";
 const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
 const NEWLINE_BYTE = 0x0a;
 
-/** How long shutdown waits for in-flight array writes before it says it gave up.
+/** How long shutdown waits for in-flight store writes before it says it gave up.
  *  Far longer than a write takes, far shorter than a person's patience with a
  *  hung quit. */
 const WRITE_DRAIN_TIMEOUT_MS = 10_000;
@@ -2152,8 +2152,8 @@ export class SessionStore {
     await this.deletionWork;
   }
 
-  /** Resolves once every in-flight array write (session-runs, messages, artifact
-   *  plans, …) and every append-only stream write has finished. `closeApiServer`
+  /** Resolves once queued mutations, array/stream writes and catalog saves have
+   *  finished. `closeApiServer`
    *  awaits this immediately before closing the store so that a caller removing
    *  the data directory right after cannot race a write-temp-then-rename that is
    *  still between its two steps.
@@ -2162,13 +2162,22 @@ export class SessionStore {
    *  shutdown must not hang on it. The wait is capped and reports the writes it
    *  abandoned, so a shutdown never claims a cleanliness it did not get. */
   async whenWritesSettle(timeoutMs = WRITE_DRAIN_TIMEOUT_MS): Promise<boolean> {
+    const queues = [this.arrayMutationQueues, this.streamAppendQueues, this.subagentMutationQueues, this.workspaceFileMutationQueues];
+    let catalog = this.saveQueue;
+    let catalogPending = false;
     const drained = (async () => {
-      // Both sets shrink as their writes finish, so re-reading them each pass
-      // terminates once the writers stop.
-      while (this.arrayWrites.size > 0 || this.streamAppendQueues.size > 0) {
-        await Promise.all([...this.arrayWrites, ...this.streamAppendQueues.values()]);
+      while (true) {
+        catalog = this.saveQueue;
+        catalogPending = true;
+        await Promise.allSettled([
+          ...this.arrayWrites,
+          ...queues.flatMap((queue) => [...queue.values()]),
+          catalog.finally(() => { catalogPending = false; }),
+        ]);
+        // A mutation can start a file write, or queue another catalog save,
+        // while this pass is waiting. Both must be drained before returning.
+        if (this.arrayWrites.size === 0 && queues.every((queue) => queue.size === 0) && this.saveQueue === catalog) return true;
       }
-      return true;
     })();
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Not unref'd: the race's other arm is a promise the event loop does not
@@ -2186,7 +2195,8 @@ export class SessionStore {
       if (timer) clearTimeout(timer);
     }
     if (!settled) {
-      const abandoned = this.arrayWrites.size + this.streamAppendQueues.size;
+      const abandoned = this.arrayWrites.size + queues.reduce((count, queue) => count + queue.size, 0)
+        + Number(catalogPending || this.saveQueue !== catalog);
       console.warn(`Store shutdown stopped waiting for ${abandoned} in-flight write(s) after ${timeoutMs}ms`);
     }
     return settled;
