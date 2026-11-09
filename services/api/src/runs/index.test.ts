@@ -16,7 +16,7 @@ import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -488,4 +488,45 @@ test("a scheduler that escapes does not restart itself at full speed while the r
   assert.ok(listCalls <= 6, `the scheduler re-entered ${listCalls} times in 300 ms; it must back off instead of spinning`);
   assert.ok(listCalls >= 2, "the escaped failure is still observed and retried, not dropped silently");
   assert.equal((await store.getSessionRun(session.id, run.id))?.status, "queued", "the run keeps the status it could persist");
+});
+
+test("the scheduler's delayed retry pass forwards every argument the first pass received", async () => {
+  // #857 F3: the closure the scheduler re-enters itself through carried 19 of
+  // the 20 parameters `scheduleSessionRuns` declares, so a run picked up by the
+  // delayed pass reached execution without `executionGovernance`: no sandbox
+  // probe, and `jiuwenswarm-agent.ts` then re-exposes the native tools that the
+  // fail-closed guard withholds, i.e. the same session runs under two tool
+  // policies depending on which pass picked it up. A behavioural test would
+  // have to stand up the whole execution graph to observe one argument, so this
+  // pins the call site's argument list against the signature it calls: adding a
+  // parameter to one without the other fails here.
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  const splitTopLevel = (list: string): string[] => {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const character of list) {
+      if ("([{<".includes(character)) depth += 1;
+      else if (")]}>".includes(character)) depth = Math.max(0, depth - 1);
+      if (character === "," && depth === 0) {
+        parts.push(current.trim());
+        current = "";
+        continue;
+      }
+      current += character;
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+  };
+  const signatureAt = source.indexOf("export function scheduleSessionRuns(");
+  assert.notEqual(signatureAt, -1, "scheduleSessionRuns is no longer defined in this module");
+  const signatureEnd = source.indexOf("): void", signatureAt);
+  const parameters = splitTopLevel(source.slice(signatureAt + "export function scheduleSessionRuns(".length, signatureEnd))
+    .map((parameter) => parameter.slice(0, parameter.indexOf(":")).replace(/\?$/u, "").trim());
+  const closureAt = source.indexOf("const reschedule = (): void => scheduleSessionRuns(", signatureAt);
+  assert.notEqual(closureAt, -1, "the scheduler no longer restarts itself through the reschedule closure");
+  const callAt = closureAt + "const reschedule = (): void => scheduleSessionRuns(".length;
+  const forwarded = splitTopLevel(source.slice(callAt, source.indexOf(");", callAt)));
+  assert.deepEqual(forwarded, parameters,
+    `the retry pass forwards ${forwarded.length} of the scheduler's ${parameters.length} arguments`);
 });
