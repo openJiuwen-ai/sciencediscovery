@@ -194,6 +194,18 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
               : null}
           </section>
         ) : null}
+        {review.notChecked?.length ? (
+          <section aria-label={t("reviewer.notChecked.aria")} className="reviewer-source-issues reviewer-not-checked">
+            <ul>
+              {review.notChecked.map((gap) => (
+                <li key={gap.check}>
+                  <b>{t(`reviewer.notChecked.${gap.check}` as MessageKey)}</b>
+                  <span>{gap.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <footer>
           <span>{t("reviewer.footer", { detail: review.reusedFromReviewId ? t("reviewer.reused") : t("reviewer.levelReview", { level: levelLabel(review, t) }) })}</span>
           <code>{review.artifactContentHash.slice(0, 12)}</code>
