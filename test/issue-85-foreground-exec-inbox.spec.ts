@@ -79,18 +79,8 @@ async function closeWakeGateAndCleanup(page: Page, playwright: Parameters<Parame
   const api = await playwright.request.newContext({ baseURL: apiBaseUrl(), extraHTTPHeaders: authorizationHeader() });
   try {
     if (fixture) {
-      // Close the wake gate before deleting: a Session that can still start
-      // runs on its own keeps its Project deletion waiting behind them.
-      await api.post(`/api/sessions/${encodeURIComponent(fixture.session.id)}/runs/current/cancel`, { data: {} }).catch(() => undefined);
-      await expect.poll(async () => {
-        // Cancellation settles asynchronously. Retry only the active-run
-        // conflict; a single best-effort DELETE can leave the Project behind.
-        const response = await api.delete(`/api/projects/${encodeURIComponent(fixture.project.id)}`, {
-          data: { confirmationId: fixture.project.id },
-        });
-        expect([200, 404, 409], "Project cleanup must succeed or still be cancelling").toContain(response.status());
-        return response.status();
-      }, { message: "cancelled runs should release Project deletion", timeout: 30_000 }).not.toBe(409);
+      // Stop and verify the Session before deleting its Project. Deleting it
+      // first makes the helper poll the missing Session for its full 45 s.
       await cleanupJourney(page, fixture);
       await expect.poll(async () => {
         const response = await api.get("/api/projects");
