@@ -73,7 +73,7 @@ export interface ReviewCheckpointStore {
   listArtifactVersions(sessionId: string, artifactId: string): ScientificArtifactVersion[];
 }
 
-export const QUICK_REVIEWER_VERSION = "2.5.0-deliverable-completeness";
+export const QUICK_REVIEWER_VERSION = "2.6.0-review-coverage";
 const sessionReviewQueues = new Map<string, Promise<void>>();
 const activeReviewControllers = new Map<string, Set<AbortController>>();
 
