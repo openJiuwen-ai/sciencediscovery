@@ -7,7 +7,12 @@ import { translateActive } from "../i18n/index.js";
 export type ContinuationTask = {
   sourceSessionId: string; requestId: string; operation?: ResearchContinuationOperation;
   state: "copying" | "ready" | "failed"; error?: string;
+  /** Consecutive transient poll failures; cleared by any answered poll. */
+  failures?: number;
 };
+/** Give up after this many consecutive transient failures, the same bound the
+ *  desktop's copy poll uses. A 4xx still fails immediately: it is an answer. */
+export const CONTINUATION_FAILURE_LIMIT = 5;
 const storageKey = "research-continuation-tasks:v1";
 type StoragePort = Pick<Storage, "getItem" | "setItem">;
 
@@ -58,7 +63,7 @@ export class ContinuationTasks {
             ? await this.client.getResearchContinuation(task.sourceSessionId, task.operation.id)
             : await this.client.createResearchContinuation(task.sourceSessionId, task.requestId);
           if (this.disposed) return;
-          task.operation = operation; task.error = undefined;
+          task.operation = operation; task.error = undefined; task.failures = 0;
           if (operation.state === "ready" && (!operation.entrySessionId || !operation.sessionIds?.length)) throw new Error(translateActive("researchPackage.copyMissingSession"));
           task.state = operation.state;
           if (operation.state === "failed") task.error = operation.error || translateActive("researchPackage.copyFailed");
@@ -69,7 +74,13 @@ export class ContinuationTasks {
           const status = (reason as { status?: number }).status;
           // A transport error must retain the same request identity to avoid duplicate copies.
           if (status && [400, 403, 404, 409].includes(status)) task.state = "failed";
-          task.error = reason instanceof Error ? reason.message : translateActive("researchPackage.connectionInterrupted");
+          else if ((task.failures = (task.failures ?? 0) + 1) >= CONTINUATION_FAILURE_LIMIT) {
+            // Bounded, like the desktop's copy poll: an unreachable service must
+            // end as a visible failure instead of a poll that never stops.
+            task.state = "failed";
+            task.error = translateActive("researchPackage.copyPollingFailed");
+          }
+          if (!task.error) task.error = reason instanceof Error ? reason.message : translateActive("researchPackage.connectionInterrupted");
           this.publish();
         }
         if (task.state === "copying" && !this.disposed) await this.delay();
