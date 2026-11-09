@@ -413,6 +413,31 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --ro-bind / / --dev /dev true
 
+      # `fetch-runtime.mjs` downloads the pinned CPython archive for the
+      # distribution journey from astral-sh/python-build-standalone. That host
+      # has answered 504, and has streamed at 9-31 KB/s for a 34 MB asset, far
+      # past the journey's own 5-minute budget, which turned ST red on clean
+      # main (issue #909). Cache the verified archive so the download leaves the
+      # required path: the key names the pinned release *and* the manifest that
+      # pins it, so a version bump starts a new key instead of reusing a stale
+      # archive, and the wide restore-key still helps after an unrelated edit.
+      - name: Read the pinned runtime release
+        id: runtime
+        run: |
+          release=$(node -p "require('./scripts/binary-release/runtimes.json').python.release")
+          version=$(node -p "require('./scripts/binary-release/runtimes.json').python.version")
+          echo "pin=cpython-${version}-${release}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned CPython archive
+        uses: actions/cache@v4
+        with:
+          # Same path as BINARY_CACHE_DIR on Run ST.
+          path: ${{ runner.temp }}/binary-cache
+          key: binary-cache-${{ runner.os }}-${{ steps.runtime.outputs.pin }}-${{ hashFiles('scripts/binary-release/runtimes.json') }}
+          restore-keys: |
+            binary-cache-${{ runner.os }}-${{ steps.runtime.outputs.pin }}-
+            binary-cache-${{ runner.os }}-
+
       # The hermetic agent loop drives a scripted local endpoint and performs a
       # real workspace tool round trip; no sandbox and no model credential. It
       # runs the API's native agent in process, so `--coverage` records what
@@ -421,6 +446,9 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
+          # Where the cache step above restores the verified archive, and where
+          # fetch-runtime.mjs looks for it before touching the network.
+          BINARY_CACHE_DIR: ${{ runner.temp }}/binary-cache
         run: pnpm ci:st -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
