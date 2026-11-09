@@ -196,10 +196,11 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
-function evidencePackage(legacy = false) {
+function evidencePackage(legacy = false, withEvolve = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
   const notebook = Buffer.from('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}');
+  const evolveSource = Buffer.from("print(1)\n");
   const version = (id: string, index: number, object: Buffer) => ({
     id, artifactId: "artifact-source", sessionId: "source-one", projectId: "source-project", version: index,
     createdAt: date, content: { hash: sha256(object), size: object.length }, mediaType: "text/csv", sourcePath: "results/result.csv",
@@ -213,7 +214,20 @@ function evidencePackage(legacy = false) {
       validations: { reviews: [{ id: "review-source", sessionId: "source-one", kind: "integrity", status: "passed", turnId: "run-source", createdAt: date, finishedAt: date, findings: [] }], artifactReviews: [{ id: "artifact-review-source", sessionId: "source-one", artifactId: "artifact-source", artifactVersionId: "version-two", artifactContentHash: sha256(latest), artifactLogicalName: "results/result.csv", checkpointId: "checkpoint-source", decision: "ACCEPT_AND_PROCEED", createdAt: date, finishedAt: date, findings: [], reviewerSpecialistVersion: "1", status: "completed" }] },
     }, { session: { id: "source-two", title: "分支会话", specialistId: "unavailable-specialist" }, messages: [{ id: "branch-prompt", role: "user", content: "分支研究", createdAt: date }], workspace: [] }],
     artifacts: [{ id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] }],
-  }, objects: [first, latest, notebook].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
+    ...(withEvolve ? [{
+      id: "artifact-evolve", projectId: "source-project", createdInSessionId: "source-one",
+      createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/83cbb6de/main.py",
+      logicalName: "evolve/83cbb6de/main.py", kind: "code", origin: "agent", currentVersion: 1,
+      createdAt: date, updatedAt: date,
+      versions: [{
+        id: "version-evolve", artifactId: "artifact-evolve", sessionId: "source-one",
+        projectId: "source-project", version: 1, createdAt: date,
+        content: { hash: sha256(evolveSource), size: evolveSource.length }, mediaType: "text/x-python",
+        sourcePath: "evolve/83cbb6de/main.py", inputArtifactVersionIds: [], executionRunIds: [],
+        turnId: "run-source", ...(legacy ? {} : { objectPath: sha256(evolveSource) }),
+      }],
+    }] : []),
+  }, objects: [first, latest, notebook, ...(withEvolve ? [evolveSource] : [])].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
 }
 
 test("complete package restores conversations, files, versions and reviews across projects without leaking into sibling sessions", async (context) => {
@@ -272,6 +286,30 @@ test("complete package restores conversations, files, versions and reviews acros
   const secondPrompt = detail.messages.find((message) => message.content === "第二轮科研问题")!;
   const markdown = await (await request(`/api/sessions/${targetId}/conversation-export?format=markdown&scope=custom&messageId=${encodeURIComponent(secondPrompt.id)}`)).text();
   assert.ok(markdown.includes("第二轮结论")); assert.ok(!markdown.includes("第一轮结论"));
+});
+
+test("a package carrying an evolve result reports that the searches themselves were not carried", async (context) => {
+  // #1019: the gate is evidence-based, so this is the only shape that may report
+  // the loss — and the receipt must actually receive the line, not just the
+  // predicate returning true.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage(false, true)),
+  })).json() as { artifactCount: number; omissions: string[] };
+  assert.equal(receipt.artifactCount, 2);
+  assert.ok(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")),
+    "the receipt names the searches it could not carry");
+});
+
+test("a package without an evolve artifact reports no such loss", async (context) => {
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage()),
+  })).json() as { omissions: string[] };
+  assert.equal(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")), false,
+    "a session that never ran a search must not report a loss that never happened");
 });
 
 test("legacy v1 packages restore CAS-backed artifact content without explicit objectPath", async (context) => {
