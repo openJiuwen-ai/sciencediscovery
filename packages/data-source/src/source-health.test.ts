@@ -50,8 +50,22 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
       inputSchema: registry.getTool(id, "search").inputSchema,
     })),
   }] };
+  // Callers wait for a call by name rather than polling a clock: the transport
+  // resolves every rendezvous whose target the call reached.
+  const callWaiters: { target: number; resolve: () => void }[] = [];
+  const nextCall = (target: number) => calls >= target
+    ? Promise.resolve()
+    : new Promise<void>(resolve => { callWaiters.push({ target, resolve }); });
   const gateway: McpTransportClient = { catalog: async () => catalogData, reload: async () => catalogData,
-    invoke: async (request, signal) => { calls++; return fault(request, signal); } };
+    invoke: async (request, signal) => {
+      calls += 1;
+      for (let index = callWaiters.length - 1; index >= 0; index -= 1) {
+        if (calls < callWaiters[index]!.target) continue;
+        const [waiter] = callWaiters.splice(index, 1);
+        waiter!.resolve();
+      }
+      return fault(request, signal);
+    } };
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
   const limiter = new ResourceRateLimiter();
@@ -62,7 +76,8 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const invoke = (query: string, sourceId = "arxiv", sessionId = "session", signal?: AbortSignal) => broker.invoke({
     input: { query, limit: 1 }, projectId: "project", sessionId, sourceId, toolId: "search", toolCallId: query, turnId: query, signal,
   });
-  return { invoke, invocations, gateway, broker, sibling, registry, limiter, health, setFault: (next: typeof fault) => { fault = next; }, calls: () => calls };
+  return { invoke, nextCall, invocations, gateway, broker, sibling, registry, limiter, health,
+    setFault: (next: typeof fault) => { fault = next; }, calls: () => calls };
 }
 
 function failure(status: "rate-limited" | "semantic-error", retryAfterMs?: number): McpInvokeResponse {
@@ -118,10 +133,11 @@ interface FaultWait {
   /** Read on timeout only, so a red gate says what it was waiting for. */
   diagnose?: () => string;
 }
-// Measured with performance.now(), not Date.now(): `cooldown admits one recovery
-// probe…` below and the guard test that follows enable
-// `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still and a
-// Date-based deadline would never arrive.
+// The escape hatch for a wait this suite cannot observe directly; the fault
+// observations below use the transport rendezvous instead. Its own contract
+// tests are the callers, and one of them runs under
+// `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still — so the
+// deadline is measured with performance.now() rather than Date.now().
 async function waitFor(predicate: () => boolean, wait: FaultWait = {}) {
   const startedAt = performance.now();
   const timeoutMs = wait.timeoutMs ?? FAULT_OBSERVATION_DEADLINE_MS;
