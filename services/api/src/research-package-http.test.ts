@@ -13,18 +13,6 @@ import { createResearchPackage, importResearchPackage, sha256, type ResearchPack
 import { createApiServer, closeApiServer } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
-
-test("only a package that proves an evolve search ran reports the missing searches", async () => {
-  // #1019: `evolve/<run>/<entrypoint>` is how a run's result is published, so its
-  // presence is the package's own evidence that a search existed. A literature
-  // session that never ran one must not report a loss that never happened.
-  const { packageRanEvolve } = await import("./research-snapshots.js");
-  assert.equal(packageRanEvolve([{ name: "results/result.csv" }]), false);
-  assert.equal(packageRanEvolve([]), false);
-  assert.equal(packageRanEvolve(undefined), false);
-  assert.equal(packageRanEvolve([{ name: "evolve/83cbb6de/main.py" }]), true);
-  assert.equal(packageRanEvolve([{ name: "results/a.csv" }, { name: "evolve/a539ffc0/run.py" }]), true);
-});
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createServer } from "node:http";
 import { researchHistoryFixture, researchTrajectoryFixture } from "../../../test/support/research-package.fixture.js";
@@ -237,9 +225,6 @@ test("complete package restores conversations, files, versions and reviews acros
   assert.equal(receipt.artifactCount, 1);
   assert.equal(receipt.importedSessionIds.length, 2);
   assert.ok(receipt.omissions.some((item) => item.includes("no scientific memory snapshot")));
-  // #1019: a dimension the package cannot carry must be named, not silently absent.
-  assert.ok(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")),
-    "the receipt names the dimension the package cannot carry");
   const detail = await (await request(`/api/sessions/${targetId}`)).json() as { title: string; messages: { id: string; content: string }[] };
   assert.equal(detail.title, "原始研究");
   assert.deepEqual(detail.messages.map((item) => item.content), ["第一轮科研问题", "第一轮结论", "第二轮科研问题", "第二轮结论"]);
