@@ -155,7 +155,11 @@ not two Playwright workers sharing one API. Playwright keeps `workers: 1`,
 `fullyParallel: false`, and `retries: 0`.
 
 Each batch has its own token, data directory, Python service environment,
-JiuwenSwarm registry/instance, and reports. The harness reserves a block for
+JiuwenSwarm registry/instance, explicit memory-graph store, and reports. Short
+opaque runtime directories keep cloned conda prefixes below their relocation
+padding; descriptive batch names remain in reports. Successful stacks release
+their stopped runtime/venvs immediately; failed runtimes stay for diagnosis.
+The harness reserves a block for
 API, Runner, memory graph, legacy API, MCP fault proxy, and all four Swarm
 ports before launch. It writes the Swarm assignment through the pinned SDK's
 instance registry/bootstrap API; product launcher environment filtering stays

@@ -397,27 +397,36 @@ export async function main(args=process.argv.slice(2)) {
     // own evidence directory, so a retry never erases the attempt it repeats.
     const runtimeBase=resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'));
     if(slice==='e2e')mkdirSync(runtimeBase,{recursive:true});
-    const mockedRuntime=slice==='e2e'?mkdtempSync(join(runtimeBase,'mocked-')):undefined;
+    const mockedRuntime=slice==='e2e'?mkdtempSync(join(runtimeBase,'m-')):undefined;
     const browserTimings=[];
     const browserRun=async(batch,planPath,reportPath,instance)=>{
-      const runtime=mockedRuntime?join(mockedRuntime,instance):join(runtimeBase,batch.key);
+      // Descriptive names belong in reports, not conda prefixes: a UUID-named
+      // revision under a long worktree must still fit conda's prefix padding.
+      const runtime=mockedRuntime?mkdtempSync(join(mockedRuntime,'s-')):join(runtimeBase,batch.key);
       const ports=mockedRuntime?await reserveMockedPorts():undefined;
       const startedAt=new Date();
       if(ports)console.log(`Mocked stack ${instance}: API ${ports.base}, Runner ${ports.base+1}, Swarm ${ports.base+3}/${ports.base+4}/${ports.base+6}`);
       // Release immediately before handing this block to its own services.
       await ports?.release();
+      let succeeded=false;
       try {
         const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
           CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
           CI_RUNTIME_DIR:runtime,...ports?.env,
           CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
-          ...(mockedRuntime?{JIUWENSWARM_HOME:join(runtime,'jiuwenswarm')}:{}),
+          ...(mockedRuntime?{JIUWENSWARM_HOME:join(runtime,'jiuwenswarm'),
+            SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR:join(runtime,'data','memory-graph')}:{}),
           ...(slice==='e2e'?{CI_E2E_SWARM_CHECKS:batch.checks.length?'run':'off'}:{}),
           SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath,
           E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
-        return {code,data:existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined};
+        const data=existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined;
+        succeeded=code===0&&data?.results?.every(result=>result.outcome==='PASS');
+        return {code,data};
       } finally {
         browserTimings.push({batch:instance,startedAt,durationMs:Date.now()-startedAt.getTime(),ports:ports?.env});
+        // run-e2e.sh has stopped all services and staged their evidence. Do
+        // not accumulate GBs of completed venvs; keep failed stacks to debug.
+        if(mockedRuntime&&succeeded)rmSync(runtime,{recursive:true,force:true});
       }
     };
     const runBatch=async(batch)=>{

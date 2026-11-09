@@ -12,7 +12,7 @@ test('fresh-library execution finishes before independent global stacks overlap'
   const fresh = gate(), bothStarted = gate(), release = gate();
   const started = [];
   let active = 0, peak = 0;
-  const pending = runMockedBatches([batch('global-a'), batch('fresh', true), batch('global-b')], async b => {
+  const pending = runMockedBatches([batch('global-a'), batch('fresh', true), batch('global-b'), batch('global-c')], async b => {
     started.push(b.key);
     if (b.key === 'fresh') { await fresh.promise; return; }
     active++; peak = Math.max(peak, active);
@@ -24,8 +24,10 @@ test('fresh-library execution finishes before independent global stacks overlap'
   assert.deepEqual(started, ['fresh']);
   fresh.resolve(); await bothStarted.promise;
   assert.equal(peak, 2);
+  assert.deepEqual(started, ['fresh', 'global-a', 'global-b'], 'a third stack stays queued until capacity is released');
   release.resolve();
   assert.ok((await pending).every(result => result.status === 'fulfilled'));
+  assert.ok(started.includes('global-c'));
 });
 
 test('serial diagnosis executes every batch and a rejected worker never drops sibling evidence', async () => {

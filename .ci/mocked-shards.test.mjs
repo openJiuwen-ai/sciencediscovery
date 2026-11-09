@@ -44,6 +44,7 @@ test('mocked partitions keep standard fixtures and select the same cases for eac
   assert.deepEqual(mockedShards(b).flatMap(s => s.checks), []);
   assert.throws(() => mockedShards(plan([descriptor('new')])), /MOCKED_ISOLATION_REQUIRED/);
   assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:global']), { ...descriptor('two', ['isolation:session']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
+  assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:fresh']), { ...descriptor('two', ['isolation:global']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
 });
 
 test('the complete local run can execute every mocked partition serially', () => {
