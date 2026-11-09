@@ -362,8 +362,23 @@ const SUBAGENT_PROGRESS_FLUSH_MS = 250;
  *  whole-content snapshots, just at this cadence rather than once per token;
  *  the snapshots in between are transient and never reach the run stream. */
 const SUBAGENT_STREAM_EMIT_MS = 250;
+
+/** How long a scheduler that escaped has to wait before it may re-enter itself,
+ *  doubled per consecutive escape and capped, and how many escapes in a row are
+ *  tolerated at all. An escape usually means the write that would move a run out
+ *  of `queued` failed, so the run is still queued when the loop unwinds: resuming
+ *  immediately re-enters the same failing write with no delay. Measured on a
+ *  scratch tree, that read the run list 5,508 times in one second (~2,750
+ *  transition attempts), kept a core busy and appended a `run_scheduler_failed`
+ *  record per cycle. */
+const SCHEDULER_RETRY_BASE_MS = 500;
+const SCHEDULER_RETRY_MAX_MS = 30_000;
+const SCHEDULER_MAX_CONSECUTIVE_ESCAPES = 5;
+
 const activeSessions = new Map<string, RuntimeSessionRun>();
 const scheduledSessions = new Set<string>();
+/** Consecutive escapes per session; cleared the next time the loop finishes. */
+const schedulerEscapes = new Map<string, number>();
 const activeRunAbortControllers = new Map<string, AbortController>();
 const activeSubagentAbortControllers = new Map<string, AbortController>();
 const cancelledRuns = new Set<string>();
@@ -3531,7 +3546,29 @@ export function scheduleSessionRuns(
 ): void {
   if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
+  const reschedule = (): void => scheduleSessionRuns(
+    store,
+    runnerClient,
+    provenanceRecorder,
+    mcpBroker,
+    webBroker,
+    mcpRegistry,
+    mcpCatalog,
+    artifactManager,
+    paperService,
+    remoteCompute,
+    skillCatalog,
+    skillLibraryCatalog,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
+    memoryGraphSink,
+    sessionId,
+    serverConfig,
+    memoryGraphClient,
+    evolve,
+  );
   void (async () => {
+    let escaped = false;
     try {
       while (true) {
         if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
@@ -3693,34 +3730,52 @@ export function scheduleSessionRuns(
           }
         }
       }
+    } catch (reason) {
+      escaped = true;
+      throw reason;
     } finally {
       scheduledSessions.delete(sessionId);
       const remaining = await store.listSessionRuns(sessionId);
       const stillQueued = remaining.some((run) => run.status === "queued")
         && !remaining.some((run) => run.status === "blocked" && run.configurationWait);
-      if (stillQueued) scheduleSessionRuns(
-        store,
-        runnerClient,
-        provenanceRecorder,
-        mcpBroker,
-        webBroker,
-        mcpRegistry,
-        mcpCatalog,
-        artifactManager,
-        paperService,
-        remoteCompute,
-        skillCatalog,
-        skillLibraryCatalog,
-        ideaTreeAuthorities,
-        ideaTreeRepository,
-        memoryGraphSink,
-        sessionId,
-        serverConfig,
-        memoryGraphClient,
-        evolve,
-      );
+      if (!escaped) schedulerEscapes.delete(sessionId);
+      if (stillQueued && !escaped) {
+        reschedule();
+      } else if (stillQueued) {
+        const escapes = (schedulerEscapes.get(sessionId) ?? 0) + 1;
+        schedulerEscapes.set(sessionId, escapes);
+        if (escapes > SCHEDULER_MAX_CONSECUTIVE_ESCAPES) {
+          // The state directory stays unwritable; retrying forever would only
+          // keep a core busy. The run keeps `queued` on disk and the next
+          // scheduler start (or a restart) picks it up again.
+          runLog.error("run_scheduler_stopped", {
+            errorMessage: "the scheduler escaped repeatedly and stopped retrying",
+            escapes,
+            sessionId,
+          });
+        } else {
+          const delayMs = Math.min(SCHEDULER_RETRY_BASE_MS * 2 ** (escapes - 1), SCHEDULER_RETRY_MAX_MS);
+          setTimeout(reschedule, delayMs).unref();
+        }
+      }
     }
-  })();
+  })().catch((reason: unknown) => {
+    // This scheduler is started with `void`, so nothing above observes its
+    // rejection: it used to reach the process as an unhandled rejection and
+    // killed the API (#816). What escapes is an `await` inside the loop or its
+    // `finally` — the terminal `updateSessionRunStatus` write when
+    // `session-runs/<id>.json` cannot be replaced, the follow-up
+    // `listSessionRuns`, or the `publishRunEvent` beside it (observed as
+    // "Run not found" on `main`). The run keeps the last status it persisted and
+    // `recoverSessionRuns` marks it `interrupted` at the next start, so
+    // containing the failure here loses no state; swallowing it into a silent
+    // log would, which is why the cause is logged with the run/session ids. The
+    // reschedule that follows is delayed and capped (see `SCHEDULER_RETRY_*`).
+    runLog.error("run_scheduler_failed", {
+      errorMessage: reason instanceof Error ? reason.message : String(reason),
+      sessionId,
+    });
+  });
 }
 
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {

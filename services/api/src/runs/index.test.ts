@@ -15,8 +15,10 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 
 import type { PermissionRequest, RunStreamEvent, SessionRun } from "@sciencediscovery/schema";
@@ -32,6 +34,7 @@ import {
   cloneRunEventDetails,
   computeSettingsSnapshot,
   firstUserAuthoredMessage,
+  scheduleSessionRuns,
   skillAuthoringCommandPrompt,
   splitArtifactVersionSuffix,
 } from "./index.js";
@@ -398,4 +401,91 @@ test("a request with no run to own it is skipped rather than failing the decisio
   const { published, store } = permissionStreamStore([]);
   await publishResolvedPermissions(store, "session-f", [permissionRequest("request-6", "nothing")]);
   assert.deepEqual(published, []);
+});
+
+test("a failed state write is contained where the scheduler starts it instead of killing the API", async (context) => {
+  // #816: the writing half of a chat run is started with `void`, so a rejected
+  // state write had nowhere to go and the process died on the unhandled
+  // rejection. This pins the containment at that boundary; the retry half of
+  // the same defect lives in atomic-file.ts and is not what this test drives.
+  const root = resolve(process.cwd(), ".tmp", `scheduler-containment-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const project = await store.createProject("Scheduler containment");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({
+    sessionId: session.id,
+    prompt: "Persist through a locked state file",
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+  context.mock.method(store, "appendSessionRunEvent", async () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), {
+      code: "EPERM", errno: -4048, path: resolve(root, "session-runs", `${session.id}.json`), syscall: "rename",
+    });
+  });
+  context.after(() => context.mock.restoreAll());
+
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on("unhandledRejection", onRejection);
+  context.after(() => process.off("unhandledRejection", onRejection));
+
+  scheduleSessionRuns(store, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    session.id, undefined as never, null, undefined);
+  // The queued->running write happens inside the scheduler, so wait for the
+  // state the assertion needs instead of racing it with a fixed sleep.
+  const runningDeadline = Date.now() + 2_000;
+  while ((await store.getSessionRun(session.id, run.id))?.status !== "running" && Date.now() < runningDeadline) {
+    await delay(10);
+  }
+  await delay(20); // let the mocked write reject through the scheduler
+
+  assert.deepEqual(rejections, [], "a failed state write must be logged, not rejected into the process");
+  const persisted = await store.getSessionRun(session.id, run.id);
+  assert.equal(persisted?.status, "running", "the run keeps the last status it could persist for restart recovery");
+});
+
+test("a scheduler that escapes does not restart itself at full speed while the run stays queued", async (context) => {
+  // #816, second half of the same boundary: the write that throws is usually
+  // the queued->running transition, so the run is still queued when the loop
+  // unwinds. Resuming immediately re-enters the same failing write with no
+  // delay: before the backoff this read the run list ~1,600 times in 300 ms and
+  // never went idle, which is a regression the containment must not introduce.
+  const root = resolve(process.cwd(), ".tmp", `scheduler-backoff-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const project = await store.createProject("Scheduler backoff");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({
+    sessionId: session.id,
+    prompt: "The transition write keeps failing",
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+
+  let listCalls = 0;
+  const readRuns = store.listSessionRuns.bind(store);
+  context.mock.method(store, "listSessionRuns", async (sessionId: string) => {
+    listCalls += 1;
+    return readRuns(sessionId);
+  });
+  context.mock.method(store, "updateSessionRunStatusIfCurrent", async () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), {
+      code: "EPERM", errno: -4048, path: resolve(root, "session-runs", `${session.id}.json`), syscall: "rename",
+    });
+  });
+  context.after(() => context.mock.restoreAll());
+
+  scheduleSessionRuns(store, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    session.id, undefined as never, null, undefined);
+  await delay(300);
+
+  assert.ok(listCalls <= 6, `the scheduler re-entered ${listCalls} times in 300 ms; it must back off instead of spinning`);
+  assert.ok(listCalls >= 2, "the escaped failure is still observed and retried, not dropped silently");
+  assert.equal((await store.getSessionRun(session.id, run.id))?.status, "queued", "the run keeps the status it could persist");
 });
