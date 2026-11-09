@@ -472,7 +472,8 @@ export class ShellExecutions {
     const retryable = !["AUTHORIZATION_REVOKED", "EXECUTION_NOT_FOUND", "ORIGINAL_RUNNER_MISMATCH",
       "EXECUTION_IDENTITY_MISMATCH", "EXECUTION_ID_CONFLICT", "RESULT_DIGEST_MISMATCH", "EXECUTION_RESULT_CONFLICT",
       "PROCESS_STATE_UNVERIFIABLE", "RECOVERY_CONTEXT_UNAVAILABLE"].includes(code)
-      && (httpStatus === undefined || httpStatus >= 500);    const failureCount = (execution.observation?.failureCount ?? 0) + 1;
+      && (httpStatus === undefined || httpStatus >= 500);
+    const failureCount = (execution.observation?.failureCount ?? 0) + 1;
     // A failed provenance commit is deterministic: the same bytes are committed
     // again, so a storage problem either clears within a few attempts or never.
     // Past this limit the retry only rewrites the ledger every few seconds,
@@ -497,16 +498,19 @@ export class ShellExecutions {
     // documents above: only allowlisted identifiers are retained, never the
     // message chain (which can wrap a Runner response body or a token).
     const safeCause = transportCode ?? (error instanceof RecoveryError ? error.code : undefined);
-    execution.error = detail;
+    // The stopped explanation has to land in `execution.error`: that is the field the
+    // panel renders (`AgentActivityPanel.tsx:99`), while `observation.lastError` is not
+    // read by any client. Churn-safe: the export projection takes `lastError.code`, and
+    // the stop happens once because nothing reschedules it afterwards.
+    const stopped = `${detail}. Retrying the commit stopped after ${COMMIT_RETRY_LIMIT} attempts; the result may still exist on the Runner. This workspace refuses new shell commands until this execution settles: restarting the local service retries the commit once, and cancel asks the Runner to stop it.`;
+    execution.error = commitRetryExhausted ? stopped : detail;
     execution.state = "unknown";
     execution.provenance = "unconfirmed";
     execution.finalization = fallback === "PROVENANCE_COMMIT_FAILED" ? "failed" : "pending";
     delete execution.finishedAt;
     execution.observation = { ...execution.observation, status: "blocked", failureCount,
       ...(retryable && !commitRetryExhausted ? { nextRetryAt: new Date(Date.now() + Math.min(1_000 * 2 ** Math.min(failureCount - 1, 6), 60_000)).toISOString() } : {}),
-      lastError: { code, message: commitRetryExhausted
-        ? `${detail}. Retrying the commit stopped after ${COMMIT_RETRY_LIMIT} attempts; the result may still exist on the Runner. This workspace refuses new shell commands until this execution settles: restarting the local service retries the commit once, and cancel asks the Runner to stop it.`
-        : detail,
+      lastError: { code, message: commitRetryExhausted ? stopped : detail,
         retryable: retryable && !commitRetryExhausted,
         ...(safeCause && safeCause !== code ? { cause: safeCause } : {}), ...(httpStatus ? { httpStatus } : {}) } };
     if (!retryable || commitRetryExhausted) delete execution.observation.nextRetryAt;
