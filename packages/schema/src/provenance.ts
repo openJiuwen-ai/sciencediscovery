@@ -242,6 +242,20 @@ export interface ArtifactReviewRun {
   checkpointId: string;
   /** Checks completed by this run. Older persisted MVP reviews omit it. */
   checks?: Array<"structure" | "citation" | "computation" | "completeness">;
+  /**
+   * Checks this run did NOT perform, each with the reason, so a partial review
+   * cannot read as a complete one.
+   *
+   * A Quick review parses citation format and links provenance; it never reads
+   * a source to decide whether a claim is supported. Without this field the
+   * record said only "citation: passed" and "No findings", which readers and
+   * the main Agent alike took as "the claims were checked" (#669). Declaring the
+   * gap is the difference between a format pass and a claim-fidelity pass.
+   */
+  notChecked?: Array<{
+    check: "claim_support" | "citation_identity" | "computation";
+    reason: string;
+  }>;
   createdAt: string;
   /**
    * Deterministic delivery-completeness verdict for the task this report

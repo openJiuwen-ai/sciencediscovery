@@ -190,6 +190,15 @@ test("Quick checkpoint skips graph-linked checks when the graph is disabled", as
   assert.equal(result.reviews[0]?.decision, "ACCEPT_AND_PROCEED");
   assert.deepEqual(result.reviews[0]?.checks, ["citation"]);
   assert.deepEqual(result.reviews[0]?.findings, []);
+  // #669 C1: the pass is a format pass, and the record says which claim check it
+  // did not run rather than leaving "No findings" to be read as verification.
+  const gaps = result.reviews[0]?.notChecked ?? [];
+  assert.deepEqual(gaps.map((gap) => gap.check), ["claim_support", "computation"]);
+  assert.match(gaps[0]!.reason, /no source was read to confirm the claims/u);
+  assert.match(gaps[1]!.reason, /memory graph is disabled/u);
+  const record = reviewerCheckpointPromptContent(result.reviews);
+  assert.match(record, /Not checked: claim support —/u);
+  assert.doesNotMatch(record, /^Status: PASSED$/mu);
 });
 
 test("Reviewer checkpoint excludes Artifacts and versions created by another Session in the same Project", async () => {
@@ -370,6 +379,60 @@ test("Reviewer checkpoint failure is context, not an Artifact defect", () => {
   assert.match(content, /Status: FAILED/);
   assert.match(content, /memory graph unavailable/);
   assert.match(content, /Do not treat this failure as an Artifact defect/);
+});
+
+test("a citation-format Quick review declares the claim check it did not perform", () => {
+  // #669 workstream C1: a format/provenance-only Quick review must present
+  // itself as partial and disclose the skipped claim checks with a reason. The
+  // record used to say only "No findings", which the main Agent read as "the
+  // claims were verified".
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "literature-report.md",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    checks: ["citation" as const],
+    createdAt: "2026-08-05T00:00:00.000Z",
+    decision: "ACCEPT_AND_PROCEED" as const,
+    findings: [],
+    finishedAt: "2026-08-05T00:00:01.000Z",
+    id: "review-1",
+    notChecked: [{ check: "claim_support" as const, reason: "Quick review parses citation format only." }],
+    reviewerSpecialistVersion: "quick",
+    reviewLevel: "quick" as const,
+    sessionId: "session-1",
+    status: "completed" as const,
+  } satisfies ArtifactReviewRun;
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.match(content, /Not checked: claim support — Quick review parses citation format only\./u);
+  // The pass must not be reported as an unqualified PASSED alongside it.
+  assert.doesNotMatch(content, /^Status: PASSED$/mu);
+  assert.match(content, /^Status: SCOPE_LIMITED$/mu);
+});
+
+test("a review that performed every check still reports a plain pass", () => {
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "analysis.json",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    checks: ["structure" as const],
+    completeness: { required: [], source: "brief" as const, status: "complete" as const },
+    createdAt: "2026-08-05T00:00:00.000Z",
+    decision: "ACCEPT_AND_PROCEED" as const,
+    findings: [],
+    finishedAt: "2026-08-05T00:00:01.000Z",
+    id: "review-1",
+    reviewerSpecialistVersion: "quick",
+    reviewLevel: "quick" as const,
+    sessionId: "session-1",
+    status: "completed" as const,
+  } satisfies ArtifactReviewRun;
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.doesNotMatch(content, /Not checked:/u);
+  assert.match(content, /^Status: PASSED$/mu);
 });
 
 test("Reviewer checkpoint keeps an operationally incomplete Deep stage out of main-Agent feedback", () => {
