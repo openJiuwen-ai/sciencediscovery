@@ -3566,6 +3566,7 @@ export function scheduleSessionRuns(
     serverConfig,
     memoryGraphClient,
     evolve,
+    executionGovernance,
   );
   void (async () => {
     let escaped = false;
