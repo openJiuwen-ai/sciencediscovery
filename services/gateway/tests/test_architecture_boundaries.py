@@ -22,7 +22,9 @@ import atexit
 import os
 import re
 import signal
+import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -296,6 +298,27 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
             failures = _node_boundary_failures()
         self.assertIn(f"content: {self.relative_probe()}", failures)
 
+    def test_the_positive_filter_drops_another_shards_probe(self) -> None:
+        """Prove the filter filters, rather than its condition never matching.
+
+        A predicate keyed on a root the walk never visits lets every file through, so
+        this feeds the API-root listing a sibling's probe and an ordinary source file
+        and requires both to be gone while this case's probe survives.
+        """
+        self.probe = self.positive_probe_path()
+        foreign_probe = self.PROBE_ROOT / f"probe-boundary-{os.getpid() + 1}{self.PROBE_SUFFIX}"
+        foreign_source = self.PROBE_ROOT / "neighbour.py"
+        self.assertEqual(
+            list(self._filtered_listing(self.API_ROOT, [self.probe, foreign_probe, foreign_source])),
+            [self.probe],
+        )
+        # The root the walk does not visit stays untouched, which is the bug this
+        # pins: `_node_boundary_failures()` only ever passes NODE_ROOTS entries.
+        self.assertEqual(
+            list(self._filtered_listing(self.PROBE_ROOT, [self.probe, foreign_probe])),
+            [self.probe, foreign_probe],
+        )
+
     def test_the_positive_probe_lives_in_the_root_the_issue_names(self) -> None:
         # The assertions above only say the walk still speaks; this one says where.
         # Without it, moving the probe back to `apps/web` (or anywhere the egress
@@ -327,6 +350,75 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
             f"{self.positive_probe_path().relative_to(REPOSITORY_ROOT).as_posix()} is read by the "
             "datasource egress worker while it exists; give the probe a suffix it never opens",
         )
+
+
+class StaleProbeSweepTests(unittest.TestCase):
+    """The sweep runs before any test walks the tree, and never touches a live shard.
+
+    A probe planted by this class is visible to `_node_boundary_failures()`, so these
+    cases exist to pin when it may be deleted: a dead owner, or a file older than the
+    live owner's own start, but never this process and never a young sibling.
+    """
+
+    def write_probe(self, pid: int) -> Path:
+        probe = PROBE_ROOT / f"probe-boundary-{pid}{PROBE_SUFFIX}"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("// deerflow vendor token\n", encoding="utf-8")
+        self.addCleanup(probe.unlink, missing_ok=True)
+        return probe
+
+    def spawn_sleeper(self) -> subprocess.Popen:
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+        def stop() -> None:
+            child.kill()
+            child.wait()
+
+        self.addCleanup(stop)
+        return child
+
+    def test_a_dead_owner_probe_is_swept(self) -> None:
+        probe = self.write_probe(999999)
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertFalse(probe.exists())
+
+    def test_a_probe_older_than_its_live_owner_is_swept(self) -> None:
+        probe = self.write_probe(self.spawn_sleeper().pid)
+        stale = time.time() - 600
+        os.utime(probe, (stale, stale))
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertFalse(probe.exists())
+
+    def test_a_probe_a_live_owner_just_wrote_is_kept(self) -> None:
+        probe = self.write_probe(self.spawn_sleeper().pid)
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertTrue(probe.exists())
+
+    def test_this_process_probe_is_never_swept(self) -> None:
+        probe = self.write_probe(os.getpid())
+        stale = time.time() - 600
+        os.utime(probe, (stale, stale))
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertTrue(probe.exists())
+
+    def test_without_proc_the_age_fallback_decides(self) -> None:
+        probe = self.write_probe(self.spawn_sleeper().pid)
+        stale = time.time() - (PROBE_STALE_AGE_S + 5)
+        os.utime(probe, (stale, stale))
+        with mock.patch.object(sys.modules[__name__], "_process_started_at", return_value=None):
+            _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertFalse(probe.exists())
+
+    def test_process_start_time_is_none_when_proc_is_absent(self) -> None:
+        real_open = open
+
+        def without_proc(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise FileNotFoundError(path)
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", without_proc):
+            self.assertIsNone(_process_started_at(os.getpid()))
 
 
 if __name__ == "__main__":
