@@ -232,7 +232,11 @@ test("hover import defaults to no project and allows an existing project", async
       const dialog = page.getByRole("dialog", { name: "导入会话" });
       await expect(dialog.getByLabel("项目归属")).toHaveValue("");
       if (project === "project-1") await dialog.getByLabel("项目归属").selectOption(project);
-      await dialog.locator("input[type=file]").setInputFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
+      // Open the picker the way a user does, so the hand-drawn trigger this PR
+      // added is actually exercised instead of being bypassed by setInputFiles.
+      const chooser = page.waitForEvent("filechooser");
+      await dialog.locator(".research-package-upload-trigger").click();
+      await (await chooser).setFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
       // The review pane describes the package, not where it came from: the
       // filename, the object count and the read-only hint. The source session's
       // title is deliberately not rendered any more.
