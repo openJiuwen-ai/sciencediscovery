@@ -83,10 +83,15 @@ test("the assembled-artifact gate passes approved SBOM references and still fail
   // Written to its own script rather than inlined into `bash -c`, so the
   // function's own sed escaping reaches sed exactly as it does in production.
   const gate = join(root, "gate.sh");
+  // HOME is pinned in the script alongside the other two needles, not inherited:
+  // the function reads `${HOME:-}`, so a test that left the ambient HOME in place
+  // would only pin the HOME-removal half on a runner whose HOME already is
+  // /home/runner, and a contributor who re-added the needle would still see green.
   writeFileSync(gate, [
     "set -euo pipefail",
     "repository_root=/build/sciencediscovery",
     "output_dir=/build/out",
+    "HOME=/home/runner",
     fn,
     'assert_no_release_build_paths "$1"',
     "",
