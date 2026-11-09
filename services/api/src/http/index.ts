@@ -4411,6 +4411,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     // Deletions answer from the catalog and reclaim files afterwards; leaving
     // them mid-flight would hand the next start a journal to finish.
     await store.whenDeletionsSettle();
+    // Array writes are write-temp-then-rename: letting the store close between
+    // those two steps turns the rename into an ENOENT the next remove surfaces.
+    await store.whenWritesSettle();
     ideaResearch.close();
     await (await platform.connectorPlugins).dispose();
     remoteCompute.close();

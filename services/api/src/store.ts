@@ -2147,6 +2147,16 @@ export class SessionStore {
     await this.deletionWork;
   }
 
+  /** Resolves once every in-flight array write (session-runs, messages, …) has
+   *  finished. `closeApiServer` awaits this before closing the store so that a
+   *  caller removing the data directory right after cannot race a
+   *  write-temp-then-rename that is still between its two steps. */
+  async whenWritesSettle(): Promise<void> {
+    while (this.arrayMutationQueues.size > 0) {
+      await Promise.all([...this.arrayMutationQueues.values()]);
+    }
+  }
+
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
     try {
       await rm(operation.root, { force: true, recursive: true });
