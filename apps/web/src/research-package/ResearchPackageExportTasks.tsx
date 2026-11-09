@@ -6,7 +6,7 @@ import { downloadBlob } from "../artifact-download.js";
 import type { ToastTone } from "../Toasts.js";
 import type { ResearchPackageExportTaskView } from "../api/plugins.js";
 import { translateActive } from "../i18n/index.js";
-import { exportPollStep } from "./export-poll.js";
+import { exportCompletionStep, exportPollStep } from "./export-poll.js";
 
 type TrackedExport = Pick<ResearchPackageExportTaskView, "id" | "filename" | "createdAt"> & { projectId: string };
 const STORAGE_KEY = "sciencediscovery.research-package-exports.v1";
@@ -49,6 +49,7 @@ const failures = new Map<string, number>();
 
 const POLL_TEXT = () => ({
   exportCanceled: translateActive("researchPackage.exportCanceled"),
+  exportDownloadFailed: translateActive("researchPackage.exportDownloadFailed"),
   exportFailed: translateActive("researchPackage.exportFailed"),
   exportMissing: translateActive("researchPackage.exportMissing"),
   exportPollingFailed: translateActive("researchPackage.exportPollingFailed"),
@@ -80,17 +81,32 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
             const status = await client.getResearchPackageExport(task.projectId, task.id);
             if (!active) return;
             const step = exportPollStep(failures.get(task.id) ?? 0, { ok: true, status: status.status }, POLL_TEXT());
+            if (status.status === "completed") {
+              // The status route answered; the archive still has to be fetched.
+              // This branch keeps its own budget: publishing `completed` does not
+              // reset the count, or a failing download would restart forever.
+              try {
+                const blob = await client.downloadResearchPackageExport(task.projectId, task.id);
+                if (!active) return;
+                downloadBlob(blob, status.filename || task.filename);
+                failures.delete(task.id);
+                removeResearchPackageExport(task.id);
+                onToast("success", translateActive("researchPackage.exportComplete"), translateActive("researchPackage.exportDownloaded", { filename: status.filename || task.filename }));
+              } catch (reason) {
+                if (!active) return;
+                const save = exportCompletionStep(failures.get(task.id) ?? 0, { ok: false, reason }, POLL_TEXT());
+                failures.set(task.id, save.failures);
+                if (save.drop) {
+                  failures.delete(task.id);
+                  removeResearchPackageExport(task.id);
+                  if (save.notice) onToast(save.notice.tone, save.notice.title, save.notice.detail);
+                }
+              }
+              continue;
+            }
             failures.set(task.id, step.failures);
             if (!step.drop) continue;
             failures.delete(task.id);
-            if (status.status === "completed") {
-              const blob = await client.downloadResearchPackageExport(task.projectId, task.id);
-              if (!active) return;
-              downloadBlob(blob, status.filename || task.filename);
-              removeResearchPackageExport(task.id);
-              onToast("success", translateActive("researchPackage.exportComplete"), translateActive("researchPackage.exportDownloaded", { filename: status.filename || task.filename }));
-              continue;
-            }
             removeResearchPackageExport(task.id);
             if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
           } catch (reason) {
