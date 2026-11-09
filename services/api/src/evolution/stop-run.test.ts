@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { stopEvolveRunForSession, type StopEvolveRunDeps } from "./stop-run.js";
 
-const isActive = (status: string): boolean => status === "running" || status === "queued";
+const isActive = (status: string): boolean => status === "running" || status === "pending";
 
 function deps(over: Partial<StopEvolveRunDeps> = {}): { d: StopEvolveRunDeps; stopped: string[] } {
   const stopped: string[] = [];
@@ -32,10 +32,10 @@ test("a finished search reports its final status and is not stopped again", asyn
   // The caller races the terminal event constantly: the card says "running",
   // the run finished a moment ago. Here stop() must not be called at all.
   const { d, stopped } = deps({
-    readRun: async (id) => ({ id, sessionId: "s1", status: "completed" }),
+    readRun: async (id) => ({ id, sessionId: "s1", status: "succeeded" }),
   });
   assert.deepEqual(await stopEvolveRunForSession("run-mine", d),
-    { runId: "run-mine", status: "completed", stopping: false });
+    { runId: "run-mine", status: "succeeded", stopping: false });
   assert.deepEqual(stopped, [], "a terminal run must not reach the orchestrator");
 });
 
@@ -50,12 +50,12 @@ test("a run belonging to another session is refused and is not stopped", async (
 test("an unknown id answers with the searches this session does have", async () => {
   const { d, stopped } = deps({
     listRuns: async () => [
-      { id: "run-a", status: "completed" },
+      { id: "run-a", status: "succeeded" },
       { id: "run-b", status: "running" },
     ],
   });
   await assert.rejects(() => stopEvolveRunForSession("made-up", d),
-    /no such search in this session: made-up\. The searches in this session: run-a（completed）、run-b（running）/);
+    /no such search in this session: made-up\. The searches in this session: run-a（succeeded）、run-b（running）/);
   assert.deepEqual(stopped, []);
 });
 
