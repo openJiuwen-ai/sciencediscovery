@@ -839,6 +839,32 @@ test("a failing provenance commit stops being retried and stops rewriting the re
   assert.notEqual(JSON.stringify(record.observation), before);
 });
 
+test("the export projection holds its blocked value while a commit retry is in flight", async context => {
+  // #1018 review F2: `observed()` used to reopen the record as `running` for the
+  // duration of every attempt, so a preview sampled mid-retry still saw a moving
+  // revision. The package carries `state`, so the projection must not move.
+  const f = await fixture(context);
+  const lost = await lostAck(f, async id => recoveredTerminal(id, f));
+  const gate = deferred<void>();
+  let attempts = 0;
+  const handlers = { runner: () => lost.runner,
+    finalize: async (_context: unknown, result: ShellExecutionResult) => {
+      attempts += 1;
+      if (attempts > 1) await gate.promise;
+      return result;
+    } };
+  await f.service.reconcile(lost.job.id, owner, handlers).catch(() => undefined);
+  const before = f.service.revisionSnapshot(owner.sessionId);
+  assert.equal(before[0]?.state, "unknown");
+
+  const inFlight = f.service.reconcile(lost.job.id, owner, handlers).catch(() => undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.service.revisionSnapshot(owner.sessionId), before,
+    "a preview read while the retry runs sees the same blocked record");
+  gate.resolve();
+  await inFlight;
+});
+
 test("the export revision projection ignores retry bookkeeping", async context => {
   // The projection is what the revision hashes: two records that differ only in
   // `nextRetryAt` / `failureCount` must project identically, or a stuck retry
