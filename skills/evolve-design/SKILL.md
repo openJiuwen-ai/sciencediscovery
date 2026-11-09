@@ -255,6 +255,15 @@ most two, only ones that change a decision; empty is fine.
 > about the run, not restarting the design: call `get_evolve_run` **first** and answer from its
 > numbers. Never reopen a step — 3, 2 or 4 — once the run has started; the search is already doing
 > what it was going to do, and another card asks for a decision that changes nothing.
+>
+> **The one exception: the target itself changed.** When the user corrects the scoring formula, the
+> evaluator, the starting point or the metric — not asks about the numbers — the running search is
+> now answering the wrong question, and answering with its numbers wastes their money. Call
+> `stop_evolve_run` with that run's id, report that it stopped, and then design again from step 2
+> with the corrected target. Never start a second search beside the running one: two searches share
+> one session and one budget, score against different formulas, and leave the user unable to say
+> which result counts. The server refuses a second start for exactly this reason, so a `create`
+> that answers "this session already has a search running" means stop that one first, not retry.
 
 A refusal is design feedback, not an error. "Cannot discriminate" means the scoring needs harder
 cases or a more mechanical rubric; "no slope" means the starting point is too strong. Fix it and
