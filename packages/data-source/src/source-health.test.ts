@@ -101,7 +101,8 @@ interface FaultWait {
   /** Read on timeout only, so a red gate says what it was waiting for. */
   diagnose?: () => string;
 }
-// Measured with performance.now(), not Date.now(): three call sites run under
+// Measured with performance.now(), not Date.now(): `cooldown admits one recovery
+// probe…` below and the guard test that follows enable
 // `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still and a
 // Date-based deadline would never arrive.
 async function waitFor(predicate: () => boolean, wait: FaultWait = {}) {
@@ -133,9 +134,10 @@ test("the fault wait tolerates a loaded runner instead of a 200 ms budget", asyn
 });
 
 test("the fault wait stays bounded while Date is mocked", async t => {
-  // Three call sites of `waitFor` run under `t.mock.timers.enable({ apis: ["Date"] })`,
-  // where Date stands still. A deadline read from Date never arrives there, so a
-  // probe that is never admitted would spin instead of failing the gate.
+  // This test and `cooldown admits one recovery probe…` below run under
+  // `t.mock.timers.enable({ apis: ["Date"] })`, where Date stands still. A deadline
+  // read from Date never arrives there, so a probe that is never admitted would spin
+  // instead of failing the gate.
   t.mock.timers.enable({ apis: ["Date"] });
   const startedAt = performance.now();
   await assert.rejects(
