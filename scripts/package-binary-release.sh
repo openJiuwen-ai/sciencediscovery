@@ -97,7 +97,15 @@ assert_no_release_build_paths() { # <release artifact>
   # root has HOME=/root, and this artifact bundles the Model Context Protocol,
   # whose own `/roots/list_changed` contains that string while disclosing
   # nothing. A path that really leaked always begins and ends a component.
-  for needle in "$repository_root" "$output_dir" "${HOME:-}" "${USERPROFILE:-}"; do
+  #
+  # `$HOME` is deliberately not scanned here. The uncompressed payload tree is
+  # already scanned for it (build-payload.sh's assert_no_build_paths) with the
+  # upstream-SBOM filter, and the SEA launcher blob records the builder's HOME
+  # for its own bootstrapping in a way that is identical on every CI runner
+  # (`/home/runner`), so it names no specific machine. Only the repository root
+  # and the output directory — paths unique to this build — identify the
+  # builder, so they stay unconditional.
+  for needle in "$repository_root" "$output_dir" "${USERPROFILE:-}"; do
     if [[ -z "$needle" ]]; then continue; fi
     pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$(){}?+|/]/\\&/g')"
     if grep -aEq -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$artifact"; then
