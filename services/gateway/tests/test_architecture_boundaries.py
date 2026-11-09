@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 import unittest
+from collections.abc import Iterable
 from pathlib import Path
 from unittest import mock
 
@@ -159,6 +160,93 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
 
+# `services/api` is the root #918 names first, so the positive half of the boundary
+# walk stays inside it. A `.mdx` probe is still text for that walk — `.mdx` is in
+# TEXT_SUFFIXES — while the datasource egress contract worker only opens `.ts`, so no
+# other worker reads a file a case creates and removes.
+PROBE_ROOT = REPOSITORY_ROOT / "services" / "api" / "src"
+PROBE_SUFFIX = ".mdx"
+# A killed run cannot clean up after itself, so this pattern is ignored by git and the
+# next run sweeps what a dead process left behind. Keep the two in sync.
+#
+# Sweeping is a heuristic, and its limits are deliberate: a pid that a container has
+# recycled onto an unrelated live process is caught by the start-time test below, and
+# a same-pid probe is never touched. Parallel shards that share one checkout are NOT
+# supported: `ArchitectureBoundaryTests` walks the real tree and can see a sibling's
+# in-flight probe, and the sweep is not allowed to delete a live shard's file. CI gives
+# every job its own checkout, so this shape does not occur there; introducing xdist
+# would need the probe moved or the walk redesigned, not a skip marker.
+PROBE_PATTERN = f"probe-boundary-*{PROBE_SUFFIX}"
+# The slowest probe-holding case measured 0.65 s (`pytest --durations=0`), so the age
+# fallback for hosts without /proc uses 10 s: more than ten times a full probe life,
+# which keeps a parallel shard's fresh probe and still collects an abandoned one.
+PROBE_STALE_AGE_S = 10.0
+# `btime` in /proc/stat has one-second resolution while a probe's mtime is
+# nanosecond-precise, so a shard that writes its probe within a second of starting
+# would look older than its own process. This margin absorbs that truncation and any
+# NTP step, and stays well below PROBE_STALE_AGE_S.
+PROBE_START_MARGIN_S = 3.0
+
+
+def _process_started_at(pid: int) -> float | None:
+    """Wall-clock start of `pid` from /proc, or None where /proc is unusable.
+
+    `starttime` is the 22nd field of /proc/<pid>/stat, counted in clock ticks since
+    boot — `SC_CLK_TCK` per second, which is not always 100 — and `btime` is whole
+    seconds, so the result is accurate to about one second.
+    """
+    try:
+        with open("/proc/stat", encoding="utf-8") as handle:
+            boot = next(int(line.split()[1]) for line in handle if line.startswith("btime "))
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            fields = handle.read().rsplit(")", 1)[1].split()
+        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _remove_stale_probes(root: Path, pattern: str) -> None:
+    """Delete probes a dead run left, never one a live shard is still writing.
+
+    Same pid is skipped outright. Otherwise a dead pid means the file is garbage; a
+    live pid is judged by its own start time (so a recycled pid cannot keep an old
+    probe alive), and hosts without /proc fall back to pid liveness plus
+    PROBE_STALE_AGE_S.
+    """
+    for stale in root.glob(pattern):
+        try:
+            owner = int(stale.stem.rsplit("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if owner == os.getpid():
+            continue
+        try:
+            os.kill(owner, 0)
+        except ProcessLookupError:
+            stale.unlink(missing_ok=True)
+            continue
+        except PermissionError:
+            pass  # alive, just not ours to signal
+        started = _process_started_at(owner)
+        if started is not None:
+            if stale.stat().st_mtime < started - PROBE_START_MARGIN_S:
+                stale.unlink(missing_ok=True)
+            continue
+        if time.time() - stale.stat().st_mtime >= PROBE_STALE_AGE_S:
+            stale.unlink(missing_ok=True)
+
+
+def setUpModule() -> None:
+    """Sweep before any test walks the tree, not from the class that writes probes.
+
+    `ArchitectureBoundaryTests.test_node_and_browser_sources_use_only_product_names`
+    walks the real tree without a patched listing and is collected before the class
+    below, so a sweep that only ran from that class let a dead run's probe fail it
+    first.
+    """
+    _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+
+
 class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
     """`services/api/.tmp` is a live workspace root, not source.
 
@@ -168,27 +256,33 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
 
     TEMP_ROOT = REPOSITORY_ROOT / "services" / "api" / ".tmp"
     API_ROOT = REPOSITORY_ROOT / "services" / "api"
-    # `services/api` is the root #918 names first, so the positive half stays inside
-    # it. A `.mdx` probe is still text for the walk, while the datasource egress
-    # contract worker only opens `.ts`, so no other worker reads a file this case
-    # creates and removes.
-    PROBE_ROOT = REPOSITORY_ROOT / "services" / "api" / "src"
-    PROBE_SUFFIX = ".mdx"
-    # A killed run cannot clean up after itself, so the pattern is ignored by git and
-    # the next run sweeps what a dead process left behind. Keep both in sync.
-    PROBE_PATTERN = f"probe-boundary-*{PROBE_SUFFIX}"
+    PROBE_ROOT = PROBE_ROOT
+    PROBE_SUFFIX = PROBE_SUFFIX
 
     def setUp(self) -> None:
         self.TEMP_ROOT.mkdir(parents=True, exist_ok=True)
         self.probe = self.TEMP_ROOT / f"probe-boundary-{os.getpid()}.ts"
         self.addCleanup(self.probe.unlink, missing_ok=True)
-        self._remove_stale_probes()
+        # Idempotent: setUpModule already swept, and a later case in the same run may
+        # have left something behind.
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
         # Installed once per case, before any probe exists, so every test that writes
         # one is covered — including tests added later.
         self._guard_probe_against_signals()
 
     def relative_probe(self) -> str:
         return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
+
+    def _filtered_listing(self, root: Path, listing: Iterable[Path]) -> Iterable[Path]:
+        """Keep only this case's probe under the root the walk actually visits.
+
+        `_node_boundary_failures()` calls `_files()` with `NODE_ROOTS` entries, so the
+        filter has to key on `API_ROOT`; keying on `PROBE_ROOT` never matches and lets
+        the positive case read every root unfiltered.
+        """
+        if root != self.API_ROOT:
+            return listing
+        return (path for path in listing if path == self.probe)
 
     def positive_probe_path(self) -> Path:
         """Where the positive case plants the file the walk must report.
@@ -199,27 +293,6 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         `.ts` files under `packages/` and `services/`.
         """
         return self.PROBE_ROOT / f"probe-boundary-{os.getpid()}{self.PROBE_SUFFIX}"
-
-    def _remove_stale_probes(self) -> None:
-        """Delete probes a killed run left behind, never one a live run is using.
-
-        `SIGKILL` cannot be caught, so this sweep — not the handler below — is what
-        keeps a dead run's probe from reaching the next one. A pid that still answers
-        `kill(pid, 0)` may be a parallel shard mid-test, so its file stays.
-        """
-        for stale in self.PROBE_ROOT.glob(self.PROBE_PATTERN):
-            try:
-                owner = int(stale.stem.rsplit("-", 1)[1])
-            except (IndexError, ValueError):
-                continue
-            if owner == os.getpid():
-                continue
-            try:
-                os.kill(owner, 0)
-            except ProcessLookupError:
-                stale.unlink(missing_ok=True)
-            except PermissionError:
-                continue
 
     def _guard_probe_against_signals(self) -> None:
         """Unlink the probe on exit, `SIGINT` and `SIGTERM`, then let the signal work.
@@ -289,10 +362,9 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
 
         def only_the_probe(root: Path):
             # Keep the real listing (so IGNORED_DIRECTORIES still governs) and drop
-            # every other file, so the assertion cannot depend on the working tree.
-            if root == self.PROBE_ROOT:
-                return (path for path in original(root) if path == self.probe)
-            return original(root)
+            # every file but this case's probe under the walked root, so the assertion
+            # cannot depend on the working tree or on a parallel shard's probe.
+            return self._filtered_listing(root, original(root))
 
         with mock.patch.object(sys.modules[__name__], "_files", only_the_probe):
             failures = _node_boundary_failures()
