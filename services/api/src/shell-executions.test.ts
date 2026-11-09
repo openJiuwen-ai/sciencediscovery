@@ -839,6 +839,40 @@ test("a failing provenance commit stops being retried and stops rewriting the re
   assert.notEqual(JSON.stringify(record.observation), before);
 });
 
+test("a failing authoritative-failure commit is bounded too, not just an existing result", async context => {
+  // The other provenance commit in this file: a terminal failure with no result goes
+  // through `finalizeFailure`, so it pins `candidateFailure` and never a
+  // `candidateResultRef`. The budget used to require the result ref, so `observed()`
+  // reopened this record on every attempt, `failureCount` never left 1 and the loop ran
+  // forever — the #1018 churn, through the second commit shape.
+  const f = await fixture(context);
+  const lost = await lostAck(f, async id => ({ ...owner, id, state: "failed", queuedAt: "now", receipt: receipt(2),
+    finishedAt: "2026-01-01T00:00:01.000Z", error: "Admission denied",
+    evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot-one", revision: 2, processTerminated: true, terminationReason: "not_started" } }));
+  let attempts = 0;
+  let during: unknown;
+  const handlers = { runner: () => lost.runner, finalize: async (_: unknown, result: ShellExecutionResult) => result,
+    finalizeFailure: async () => {
+      attempts += 1;
+      if (attempts === 2) during = f.service.revisionSnapshot(owner.sessionId);
+      throw new Error("audit storage unavailable");
+    } };
+  let record = await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.equal(record.finalization, "failed");
+  assert.equal(record.observation?.lastError?.retryable, true, "the first attempts still retry");
+  const blocked = f.service.revisionSnapshot(owner.sessionId);
+
+  for (let round = 0; round < 12; round += 1) {
+    record = await f.service.reconcile(lost.job.id, owner, handlers);
+  }
+  assert.deepEqual(during, blocked, "a retry of the failure commit does not reopen the record");
+  assert.equal(record.observation?.lastError?.retryable, false, "retrying stopped");
+  assert.equal(record.observation?.nextRetryAt, undefined, "nothing schedules another attempt");
+  assert.match(record.observation?.lastError?.message ?? "", /Retrying the commit stopped after 5 attempts/);
+  assert.equal(record.state, "unknown", "the outcome stays unconfirmed until someone cancels it");
+  assert.equal(record.provenance, "unconfirmed");
+});
+
 test("the export projection holds its blocked value while a commit retry is in flight", async context => {
   // #1018 review F2: `observed()` used to reopen the record as `running` for the
   // duration of every attempt, so a preview sampled mid-retry still saw a moving

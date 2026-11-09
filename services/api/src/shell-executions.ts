@@ -409,10 +409,13 @@ export class ShellExecutions {
     this.save(execution);
   }
 
-  /** True while a record is retrying a commit that has already failed once. */
+  /** True while a record is retrying a commit that has already failed once. Both
+   *  provenance commits are covered: an existing result pins `candidateResultRef`, a
+   *  terminal failure pins `candidateFailure`, and without the second term the failure
+   *  commit was reopened by every attempt and its budget could never run out. */
   private retryingPinnedCommit(execution: Record): boolean {
     return execution.finalization === "failed"
-      && Boolean(execution.candidateResultRef)
+      && Boolean(execution.candidateResultRef || execution.candidateFailure)
       && execution.observation?.lastError?.code === "PROVENANCE_COMMIT_FAILED";
   }
 
