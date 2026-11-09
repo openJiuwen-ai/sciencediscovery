@@ -321,11 +321,40 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
   if (history.length) warnings.add("Some invocation records have no reliable event timestamp. They remain inspectable with their invocation, but have no wall-clock position.");
   if (source.events.length && !contexts.size) warnings.add("No recorded model contexts are available for this Session.");
   const index: TrajectoryIndex = { schemaVersion: 1, sessionId: source.sessionId, capturedAt: new Date().toISOString(), agents: source.agents, entries, untimedEntries: history, historicalEntries: history, warnings: [...warnings] };
+  const byId = new Map([...entries, ...history].map(entry => [entry.id, entry]));
+  // Reuse immutable projections for adjacent events, without pinning every
+  // context/state of a long research run in a viewer or size preview.
+  const projections = new Map<string, { bytes: number; value: Promise<unknown> }>();
+  const projectionBudget = 32 * 1024 * 1024;
+  let projectionBytes = 0;
+  function projection<T>(key: string, bytes: number, load: () => Promise<T>): Promise<T> {
+    const cached = projections.get(key);
+    if (cached) {
+      projections.delete(key); projections.set(key, cached);
+      return cached.value as Promise<T>;
+    }
+    const value = load();
+    if (bytes <= projectionBudget) {
+      while (projections.size && (projectionBytes + bytes > projectionBudget || projections.size >= 128)) {
+        const oldest = projections.keys().next().value!;
+        projectionBytes -= projections.get(oldest)!.bytes; projections.delete(oldest);
+      }
+      const cached = { bytes, value }; projections.set(key, cached); projectionBytes += bytes;
+      void value.catch(() => {
+        if (projections.get(key) === cached) { projections.delete(key); projectionBytes -= bytes; }
+      });
+    }
+    return value;
+  }
+  const stateProjection = (ref: AgentStateRef) => projection(
+    `state:${JSON.stringify([ref.pool, ref.digest, ref.size, ref.mediaType])}`, ref.size,
+    async () => redact(await record(ref, "AgentStateSnapshot")));
   async function detail(id: string): Promise<TrajectoryDetail | undefined> {
     signal.throwIfAborted();
-    const entry = [...entries, ...history].find(e => e.id === id), load = loaders.get(id);
+    const entry = byId.get(id), load = loaders.get(id);
     if (!entry || !load) return undefined;
-    const result: TrajectoryDetail = { entry, value: redact(await load()) };
+    const state = states.get(id);
+    const result: TrajectoryDetail = { entry, value: state && entry.kind === "state" ? await stateProjection(state) : redact(await load()) };
     if (entry.kind === "mcp" && object(result.value).type === "mcp.invocation") {
       const invocation = object(result.value), payloads: Record<string, unknown> = {};
       for (const key of ["request", "rawResponse", "normalizedResult"]) {
@@ -342,15 +371,19 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
     }
     const context = entry.contextId ? contexts.get(entry.contextId) : undefined;
     if (context) {
-      const input = redact(object(await record(context.assembly.modelContext, "ModelContextSnapshot")).input);
-      const assembly = redact(await record(context.ref, "ContextAssemblyRecord"));
-      result.context = { input, assembly, state: redact(await record(context.assembly.state, "AgentStateSnapshot")), blocks: contextBlocks(input, assembly) };
+      const projected = await projection(`context:${entry.contextId}`, context.ref.size + context.assembly.modelContext.size + context.assembly.state.size, async () => {
+        const input = redact(object(await record(context.assembly.modelContext, "ModelContextSnapshot")).input);
+        const assembly = redact(await record(context.ref, "ContextAssemblyRecord"));
+        return { input, assembly, state: await stateProjection(context.assembly.state), blocks: contextBlocks(input, assembly) };
+      });
+      // Event-specific state overrides own their container, never the cached one.
+      result.context = { ...projected };
     }
-    if (states.has(id)) {
-      const snapshot = await record(states.get(id)!, "AgentStateSnapshot");
+    if (state) {
+      const snapshot = await stateProjection(state);
       if (owner(object(snapshot).agentId) !== entry.agentId) throw new Error("State ownership mismatch");
-      if (result.context) result.context.state = redact(snapshot);
-      if (entry.kind === "state") result.value = redact(snapshot);
+      if (result.context) result.context.state = snapshot;
+      if (entry.kind === "state") result.value = snapshot;
     }
     return result;
   }

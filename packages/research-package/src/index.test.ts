@@ -4,6 +4,30 @@ import { createResearchPackage, createResearchPackageAsync, estimateResearchPack
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
 
+test("memoized JSON sizing preserves repeated immutable values and JSON normalization", () => {
+  const shared = { text: '中\\\"\n' + 'x'.repeat(32767) + '😀', omitted: undefined, nested: [NaN, null] };
+  const keyed = { toJSON(key: string) { return { key, shared }; } };
+  const values = [{ a: shared, b: shared, first: keyed, second: keyed }, [undefined, , Symbol(), () => 1], keyed];
+  const sizes = new WeakMap<object, number>();
+  for (const value of values) {
+    assert.equal(jsonByteLength(value, sizes), jsonByteLength(value));
+    assert.equal(jsonByteLength(value, sizes), jsonBytes(value).byteLength);
+  }
+  const circular: { self?: unknown } = {}; circular.self = circular;
+  assert.throws(() => jsonByteLength(circular, sizes), /circular/);
+});
+
+test("incremental detail sizes preserve complete package estimates including tar boundaries", () => {
+  const shared = { input: "large model input ".repeat(200) };
+  const details = [{ context: shared, value: "one" }, { context: shared, value: "two" }];
+  const input = { source: { projectId: "p", title: "sizing" }, records: { sessions: [{ details }] } };
+  const skeleton = { ...input, records: { sessions: [{ details: [] }] } };
+  const sizes = new WeakMap<object, number>();
+  const extra = details.reduce((sum, detail, index) => sum + jsonByteLength(detail, sizes) + (index ? 1 : 0), 0);
+  assert.equal(estimateResearchPackageBytes(skeleton, undefined, extra), estimateResearchPackageBytes(input));
+  assert.throws(() => estimateResearchPackageBytes(skeleton, undefined, -1), /size/i);
+});
+
 test("exports and imports a deterministic evidence package", () => {
   const object = new TextEncoder().encode("print('hello')\n");
   const input = { source: { projectId: "p1", sessionIds: ["s1"], title: "Demo" }, createdAt: "2026-01-01T00:00:00.000Z",

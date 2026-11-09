@@ -121,7 +121,7 @@ class UpstreamPipelineTests(unittest.TestCase):
         def post(*args, **kwargs):
             return SimpleNamespace(status_code=200, json=lambda: {"choices": [{"message": {"content": next(replies)},
                 "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
-        response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {"title": "source", "content": "Magnetic cues guide direction."}})
+        response = SimpleNamespace(close=lambda: None, raise_for_status=lambda: None, json=lambda: {"data": {"title": "source", "content": "Magnetic cues guide direction."}})
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"LLM_BACKEND": "openai", "OPENAI_API_KEY": "fixture",
                 "JINA_API_KEY": "fixture", "RACE_MODEL": "fixture", "CLEAN_MODEL": "fixture", "FACT_MODEL": "fixture"}), \
                 patch("requests.post", side_effect=post), patch("requests.get", return_value=response):

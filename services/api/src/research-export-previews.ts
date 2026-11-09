@@ -17,17 +17,25 @@ export type DefaultExportPreviews = {
 type WarmMemo = { revision?: string; allowed?: boolean; pendingRevision?: string; pending?: Promise<boolean> };
 const WATCH_IDLE_MS = 30_000;
 
+/** A sibling Session changed this preview's dependency set; its own scope survives. */
+class ExportPreviewInvalidatedError extends ApiStatusError {
+  constructor() { super(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING"); }
+}
+
+const serviceClosed = () => new ApiStatusError(503, "Export preview service is closed", "EXPORT_PREVIEW_SERVICE_CLOSED");
+
 /** Bounded metadata cache and serial work queue; never retain an export payload. */
 export class ResearchExportPreviews {
   private readonly entries = new Map<string, Promise<ResearchExportPreview>>();
   private readonly completed = new WeakMap<Promise<ResearchExportPreview>, ResearchExportPreview>();
   private readonly watching = new Map<string, { projectId: string; sessionId: string; lastSeenAt: number }>();
   private readonly revisions = new Map<string, Promise<string>>();
+  private readonly controllers = new Map<AbortController, ExportPreviewOptions>();
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
   private ticking = false;
   constructor(private readonly revision: (projectId: string, sessionId?: string) => Promise<string>,
-    private readonly calculate: (options: ExportPreviewOptions, revision: string) => Promise<ResearchExportPreview>,
+    private readonly calculate: (options: ExportPreviewOptions, revision: string, signal: AbortSignal) => Promise<ResearchExportPreview>,
     private readonly canWarm: (projectId: string, sessionId: string) => Promise<boolean> = async () => true,
     private readonly now: () => number = () => Date.now()) {}
 
@@ -70,7 +78,7 @@ export class ResearchExportPreviews {
   }
 
   private async assertCanCalculate(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo): Promise<string | undefined> {
-    if (this.closed) throw new Error("Export preview service is closed");
+    if (this.closed) throw serviceClosed();
     if (!deferWhileRunning || !options.sessionId) return undefined;
     const current = await this.currentRevision(options.projectId, options.sessionId);
     let allowed: boolean;
@@ -88,31 +96,52 @@ export class ResearchExportPreviews {
   }
 
   async get(options: ExportPreviewOptions, deferWhileRunning = false, memo?: WarmMemo): Promise<ResearchExportPreview> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await this.getAttempt(options, deferWhileRunning, memo); }
+      catch (error) {
+        // Recompute once for a surviving scope after a sibling was deleted.
+        // Repeated invalidation uses the existing pending HTTP/polling contract.
+        if (!(error instanceof ExportPreviewInvalidatedError) || attempt >= 1) throw error;
+      }
+    }
+  }
+
+  private async getAttempt(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo): Promise<ResearchExportPreview> {
     const admitted = await this.assertCanCalculate(options, deferWhileRunning, memo);
-    if (this.closed) throw new Error("Export preview service is closed");
+    if (this.closed) throw serviceClosed();
     const revision = admitted ?? await this.currentRevision(options.projectId, options.sessionId);
-    if (this.closed) throw new Error("Export preview service is closed");
+    if (this.closed) throw serviceClosed();
     const key = this.key(options, revision);
     const cached = this.entries.get(key);
     if (cached) return cached;
+    const controller = new AbortController();
+    this.controllers.set(controller, options);
+    const signal = controller.signal;
     const work = this.queue.then(async () => {
       await setImmediate();
-      if (this.closed) throw new Error("Export preview service is closed");
+      signal.throwIfAborted();
+      if (this.closed) throw serviceClosed();
       // Recheck when admitted: a newer reply may have arrived while queued.
       for (let attempt = 0; attempt < 3; attempt++) {
         // A run may start after an idle poll queued all five profiles. Stop
         // those jobs here, rather than repeatedly exporting changing evidence.
         await this.assertCanCalculate(options, deferWhileRunning, memo);
+        signal.throwIfAborted();
         const current = await this.currentRevision(options.projectId, options.sessionId);
+        signal.throwIfAborted();
         // An older queued request may already have calculated this revision.
         // Only consume completed work here: awaiting later queue entries deadlocks.
         const existing = this.entries.get(this.key(options, current));
         const ready = existing && this.completed.get(existing);
         if (ready) return ready;
-        const result = await this.calculate(options, current);
+        const result = await this.calculate(options, current, signal);
+        signal.throwIfAborted();
         await this.assertCanCalculate(options, deferWhileRunning, memo);
-        if (this.closed) throw new Error("Export preview service is closed");
-        if (current === await this.currentRevision(options.projectId, options.sessionId)) {
+        signal.throwIfAborted();
+        if (this.closed) throw serviceClosed();
+        const latest = await this.currentRevision(options.projectId, options.sessionId);
+        signal.throwIfAborted();
+        if (current === latest) {
           // Work admitted for an older revision may finish at a newer one.
           // Publish under that revision too so the next poll reuses it.
           const currentKey = this.key(options, current);
@@ -123,10 +152,17 @@ export class ResearchExportPreviews {
         await setImmediate();
       }
       throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
+    }).catch((error: unknown) => {
+      // A concurrent deletion may make an awaited store read fail first.
+      // Preserve the intentional cancellation outcome rather than that race.
+      signal.throwIfAborted();
+      throw error;
     });
     this.queue = work.catch(() => undefined);
     this.remember(key, work);
-    void work.catch(() => { if (this.entries.get(key) === work) this.entries.delete(key); });
+    void work.finally(() => this.controllers.delete(controller)).catch(() => {
+      if (this.entries.get(key) === work) this.entries.delete(key);
+    });
     return work;
   }
 
@@ -158,8 +194,28 @@ export class ResearchExportPreviews {
     } finally { this.ticking = false; }
   }
 
+  cancel(projectId: string, sessionId?: string): void {
+    for (const [key, watcher] of this.watching) {
+      if (watcher.projectId === projectId && (!sessionId || watcher.sessionId === sessionId)) this.watching.delete(key);
+    }
+    for (const [controller, options] of this.controllers) {
+      // Necessary previews of other sessions can depend on this session too.
+      if (options.projectId === projectId) {
+        const deleted = !sessionId || options.sessionId === sessionId;
+        controller.abort(deleted
+          ? new ApiStatusError(404, "Export preview resource was deleted", "EXPORT_PREVIEW_RESOURCE_DELETED")
+          : new ExportPreviewInvalidatedError());
+      }
+    }
+    for (const key of this.entries.keys()) {
+      const [project] = JSON.parse(key) as [string];
+      if (project === projectId) this.entries.delete(key);
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true; this.watching.clear(); this.entries.clear();
+    for (const controller of this.controllers.keys()) controller.abort(serviceClosed());
     // Finish admitted work before its store or workspace can be disposed.
     await Promise.allSettled([this.queue, ...this.revisions.values()]);
   }

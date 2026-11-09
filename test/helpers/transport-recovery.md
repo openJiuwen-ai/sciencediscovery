@@ -17,6 +17,20 @@
 - Recovery is observable via `approval transport retry` and `[run-poll]` logs.
   Retrying does not imply bypassing approval or marking an unfinished run complete.
 
+Fixture cleanup is a narrow exception to the no-write-retry rule: after a
+Project DELETE returns 502/503/504, read the authoritative Project list. An
+absent owned fixture needs no further DELETE; a surviving fixture permits one
+more DELETE with the same confirmation ID. A failed or malformed read grants no
+write. Other writes, authentication errors, conflicts and uncertain transport
+failures are not replayed. Research failures and cleanup failures are both
+retained when a finally block also fails.
+
+DRB source reads permit at most two GETs per URL within a 120-second source
+ceiling and the original overall evaluator budget. Only transport timeouts,
+connection errors and 429/502/503/504 can recover. Successful source content is
+cached within that evaluation, never scores or verdicts across evaluations.
+Exhausted reads still produce unknown citations with the original denominator.
+
 Focused tests: `jiuwenswarm-agent.test.ts` (approval cases), adapter
 `test_agent_runs.py` (approval cases), `run-poll-recovery.unit.ts` (read-error
 classification), and `journey-deliver-result.spec.ts` (Playwright polling retry).

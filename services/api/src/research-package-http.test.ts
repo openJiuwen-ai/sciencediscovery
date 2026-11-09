@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { TestContext } from "node:test";
-import { createResearchPackage, importResearchPackage, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { createResearchPackage, importResearchPackage, estimateResearchPackageBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { createApiServer, closeApiServer } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
@@ -83,6 +83,24 @@ async function fixture(context: TestContext, graphAvailable = false, sampleSessi
 
 const date = "2026-10-20T10:00:00.000Z";
 
+test("incremental previews match exported evidence and profile sizes", async (context) => {
+  const { request, project } = await fixture(context, true);
+  const target = await project();
+  const historical = researchTrajectoryFixture();
+  await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, { method: "POST", body: Buffer.from(historical.bytes) });
+  for (const level of ["necessary", "complete"]) for (const trajectory of [false, true]) for (const memory of [false, true]) {
+    const query = `sessionId=${target.firstSession.id}&level=${level}&includeFullTrajectory=${Number(trajectory)}&includeFullMemoryGraph=${Number(memory)}`;
+    const base = `/api/projects/${target.id}/research-package`;
+    const preview = await (await request(`${base}/preview?${query}`)).json() as { estimatedBytes: number };
+    const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
+    assert.equal(preview.estimatedBytes, estimateResearchPackageBytes({
+      source: exported.manifest.source, records: exported.records, readme: Buffer.from(exported.readme).toString(),
+      omissions: exported.manifest.omissions, exportProfile: exported.manifest.exportProfile,
+      objects: [...exported.objects].map(([path, bytes]) => ({ path, bytes })),
+    }), query);
+  }
+});
+
 test("pending export previews return HTTP 409 for single and default profiles", async (context) => {
   const { rawRequest, project } = await fixture(context);
   const target = await project();
@@ -124,6 +142,22 @@ test("async preview clients receive accepted pending state and recover for singl
   const failed = await rawRequest(`${endpoint}&level=complete`, { headers: { Prefer: "respond-async" } });
   assert.equal(failed.status, 503);
   assert.equal((await failed.json() as { code: string }).code, "EXPORT_STORAGE_UNAVAILABLE");
+});
+
+test("preview deletion and shutdown retain their HTTP status for async clients", async (context) => {
+  const { rawRequest, project } = await fixture(context);
+  const target = await project();
+  let failure: ApiStatusError;
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => { throw failure; });
+  const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}`;
+  for (const [status, code] of [[404, "EXPORT_PREVIEW_RESOURCE_DELETED"], [503, "EXPORT_PREVIEW_SERVICE_CLOSED"]] as const) {
+    failure = new ApiStatusError(status, "Preview intentionally stopped", code);
+    for (const query of ["&level=complete", "&defaults=1"]) {
+      const response = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
+      assert.equal(response.status, status);
+      assert.equal((await response.json() as { code: string }).code, code);
+    }
+  }
 });
 
 test("the first-install sample supports all five preview profiles without unshipped state objects", async (context) => {

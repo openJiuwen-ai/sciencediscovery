@@ -9,6 +9,16 @@
 
 const ANSI_SGR = /\u001b\[[0-9;]*m/g;
 
+/** A failed finally block must retain the research/assertion failure too. */
+export async function runTestCleanup(primary: { error: unknown } | undefined, cleanup: () => Promise<void>): Promise<void> {
+  try { await cleanup(); }
+  catch (error) {
+    if (!primary) throw error;
+    const text = (value: unknown) => value instanceof Error ? value.message : String(value);
+    throw new AggregateError([primary.error, error], `Test failed: ${text(primary.error)}\nCleanup also failed: ${text(error)}`, { cause: primary.error });
+  }
+}
+
 /** Playwright colors assertion messages for a terminal; a report or a log reads them as plain text. */
 export function plainText(text: string): string {
   return text.replace(ANSI_SGR, "");

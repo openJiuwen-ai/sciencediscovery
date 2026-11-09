@@ -40,6 +40,7 @@ import {
 } from "./helpers/desktop-evolve.ts";
 import { positiveNumber } from "./helpers/deepresearchbench.ts";
 import { evolutionScorecard } from "./helpers/evolve-result.mjs";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 
 /**
  * The problem statement, verbatim. It is the user's input to the design
@@ -221,7 +222,11 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
 
   try {
     await journey.step("Open a desktop Session with the real model", "The new entry reaches the workspace, not the wizard.", async () => {
-      fixture = await createDesktopFixture(page);
+      const thinking = realModelThinking();
+      fixture = await createDesktopFixture(page, {
+        model: { apiVariant: realModelApiVariant(), ...thinking },
+        session: thinking,
+      });
       metrics.session_id = fixture.session.id;
       metrics.model = fixture.model?.model ?? null;
       await openDesktopSession(page, fixture);

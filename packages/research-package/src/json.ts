@@ -63,7 +63,36 @@ export function jsonBytes(value: unknown): Uint8Array {
   return Buffer.concat(buffers);
 }
 
-export function jsonByteLength(value: unknown): number {
+/** A caller may share sizes only for immutable JSON projections. Keys stay weak. */
+export function jsonByteLength(value: unknown, sizes?: WeakMap<object, number>): number {
+  if (sizes) {
+    const ancestors = new Set<object>();
+    const normalize = (item: unknown, key: string): unknown => item && typeof item === "object"
+      && "toJSON" in item && typeof item.toJSON === "function" ? item.toJSON(key) : item;
+    const count = (item: unknown): number => {
+      if (!item || typeof item !== "object") return jsonByteLength(item);
+      if (ancestors.has(item)) throw new TypeError("Cannot serialize circular research records");
+      const cached = sizes.get(item);
+      if (cached !== undefined) return cached;
+      ancestors.add(item);
+      let size = 2;
+      if (Array.isArray(item)) {
+        for (let index = 0; index < item.length; index++) size += (index ? 1 : 0) + count(normalize(item[index], String(index)));
+      } else {
+        let first = true;
+        for (const key of Object.keys(item)) {
+          const child = normalize((item as Record<string, unknown>)[key], key);
+          if (child === undefined || typeof child === "function" || typeof child === "symbol") continue;
+          size += (first ? 0 : 1) + jsonByteLength(key) + 1 + count(child);
+          first = false;
+        }
+      }
+      ancestors.delete(item);
+      sizes.set(item, size);
+      return size;
+    };
+    return count(normalize(value, ""));
+  }
   let size = 0;
   for (const part of jsonTextChunks(value)) size += Buffer.byteLength(part);
   return size;

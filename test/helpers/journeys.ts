@@ -19,6 +19,7 @@ import { expect, request, type Locator, type Page, type TestInfo } from "@playwr
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 import { retryRead } from "./read-retry.ts";
+import { deleteOwnedProject } from "./project-cleanup.ts";
 import { RunPollRecovery } from "./run-poll-recovery.js";
 import { RunChainSettler } from "./run-chain.ts";
 import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
@@ -146,7 +147,9 @@ async function apiJson<T>(
     ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
   });
   if (!response.ok()) {
-    throw new Error(`${method} ${path} -> ${response.status()}: ${await response.text()}`);
+    throw Object.assign(new Error(`${method} ${path} -> ${response.status()}: ${await response.text()}`), {
+      status: response.status(), requestId: response.headers()["x-sciencediscovery-request-id"],
+    });
   }
   return response.json() as Promise<T>;
 }
@@ -1003,14 +1006,18 @@ export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promi
     await cancelActiveSessionRuns(client, fixture.session.id).catch((error) => {
       console.warn(`[journey-cleanup] session shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
     });
-    await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
-      data: { confirmationId: fixture.project.id },
-      method: "DELETE",
-    }).catch(async (error) => {
-      // A fixture may have been removed by a failed setup path; preserve that
-      // benign case while exposing real teardown conflicts to the test runner.
-      if (error instanceof Error && /-> 404:/.test(error.message)) return;
-      throw error;
+    const path = `/api/projects/${encodeURIComponent(fixture.project.id)}`;
+    await deleteOwnedProject({
+      remove: () => apiJson(client, path, { data: { confirmationId: fixture.project.id }, method: "DELETE" }),
+      exists: async () => {
+        // The API exposes a Project list, not GET /api/projects/:id. A 404
+        // from an unsupported route would not confirm that deletion succeeded.
+        const projects = await apiJson<JourneyProject[]>(client, "/api/projects", { timeoutMs: 5_000 });
+        if (!Array.isArray(projects) || projects.some(project => !project || typeof project.id !== "string")) {
+          throw new Error("Cleanup could not read an authoritative Project list");
+        }
+        return projects.some(project => project.id === fixture.project.id);
+      },
     });
     if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
   } finally { await api.dispose(); }
