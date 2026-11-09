@@ -42,7 +42,7 @@ test("CFG-T29/33: server registry keeps domain fields while the model transport 
   for (const id of [
     "connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select",
     "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure",
-    "environment.sources", "runner.assign",
+    "environment.sources", "runner.assign", "memory.enable",
     "web.configure", "web.credential",
 
     "plugin.json_viewer", "reviewer.enable", "settings.inherit",

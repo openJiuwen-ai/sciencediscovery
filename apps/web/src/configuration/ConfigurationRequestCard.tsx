@@ -9,6 +9,7 @@ import { ApiRequestError } from "../api/auth.js";
 import { useLocale } from "../i18n/index.js";
 import { ProcessRecord } from "../ProcessRecord.js";
 import { configurationMessages } from "./messages.js";
+import { memoryConfigurationCopy } from "./memory-copy.js";
 
 export interface ConfigurationRequestActions {
   consent?(input: { revision: number; endpointTarget: string }, key: string): Promise<ConfigurationRequestView>;
@@ -279,30 +280,35 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
     `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
   const choiceLabel = request.choiceReceipt ? describeChoice(request.choiceReceipt) : undefined;
-  const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
+  const copy = memoryConfigurationCopy(request, locale);
+  const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : copy.reason;
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "web.credential"
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "memory.enable"
+    ? m.mode.memoryNextRequest : request.activation.mode === "next_request" && request.capabilityId === "web.credential"
     ? m.mode.domainNextRequest : m.mode[request.activation.mode];
   const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
+  const isMemoryEnabledField = (field: string) => request.capabilityId === "memory.enable" && field === "enabled";
+  const changeValue = (field: string, value: string | undefined) => isMemoryEnabledField(field)
+    ? ownMessage(m.memoryState, value ?? "", value ?? m.unset) : value ?? m.unset;
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
-      <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
-      <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
+      <dt>{m.resource}</dt><dd>{copy.resourceLocation}</dd>
+      <dt>{m.scopeLabel}</dt><dd>{copy.effectiveScope || scope}</dd>
       <dt>{m.activationLabel}</dt><dd>{activationModeLabel}</dd>
     </dl>
-    <p>{request.impact.message}</p>
+    <p>{copy.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{(request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{isMemoryEnabledField(change.field) ? m.field.memoryEnabled : (request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{changeValue(change.field, change.before)}</span> → <span>{changeValue(change.field, change.after)}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -392,7 +398,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{isMemoryEnabledField(field.id) ? m.field.memoryEnabled : ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}

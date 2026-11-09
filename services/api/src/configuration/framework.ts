@@ -12,6 +12,7 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createMemoryEnableAdapter } from "./memory-enable-adapter.js";
 import { createWebCredentialAdapter } from "./web-credential-adapter.js";
 import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
@@ -118,7 +119,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createMemoryEnableAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");

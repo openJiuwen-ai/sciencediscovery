@@ -2503,6 +2503,7 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
+    if (capabilityId === "memory.enable") systemVersions = { memoryGraph: version(this.catalog.memoryGraphSettings) };
     const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
     const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
       this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
@@ -2544,6 +2545,7 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "memory.enable" ? { memoryGraph: this.configurationMemoryGraph() } : {}),
         ...(capabilityId === "web.credential" ? { webProviders: this.getWebSettings().providers } : {}),
         ...(capabilityId === "web.configure" ? { webSettings: this.getWebSettings(), webProxyPolicies: this.configurationWebProxyPolicies() } : {}),
 
@@ -3102,6 +3104,19 @@ export class SessionStore {
     const row = this.database.prepare("SELECT encrypted_password FROM memory_graph_secret WHERE id = 1")
       .get() as { encrypted_password: string } | undefined;
     return row ? this.decryptModelApiToken("memory-graph:neo4j", row.encrypted_password) : undefined;
+  }
+
+  /** Only the local gate is exposed to conversational configuration; never project a destination or decrypt a credential. */
+  configurationMemoryGraph(): { enabled: boolean; backend: "local" | "neo4j" } {
+    const { enabled, backend } = this.catalog.memoryGraphSettings;
+    return { enabled, backend };
+  }
+
+  applyMemoryGraphParticipationSync(enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (typeof enabled !== "boolean") throw new Error("Memory enabled must be a boolean");
+    if (this.catalog.memoryGraphSettings.backend !== "local") throw new Error("Conversational memory configuration supports only the local backend");
+    this.catalog.memoryGraphSettings = { ...this.catalog.memoryGraphSettings, enabled };
   }
 
   async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {

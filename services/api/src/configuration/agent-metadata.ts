@@ -20,6 +20,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     pipSource: { kind: "string", choices: ENVIRONMENT_PIP_SOURCE_PRESETS.map(preset => preset.id) },
     condaSource: { kind: "string", choices: ENVIRONMENT_CONDA_SOURCE_PRESETS.map(preset => preset.id) },
   }, activation: "next_run", diagnostics: [] },
+  "memory.enable": { label: "Enable or disable local workbench memory graph", whenNeeded: "The user explicitly requests the deployment-wide local MemoryGraph participation switch. This is not every Agent memory. Only the existing local backend is supported. Disabling retains stored data and does not cancel in-flight work. No backend or credential change, installation or readiness verification. Omit scope; manual confirmation required. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate.", fields: { enabled: boolean }, activation: "next_request", diagnostics: [] },
   "web.credential": { label: "Manage Web service credentials", whenNeeded: "The user explicitly asks to replace or clear a shared Web provider key. Use only the current backend provider list. Never put a key in values or chat; the secure user card collects it. Changing a key can activate an already-selected paid provider. Saving is not authentication verification and does not retry a Web request.", fields: { webProvider: { kind: "string", choices: WEB_KEY_PROVIDERS }, operation: { kind: "string", choices: ["replace", "clear"] } }, activation: "next_request", diagnostics: [] },
 
   "settings.inherit": { label: "Restore ordinary settings inheritance", whenNeeded: "Only an explicit request to remove selected ordinary overrides at this Session or its Project. selectedFields is a finite list of model/review/semantic/thinking/connector/Skill selection fields. Session is default; no Global, security, approval, auto-review, network, plugin JSON, Runner or credential reset. Manual v3 confirmation. Lower overrides keep precedence and frozen runs do not change.", fields: { selectedFields: ids }, activation: "next_run", diagnostics: [] },
@@ -53,7 +54,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources"] as const satisfies readonly ConfigurationCapabilityId[];
-export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "memory.enable", "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })

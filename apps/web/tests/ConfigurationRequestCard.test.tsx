@@ -918,3 +918,43 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
 });
+
+
+test("CFG-X04a: local Memory labels and saved state distinguish subsequent operations from readiness", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "memory.enable", state: "applied", runId: undefined,
+      fields: [{ id: "enabled", label: "Enable workbench memory graph", kind: "boolean", required: true, value: true }],
+      activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }), actions(), () => undefined, locale);
+    const content = JSON.stringify(renderer.toJSON());
+    assert.match(content, locale === "en" ? /Configure local workbench memory graph · Saved · Subsequent memory operations; readiness unverified/ : /配置本地工作台记忆图谱 · 已保存 · 后续记忆操作读取，服务就绪未验证/);
+    const editable = await mount(request({ capabilityId: "memory.enable", runId: undefined,
+      fields: [{ id: "enabled", label: "Enable workbench memory graph", kind: "boolean", required: true, value: false }] }), actions(), () => undefined, locale);
+    assert.match(JSON.stringify(editable.toJSON()), locale === "en" ? /Enable local workbench memory graph/ : /启用本地工作台记忆图谱/);
+    await act(async () => editable.unmount());
+    assert.doesNotMatch(content, /Verified active|已核对生效|Reviewer Specialist|全局审阅专家|Neo4j/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+
+test("CFG-X04a: memory change rows localize both toggle directions without borrowing Reviewer labels", async () => {
+  for (const locale of ["en", "zh"] as const) for (const enabled of [true, false]) {
+    const before = enabled ? "Disabled" : "Enabled", after = enabled ? "Enabled" : "Disabled";
+    const renderer = await mount(request({ capabilityId: "memory.enable", runId: undefined,
+      fields: [{ id: "enabled", label: "Enable workbench memory graph", kind: "boolean", required: true, value: enabled }],
+      changes: [{ field: "enabled", before, after }] }), actions(), () => undefined, locale);
+    const diff = renderer.root.findByProps({ className: "configuration-diff" });
+    assert.deepEqual(diff.findAllByType("strong").map(node => node.children.join("")), locale === "zh"
+      ? ["拟修改内容", "启用本地工作台记忆图谱"] : ["Proposed changes", "Enable local workbench memory graph"]);
+    assert.deepEqual(diff.findAllByType("span").map(node => node.children.join("")), locale === "zh"
+      ? enabled ? ["已停用", "已启用"] : ["已启用", "已停用"] : [before, after]);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Reviewer Specialist|全局审阅专家/);
+    await act(async () => renderer.unmount());
+  }
+  const reviewer = await mount(request({ capabilityId: "reviewer.enable",
+    fields: [{ id: "enabled", label: "Reviewer", kind: "boolean", required: true, value: true }],
+    changes: [{ field: "enabled", before: "Disabled", after: "Enabled" }] }), actions(), () => undefined, "zh");
+  assert.match(JSON.stringify(reviewer.toJSON()), /启用全局审阅专家/);
+  assert.doesNotMatch(JSON.stringify(reviewer.toJSON()), /本地工作台记忆图谱|已启用|已停用/);
+  await act(async () => reviewer.unmount());
+});

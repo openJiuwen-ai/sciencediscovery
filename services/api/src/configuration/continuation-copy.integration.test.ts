@@ -74,3 +74,16 @@ test("CFG-XBUG-09: an independent setting has no original task to continue and m
     assert.doesNotMatch(CONFIGURATION_AGENT_DESCRIPTORS[id].whenNeeded, /does not resume the active run/);
   }
 });
+
+
+test("CFG-X04a: local Memory save resumes only its bound wait without claiming runtime readiness", async context => {
+  const h = await fixture(context), frozen = structuredClone(h.run.settingsSnapshot);
+  const before = h.store.getMemoryGraphSettings();
+  const card = await h.framework.propose(h.session.id, { protocolVersion: 3, runId: h.run.id, capabilityId: "memory.enable", values: { enabled: !before.enabled } });
+  const decision = { revision: card.revision, previewDigest: card.previewDigest!, selectedOptionId: "persist", decision: "apply" as const };
+  const applied = await h.framework.decide(h.session.id, card.id, decision);
+  assert.equal(applied.activation.mode, "next_request"); assert.equal(applied.activation.state, "needs_user_action"); assert.equal(applied.resumption.state, "queued");
+  await h.framework.decide(h.session.id, card.id, decision);
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
