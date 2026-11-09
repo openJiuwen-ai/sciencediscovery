@@ -4422,9 +4422,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     // Deletions answer from the catalog and reclaim files afterwards; leaving
     // them mid-flight would hand the next start a journal to finish.
     await store.whenDeletionsSettle();
-    // Array writes are write-temp-then-rename: letting the store close between
-    // those two steps turns the rename into an ENOENT the next remove surfaces.
-    await store.whenWritesSettle();
     ideaResearch.close();
     await (await platform.connectorPlugins).dispose();
     remoteCompute.close();
@@ -4435,7 +4432,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     } catch (error) {
       apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
     }
-  })().finally(() => store.close());
+  })().finally(async () => {
+    // Array writes are write-temp-then-rename, and closing the store does not
+    // stop them (they never touch SQLite). Drain them last, after every other
+    // teardown step above has had its chance to write, so a caller removing the
+    // data directory right after cannot turn a rename still between its two
+    // steps into an ENOENT.
+    await store.whenWritesSettle().catch(() => false);
+    store.close();
+  });
   server.once("listening", () => { hasListened = true; });
   server.once("close", () => {
     hasClosed = true;

@@ -84,6 +84,48 @@ test("CFG connector proposals require a user decision and preserve inherited con
   } finally { db.close(); }
 });
 
+test("shutdown drains an in-flight array write before the data directory goes away", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  // Reach the same queue the store's own writers use, so the drain is pinned
+  // deterministically instead of through the teardown race it exists to stop.
+  const queue = store as unknown as {
+    mutateArray<T, R>(path: string, operation: (values: T[]) => R | Promise<R>): Promise<R>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const runsPath = resolve(tempRoot, "session-runs", "gated.json");
+  const pending = queue.mutateArray<string, void>(runsPath, async () => { await gate; });
+  let settled = false;
+  const waiting = queue.whenWritesSettle().then((drained) => { settled = true; return drained; });
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(settled, false, "the drain must not resolve while a write is between its two steps");
+  release();
+  await pending;
+  assert.equal(await waiting, true, "the drain reports a clean wait once the write lands");
+  assert.equal(settled, true);
+  const leftovers = (await readdir(dirname(runsPath))).filter((name) => name.endsWith(".tmp"));
+  assert.deepEqual(leftovers, [], "the write-temp-then-rename step leaves no temp behind");
+});
+
+test("a write that never finishes is reported rather than hanging shutdown", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-bound-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const queue = store as unknown as {
+    mutateArray<T, R>(path: string, operation: (values: T[]) => R | Promise<R>): Promise<R>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const pending = queue.mutateArray<string, void>(resolve(tempRoot, "session-runs", "stuck.json"), async () => { await gate; });
+  assert.equal(await queue.whenWritesSettle(20), false, "an unbounded writer must not hold shutdown open");
+  release();
+  await pending;
+});
+
 test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
