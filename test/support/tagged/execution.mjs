@@ -50,30 +50,51 @@ export function mockedShards(plan) {
       if (!['fresh', 'global', 'session'].includes(isolation)) throw new Error(`MOCKED_ISOLATION_REQUIRED: ${entry.id}`);
       name = isolation === 'session' ? 'standard-journeys' : 'standard-config';
     } else if (!['research', 'literature', 'governed'].includes(fixture)) throw new Error(`UNKNOWN_MOCKED_FIXTURE: ${entry.id}`);
-    if (files.has(entry.source) && files.get(entry.source) !== name) throw new Error(`SPLIT_MOCKED_FILE: ${entry.source}`);
-    files.set(entry.source, name);
+    // Fresh/global live in different stacks even though they share a CI job.
+    // A file must not silently lose its shared hooks across that boundary.
+    const fileGroup = fixture === 'standard' ? `${name}:${isolation}` : name;
+    if (files.has(entry.source) && files.get(entry.source) !== fileGroup) throw new Error(`SPLIT_MOCKED_FILE: ${entry.source}`);
+    files.set(entry.source, fileGroup);
     const group = groups.get(name) ?? { name, fixture, keys: [], checks: name === 'standard-config' && plan.execution.backend === 'jiuwenswarm' ? swarmChecks : [] };
     group.keys.push(entry.key); groups.set(name, group);
   }
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// A local complete run executes the CI partitions one after another. Keeping
-// this projection beside mockedShards prevents the local driver from merging
-// partitions merely because they happen to share a product fixture.
+// Files own beforeAll/afterAll state and sometimes ordered tests. Keep each
+// file serial, but distribute independent files over two separate stacks.
+// Global mutations only serialize work on the SAME stack, not other installs.
+function isolatedBatches(partition, entries, suffix = '', checks = partition.checks) {
+  const files = new Map();
+  for (const entry of entries) {
+    const file = files.get(entry.source) ?? [];
+    file.push(entry); files.set(entry.source, file);
+  }
+  const bins = Array.from({ length: Math.min(2, files.size) }, () => []);
+  for (const file of [...files.values()].sort((a, b) => b.length - a.length || a[0].source.localeCompare(b[0].source))) {
+    const bin = bins.reduce((best, next) => next.length < best.length ? next : best);
+    bin.push(...file);
+  }
+  return bins.map((bin, index) => ({
+    shard: partition.name, group: 'mocked', fixture: partition.fixture,
+    key: `mocked-${partition.name}${suffix}${bins.length > 1 ? `-${index + 1}` : ''}`,
+    // Preserve the frozen collection order within each stack, including hooks.
+    entries: entries.filter(entry => bin.includes(entry)), checks: index === 0 ? checks : [],
+  }));
+}
+
+// The CI matrix and local driver use the same batches and accounting. A
+// pristine-library batch precedes mutations; all other stacks are independent.
 export function mockedBatches(plan) {
   return mockedShards(plan).flatMap(partition => {
     const entries = plan.entries.filter(entry => partition.keys.includes(entry.key));
-    const batch = (suffix, selected, checks = []) => ({
-      shard: partition.name, group: 'mocked', fixture: partition.fixture,
-      key: `mocked-${partition.name}${suffix}`, entries: selected, checks,
-    });
-    if (partition.name !== 'standard-config') return [batch('', entries, partition.checks)];
+    if (partition.name !== 'standard-config') return isolatedBatches(partition, entries);
     const fresh = entries.filter(entry => entry.tags.includes('isolation:fresh'));
     const global = entries.filter(entry => entry.tags.includes('isolation:global'));
     return [
-      ...(fresh.length ? [batch('-fresh', fresh)] : []),
-      ...(global.length ? [batch('-global', global, partition.checks)] : []),
+      ...(fresh.length ? [{ shard: partition.name, group: 'mocked', fixture: partition.fixture,
+        key: `mocked-${partition.name}-fresh`, entries: fresh, checks: [] }] : []),
+      ...isolatedBatches(partition, global, '-global'),
     ];
   });
 }

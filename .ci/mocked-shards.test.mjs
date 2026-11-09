@@ -1,9 +1,11 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { mockedBatches, mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
@@ -44,6 +46,7 @@ test('mocked partitions keep standard fixtures and select the same cases for eac
   assert.deepEqual(mockedShards(b).flatMap(s => s.checks), []);
   assert.throws(() => mockedShards(plan([descriptor('new')])), /MOCKED_ISOLATION_REQUIRED/);
   assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:global']), { ...descriptor('two', ['isolation:session']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
+  assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:fresh']), { ...descriptor('two', ['isolation:global']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
 });
 
 test('the complete local run can execute every mocked partition serially', () => {
@@ -58,6 +61,26 @@ test('the complete local run can execute every mocked partition serially', () =>
   assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-global').entries.every(entry => entry.tags.includes('isolation:global')));
   assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-config-global').checks, swarmChecks);
   assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-journeys').checks, []);
+});
+
+test('the Actions matrix creates large partitions before short fixtures without changing its members', t => {
+  const entries = [
+    ...Array.from({ length: 7 }, (_, i) => descriptor(`session-${i}`, ['isolation:session'])),
+    ...Array.from({ length: 4 }, (_, i) => descriptor(`global-${i}`, ['isolation:global'])),
+    ...Array.from({ length: 2 }, (_, i) => descriptor(`research-${i}`, ['fixture:research'])),
+    descriptor('literature', ['fixture:literature']), descriptor('governed', ['fixture:governed']),
+  ];
+  const root = mkdtempSync(join(tmpdir(), 'mocked-matrix-order-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const input = join(root, 'plan.json'), output = join(root, 'output'), p = plan(entries);
+  writeFileSync(input, JSON.stringify(p));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./mocked-matrix.mjs', import.meta.url)), input], {
+    env: { ...process.env, GITHUB_OUTPUT: output }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const matrix = JSON.parse(readFileSync(output, 'utf8').trim().replace(/^matrix=/, ''));
+  assert.deepEqual(matrix.include.map(row => row.shard), ['standard-journeys', 'standard-config', 'research', 'governed', 'literature']);
+  assert.deepEqual(matrix.include.map(row => row.shard).sort(), mockedShards(p).map(shard => shard.name).sort());
 });
 
 test('fresh-library journeys precede global mutation and cannot run with multiple workers', () => {
@@ -152,13 +175,35 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
-  // The summary step reads the stack that actually runs the checks, named by
-  // the same batch key the run writes under.
-  const checkKey = mockedBatches(plan()).find(batch => batch.checks.length).key;
-  assert.ok(job('e2e').includes(`checks=.ci-results/${checkKey}/e2e/jiuwenswarm-checks.log`));
+  // Batch counts depend on the collected files. Summarize the actual check
+  // log instead of guessing one batch's directory in the workflow.
+  assert.match(job('e2e'), /find \.ci-results -name jiuwenswarm-checks\.log -type f/);
   const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
   for (const block of [real, job('merge-gate')]) {
     assert.match(block, /path: \.ci-mocked-results\n/);
     assert.match(block, /node \.ci\/mocked-report.mjs \.ci-mocked-plan\/plan.json \.ci-mocked-results/);
   }
+});
+
+test('independent files get separate stacks while file hooks, fresh state and checks retain their owners', () => {
+  const entries = [
+    descriptor('fresh', ['isolation:fresh']),
+    ...['a', 'b', 'c', 'd'].flatMap(file => [0, 1, 2].map(i => ({
+      ...descriptor(`${file}-${i}`, ['isolation:global']), source: `test/${file}.spec.ts`,
+    }))),
+    ...['session-a', 'session-b'].map(id => descriptor(id, ['isolation:session'])),
+  ];
+  const p = plan(entries), batches = mockedBatches(p);
+  assert.deepEqual(batches.flatMap(b => b.entries.map(e => e.key)).sort(), p.entries.map(e => e.key).sort());
+  const global = batches.filter(b => b.key.includes('-global'));
+  assert.equal(global.length, 2);
+  assert.deepEqual(global.map(b => b.entries.length), [6, 6]);
+  for (const source of new Set(p.entries.map(e => e.source))) {
+    assert.equal(batches.filter(b => b.entries.some(e => e.source === source)).length, 1, source);
+  }
+  for (const batch of batches) {
+    assert.deepEqual(batch.entries, p.entries.filter(e => batch.entries.includes(e)));
+  }
+  assert.deepEqual(batches.filter(b => b.checks.length).map(b => b.key), ['mocked-standard-config-global-1']);
+  assert.equal(batches.filter(b => b.key.startsWith('mocked-standard-journeys')).length, 2);
 });

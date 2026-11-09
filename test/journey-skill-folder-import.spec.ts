@@ -116,6 +116,10 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
         await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^Skills/ }).click();
         await expect(manager).toBeVisible();
         await expect(skillCard).toHaveCount(0);
+        // The catalog renders a zero placeholder before its request completes.
+        // Establish the loaded count before checking that import adds one.
+        const installed = await api("/api/skills") as Array<{ id: string }>;
+        await expect(installedStat).toHaveText(String(installed.length));
         installedBefore = Number(await installedStat.innerText());
         expect(Number.isInteger(installedBefore)).toBe(true);
       },

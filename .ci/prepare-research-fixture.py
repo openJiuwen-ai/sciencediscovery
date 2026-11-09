@@ -8,7 +8,7 @@ import re
 import yaml
 
 instance = os.environ["JIUWENSWARM_INSTANCE"]
-if not re.fullmatch(r"sd-e2e-mocked-(research|literature)", instance):
+if not re.fullmatch(r"sd-e2e-mocked-(research|literature)(?:-[12])?", instance):
     raise ValueError("Research fixture requires its own CI Swarm instance")
 # CI must provide its disposable root; never fall back to a developer's home.
 home = Path(os.environ["JIUWENSWARM_HOME"])

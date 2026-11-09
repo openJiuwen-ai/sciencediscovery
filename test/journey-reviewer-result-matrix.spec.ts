@@ -104,7 +104,14 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
       await expect(skipped).toHaveCount(2);
       await expect(skipped.first().locator("strong").first()).toContainText("Review skipped");
     });
-  } finally { await cleanupJourney(page, fixture); }
+  } finally {
+    // Drain fixture rewriting before deletion turns Session polling into 404s.
+    try {
+      await page.unrouteAll({ behavior: "wait" });
+    } finally {
+      await cleanupJourney(page, fixture);
+    }
+  }
 });
 
 });

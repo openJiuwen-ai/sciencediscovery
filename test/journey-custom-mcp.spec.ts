@@ -314,6 +314,14 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
     await journey.step("等待修复并恢复调用", "重要来源阻塞任务，修复卡片重新检查后同一运行成功", async () => {
       const before = (await invocations()).length;
       const run = await sendUserMessage(page, fixture.session.id, "The selected MCP tool is essential. Wait for repair, then call it.");
+      // Start the UI propagation check after the model's call has actually
+      // entered repair wait, rather than including model/bridge startup.
+      await expect.poll(async () => {
+        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/execution-blocks`, { headers: authorizationHeader() });
+        expect(response.ok()).toBe(true);
+        const blocks = await response.json() as Array<{ kind?: string; executionId: string }>;
+        return blocks.some((block) => block.kind === "mcp" && block.executionId === run.id);
+      }, { message: "the selected MCP call should enter repair wait", timeout: 60_000 }).toBe(true);
       const card = page.getByRole("region", { name: "执行受阻" });
       await expect(card).toContainText("等待 MCP 修复");
       await expect(card).toContainText(second.id);

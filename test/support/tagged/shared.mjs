@@ -14,7 +14,7 @@
 // limitations under the License.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, globSync, readdirSync, readlinkSync, symlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collect, execute } from './coordinator.mjs';
@@ -27,6 +27,7 @@ import { PROVIDER_FAULT, retryableProviderFaults, providerFaultRepeatFailed, pro
 import { checks } from './checks.mjs';
 import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
 import { startSwarm, withoutSwarm } from './swarm.mjs';
+import { mockedWorkers, reserveMockedPorts, runMockedBatches } from './mocked-workers.mjs';
 import { availableParallelism, totalmem } from 'node:os';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -158,7 +159,7 @@ export function resultsLabel(slice, query=false) {
 }
 
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard,targetArch;const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard,targetArch,browserWorkers;const query={};
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -170,6 +171,7 @@ export async function main(args=process.argv.slice(2)) {
     else if(flag==='--coverage')coverage=true;
     else if(flag==='--backend')backend=args.shift();
     else if(flag==='--shard')shard=args.shift();
+    else if(flag==='--workers')browserWorkers=mockedWorkers(args.shift() ?? '');
     else if(flag==='--target-arch'){
       targetArch=args.shift();
       if(!['amd64','arm64'].includes(targetArch))throw new Error('Invalid --target-arch; use amd64 or arm64');
@@ -188,6 +190,7 @@ export async function main(args=process.argv.slice(2)) {
   if(!profile)throw new Error(`Unknown profile: ${profileName}; known are ${Object.keys(profiles).join(', ')}`);
   if(dimensions.length&&(slice!==undefined||profileName!=='pr'))throw new Error('--profile and --slice name a part of a CI policy; a tag query builds its own selector. Use one or the other');
   slice??='shared';
+  if(browserWorkers!==undefined&&slice!=='e2e')throw new Error('--workers is only supported for the mocked e2e slice');
   if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list|policy [--profile ${Object.keys(profiles).join('|')}] [--slice ut|st|e2e] [--${Object.keys(schema.groups).join(' V] [--')} V] [--output DIR] [--coverage]`);
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
@@ -236,6 +239,13 @@ export async function main(args=process.argv.slice(2)) {
     for(let i=0;i<steps.length;i++){const [cmd,argv,stepEnv]=steps[i];console.log(`Prepare: ${cmd} ${argv.join(' ')}`);if(await run(cmd,argv,{...env,...stepEnv},join(outputDir,`prepare-${i}.log`)))throw new Error(`PREPARATION_FAILED: inspect ${join(outputDir,`prepare-${i}.log`)}`);}
   }
   if(prepareOnly){console.log(`Prepared ${slice}; no test was collected or executed here.`);return 0;}
+  if(needPW&&action!=='list'){
+    // Normalize once before concurrent drivers read the shared installation.
+    const link=join(root,'test/node_modules');
+    if(!existsSync(link)||readlinkSync(link)!=='../.e2e/node_modules'){
+      rmSync(link,{force:true});symlinkSync('../.e2e/node_modules',link);
+    }
+  }
   // Source scopes follow workspace layout, never installed capabilities or environment gates.
   const nodeFiles=[...globSync([...nodeSources],{cwd:root}), ...nodeExtraSources].sort();
   const wantedCategory=categories.length===1?categories[0]:null;
@@ -385,17 +395,42 @@ export async function main(args=process.argv.slice(2)) {
     // for them — `<results>/e2e/` — while the frozen plan and its accounting
     // stay in this slice's own directory beside them. Every attempt keeps its
     // own evidence directory, so a retry never erases the attempt it repeats.
+    const runtimeBase=resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'));
+    if(slice==='e2e')mkdirSync(runtimeBase,{recursive:true});
+    const mockedRuntime=slice==='e2e'?mkdtempSync(join(runtimeBase,'m-')):undefined;
+    const browserTimings=[];
     const browserRun=async(batch,planPath,reportPath,instance)=>{
-      const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
-        CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
-        CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),batch.key),
-        CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
-        ...(slice==='e2e'?{CI_E2E_SWARM_CHECKS:batch.checks.length?'run':'off'}:{}),
-        SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath,
-        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
-      return {code,data:existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined};
+      // Descriptive names belong in reports, not conda prefixes: a UUID-named
+      // revision under a long worktree must still fit conda's prefix padding.
+      const runtime=mockedRuntime?mkdtempSync(join(mockedRuntime,'s-')):join(runtimeBase,batch.key);
+      const ports=mockedRuntime?await reserveMockedPorts():undefined;
+      const startedAt=new Date();
+      if(ports)console.log(`Mocked stack ${instance}: API ${ports.base}, Runner ${ports.base+1}, Swarm ${ports.base+3}/${ports.base+4}/${ports.base+6}`);
+      // Release immediately before handing this block to its own services.
+      await ports?.release();
+      let succeeded=false;
+      try {
+        const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
+          CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
+          CI_RUNTIME_DIR:runtime,...ports?.env,
+          CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
+          ...(mockedRuntime?{JIUWENSWARM_HOME:join(runtime,'jiuwenswarm'),
+            SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR:join(runtime,'data','memory-graph')}:{}),
+          ...(slice==='e2e'?{CI_E2E_SWARM_CHECKS:batch.checks.length?'run':'off'}:{}),
+          SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath,
+          E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
+        const data=existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined;
+        succeeded=code===0&&data?.results?.every(result=>result.outcome==='PASS');
+        return {code,data};
+      } finally {
+        browserTimings.push({batch:instance,startedAt,durationMs:Date.now()-startedAt.getTime(),ports:ports?.env});
+        // run-e2e.sh has stopped all services and staged their evidence. Do
+        // not accumulate GBs of completed venvs; keep failed stacks to debug.
+        if(mockedRuntime&&succeeded)rmSync(runtime,{recursive:true,force:true});
+      }
     };
-    for(const [key,batch] of batches){
+    const runBatch=async(batch)=>{
+      const key=batch.key;
       const report=join(outputDir,`playwright-${key}-results.json`);rmSync(report,{force:true});
       const batchPlan=join(outputDir,`playwright-${key}-plan.json`);json(batchPlan,subplan(plan,batch.entries));
       const first=await browserRun(batch,batchPlan,report,key);
@@ -441,6 +476,13 @@ export async function main(args=process.argv.slice(2)) {
       if(first.code&&!providerFaultOnly)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${first.code}`);
       results.push(...batchResults);
       if(first.data)errors.push(...first.data.errors);else errors.push('PLAYWRIGHT_REPORT_MISSING');
+    };
+    if(slice==='e2e'){
+      const completed=await runMockedBatches([...batches.values()],runBatch,{workers:browserWorkers});
+      for(const item of completed)if(item.status==='rejected')errors.push(`PLAYWRIGHT_WORKER_FAILED: ${item.reason?.message??item.reason}`);
+      json(join(outputDir,'browser-timing.json'),{workers:mockedWorkers(browserWorkers),batches:browserTimings});
+    }else{
+      for(const batch of batches.values())await runBatch(batch);
     }
   }
   const summary=verifyResults(plan,results,errors);json(join(outputDir,'summary.json'),summary);

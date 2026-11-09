@@ -573,8 +573,7 @@ jobs:
       - name: Summarize the JiuwenSwarm checks
         if: always()
         run: |
-          checks=.ci-results/mocked-standard-config-global/e2e/jiuwenswarm-checks.log
-          if [[ -f "$checks" ]]; then
+          while IFS= read -r checks; do
             {
               echo
               echo "### JiuwenSwarm checks"
@@ -583,7 +582,7 @@ jobs:
               grep -E '^[a-z-]+: |^FAILED|^jiuwenswarm_checks=' "$checks" || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          done < <(find .ci-results -name jiuwenswarm-checks.log -type f)
 
       # Failure evidence — Playwright report, traces, screenshots, journey
       # reports, and the stack log that attributes a stack-side failure.

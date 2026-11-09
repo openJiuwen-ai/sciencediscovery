@@ -185,7 +185,9 @@ fi
 # The upstream postinstall uses $PWD and therefore creates a container-absolute
 # link. Normalize it so the bind-mounted checkout — or an unpacked payload —
 # remains usable wherever it landed.
-ln -sfn ../.e2e/node_modules "$repository_root/test/node_modules"
+if [[ "$(readlink "$repository_root/test/node_modules" 2>/dev/null || true)" != ../.e2e/node_modules ]]; then
+  ln -sfn ../.e2e/node_modules "$repository_root/test/node_modules"
+fi
 
 if [[ "$prepare_only" -eq 1 ]]; then
   printf 'E2E preparation complete; the stack is deliberately not started here.\n' | tee -a "$test_log"
@@ -264,7 +266,11 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # pinned Chromium — the shared runner does that before it freezes the plan —
   # not JiuwenSwarm or its instance, so this runs either way; with the install
   # already present it only makes sure the instance exists.
-  "$repository_root/scripts/jiuwenswarm.sh" setup >> "$test_log" 2>&1 || {
+  # Instances have separate registries, but setup patches/syncs one shared
+  # pinned installation. Serialize only setup, never the running journeys.
+  mkdir -p "$repository_root/.tmp"
+  flock "$repository_root/.tmp/ci-e2e-swarm-setup.lock" \
+    "$repository_root/scripts/jiuwenswarm.sh" setup >> "$test_log" 2>&1 || {
     printf 'BLOCKED: JiuwenSwarm could not be installed (scripts/jiuwenswarm.sh setup); see %s.\n' "$test_log" | tee -a "$test_log" >&2
     exit 2
   }
@@ -272,6 +278,13 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     printf 'BLOCKED: the JiuwenSwarm instance %s is not set up.\n' "$JIUWENSWARM_INSTANCE" | tee -a "$test_log" >&2
     exit 2
   }
+  if [[ "$group" == mocked && -n "${JIUWENSWARM_AGENT_SERVER_PORT:-}" ]]; then
+    if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
+      echo 'BLOCKED: mocked port assignment refuses to modify a running Swarm instance' >&2; exit 2
+    fi
+    "$JIUWENSWARM_SRC/.venv/bin/python" .ci/prepare-mocked-instance.py >> "$test_log" 2>&1 || exit 2
+    eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || exit 2
+  fi
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
   if [[ "$swarm_offline_fixture" == 1 ]]; then
     if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
