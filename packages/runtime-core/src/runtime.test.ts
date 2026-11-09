@@ -367,6 +367,65 @@ test("a second provider input overflow is surfaced without an infinite recovery 
   assert.equal(calls, 2);
 });
 
+test("a truncated tool-call-free turn is retried with output-limit feedback before completing", async () => {
+  const feedbacks: string[] = [];
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: {
+      async invoke() {
+        calls += 1;
+        if (calls === 1) {
+          return { assistantMessage: { role: "assistant", content: "the first half" }, toolCalls: [], truncated: true };
+        }
+        return {
+          assistantMessage: { role: "assistant", content: "done", tool_calls: [{ id: "write", name: "write_file" }] },
+          toolCalls: [{ id: "write", name: "write_file", args: {} }],
+        };
+      },
+    },
+    toolDispatcher: { async execute() { return { content: "ok", isError: false, message: { role: "tool", tool_call_id: "write", content: "ok" } }; } },
+    outputRecovery: {
+      maxRecoveries: 2,
+      feedback: (turn, attempt) => { const text = `recover ${attempt}`; feedbacks.push(text); return { role: "user", content: text }; },
+    },
+  });
+  const result = await loop.run([{ role: "user", content: "big task" }], new AbortController().signal, () => undefined);
+  assert.equal(calls, 2);
+  assert.deepEqual(feedbacks, ["recover 1"]);
+  assert.deepEqual(result.history.map((message) => message.role), ["user", "user", "assistant", "tool"]);
+  assert.equal(result.history[1]?.content, "recover 1");
+  assert.equal(result.history[2]?.content, "done");
+});
+
+test("output-limit recovery exhausts and still reports the truncated turn for fail-closed handling", async () => {
+  let calls = 0;
+  const completed: Array<{ truncated?: boolean }> = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: {
+      async invoke() {
+        calls += 1;
+        return { assistantMessage: { role: "assistant", content: "still cut off" }, toolCalls: [], truncated: true };
+      },
+    },
+    toolDispatcher: { async execute() { throw new Error("not called"); } },
+    eventSink: (event) => { if (event.type === "completed") completed.push(event); },
+    outputRecovery: {
+      maxRecoveries: 2,
+      feedback: (turn, attempt) => ({ role: "user", content: `recover ${attempt}` }),
+    },
+  });
+  const result = await loop.run([{ role: "user", content: "big" }], new AbortController().signal, () => undefined);
+  assert.equal(calls, 3);
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0]?.truncated, true);
+  assert.equal(result.history.at(-1)?.role, "assistant");
+  assert.equal(result.history.at(-1)?.content, "still cut off");
+});
+
 test("builder validates required ports and freezes the run composition", async () => {
   assert.throws(() => new RuntimeBuilder<RuntimeMessage, Input, never>().build(), /contextAssembler.*modelClient.*toolDispatcher.*maxModelTurns/);
   const assembler = { async assemble({ history }: { history: readonly RuntimeMessage[] }) {

@@ -47,9 +47,11 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -217,7 +219,7 @@ export function createPlatformServices(
   const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
-    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog, { dataDir: config.dataDir });
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
@@ -298,7 +300,13 @@ export function createPlatformServices(
     evolutionStore,
     new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() }),
     memoryGraphSink,
-    undefined,
+    // Stated here rather than left to the orchestrator's default: whether an
+    // installation may run candidates unconfined is a configuration decision,
+    // and the default must stay "no".
+    () => probeEvolveSandbox(
+      process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+      { unisolated: config.evolve.unisolated },
+    ),
     evolveRunTokens,
     // The sidecar reaches the model proxy at this origin. `0.0.0.0` is a bind
     // address, not somewhere to connect to, so it is dialled back to loopback —
@@ -386,6 +394,18 @@ export function createPlatformServices(
     },
   );
 
+  /** Whether the user's own command approved unconfined candidates. On a
+   *  Windows install the server runs candidates directly, so this flag is the
+   *  only thing between a search and unconfined model-written code; the
+   *  model's tool argument alone is not the user's answer.
+   *
+   *  The latest command wins: a second design started with a plain
+   *  `/evolve-design` inherits nothing from an earlier approval. A checkpoint
+   *  answer does not move the anchor — it is not a command — so the design
+   *  this run belongs to is still the latest one there. */
+  const userApprovedUnisolated = async (sessionId: string) =>
+    latestEvolveCommandApprovesUnisolated(await store.readMessages(sessionId));
+
   const casHasEvolve = async (hash: string) => {
     try {
       await evolveCas.read(hash);
@@ -418,10 +438,22 @@ export function createPlatformServices(
     // Read before the spend checkpoint. The same function that prices the run
     // answers here, so the number the agent shows the user is the number the
     // run gets — including the thinking setting an endpoint cannot honor.
-    getEvolveBudget: async ({ thinking }) => describeEvolveBudget(store.getModel(turn.modelId), thinking),
+    getEvolveBudget: async ({ thinking, thinkingEffort }) => describeEvolveBudget(
+      store.getModel(turn.modelId), thinking ?? turn.thinkingMode ?? "auto", thinkingEffort ?? turn.thinkingEffort,
+    ),
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
+      // The tool's `allowUnisolated` records the user's answer, but it is the
+      // model that writes it: a goal, a dataset row or a plain mistake can set
+      // it. Accept it only when the session's own `/evolve-design` command
+      // carried `--allow-direct`; otherwise drop it and let pre-flight's
+      // `unisolated_run_unconfirmed` refusal say what is missing.
+      const requested = input.allowUnisolated === true;
+      const approvedUnisolated = requested && await userApprovedUnisolated(turn.sessionId);
+      if (requested && !approvedUnisolated) {
+        apiLog.warn("evolve_unisolated_not_confirmed", { sessionId: turn.sessionId });
+      }
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
       // agent's idle clock is four: without pausing it the turn dies with "no
@@ -431,11 +463,14 @@ export function createPlatformServices(
       const releaseWait = turn.beginExternalWait?.();
       try {
         const result = await startProposedRun(input, {
+          approvedUnisolated,
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
           orchestrator: evolveOrchestrator,
           sessionId: turn.sessionId,
+          thinking: turn.thinkingMode ?? "auto",
+          thinkingEffort: turn.thinkingEffort,
           store: storeEvolveInput(turn.sessionId),
           // A custom gateway is configured as the plain OpenAI dialect unless
           // its operator names another, and that dialect has no thinking
@@ -652,7 +687,10 @@ export async function initializePlatformServices(
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.
-  void evolutionStore.initialize()
+  // Evolution recovery touches the data directory. Keep it in the startup
+  // lifecycle so closing an API during boot cannot race a test/fixture that
+  // removes its temporary data directory.
+  await evolutionStore.initialize()
     .then(() => evolveOrchestrator.adoptOrphanedRuns())
     .catch((error: unknown) => {
       apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });

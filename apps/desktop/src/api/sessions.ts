@@ -14,9 +14,11 @@
 
 import type { ApiClient } from "./client.js";
 import type {
+  ArtifactVersionProvenance,
   CreateSessionRequest,
   Project,
   ScientificArtifact,
+  ScientificArtifactVersion,
   Session,
   SessionArtifactOutput,
   SessionDetail,
@@ -131,6 +133,23 @@ export function listSubagents(client: ApiClient, sessionId: string): Promise<Sub
   return client.request<Subagent[]>(`/api/sessions/${encodeURIComponent(sessionId)}/subagents`);
 }
 
+/**
+ * One child's record, with the steps it recorded.
+ *
+ * The panel shows a single child, so reading the catalog to pick from it would
+ * move every sibling's steps over the wire for text no one opened. The list
+ * route stays for callers that need the roster.
+ */
+export function getSubagent(
+  client: ApiClient,
+  sessionId: string,
+  subagentId: string,
+): Promise<Subagent> {
+  return client.request<Subagent>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
+  );
+}
+
 export function cancelRun(client: ApiClient, sessionId: string, runId: string): Promise<SessionRun> {
   return client.request<SessionRun>(
     `/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`,
@@ -166,6 +185,31 @@ export function listArtifactOutputs(
 ): Promise<SessionArtifactOutput[]> {
   return client.request<SessionArtifactOutput[]>(
     `/api/sessions/${encodeURIComponent(sessionId)}/artifact-outputs`,
+  );
+}
+
+/** Every version of one Artifact, oldest first. The artifact dialog's picker
+ *  lists them newest first; a citation pins a version *number*, which this
+ *  list turns into the version id the provenance and content routes read. */
+export function listArtifactVersions(
+  client: ApiClient,
+  sessionId: string,
+  artifactId: string,
+): Promise<ScientificArtifactVersion[]> {
+  return client.request<ScientificArtifactVersion[]>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/versions`,
+  );
+}
+
+/** The version's own record of how it was made: the files it was derived
+ *  from, the code that ran, the execution log, and the managed environment. */
+export function readArtifactProvenance(
+  client: ApiClient,
+  sessionId: string,
+  versionId: string,
+): Promise<ArtifactVersionProvenance> {
+  return client.request<ArtifactVersionProvenance>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifact-versions/${encodeURIComponent(versionId)}/provenance`,
   );
 }
 
@@ -214,7 +258,7 @@ export function deleteSession(client: ApiClient, sessionId: string): Promise<{ d
 
 /** A Project the user made goes away whole — its Sessions, their transcripts
  *  and their workspaces. The inbox is not a Project the user made: the service
- *  refuses it with a 409, so the sidebar never offers this for 最近会话. The id
+ *  refuses it with a 409, so the sidebar never offers this for 会话. The id
  *  is repeated back as confirmation, the same gate a Session has. */
 export function deleteProject(client: ApiClient, projectId: string): Promise<{ deleted: string }> {
   return client.request<{ deleted: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {

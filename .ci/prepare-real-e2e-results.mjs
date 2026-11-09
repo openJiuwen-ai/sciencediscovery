@@ -16,6 +16,7 @@ import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/pro
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { projectMetrics } from "./biomni-gate.mjs";
+import { executionMeasurements } from "./case-execution.mjs";
 
 const metrics = new Set(["benchmark-metrics.json", "team-metrics.json", "evolve-metrics.json"]);
 const planFiles = new Set(["plan.json", "summary.json", "preflight.json"]);
@@ -38,10 +39,15 @@ function scoreFields(doc) {
 function scoreDocument(doc, name) {
   if (!doc || Array.isArray(doc) || typeof doc !== "object") throw new SyntaxError("Expected an object");
   if (metrics.has(name)) {
-    if (doc.benchmark === "biomnibench-da") return projectMetrics(doc);
-    const out = pick(doc, ["schema_version", "case", "case_id", "integration_status", "integration",
+    const out = doc.benchmark === "biomnibench-da" ? projectMetrics(doc) : pick(doc, ["schema_version", "case", "case_id", "key", "integration_status", "integration",
       "started_at", "finished_at", "generation_duration_ms", "budget_ms",
       "budget_exceeded", "cancel_requested", "cancel_http_status"]);
+    // Biomni's score projection has its own gate contract. Preserve existing
+    // timing when present, without substituting its end-to-end measurement.
+    for (const key of ["started_at", "generation_duration_ms"]) if (doc[key] !== undefined) out[key] = doc[key];
+    const measurements = executionMeasurements(doc);
+    if (Object.keys(measurements).length) out.execution_metrics = measurements;
+    if (doc.benchmark === "biomnibench-da") return out;
     for (const key of ["evaluation", "llm_evaluation"]) {
       if (doc[key] && typeof doc[key] === "object") out[key] = scoreFields(doc[key]);
     }

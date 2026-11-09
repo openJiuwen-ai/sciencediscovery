@@ -36,6 +36,7 @@ function bucket(overrides: Partial<ModelUsageBucket> = {}): ModelUsageBucket {
     key: "bucket",
     label: "Bucket",
     outputTokens: 5,
+    reasoningTokens: null,
     reportedInvocationCount: 1,
     totalTokens: 15,
     unreportedInvocationCount: 0,
@@ -59,6 +60,7 @@ test("USG-011 usage formatting omits missing token fields instead of unreported"
   assert.equal(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), "in 10 · out 5");
   assert.doesNotMatch(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), /cache/);
   assert.equal(usageBreakdownLabel(bucket({ inputTokens: null, unreportedInvocationCount: 1 })), "out 5");
+  assert.match(usageBreakdownLabel(bucket({ reasoningTokens: 8 })), /reasoning 8/);
 });
 
 test("USG-031 a compact token count never rounds up into a unit it has not reached", () => {
@@ -93,6 +95,7 @@ test("USG-012 usage page renders model drilldown, chart and inline/table usage",
     modelProfileId: "model-a",
     modelProfileName: "Model A",
     outputTokens: 5,
+    reasoningTokens: 7,
     runId: "run-a",
     sessionId: "session-a",
     startedAt: "2026-08-03T06:39:00.000Z",
@@ -252,6 +255,7 @@ test("USG-012 usage page renders model drilldown, chart and inline/table usage",
   assert.match(page, /All models/);
   assert.match(page, /Last 30 days/);
   assert.match(page, /Cache write/);
+  assert.match(page, /reasoning 7/);
   assert.match(page, /Estimated cost \(CNY, approx\.\)/);
   assert.match(page, /Displayed costs use approximate cached conversion \(1 USD = 6\.69 CNY \(2026-09-08\)\); exports keep original currencies, and CSV adds display conversion columns\./);
   assert.match(page, /<option value="CNY" selected="">CNY<\/option>/);

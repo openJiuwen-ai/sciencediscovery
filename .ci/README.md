@@ -32,7 +32,7 @@ No workflow maintains its own list of case titles.
 | L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + all 50 public BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
+| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -149,8 +149,19 @@ checkout, service ports, runtime data, JiuwenSwarm home and reports; both
 standard workers still use the **standard fixture**, not a research fixture.
 Backend selection is independent and does not change the 70 browser identities.
 
-`pnpm ci:e2e -- --shard standard-config` runs one partition; without `--shard`,
-the local entry point retains the full serial suite and one supplemental pass.
+`pnpm ci:e2e -- --shard standard-config` runs one evidence partition. Its
+fresh-library cases execute first in a dedicated pristine stack, followed by
+the global configuration cases and the single supplemental pass in a second
+stack. Without `--shard`, the local entry point retains the full serial suite
+and the same isolation boundary.
+
+Managed scientific-environment readiness is a prerequisite of the journeys
+that use it, rather than a gate before every browser batch. J3 and the real
+request journey poll the existing setup status for at most 180 seconds, with
+each request limited to 10 seconds and the remaining total budget. A failed,
+disabled or expired setup cannot satisfy the journey's ready precondition;
+unrelated journeys can still run and report their own results.
+
 Concurrent local invocations must use prepared dependencies and distinct
 `CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
 On one host, let each JiuwenSwarm instance finish binding its automatically
@@ -214,7 +225,7 @@ parallel distribution jobs. Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
-L3, L4 and L5 reuse the existing **nightly-ci-ds** Environment, with **no required
+L3, L4 and L5 reuse the existing **nightly-research** Environment, with **no required
 reviewers and no final approval job**, as agreed in
 [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
 
@@ -384,11 +395,11 @@ artifacts. A repeat that did not work is recorded in the accounting
 (`PROVIDER_FAULT_REPEAT_FAILED`, `PROVIDER_FAULT_REPEAT_REPORT_MISSING`)
 instead of only in the log: the case stays unverified and the run says why.
 
-### L5 full-public benchmark and baseline candidate
+### L5 active-public benchmark and baseline candidate
 
 For a full L5 CI run, manually dispatch **CI** (`ci.yml`) on the desired
 branch with `profile=release`. This runs the cumulative CI gates and the
-complete real E2E suite, including the L3/L4 cases and all 50 public
+complete real E2E suite, including the L3/L4 cases and all 45 active public
 BiomniBench-DA tasks.
 The shared real E2E workflow defaults to two concurrent workers across the
 whole matrix. To use four workers, select `max-parallel=4` in the manual
@@ -396,7 +407,7 @@ whole matrix. To use four workers, select `max-parallel=4` in the manual
 invalid reusable-workflow inputs fail planning before any worker starts.
 Merge queue, nightly and release-tag runs keep the default of two workers.
 
-The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
+The real case counts are L3 **9**, L4 **19**, L5 **64**. L5 includes 45 active
 public BiomniBench-DA tasks, with one task per isolated worker, sharing the
 selected concurrency limit and a six-hour worker ceiling including preparation. The
 other 50 upstream tasks remain private. The seeded literature-review journey
@@ -408,11 +419,27 @@ missing, duplicate or mismatched metrics fail the aggregate. All original data
 formats and nested paths are retained; large inputs are streamed into local
 fixtures rather than sent through the buffered HTTP upload endpoint.
 
-The checked-in `biomni-gate.json` uses a temporary aggregate baseline from two
-complete A3 diagnostic runs: mean score 67.7, total tokens 195,099,712, tool
-rounds 2,042, research time 1,312.753472 minutes and task-peak RSS P95
-11.201639801 GiB. All 50 valid results are required. A score drop of 3 points
-warns and 5 points blocks; resources have independent configured limits.
+Biomni workers in both real-E2E workflows, and the serial driver including
+recovery, pin generator and judge thinking to `enabled` + `low` as the requested
+L5 budget policy. They ignore the repository variables
+`E2E_LLM_THINKING_MODE`, `E2E_LLM_THINKING_EFFORT`,
+`BIOMNI_JUDGE_THINKING_MODE` and `BIOMNI_JUDGE_THINKING_EFFORT`;
+other real workers retain these overrides. A Biomni A/B experiment therefore
+requires a separate configuration change. No A/B capability conclusion is
+claimed; #817's validation remains open. The five exclusions are submitter-requested
+scope retirements without per-case invalidity/flake evidence; see the benchmark
+README for the policy record.
+
+The checked-in `biomni-gate.json` retains historical **50-case** observations
+from two complete A3 diagnostic runs: mean score 67.7, total tokens 195,099,712,
+tool rounds 2,042, research time 1,312.753472 minutes and task-peak RSS P95
+11.201639801 GiB. Its explicit population policy scales only additive resource
+budgets by 45/50 before applying warning/block ratios: effective tokens
+175,589,740.8, tool rounds 1,837.8, and research time 1,181.478125 minutes.
+Mean and P95 remain unscaled historical references, not measured 45-case
+figures; population-shift calibration is still required. All 45 active valid
+results are required. A score drop of 3 points warns and 5 points blocks;
+resources have independent configured limits.
 Per-task status and metrics appear in JSON, Markdown and the GitHub step summary.
 The resumable serial driver finishes all first-pass tasks before classified
 evaluation-only/end-to-end recovery, with at most three additional retries per
@@ -441,6 +468,25 @@ consumers, with a single suite-level plan/summary and namespaced per-case scores
 `real-e2e-verdict` carries the aggregate failure reasons. Mock `e2e-results`
 continues to contain complete HTML, linked screenshots and results. Keep large
 diagnostic traces separate if that artifact exceeds the dashboard limit.
+
+For `daily` and `release`, real accounting also publishes a **case execution**
+table in its job summary and in `case-execution-details.md`. Nightly copies the
+same Markdown into its outcome summary. The combined `real-e2e-results` artifact
+contains both that file and `dashboard-summary.json`, whose optional generic
+`table` declares ordered columns and producer-formatted string cells. Its count
+fields partition the selected plan; cases without a verified pass or skip count
+as failed. The existing gate verdict, slice summary, PUCT review and Biomni
+suite report remain separate. `pr` and `merge` do not publish this table.
+
+Rows include every selected identity, ordered by recorded `started_at`, then
+untimed cases by case ID. Score uses only `evaluation.overall_score`,
+`evaluation.total_score`, or `evaluation.score`, in that order. Duration uses
+only `generation_duration_ms / 60000`; it never falls back to end-to-end or
+worker wall time. Generated tokens use recorded completion/output tokens,
+judge tokens and totals retain their recorded scopes, and no split is inferred
+from a total. Peak RSS bytes are divided by `1024 ** 3` for the fixed memory
+column. Missing optional measurements display `n/a` and do not affect gating.
+Only identity cells and numeric measurements enter the table and summary.
 
 ## Coverage reporting
 

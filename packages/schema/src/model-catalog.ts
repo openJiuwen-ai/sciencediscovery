@@ -40,6 +40,7 @@ import type {
 } from "./model-provider.js";
 import {
   DEFAULT_MODEL_API_VARIANT,
+  MODEL_THINKING_EFFORTS,
   THINKING_CONTROL_VARIANTS,
   THINKING_EFFORT_VARIANTS,
   type ModelApiVariant,
@@ -210,7 +211,8 @@ export function modelVariantThinkingControls(
     ?? (["gemini", "kimi-k3"].includes(effectiveVariant) ? ["auto", "enabled"] : DEFAULT_THINKING_MODES);
   let efforts: readonly ModelThinkingEffort[] = declaredEfforts ?? catalog?.thinking?.efforts ?? [];
   if (!declaredEfforts && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(effectiveVariant)) {
-    if (effectiveVariant === "gemini") efforts = ["low", "medium", "high"];
+    if (effectiveVariant === "deepseek") efforts = MODEL_THINKING_EFFORTS;
+    else if (effectiveVariant === "gemini") efforts = ["low", "medium", "high"];
     else if (effectiveVariant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (effectiveVariant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
     else if (effectiveVariant === "kimi-k3") efforts = ["low", "high", "max"];

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
-import { mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
+import { mockedBatches, mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
 import { reconcileMocked } from './mocked-report.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 const descriptor = (id, extra = []) => ({ id, source: `test/${id}.spec.ts`, sourceHash: 'a'.repeat(64), runner: 'playwright', tags: ['category:e2e', 'os:linux', 'arch:amd64', 'model:mock', ...extra] });
@@ -22,10 +22,12 @@ function evidence(t, p = plan()) {
     const worker = subplan(p, p.entries.filter(e => shard.keys.includes(e.key)));
     writeFileSync(join(dir, 'plan.json'), JSON.stringify(worker));
     writeFileSync(join(dir, 'summary.json'), JSON.stringify(verifyResults(worker, worker.entries.map(pass))));
-    if (shard.checks.length) {
-      const checkDir = join(base, `mocked-${shard.fixture}/e2e`); mkdirSync(checkDir, { recursive: true });
-      writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(shard.checks.map(name => ({ name, outcome: 'PASS' }))));
-    }
+  }
+  // The checks land where the run writes them: the batch key that carries
+  // them, which is the same projection shared.mjs turns into CI_RESULTS_DIR.
+  for (const batch of mockedBatches(p).filter(batch => batch.checks.length)) {
+    const checkDir = join(root, `mocked-e2e-results-${batch.shard}`, batch.key, 'e2e'); mkdirSync(checkDir, { recursive: true });
+    writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(batch.checks.map(name => ({ name, outcome: 'PASS' }))));
   }
   return root;
 }
@@ -42,6 +44,20 @@ test('mocked partitions keep standard fixtures and select the same cases for eac
   assert.deepEqual(mockedShards(b).flatMap(s => s.checks), []);
   assert.throws(() => mockedShards(plan([descriptor('new')])), /MOCKED_ISOLATION_REQUIRED/);
   assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:global']), { ...descriptor('two', ['isolation:session']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
+});
+
+test('the complete local run can execute every mocked partition serially', () => {
+  const p = plan(), batches = mockedBatches(p);
+  assert.deepEqual(batches.flatMap(batch => batch.entries.map(entry => entry.key)).sort(), p.entries.map(entry => entry.key).sort());
+  assert.equal(batches.filter(batch => batch.checks.length > 0).length, 1);
+  assert.deepEqual(batches.map(batch => batch.key), [
+    'mocked-literature', 'mocked-research', 'mocked-standard-config-fresh',
+    'mocked-standard-config-global', 'mocked-standard-journeys',
+  ]);
+  assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-fresh').entries.every(entry => entry.tags.includes('isolation:fresh')));
+  assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-global').entries.every(entry => entry.tags.includes('isolation:global')));
+  assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-config-global').checks, swarmChecks);
+  assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-journeys').checks, []);
 });
 
 test('fresh-library journeys precede global mutation and cannot run with multiple workers', () => {
@@ -105,12 +121,18 @@ test('a failed case remains executed and failed in the suite totals', t => {
 });
 
 test('supplemental checks must run once, in order, on their designated stack', t => {
-  for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker']) {
-    const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard/e2e/jiuwenswarm-checks.json');
+  for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker', 'wrong-batch']) {
+    const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard-config-global/e2e/jiuwenswarm-checks.json');
     const checks = JSON.parse(readFileSync(path));
     if (mutation === 'missing') rmSync(path);
     else if (mutation === 'wrong-worker') {
-      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard/e2e'); mkdirSync(dest, { recursive: true });
+      // A sibling shard's own batch directory, which is where a checks run on
+      // that stack would actually write.
+      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard-journeys/e2e'); mkdirSync(dest, { recursive: true });
+      writeFileSync(join(dest, 'jiuwenswarm-checks.json'), JSON.stringify(checks));
+    } else if (mutation === 'wrong-batch') {
+      // The other standard-config stack: the checks belong to the global one.
+      const dest = file(root, 'mocked-standard-config-fresh/e2e'); mkdirSync(dest, { recursive: true });
       writeFileSync(join(dest, 'jiuwenswarm-checks.json'), JSON.stringify(checks));
     } else {
       if (mutation === 'omitted') checks.pop();
@@ -130,6 +152,10 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
+  // The summary step reads the stack that actually runs the checks, named by
+  // the same batch key the run writes under.
+  const checkKey = mockedBatches(plan()).find(batch => batch.checks.length).key;
+  assert.ok(job('e2e').includes(`checks=.ci-results/${checkKey}/e2e/jiuwenswarm-checks.log`));
   const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
   for (const block of [real, job('merge-gate')]) {
     assert.match(block, /path: \.ci-mocked-results\n/);

@@ -190,7 +190,8 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
         await wizard.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizard.locator(".wizard-submit-button").click();
         const success = wizard.locator(".wizard-alert-success");
-        await expect(success).toContainText("模型已连接");
+        // Saving connects the model and refreshes both registries before showing success.
+        await expect(success).toContainText("模型已连接", { timeout: 30_000 });
         await success.scrollIntoViewIfNeeded();
         expect(await journeyProviderNames(page)).toContain(providerName);
       },

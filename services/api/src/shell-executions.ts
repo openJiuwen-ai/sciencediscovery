@@ -11,10 +11,12 @@ import { shortErrorMessage, type OperationalLogger } from "@sciencediscovery/ope
 import type { AgentShellExecution, ExecutionOwner, ExecutionRun, ManagedExecution, ShellExecutionResult } from "@sciencediscovery/schema";
 import type { AgentNotifications } from "./agent-notifications.js";
 import { apiLog } from "./logging.js";
+import { portableShellResult } from "./research-shell-result.js";
 
 type RecoveryAttempt = { context: RecoveryContext; requestDigest: string };
 type Record = Omit<AgentShellExecution, "result"> & {
   resultRef?: AgentStateRef;
+  historical?: boolean;
   candidateResultRef?: AgentStateRef;
   candidateFailure?: AuthoritativeFailure;
   originalExecutionContext?: ShellExecutionContext;
@@ -30,7 +32,7 @@ export interface ExecutionRecoveryHandlers {
     status: "succeeded" | "failed" | "cancelled"): Promise<ShellExecutionResult>;
   finalizeFailure?(context: ShellExecutionContext, failure: AuthoritativeFailure): Promise<void>;
 }
-const publicRecord = ({ originalExecutionContext: _, expectedRunnerInstanceId: __, catalogRevision: ___, submissionDigest: ______, candidateResultRef: ____, candidateFailure: _____, ...record }: Record) => record;
+const publicRecord = ({ historical: _historical, originalExecutionContext: _, expectedRunnerInstanceId: __, catalogRevision: ___, submissionDigest: ______, candidateResultRef: ____, candidateFailure: _____, ...record }: Record) => record;
 // PR 472 stored its private provenance context under the name later used by
 // explicit continuation. Upgrade that older shape without exposing it publicly.
 const readRecord = (json: string): Record => {
@@ -165,6 +167,15 @@ const retryableObservationFailure = (error: unknown): boolean => {
     || (typeof failure.message === "string" && /fetch failed|operation was aborted|Remote runner is not connected/i.test(failure.message))
     || (typeof failure.code === "string" && /^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z0-9_]+)$/i.test(failure.code)));
 };
+/**
+ * A submission the Runner answered with a definite refusal: the command never
+ * entered its queue. A 4xx is that refusal; a transport failure or a 5xx is
+ * not, because the command may already have run.
+ */
+const submissionRejected = (error: unknown): boolean => {
+  const status = observationHttpStatus(observationFailureChain(error));
+  return status !== undefined && status >= 400 && status < 500;
+};
 const errorDetail = (error: unknown): string => {
   if (!(error instanceof Error)) return String(error);
   const chain = observationFailureChain(error);
@@ -223,7 +234,7 @@ export class ShellExecutions {
     for (const row of db.prepare("SELECT record FROM shell_executions").all()) {
       const execution = readRecord(String(row.record));
       const leased = this.db.prepare("SELECT 1 FROM shell_execution_leases WHERE id = ? AND expires > ?").get(execution.id, Date.now());
-      if (!terminal(execution.state) && !leased) {
+      if (!execution.historical && !terminal(execution.state) && !leased) {
         this.log.warn("shell_execution_orphaned", { ...correlation(execution), state: execution.state, accepted: execution.accepted });
         execution.state = "unknown";
         execution.provenance = "unconfirmed";
@@ -335,7 +346,7 @@ export class ShellExecutions {
       AND (? OR coalesce(json_extract(record, '$.observation.nextRetryAt'), '') <= ?)
       ORDER BY coalesce(json_extract(record, '$.observation.nextRetryAt'), ''), rowid LIMIT 100`)
       .all(runnerId ?? null, runnerId ?? null, Number(force || Boolean(runnerId)), Number(force || Boolean(runnerId)), new Date().toISOString());
-    const due = rows.map(row => readRecord(String(row.record))).filter(record => !this.active.has(record.id));
+    const due = rows.map(row => readRecord(String(row.record))).filter(record => !record.historical && !this.active.has(record.id));
     for (let offset = 0; offset < Math.min(due.length, 100); offset += 4) {
       await Promise.all(due.slice(offset, offset + 4).map(record => this.reconcile(record.id, record).catch(() => undefined)));
     }
@@ -452,10 +463,54 @@ export class ShellExecutions {
     this.save(execution);
   }
 
+  /** The Runner answered a submission with a definite 4xx: the command never ran.
+   *  Settle it failed (committed) with a visible error instead of an unknown outcome. */
+  private rejectSubmission(execution: Record, error: unknown): void {
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    const code = httpStatus === 404 ? "EXECUTION_NOT_FOUND"
+      : httpStatus === 401 || httpStatus === 403 ? "AUTHORIZATION_REVOKED" : "SUBMISSION_REJECTED";
+    const detail = httpStatus === 404
+      ? "Runner did not find this execution for the requesting Agent; the command was not run"
+      : `Runner rejected the execution submission (HTTP ${httpStatus ?? "unknown"}); the command was not run`;
+    execution.observation = { ...execution.observation, status: "blocked",
+      failureCount: (execution.observation?.failureCount ?? 0) + 1,
+      lastError: { code, message: detail, retryable: false, ...(httpStatus ? { httpStatus } : {}) } };
+    this.finish(execution, { state: "failed", provenance: "committed", error: detail });
+  }
+
+  /** True when the Runner has definitively refused to hand over an execution it
+   *  had already accepted: 401/403 mean "not yours any more", 404 means "not
+   *  there". None of these become readable by waiting, so they are terminal.
+   *  Only when no result was captured yet: once `existingResult` has pinned the
+   *  bytes, a later refusal is a recoverable finalization failure, not an
+   *  unreadable result. */
+  private acceptedButUnreadable(execution: Record, error: unknown): boolean {
+    if (!execution.accepted || execution.candidateResultRef) return false;
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    return httpStatus === 401 || httpStatus === 403 || httpStatus === 404;
+  }
+
+  /** Settle an accepted execution whose result can no longer be read. It is
+   *  recorded as failed with committed provenance, and the message says what is
+   *  actually known: the command was accepted and may have run, but the Runner
+   *  will not return its result, so the workspace must be inspected before
+   *  anything is re-run. */
+  private failUnreadableResult(execution: Record, error: unknown): void {
+    const httpStatus = observationHttpStatus(observationFailureChain(error));
+    const code = httpStatus === 404 ? "EXECUTION_NOT_FOUND" : "AUTHORIZATION_REVOKED";
+    const detail = "Runner accepted this command but would not return its result"
+      + ` (HTTP ${httpStatus ?? "unknown"}). The outcome could not be read;`
+      + " inspect the workspace before running anything again.";
+    execution.observation = { ...execution.observation, status: "blocked",
+      failureCount: (execution.observation?.failureCount ?? 0) + 1,
+      lastError: { code, message: detail, retryable: false, ...(httpStatus ? { httpStatus } : {}) } };
+    this.finish(execution, { state: "failed", provenance: "committed", error: detail });
+  }
+
   /** Observation and existing-result finalization only. This method cannot submit. */
   async reconcile(id: string, owner: ExecutionOwner, handlers = this.recovery, runner?: RunnerResolver, signal?: AbortSignal): Promise<AgentShellExecution> {
     let execution = this.record(id, owner);
-    if (execution.provenance === "committed" || this.active.has(id) || (!handlers && !runner) || this.closed) return this.get(id, owner);
+    if (execution.historical || execution.provenance === "committed" || this.active.has(id) || (!handlers && !runner) || this.closed) return this.get(id, owner);
     if (!this.acquire(id)) return this.get(id, owner);
     const heartbeat = this.heartbeat(id);
     let following = false;
@@ -581,6 +636,17 @@ export class ShellExecutions {
       ...(workspaceSnapshot ? { workspaceSnapshot: scoped(workspaceSnapshot) } : {}),
       ...(workspaceVersion ? { workspaceVersion: scoped(workspaceVersion) } : {}),
     } };
+  }
+
+  async restoreHistorical(source: AgentShellExecution): Promise<void> {
+    const { result, runnerVersionId: _version, ...execution } = source;
+    // Runner workspace receipts address another installation, not this one.
+    const output = result ? portableShellResult(result) : undefined;
+    const resultRef = result ? await this.versions.put("agent-state", JSON.stringify(output), "application/json") : undefined;
+    this.save({ ...execution, historical: true, resultRef,
+      state: terminal(source.state) && source.state !== "unknown" ? source.state : "cancelled",
+      finishedAt: source.finishedAt ?? new Date().toISOString(),
+    });
   }
 
   /** Return only after the Runner acknowledges acceptance (or an explicit unknown outcome). */
@@ -732,6 +798,18 @@ export class ShellExecutions {
         if (recorded) {
           try { await this.commitFailure(execution, observed!, finalizeFailure); }
           catch (failure) { this.unavailable(execution, failure, "PROVENANCE_COMMIT_FAILED"); }
+        } else if (!execution.accepted && submissionRejected(error)) {
+          // The Runner refused the submission outright: the command never ran,
+          // so this is a definite failure, not an unknown outcome. Settle it
+          // failed so the tool call fails visibly instead of blocking the run.
+          this.rejectSubmission(execution, error);
+        } else if (this.acceptedButUnreadable(execution, error)) {
+          // Accepted, but the Runner will not hand the finished execution over
+          // (401/403/404 — #998's finalization-stage "Execution not found for
+          // this Agent"). Nothing here is retryable and there is no result to
+          // wait for, so an unknown outcome only keeps the tool call and the
+          // run alive forever.
+          this.failUnreadableResult(execution, error);
         } else this.unavailable(execution, error, !execution.accepted ? "SUBMIT_OUTCOME_UNKNOWN" : observed && terminal(observed.state) ? "PROVENANCE_COMMIT_FAILED" : "OBSERVATION_UNAVAILABLE");
       } finally { acknowledge(); }
     }).catch(() => {
@@ -886,13 +964,19 @@ export class ShellExecutions {
 
   async logs(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient, cursor = 0) {
     const execution = this.record(id, owner);
+    if (execution.historical) {
+      const { result } = await this.get(id, owner);
+      const chunks = ([{ stream: "stdout" as const, text: result?.stdout ?? "" }, { stream: "stderr" as const, text: result?.stderr ?? "" }])
+        .map((chunk, index) => ({ ...chunk, cursor: index + 1 })).filter((chunk) => chunk.cursor > cursor && chunk.text);
+      return { chunks, nextCursor: Math.max(cursor, 2), truncated: false, retentionTruncated: false };
+    }
     return runner(execution.runnerId).shellExecutionLogs(id, owner, cursor, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
   }
 
   async cancel(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient): Promise<AgentShellExecution> {
     const execution = this.record(id, owner);
     // Unknown after restart may still be running remotely; cancellation is safe, resubmission is not.
-    if (!terminal(execution.state) || execution.state === "unknown") {
+    if (!execution.historical && (!terminal(execution.state) || execution.state === "unknown")) {
       await runner(execution.runnerId).cancelShellExecution(id, owner, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
     }
     return this.get(id, owner);

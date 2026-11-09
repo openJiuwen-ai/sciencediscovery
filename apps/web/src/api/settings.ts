@@ -115,8 +115,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/runners/${encodeURIComponent(runnerId)}/execution-capability`, { method: refresh ? "POST" : "GET" });
   }
 
-  listExecutionBlocks(sessionId: string): Promise<import("@sciencediscovery/schema").ExecutionBlock[]> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks`);
+  listExecutionBlocks(sessionId: string, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").ExecutionBlock[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks`, { signal });
   }
 
   decideExecutionBlock(sessionId: string, id: string, decision: import("@sciencediscovery/schema").ExecutionBlockDecision): Promise<void> {
@@ -370,8 +370,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     });
   }
 
-  deleteProvider(providerId: string): Promise<{ deleted: string }> {
-    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  deleteProvider(providerId: string, replacementModelId?: string | null): Promise<{ deleted: string }> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE", body: JSON.stringify({ replacementModelId }) });
   }
 
   listProviderModels(providerId: string, refresh = false): Promise<ProviderModelList> {
@@ -459,8 +459,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     });
   }
 
-  deleteModel(modelId: string): Promise<{ deleted: string }> {
-    return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
+  deleteModel(modelId: string, replacementModelId?: string | null): Promise<{ deleted: string }> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: JSON.stringify({ replacementModelId }) });
   }
 
   testModel(modelId: string, compatibility = false, expectedDestination?: ManualModelDestination): Promise<ModelConnectivityTestResult> {

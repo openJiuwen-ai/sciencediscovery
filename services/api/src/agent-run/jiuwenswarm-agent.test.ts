@@ -320,12 +320,12 @@ test("reported token usage becomes model_usage events and one summed usage event
     assert.deepEqual(events.map((event) => event.type), ["model_usage", "model_usage", "usage"]);
     assert.deepEqual(events[0], {
       type: "model_usage", usageReported: true,
-      usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null },
+      usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null, reasoningTokens: 71 },
     });
     const summary = (events[2] as { usage: unknown }).usage;
-    assert.deepEqual(summary, { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 731, outputTokens: 87, totalTokens: 818 });
+    assert.deepEqual(summary, { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 731, outputTokens: 87, reasoningTokens: 71, totalTokens: 818 });
     // The same key order the native agent's summary has: it is serialised into subagent results.
-    assert.deepEqual(Object.keys(summary as object), ["inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"]);
+    assert.deepEqual(Object.keys(summary as object), ["inputTokens", "outputTokens", "reasoningTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"]);
   } finally {
     await adapter.close();
   }
@@ -1847,7 +1847,15 @@ const skillOptions = (extra: Record<string, unknown> = {}) => options({
 } as never);
 
 test("the run's skills are installed in JiuwenSwarm with our read_skill retained as a fallback", async () => {
-  const adapter = await fakeAdapter(async ({ body }, response) => {
+  const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
+    if (method === "GET" && url === "/agent/skills") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ skills: [
+        { name: "evolve-design", description: "d", enabled: true, source: "sciencediscovery", skillId: "evolve-design" },
+        { name: "sciencediscovery-skill-creator", description: "d", enabled: true, source: "sciencediscovery", skillId: "skill-creator" },
+      ] }));
+      return;
+    }
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ skills: { "evolve-design": { name: "evolve-design" }, "skill-creator": { name: "sciencediscovery-skill-creator" } } }));
@@ -1865,7 +1873,9 @@ test("the run's skills are installed in JiuwenSwarm with our read_skill retained
         skill("skill-creator"),
       ],
     })).execute("go");
-    const [install, run] = adapter.requests.map((request) => request.body);
+    const install = adapter.requests.find((request) => request.body?.skills)?.body;
+    const run = adapter.requests.find((request) => request.body?.tools)?.body;
+    assert.ok(install && run);
     assert.deepEqual(install.skills, [
       { hash: "hash-evolve-design", id: "evolve-design", path: "/data/skill-snapshots/abc/evolve-design" },
       { hash: "hash-skill-creator", id: "skill-creator", path: "/data/skill-snapshots/abc/skill-creator" },
@@ -1883,7 +1893,15 @@ test("the run's skills are installed in JiuwenSwarm with our read_skill retained
 
 test("loading skill-creator with JiuwenSwarm's skill_tool lets create_skill run, as read_skill did", async () => {
   let reply: any;
-  const adapter = await fakeAdapter(async ({ body }, response) => {
+  const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
+    if (method === "GET" && url === "/agent/skills") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ skills: [
+        { name: "evolve-design", description: "d", enabled: true, source: "sciencediscovery", skillId: "evolve-design" },
+        { name: "sciencediscovery-skill-creator", description: "d", enabled: true, source: "sciencediscovery", skillId: "skill-creator" },
+      ] }));
+      return;
+    }
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ skills: { "evolve-design": { name: "evolve-design" }, "skill-creator": { name: "sciencediscovery-skill-creator" } } }));
@@ -1914,7 +1932,15 @@ test("loading skill-creator with JiuwenSwarm's skill_tool lets create_skill run,
 });
 
 test("a skill JiuwenSwarm could not install stays ours: read_skill and our catalog offer just that one", async () => {
-  const adapter = await fakeAdapter(async ({ body }, response) => {
+  const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
+    if (method === "GET" && url === "/agent/skills") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ skills: [
+        { name: "evolve-design", description: "d", enabled: true, source: "sciencediscovery", skillId: "evolve-design" },
+        { name: "sciencediscovery-skill-creator", description: "d", enabled: true, source: "sciencediscovery", skillId: "skill-creator" },
+      ] }));
+      return;
+    }
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ skills: { "evolve-design": { name: "evolve-design" }, "skill-creator": { error: "refused" } } }));
@@ -1925,7 +1951,8 @@ test("a skill JiuwenSwarm could not install stays ours: read_skill and our catal
   });
   try {
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions()).execute("go");
-    const run = adapter.requests[1].body;
+    const run = adapter.requests.find((request) => request.body.tools)?.body;
+    assert.ok(run);
     assert.ok(run.tools.some((tool: { name: string }) => tool.name === "read_skill"));
     assert.match(run.systemPrompt, /<name>skill-creator<\/name>/);
     assert.doesNotMatch(run.systemPrompt, /<name>evolve-design<\/name>/);
@@ -1947,21 +1974,23 @@ test("with SCIENCE_AGENT_JIUWENSWARM_SKILLS=ours nothing is installed and the sk
   }
 });
 
-test("with the desktop selection the run aligns JiuwenSwarm's switches: staged on, earlier ones off, builtin untouched", async () => {
+test("JiuwenSwarm's global skill switches are the authority: enabled skills are staged, disabled ones are not, builtin and non-ScienceDiscovery skills stay untouched", async () => {
   const switchCalls: Array<{ name: string; enabled: boolean }> = [];
   const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
     if (method === "GET" && url === "/agent/skills") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ skills: [
-        { name: "evolve-design", description: "staged but left off", enabled: false, source: "imported" },
-        { name: "old-skill", description: "an earlier run", enabled: true, source: "imported" },
+        { name: "evolve-design", description: "disabled globally", enabled: false, source: "sciencediscovery", skillId: "evolve-design" },
+        { name: "sciencediscovery-skill-creator", description: "enabled", enabled: true, source: "sciencediscovery", skillId: "skill-creator" },
+        { name: "old-skill", description: "an earlier run", enabled: true, source: "sciencediscovery", skillId: "old-skill" },
         { name: "xlsx", description: "JiuwenSwarm's own", enabled: false, source: "builtin" },
+        { name: "local-skill", description: "user's own", enabled: true, source: "local" },
       ] }));
       return;
     }
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ skills: { "evolve-design": { name: "evolve-design" }, "skill-creator": { name: "sciencediscovery-skill-creator" } } }));
+      response.end(JSON.stringify({ skills: { "skill-creator": { name: "sciencediscovery-skill-creator" } } }));
       return;
     }
     if (url.includes("/enabled")) {
@@ -1976,22 +2005,74 @@ test("with the desktop selection the run aligns JiuwenSwarm's switches: staged o
   try {
     const config = { ...jiuwenSwarmConfigFromEnv({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: adapter.url, SCIENCE_AGENT_SKILL_SELECTION: "desktop" })! };
     await createJiuwenSwarmAgentFactory(config)(skillOptions()).execute("go");
-    assert.deepEqual(switchCalls.sort((a, b) => a.name.localeCompare(b.name)), [
-      { name: "evolve-design", enabled: true },
-      { name: "old-skill", enabled: false },
-    ], "xlsx is builtin and never touched");
+    assert.deepEqual(switchCalls, [], "starting a run never writes global skill switches");
+    const run = adapter.requests.find((request) => request.body.tools)?.body;
+    assert.ok(run);
+    const reader = run.tools.find((tool: { name: string }) => tool.name === "read_skill");
+    assert.ok(reader);
+    assert.doesNotMatch(JSON.stringify(reader.inputSchema), /evolve-design/);
+    assert.doesNotMatch(run.systemPrompt, /<name>evolve-design<\/name>/);
   } finally {
     await adapter.close();
   }
 });
 
-test("with the desktop selection an empty staging switches everything we installed off", async () => {
+test("a globally disabled skill cannot be loaded through the bridge fallback", async () => {
+  let reply: { isError: boolean; text: string } | undefined;
+  const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
+    response.writeHead(200);
+    if (method === "GET" && url === "/agent/skills") {
+      response.end(JSON.stringify({ skills: [
+        { name: "evolve-design", enabled: false, source: "sciencediscovery", skillId: "evolve-design" },
+        { name: "skill-creator", enabled: true, source: "sciencediscovery", skillId: "skill-creator" },
+      ] }));
+      return;
+    }
+    if (body.skills) {
+      response.end(JSON.stringify({ skills: { "skill-creator": { name: "skill-creator" } } }));
+      return;
+    }
+    assert.equal(body.tools.some((tool: { name: string }) => tool.name === "read_skill_resource"), false);
+    const args = { skillId: "evolve-design" };
+    response.write(line({ event: { type: "tool.started", trace: { id: "disabled-read", name: "read_skill", args, status: "running" } } }));
+    const result = await fetch(body.bridge.url, {
+      method: "POST", headers: { authorization: `Bearer ${body.bridge.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "read_skill", arguments: args }),
+    });
+    reply = await result.json() as { isError: boolean; text: string };
+    response.end(line({ done: { finalText: "ok" } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, skillSelection: "desktop" })(skillOptions({
+      skills: [
+        { ...skill("evolve-design"), resources: [{ path: "references/probe.md", hash: "probe", size: 1, kind: "reference" }] },
+        skill("skill-creator"),
+      ],
+    })).execute("go");
+    assert.ok(reply);
+    assert.equal(reply.isError, true);
+    assert.doesNotMatch(reply.text, /Follow the steps/);
+  } finally { await adapter.close(); }
+});
+
+test("unavailable global switches stop a skill run before dispatch", async () => {
+  const adapter = await fakeAdapter(async (_request, response) => {
+    response.writeHead(502);
+    response.end("skill store unavailable");
+  });
+  try {
+    await assert.rejects(createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions()).execute("go"), /HTTP 502/);
+    assert.deepEqual(adapter.requests.map((request) => request.method), ["GET"]);
+  } finally { await adapter.close(); }
+});
+
+test("with the desktop launcher an empty staging leaves global skill switches untouched", async () => {
   const switchCalls: Array<{ name: string; enabled: boolean }> = [];
   const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
     if (method === "GET" && url === "/agent/skills") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ skills: [
-        { name: "old-skill", description: "an earlier run", enabled: true, source: "imported" },
+        { name: "old-skill", description: "an earlier run", enabled: true, source: "sciencediscovery", skillId: "old-skill" },
         { name: "xlsx", description: "JiuwenSwarm's own", enabled: false, source: "builtin" },
       ] }));
       return;
@@ -2008,22 +2089,54 @@ test("with the desktop selection an empty staging switches everything we install
   try {
     const config = { ...jiuwenSwarmConfigFromEnv({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: adapter.url, SCIENCE_AGENT_SKILL_SELECTION: "desktop" })! };
     await createJiuwenSwarmAgentFactory(config)(skillOptions({ skills: [] })).execute("go");
-    assert.deepEqual(switchCalls, [{ name: "old-skill", enabled: false }]);
+    assert.deepEqual(switchCalls, []);
     assert.equal(adapter.requests.some((request) => request.body?.skills), false, "nothing is imported from an empty staging");
   } finally {
     await adapter.close();
   }
 });
 
-test("with the desktop selection missing skill packages leaves existing switches untouched", async () => {
-  const adapter = await fakeAdapter(async (_request, response) => {
+for (const desktop of [false, true]) for (const fresh of [false, true]) {
+  test(`first-use import ${fresh ? "with an empty installed list " : ""}${desktop ? "keeps Desktop catalog explicit and imports Library references" : "imports non-Desktop skills"}`, async () => {
+    const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
+      response.writeHead(200);
+      if (method === "GET" && url === "/agent/skills") {
+        response.end(JSON.stringify({ skills: fresh ? [] : [
+          { name: "disabled", enabled: false, skillId: "disabled", source: "sciencediscovery" },
+        ] }));
+      } else if (body.skills) {
+        response.end(JSON.stringify({ skills: Object.fromEntries(body.skills.map(({ id }: { id: string }) => [id, { name: id }])) }));
+      } else response.end(line({ done: { finalText: "ok" } }));
+    });
+    try {
+      await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, ...(desktop ? { skillSelection: "desktop" as const } : {}) })(skillOptions({
+        skills: [skill("catalog"), { ...skill("library"), importOnRun: true }, ...(fresh ? [] : [{ ...skill("disabled"), importOnRun: true }])],
+      })).execute("go");
+      const imports = adapter.requests.filter((request) => request.body.skills);
+      assert.equal(imports.length, 1);
+      assert.deepEqual(imports[0]?.body.skills.map(({ id }: { id: string }) => id), desktop ? ["library"] : ["catalog", "library"]);
+      assert.equal(adapter.requests.some((request) => request.url.includes("/enabled")), false);
+      const run = adapter.requests.find((request) => request.body.tools)?.body;
+      const reader = run.tools.find((tool: { name: string }) => tool.name === "read_skill");
+      assert.doesNotMatch(JSON.stringify(reader.inputSchema), /disabled/);
+      if (desktop) assert.doesNotMatch(JSON.stringify(reader.inputSchema), /catalog/);
+    } finally { await adapter.close(); }
+  });
+}
+
+test("with the desktop selection missing skill packages still respects global switches", async () => {
+  const adapter = await fakeAdapter(async ({ method, url }, response) => {
     response.writeHead(200);
-    response.end(line({ done: { finalText: "ok" } }));
+    response.end(method === "GET" && url === "/agent/skills"
+      ? JSON.stringify({ skills: [] }) : line({ done: { finalText: "ok" } }));
   });
   try {
     const config = { ...jiuwenSwarmConfigFromEnv({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: adapter.url, SCIENCE_AGENT_SKILL_SELECTION: "desktop" })! };
     await createJiuwenSwarmAgentFactory(config)(skillOptions({ skillPackagesRoot: undefined })).execute("go");
-    assert.equal(adapter.requests.some((request) => request.url.startsWith("/agent/skills")), false);
+    assert.equal(adapter.requests.filter((request) => request.url.startsWith("/agent/skills")).length, 1);
+    const run = adapter.requests.find((request) => request.body.tools)?.body;
+    assert.ok(run);
+    assert.equal(run.tools.some((tool: { name: string }) => tool.name === "read_skill"), false);
   } finally {
     await adapter.close();
   }

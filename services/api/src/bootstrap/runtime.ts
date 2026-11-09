@@ -23,6 +23,7 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  outputRecovery?: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"];
   suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
 }
 
@@ -37,6 +38,7 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withEventSink(composition.eventSink)
     .withWaitController(composition.waitController)
     .withTurnLifecycle(composition.turnLifecycle)
+    .withOutputRecovery(composition.outputRecovery)
     .withSuspendAfterTurn(composition.suspendAfterTurn)
     .withMaxModelTurns(composition.maxModelTurns)
     .withMaxParallelToolCalls(composition.maxParallelToolCalls)

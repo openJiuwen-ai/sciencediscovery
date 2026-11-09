@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect } from "react";
+import { useState } from "react";
 
 import type { ConfirmRequest } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
-import { claimsEscape } from "./dialog-escape.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 
 /**
  * The gate in front of everything irreversible.
@@ -32,18 +32,11 @@ export function ConfirmDialog({
   onDismiss: () => void;
   request: ConfirmRequest;
 }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!claimsEscape(event)) return;
-      // This dialog is the topmost one. Claim the key on its way up so the
-      // settings dialog behind it — listening on `window`, further along the
-      // same path — does not close as well.
-      event.preventDefault();
-      onDismiss();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onDismiss]);
+  const [replacement, setReplacement] = useState(request.modelReplacement?.models.length === 1 ? request.modelReplacement.models[0]?.id ?? "" : "");
+  // The confirmation is the topmost dialog whenever it is up: it is the one
+  // the reader opened last, and the surface behind it — settings on `window`,
+  // a card on `document` — stays open until the question is answered.
+  useTopmostEscape(onDismiss);
 
   return (
     <div className="modal-backdrop" onPointerDown={onDismiss}>
@@ -60,7 +53,13 @@ export function ConfirmDialog({
             ×
           </button>
         </header>
-        <div className="modal-body">{request.body}</div>
+        <div className="modal-body"><p>{request.body}</p>{request.modelReplacement ? <label className="form-field">
+          <span>{request.modelReplacement.label}</span>
+          <select value={replacement} onChange={(event) => setReplacement(event.target.value)}>
+            <option value="">{request.modelReplacement.emptyLabel}</option>
+            {request.modelReplacement.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+          </select>
+        </label> : null}</div>
         <footer className="modal-footer">
           <button className="secondary-button" onClick={onDismiss} type="button">
             {TEXT.menu.cancel}
@@ -71,7 +70,7 @@ export function ConfirmDialog({
               // Dismiss first: the work may replace the screen underneath, and
               // a modal that outlives its own action is a trap.
               onDismiss();
-              void request.onAccept();
+              void request.onAccept(replacement || undefined);
             }}
             type="button"
           >

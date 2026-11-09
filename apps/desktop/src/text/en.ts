@@ -23,6 +23,14 @@
 import type { Text } from "./zh.js";
 
 export const EN: Text = {
+  researchPackage: {
+    continueUnavailable: "This imported record is not fully restored and cannot be continued. Check the import omissions, restore missing services and import again.", sourceUnavailable: "The conversation or its project no longer exists. Refresh the session list and try again.",
+    projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.", necessaryContents: "Conversation · Current files and artifacts · Dependencies", completeContents: "Conversation · File and artifact versions · Research history",
+    newOptions: "New conversation options", projectImport: (name: string) => `Import conversation into ${name}`, messageMenu: "Reply menu", sessionScope: "Export the whole conversation and its research materials, beyond the visible chat text.", packageContents: "Conversation, workspace files, artifacts and related research evidence.",
+    title: "Research package", import: "Import conversation", export: "Export conversation", continue: "Continue chatting", branch: "Create branch chat", source: "Return to source",
+    readOnly: "Imported evidence · Read-only. Create an independent copy to continue with the retained materials.", copying: "Copying research in the background…", ready: "Research copy ready", failed: "Operation failed", open: "Open conversation", download: "Download", preparing: "Preparing the package in the background…", close: "Close", copyMissing: "The conversation or operation record for this copy no longer exists; waiting has stopped. Create a new continuation.", copyPollingFailed: "Unable to read copy progress; retries have stopped. Refresh or try again later.", legacyUnavailable: "The local service is temporarily unavailable, retrying…", exportPollingFailed: "Unable to read export progress; retries have stopped. Export again later.", exportMissing: "The export task no longer exists. Export again.",
+    necessary: "Necessary", complete: "Complete", necessaryHint: "Current results, input dependencies and related evidence, with optional history omitted.", completeHint: "Available history and versions within the selected scope.", trajectory: "Include full trajectory details", graph: "Include full scientific-memory graph", estimate: "Uncompressed estimate", calculating: "Calculating scope and size…", files: "Workspace files", omissions: "Scope and omissions", evidenceOnly: "Packages support inspection and continuation. Import does not execute code or restore permission grants.", choose: "Select a .sdresearch package", objects: "content objects", importHint: "Restore conversation, files and evidence, and prepare a writable conversation. The original record is preserved.", branchHint: "Choose a completed reply. The branch inherits the prefix and recoverable evidence, excluding later research.", reply: "Branch starting point", working: "Working…", startExport: "Start background export", confirmImport: "Confirm import", exportSaving: "Saving package…", exportSaved: "Package saved", exportSaveFailed: "Failed to save the package", exportCanceled: "Export canceled", openLocation: "Open file location", exportsInProgress: (count: number) => `${count} export${count === 1 ? "" : "s"} in progress`, retrySave: "Retry save", savedExports: "Saved packages",
+  },
   appName: "ScienceDiscovery",
   languageTag: "en-US",
 
@@ -55,8 +63,8 @@ export const EN: Text = {
     project: "Projects",
     /** The standalone-conversation section, and the title the app shows
      *  wherever a Session outside a Project has to name one. */
-    recent: "Recent sessions",
-    noRecent: "No recent sessions",
+    recent: "Sessions",
+    noRecent: "No sessions",
     noProjects: "No projects yet",
     newProject: "New project",
     projectName: "Project name",
@@ -91,14 +99,21 @@ export const EN: Text = {
 
   composer: {
     placeholder: "What can I help you with? Type “/” to reference a skill or instruction",
+    /** After a design command is seeded the composer is no longer waiting for
+     *  any request: the only useful next line is the goal itself. */
+    evolvePlaceholder: "Describe what you want to optimize and how it should be scored",
     send: "Send",
     stop: "Stop",
+    /** The ✕ on the design command token; the dialog only suggested it. */
+    clearCommand: "Remove command",
     modelSelect: "Choose a model",
     addCustomModel: "Add a custom model",
     pillLocked: "You can switch models when this run finishes",
     stopHint: "Closing the page or reloading will not stop the run. Stop it here explicitly.",
     uploadFile: "Upload files",
     sessionSettings: "Session settings",
+    /** The action at the top of 会话设置: the way into program evolution. */
+    evolveExperiment: "Program evolution experiment",
     experts: "Experts",
     expertsNone: "None",
     expertsHint: "Bind a personal expert to this conversation.",
@@ -163,8 +178,6 @@ export const EN: Text = {
       timeout_notice: "Timeout",
     },
     cancelledReason: "The run was cancelled",
-    errorLine: (message: string) => `Run failed: ${message}`,
-    errorWithCode: (code: string, message: string) => `Run failed (${code}): ${message}`,
     thinking: "Reasoning",
     thinkingSteps: (count: number) => `${count} ${count === 1 ? "step" : "steps"}`,
     thinkingNow: "Planning the next step",
@@ -232,6 +245,7 @@ export const EN: Text = {
     inputFiles: "Input files",
     emptySteps: "This subagent has not recorded any execution to show yet.",
     loading: "Loading the execution record…",
+    stale: "The execution record is not refreshing, so what is shown may be behind.",
     thinking: "Reasoning",
     tool: "Tool",
     turns: (count: number) => `${count} ${count === 1 ? "turn" : "turns"}`,
@@ -248,7 +262,7 @@ export const EN: Text = {
     projectDirectory: "Choose project",
     chooseProject: "Choose a project",
     noProject: "Don't work in a project",
-    noProjectNote: "The session will appear under Recent sessions",
+    noProjectNote: "The session will appear under Sessions",
     categories: {
       research: "Literature",
       experiment: "Experiments",
@@ -292,6 +306,126 @@ export const EN: Text = {
         title: "The right panel",
         body: "The workspace panel on the right lists the artifacts and files this session produces; open one to preview it. Drag the divider on its left to widen it, or use the button in its header to collapse it.",
       },
+    },
+  },
+
+  /** Scientific memory: the citations in a final report, and the card behind
+   *  one that says what it is and where it came from. There is deliberately
+   *  no graph here. */
+  memory: {
+    title: "Scientific memory",
+    loading: "Reading scientific memory…",
+    closeDialog: "Close",
+    openChip: "See this citation's details and provenance",
+    openSettings: "Open scientific memory settings",
+    notFoundTitle: "This memory was not found",
+    notFoundBody: "Nothing in memory matches this record. It may have been deleted, or the memory service may be unavailable right now.",
+    disabledTitle: "Scientific memory is off",
+    disabledBody: "Turn it on in Settings → Scientific memory and a report's citations expand into their evidence and artifacts.",
+    unreachableTitle: "Scientific memory is unavailable",
+    unreachableBody: "The memory service did not answer. Try again in a moment.",
+    errorTitle: "Could not read memory",
+    retry: "Retry",
+    previewTab: "Preview",
+    provenanceTab: "Provenance",
+    contentLabel: "Evidence content",
+    sourceExcerpt: "Source excerpt",
+    chipLabels: {
+      evidence: "Evidence",
+      artifact: "Artifact",
+      sourcefile: "File",
+      dbrecord: "Record",
+      session: "Session",
+      skill: "Skill",
+    },
+    status: {
+      healthy: "Running",
+      degraded: "Cannot connect",
+      checking: "Checking",
+      unknown: "Status unknown",
+      recheck: "Check again",
+    },
+    field: {
+      evidenceType: "Evidence type",
+      locator: "Locator",
+      confidence: "Confidence",
+      source: "Source",
+      recordedAt: "Recorded",
+      name: "Name",
+      version: "Version",
+      mediaType: "Media type",
+      path: "Path",
+      session: "Session",
+      hash: "Content hash",
+    },
+    version: (version: number) => `v${version}`,
+    nodeLabels: {
+      Artifact: "Artifact",
+      Claim: "Claim",
+      Code: "Code",
+      DbRecord: "Database record",
+      Evidence: "Evidence",
+      Paper: "Paper",
+      ResearchGoal: "Research goal",
+      SearchCell: "Search cell",
+      SearchNode: "Candidate",
+      SearchRun: "Evolution run",
+      SourceFile: "Uploaded file",
+      Task: "Task",
+      ToolCall: "Step",
+      WebPage: "Web page",
+    },
+    provenance: {
+      loading: "Reading provenance…",
+      error: "Provenance could not be read.",
+      retry: "Retry",
+      noAbstract: "No abstract recorded.",
+      sourcesEmpty: "No source paper, file, or web page was recorded.",
+    },
+    /** The evidence's source file follows the old UI's inline preview: PDFs in
+     *  a frame, images inline, everything else behind a download link. */
+    evidenceSource: {
+      loadingFile: "Reading the file preview…",
+      fileMissing: (name: string) => `${name} could not be found.`,
+      fileFailed: "The file preview could not be read.",
+      downloadFile: (name: string) => `Download ${name}`,
+      unknownType: "Unknown type",
+    },
+    openArtifactFailed: "The artifact could not be opened.",
+    artifactMissing: "The artifact panel has no record of this artifact.",
+    /** The artifact dialog follows the old web UI: version and download in
+     *  the header, 预览 / 溯源 as the two tabs. */
+    artifactDialog: {
+      previewTab: "Preview",
+      versionLabel: "version",
+      versionOf: (version: number, total: number) => `v${version} of ${total}`,
+      updatedInSession: (session: string) => `Updated in Session ${session}`,
+      versionSource: (session: string) => `Source: ${session}`,
+      deletedSession: "Deleted Session",
+      download: "Download current version",
+      downloadFailed: "Could not download artifact",
+      // The dialog is on screen from the press; this is what its body says
+      // until the version's bytes arrive.
+      loading: "Opening artifact…",
+      versionAria: "Artifact version",
+    },
+    /** An Artifact's provenance is the old web UI's provenance tab: parents,
+     *  code, execution log, and the managed environment of the run. */
+    artifactProvenance: {
+      dependencies: "upstream file",
+      code: "Code",
+      downloadScript: "Download script",
+      execution: "Execution log",
+      exitCode: (code: number | null) => `exit ${code ?? "unavailable"}`,
+      workingDirectory: "Working directory",
+      unavailable: "unavailable",
+      stdoutEmpty: "stdout: empty",
+      environment: "Managed package environment",
+      noPackages: "No packages recorded",
+      sourceSessionDeleted: "The source Session was deleted. Artifact content and version history are retained; Session execution details are unavailable.",
+      processEnvironment: (count: number) => `Process environment (${count} variable${count === 1 ? "" : "s"})`,
+      processEnvironmentEmpty: "No environment variables recorded.",
+      processEnvironmentUnavailable: "Process environment unavailable (not recorded for this run).",
     },
   },
 
@@ -449,7 +583,9 @@ export const EN: Text = {
       testOk: (latency: number) => `✓ Available (${latency} ms)`,
       delete: "Delete",
       deleteConfirm: (name: string) => `Delete the model "${name}"?`,
-      deleteBody: "It stops appearing in this list and in a session's model menu. The service refuses while a project or session still names it, and says why.",
+      deleteBody: "Sessions explicitly using this model will need a new selection. Historical runs are preserved.",
+      replacement: "New primary model",
+      leaveUnset: "Leave unset",
       deleteFailed: "Could not delete this model. Try again.",
       expand: "Expand model settings",
       name: "Model name",
@@ -468,11 +604,13 @@ export const EN: Text = {
     },
     skills: {
       detail: "Details",
-      empty: "No built-in skills found.",
+      empty: "No skills found.",
       heading: "Skills",
+      jiuwenSwarmOnly: "The current agent backend is not JiuwenSwarm, so skill switches are unavailable.",
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
+      scope: "These switches control JiuwenSwarm’s global skill state for new tasks using its skill mechanism. ScienceDiscovery packages are imported on first enable.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       add: "Add skill",
       create: "Create",
@@ -495,7 +633,9 @@ export const EN: Text = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `revision ${revision}`,
       source: {
-        builtIn: "built-in",
+        builtIn: "SD built-in",
+        jiuwenBuiltIn: "JiuwenSwarm built-in",
+        jiuwenLocal: "Installed in JiuwenSwarm",
         managed: "managed",
       },
       instructionsHeading: "Instructions",
@@ -720,9 +860,10 @@ export const EN: Text = {
       },
       groups: {
         general: { label: "General", description: "Interface language and preferences for this device" },
+        memory: { label: "Scientific memory", description: "The memory service behind evidence and artifacts" },
         models: { label: "Models", description: "Profiles and provider credentials" },
         skills: { label: "Skills", description: "Create, enable, or disable skills" },
-        mcp: { label: "MCP servers", description: "Custom servers and external tools" },
+        mcp: { label: "MCP servers", description: "Manage built-in and custom MCP services and choose the tool sources sessions use by default" },
         specialists: { label: "Specialists", description: "Reusable instructions and tool bundles" },
         "sandbox-network": { label: "Network", description: "Network access for run_shell" },
         remote: { label: "Remote", description: "Remote Runners and the machines a project may use" },
@@ -740,9 +881,13 @@ export const EN: Text = {
       },
       mcp: {
         heading: "MCP servers",
-        help: "Built-in servers ship with the product, start enabled, and get their tools from the server catalog. The switch controls the server itself; which sources a session may use is still chosen per session.",
+        help: "Use by default selects sources for sessions that inherit global settings; explicit project or session selections take precedence. Specialists may add other sources. Actual tool calls still depend on service readiness and permissions. Enable service in a custom server’s edit form controls its connection separately. Changes do not reconfigure a running task.",
         builtin: "Built-in",
-        empty: "No custom MCP servers registered yet.",
+        useByDefault: "Use by default",
+        enableService: "Enable service",
+        selectAll: "Select all",
+        clearSelection: "Clear selection",
+        empty: "No built-in or custom MCP sources are available yet.",
         editTitle: "Edit server",
         name: "Name",
         description: "Description",
@@ -754,9 +899,6 @@ export const EN: Text = {
         url: "URL",
         timeout: "Timeout (seconds)",
         optional: "Optional",
-        enable: "Enable",
-        enabled: "Enable this server",
-        disable: "Disable",
         env: "Environment variables",
         headers: "Headers",
         key: "Key",
@@ -811,23 +953,9 @@ export const EN: Text = {
       },
       memory: {
         heading: "Memory graph",
-        enabled: "Enable memory",
-        enabledHint: "When off, nothing is written to or read from the graph. Existing data stays.",
-        backend: "Backend",
-        backendHint: "Local storage needs no extra service.",
-        backendLocal: "Local",
-        backendNeo4j: "Neo4j",
-        neo4jHeading: "Neo4j connection",
-        neo4jHttp: "HTTP address",
-        neo4jUser: "User",
-        neo4jPassword: "Password",
-        passwordStored: "A password is stored; leave this empty to keep it.",
-        passwordHint: "The password is write-only.",
-        passwordPlaceholder: "Enter a new password",
-        statusHealthy: "Healthy",
-        statusDegraded: "Degraded",
-        statusDisabled: "Disabled",
-        statusNeedsPassword: "Password needed",
+        help: "Scientific memory keeps the evidence and artifacts a report cites as a graph; the citation buttons in a report read from it. Both reads and writes go through the memory service on this machine.",
+        enabled: "Enable scientific memory",
+        enabledHint: "When off, nothing is written to or read from memory. Existing data stays.",
       },
       ideaTree: {
         treeHeading: "Defaults",
@@ -1007,6 +1135,7 @@ export const EN: Text = {
     artifacts: "Artifacts",
     collapsible: "Workspace",
     groups: {
+      task: "Task",
       artifacts: "Artifacts",
       files: "Workspace",
     },
@@ -1068,10 +1197,279 @@ export const EN: Text = {
     close: "Exit full screen",
   },
 
+  /** Program evolution: a search that improves itself against a scorecard.
+   *
+   *  The run card and the full panel share this block; the wording is written
+   *  for the panel and shortened for the card, so a run is called the same
+   *  thing in both places. */
+  evolve: {
+    title: "Program evolution",
+    open: "Program evolution",
+    moreRuns: (count: number) => `${count} more`,
+    fewerRuns: "Show fewer",
+    /* The run card at the foot of the transcript: waiting to start, or how long
+       the search has been going. */
+    notStarted: "Not started",
+    working: "Optimising",
+    elapsed: (seconds: number) => {
+      const whole = Math.max(0, Math.floor(seconds));
+      if (whole < 60) return `${whole}s elapsed`;
+      const minutes = Math.floor(whole / 60);
+      if (minutes < 60) return `${minutes} min elapsed`;
+      const rest = minutes % 60;
+      return rest === 0
+        ? `${Math.floor(minutes / 60)} h elapsed`
+        : `${Math.floor(minutes / 60)} h ${rest} min elapsed`;
+    },
+    autoPace: "Auto",
+    autoPaceTitle: "Started without pausing at checkpoints",
+
+    /* The checkpoint card's own chrome. The title and body are the model's
+       words and arrive in the conversation's language already. */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `Checkpoint ${step}` : `Checkpoint ${step}/${total}`),
+      /* A card nobody is asked to approve is not a checkpoint: it records a step
+         that is already done, so it is not called one and carries no badge. */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `Step ${step}` : `Step ${step}/${total}`),
+      /* The band across the top of the card: what this card is waiting for on
+         the left, which step it is on the right. */
+      headerWaiting: "Checkpoint waiting for you",
+      headerAnswered: "Checkpoint answered",
+      headerStep: "Step",
+      count: (step: number, total?: number) => (total === undefined ? `${step}` : `${step}/${total}`),
+      confirm: "Looks right — continue",
+      adjust: "Needs a change",
+      /* "Needs a change" opens a labelled box inside the card; the confirm
+         button stays dark until something is written in it. */
+      adjustLabel: "What to change",
+      adjustPlaceholder: "Describe the change, e.g. score this step more strictly.",
+      /* Every confirmation reading the same left the model unable to tell which
+         step it was answering; naming the step in the reply fixes that. */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `Confirm checkpoint ${step}, continue.` : `Confirm checkpoint ${step}/${total}, continue.`,
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `Continue with step ${step}.` : `Continue with step ${step}/${total}.`,
+      adjustDraft: "I'd like to change this step: ",
+      busy: "This reply is still running; wait for it to finish.",
+    },
+
+    create: {
+      title: "New evolution run",
+      algorithmLabel: "Choose a search algorithm",
+      puctName: "PUCT algorithm",
+      puctTags: ["Refines step by step", "Narrow search space"],
+      puctPoints: [
+        "PUCT expands the nodes most likely to pay off first",
+        "Grows from the root one step at a time, keeping every candidate",
+        "Visit counts and rank steer where the search goes next",
+        "A single tree keeps refining the candidates it holds",
+      ],
+      openEvolveName: "OpenEvolve algorithm",
+      openEvolveTags: ["Wide search space", "Avoids early convergence"],
+      openEvolvePoints: [
+        "A MAP-Elites grid keeps a diverse set of good candidates",
+        "Populations evolve independently and swap elites regularly",
+        "Ring migration spreads good designs across populations",
+        "Mutations reference the global best and distinct candidates",
+      ],
+      settingsLabel: "Settings",
+      confirmLabel: "Pause at each checkpoint",
+      confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
+      autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      /* Windows has no bwrap/seatbelt. There is no switch here, only two
+         warnings: a banner under the title so the risk is seen at a glance,
+         and an alert that asks again when the search is started. The answer
+         travels with this one command (`--allow-direct`); it never becomes a
+         setting someone sets once and forgets. */
+      unisolatedBannerTitle: "This search runs candidate code without a sandbox",
+      unisolatedBannerBody: "This machine has no usable sandbox. Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. You will be asked once more when you click “Start designing”.",
+      unisolatedConfirmTitle: "Run candidate code without a sandbox?",
+      unisolatedConfirmBody: "The search will execute candidate programs directly: no sandbox, no CPU or memory limits, and access to your files and network. Continue only if you understand those risks and accept them.",
+      unisolatedConfirmCancel: "Cancel",
+      unisolatedConfirmClose: "Close",
+      unisolatedConfirmContinue: "Continue anyway",
+      send: "Start designing",
+      cancel: "Cancel",
+      blockedRunning: "This session is already running; wait for it to finish before starting another.",
+      blockedArchived: "An archived session cannot start a new run.",
+    },
+
+    /* The runtime is not usable. A person on a desktop can only read files and
+       click a button, so this names the paths this product actually writes on
+       Windows and the actions that actually exist. */
+    setup: {
+      bannerTitle: "The optimization process is unavailable; results may not be what you expect",
+      bannerInstalling: "The optimization process is being prepared; you can start designing when it finishes",
+      bannerAction: "View details",
+      title: "The evolution runtime is unavailable",
+      introMissing: "This machine has not installed the evolution runtime yet. Once it is installed, this message and “Start designing” recover on their own.",
+      introError: "The evolution runtime did not start, or the local service could not authenticate to it.",
+      introInstalling: "The evolution runtime is being prepared. This message and “Start designing” recover when it finishes.",
+      statusLabel: "Reported by the local service",
+      whereTitle: "Start with the logs",
+      logs: [
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\api.log",
+          what: "The local service log; the error at the end names the step the install or start-up stopped at.",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\evolve.log",
+          what: "The evolution engine's own log; read this when the engine starts but is still unusable.",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\evolve",
+          what: "The runtime install folder; a missing folder or missing files means the install did not finish.",
+        },
+        {
+          path: "<install folder>\\logs\\shell.log",
+          what: "The desktop start-up log, by default in %LOCALAPPDATA%\\Programs\\ScienceDiscovery\\logs; read this when the app cannot reach the local service.",
+        },
+      ],
+      whyTitle: "Common causes",
+      whyBody: "First use with no runtime installed; the install was closed midway, or the evolve folder was deleted; a proxy or network failure blocked the download; less than 1 GiB of disk space is free; the deployment does not allow automatic installation.",
+      fixTitle: "How to recover",
+      fixBody: "Click “Prepare runtime” below to download and install again. If it was installed before and is broken, quit the app, delete %USERPROFILE%\\.sciencediscovery\\evolve, and install again. If it still fails, check the network and disk against the error at the end of api.log, then restart the app and try once more.",
+      operator: "This deployment does not allow automatic installation. Ask an administrator to enable program evolution on the server; the status and logs above can be handed over as they are.",
+      installing: "Preparing…",
+      install: "Prepare runtime",
+      close: "Close",
+    },
+
+    panel: {
+      eyebrow: "Program evolution",
+      close: "Close",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopHint: "Candidates found so far remain available after stopping.",
+      fullscreen: "Full screen",
+      exitFullscreen: "Exit full screen",
+      fullTask: "Show the full goal",
+    },
+
+    status: {
+      pending: "Queued",
+      running: "Running",
+      succeeded: "Succeeded",
+      stopped: "Stopped",
+      budget_exhausted: "Budget used up",
+      failed: "Failed",
+    },
+
+    metric: {
+      best: "Best score",
+      baseline: "Baseline",
+      test: "Held-out test",
+      candidates: "Candidates",
+      depth: "Max depth",
+    },
+
+    /* The task detail: the right column's 任务 tab. The three handoffs set the
+       order — overview, chart, tree and budget — and the node list and the tree
+       are two readings of the same candidates. */
+    detail: {
+      best: "Best",
+      valid: "Valid / total",
+      generations: "Generations",
+      algorithm: "Algorithm",
+      tokens: "Token",
+      chartTitle: "Live search results",
+      treeTitle: "Search tree",
+      nodeList: "Nodes",
+      generation: (depth: number) => `Gen ${String(depth).padStart(2, "0")}`,
+      bestTag: "Best",
+      budgetTitle: "Budget",
+      score: "Score",
+      children: "Children",
+      source: "Code changes",
+      expandSource: "Expand code changes",
+      closeInspector: "Close node details",
+      closeSource: "Close code changes",
+      nodeTitle: (index: number) => `Node #${index}`,
+      root: "Baseline",
+      treeEmpty: "No nodes yet.",
+      treeAria: (count: number) => `Search tree with ${count} nodes`,
+    },
+
+    chart: {
+      title: "Live search results",
+      aria: (baseline: string, best: string, candidates: number) =>
+        `Score chart: baseline ${baseline}, current best ${best}, ${candidates} candidates.`,
+      xAxis: "Expansions",
+      best: "Best so far",
+      significant: "Scored",
+      test: "Test",
+      failed: "Failed",
+      belowBaseline: "Below baseline",
+      baseline: "Baseline",
+      empty: "No scores to plot yet.",
+    },
+
+    inspector: {
+      parent: "Parent",
+      depth: "Depth",
+      loading: "Reading source…",
+      unavailable: "Source unavailable (it may have been pruned).",
+      unchanged: "Identical to the parent.",
+      noParent: "This is the baseline; it has no parent.",
+      error: "Failure",
+      hidden: (count: number) => `${count} unchanged lines folded`,
+    },
+
+    budget: {
+      tokens: "Tokens",
+      elapsed: "Elapsed",
+      nodes: "Nodes",
+    },
+
+    notice: {
+      placeholder: "This run used a placeholder scorecard, not one designed for it.",
+    },
+  },
+
+  runFailure: {
+    title: "Run failed",
+    titles: {
+      timeout: "Run timed out",
+      "rate-limited": "Model request limit reached",
+      "semantic-error": "Unexpected run error",
+      "server-error": "Model service error",
+      "transport-error": "Model connection failed",
+      unauthorized: "Model authentication failed",
+      "invalid-tool-call": "Invalid tool call",
+    },
+    timeout: "The run timed out and was terminated. Retry, or check the relevant timeout in System settings.",
+    timeoutNoticeTitle: "Timeout notice",
+    timeoutNotice: "A timeout was reported. Open the technical details to identify the affected operation and check the relevant timeout setting.",
+    timeoutTitles: {
+      gateway_idle: "Run timed out",
+      gateway_turn: "Run timed out",
+      permission_wait: "Permission wait timed out",
+      runner_exec: "Tool execution timed out",
+      kernel_idle: "Kernel idle timeout",
+    },
+    timeouts: {
+      gateway_idle: (seconds: number) => `The Agent made no progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry, or increase the Agent idle timeout in System settings.`,
+      gateway_turn: (seconds: number) => `The Agent turn exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Split the task and retry, or increase the turn timeout in System settings.`,
+      permission_wait: (seconds: number) => `The permission request was not handled within ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry and respond to permission requests promptly, or increase the permission wait timeout in System settings.`,
+      runner_exec: (seconds: number) => `Tool execution exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}. Reduce the work per execution and retry, or increase the execution timeout in System settings.`,
+      kernel_idle: (seconds: number) => `The kernel was idle for ${seconds} ${seconds === 1 ? "second" : "seconds"}. Retry, or increase the kernel idle timeout in System settings.`,
+    },
+    "rate-limited": "The model service is limiting requests because a request or usage limit was reached. The run has stopped. Retry later; if this persists, check the provider's limits and available quota.",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "An unexpected issue prevented the task from completing. Retry; if this persists, open the technical details to investigate.",
+    "server-error": "The model service returned a server error and the run has stopped. Retry later; if this persists, check the service status or switch models.",
+    "transport-error": "The model service could not be reached and the run has stopped. Check your network, proxy settings and model service URL, then retry.",
+    unauthorized: "The model service rejected the credentials and the run has stopped. Check the API key and access permissions in System settings' model registry, then retry.",
+    "invalid-tool-call": "The model's tool call arguments could not be parsed. That call was not executed and the run has stopped. Retry; if this persists, switch models.",
+    unknown: "The task stopped before it could finish. Retry; if it fails again, open the technical details to investigate.",
+    technicalDetails: "Technical details",
+  },
+
   errors: {
     generic: "Something went wrong",
     sessionCreate: "Could not create the session",
     noStream: "The response has no readable stream",
+    modelUnavailable: "Selected model deleted; choose another",
     modelRequired: "No model is available yet. Configure one in Settings.",
     rename: "Rename failed",
     deleteWarning: (title: string) =>
@@ -1130,6 +1528,19 @@ export const EN: Text = {
       preview: "Preview what will be sent",
       none: "No diagnostics available for this feedback",
     },
+    images: {
+      label: "Screenshots (optional)",
+      add: "Upload image",
+      limit: (max: number) => `Up to ${max} images`,
+      remove: "Remove screenshot",
+      preparing: "Processing images…",
+      privacy: "Screenshots are visible to anyone with repository access; hide sensitive information first.",
+      error: {
+        type: "Only PNG, JPEG or WebP images are supported.",
+        size: "This image is still too large after compression.",
+        decode: "This image could not be read.",
+      },
+    },
     submit: "Submit",
     submitting: "Submitting…",
     success: {
@@ -1148,6 +1559,7 @@ export const EN: Text = {
       tooLarge: "The message is too long. Shorten it and try again.",
       unavailable: "The service is temporarily unavailable. Please try again later.",
       invalid: "Some fields need attention.",
+      fieldsTitle: "What needs attention",
       kept: "Your draft is kept; you can copy it or open a GitHub issue instead.",
       copyAll: "Copy everything",
       openIssue: "Open GitHub issue instead",

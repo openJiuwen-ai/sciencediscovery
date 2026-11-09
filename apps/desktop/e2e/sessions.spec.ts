@@ -20,7 +20,14 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
+import {
+  CREATED_AT,
+  TOKEN,
+  TOKEN_STORAGE_KEY,
+  installMockApi,
+  makeSession,
+  type ReplayRecord,
+} from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(
@@ -42,10 +49,11 @@ test("a title renamed in the bar is written through and survives a reload", asyn
   await field.press("Enter");
 
   await expect(dialog).toBeHidden();
-  // The list follows the write immediately. The header reads `detail.title`,
-  // which no current action refreshes after a rename, so the reload below is
-  // where the bar is checked.
+  // Both places that print the name follow the write immediately: the row,
+  // and the bar over the conversation the row just renamed. The bar reads the
+  // open Session's own record, so it has to hear the reply too.
   await expect(page.locator(".side-session-name", { hasText: "钙钛矿带隙" })).toBeVisible();
+  await expect(page.locator(".task-head-title")).toHaveText("钙钛矿带隙");
   await expect.poll(() => mock.state.sessions[0]?.title).toBe("钙钛矿带隙");
   expect(
     mock.calls.some(
@@ -73,7 +81,7 @@ test("a Session cannot be renamed to the sentinel that means it has no name", as
 
   // The service stores that title for a Session nobody has named, and the
   // column reads it as "no conversation yet". A conversation that took it as
-  // a name would leave the sidebar and 最近会话 with its messages intact, so
+  // a name would leave the sidebar and 会话 with its messages intact, so
   // the rename keeps the name it had and writes nothing.
   await expect(name).toHaveText("晶体结构分析");
   expect(mock.state.sessions[0]?.title).toBe("晶体结构分析");
@@ -145,6 +153,105 @@ test("新建会话 writes no row until the first message names it", async ({ pag
   await expect(
     page.locator(".side-session-name", { hasText: "请分析这个晶体结构" }),
   ).toBeVisible();
+});
+
+test("the first message names the bar as soon as it names the sidebar row", async ({ page }) => {
+  // The read-back that follows a run is held open, so the bar can only show
+  // the new name if it took it from the `session.updated` the service
+  // publishes ahead of the run. Waiting for the read would leave the bar
+  // saying 未命名会话 for as long as the answer streams.
+  const mock = await installMockApi(page, {
+    hold: { method: "GET", path: "/api/sessions/session-2" },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  // Boot resumes the Session the workspace already had; the click has to land
+  // after that, or the resume's own open replaces the draft it makes.
+  await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
+  await page.getByRole("button", { name: "新建会话", exact: true }).click();
+  await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
+
+  await page.locator("#composer-textarea").fill("请分析这个晶体结构");
+  await page.locator("#composer-textarea").press("Enter");
+
+  await expect(page.locator(".side-session-name", { hasText: "请分析这个晶体结构" })).toBeVisible();
+  await expect(page.locator(".task-head-title")).toHaveText("请分析这个晶体结构");
+
+  // The held read still lands, and what it brings agrees with the bar.
+  mock.release();
+  await expect(page.locator(".message.assistant")).toHaveCount(1);
+  await expect(page.locator(".message.assistant")).toContainText("晶格常数是 5.43 Å。");
+  await expect(page.locator(".task-head-title")).toHaveText("请分析这个晶体结构");
+});
+
+test("a run's replayed record cannot undo a newer name", async ({ page }) => {
+  // Followed from cursor 0, an unfinished run replays every event it has
+  // already written — including the `session.updated` that named the Session
+  // before the reader renamed it. Coming back mid-run therefore puts an older
+  // copy of the record in front of a page that has just read a newer one, and
+  // taking it would send the bar back to the old name while the sidebar row,
+  // read fresh, keeps the new one. The event is held open until the spec is
+  // looking, so the assertions cannot be satisfied by the replay never having
+  // arrived.
+  const runs: ReplayRecord[] = [];
+  const mock = await installMockApi(page, {
+    hold: { method: "GET", path: /\/runs\/run-1\/events$/ },
+    runsBySession: { "session-1": runs },
+    sessions: [
+      makeSession(),
+      makeSession({ id: "session-2", title: "另一个会话", updatedAt: CREATED_AT }),
+    ],
+  });
+  await page.goto("/");
+  await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
+
+  await page.locator(".task-head-title").dblclick();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const field = dialog.getByLabel("会话名称");
+  await field.fill("钙钛矿带隙");
+  await field.press("Enter");
+  await expect(page.locator(".task-head-title")).toHaveText("钙钛矿带隙");
+
+  // The run was already going when the name was changed, so its log still
+  // holds the record written before it — the old name, and the permission the
+  // Session had then.
+  runs.push({
+    events: [
+      { session: { ...makeSession(), approvalMode: "always_allow" }, type: "session.updated" },
+      { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
+      { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+      { delta: "旧运行仍在继续", responseId: "response-1", turn: 1, type: "assistant.delta" },
+    ],
+    run: {
+      createdAt: CREATED_AT,
+      id: "run-1",
+      prompt: "分析晶体结构",
+      queueOrder: 0,
+      sessionId: "session-1",
+      status: "running",
+    },
+  });
+
+  await page.locator(".side-session-name", { hasText: "另一个会话" }).click();
+  await expect(page.locator(".task-head-title")).toHaveText("另一个会话");
+  await page.locator(".side-session-name", { hasText: "钙钛矿带隙" }).click();
+  // The read this open makes already carries the new name; the replay is what
+  // is still in flight.
+  await expect(page.locator(".task-head-title")).toHaveText("钙钛矿带隙");
+
+  mock.release();
+  await expect(page.locator(".message.assistant")).toContainText("旧运行仍在继续");
+  // The replay landed and changed nothing it was not entitled to change.
+  await expect(page.locator(".task-head-title")).toHaveText("钙钛矿带隙");
+  await expect(page.locator(".side-session-name", { hasText: "钙钛矿带隙" })).toBeVisible();
+
+  // The composer's permission row reads the same record: the replay carried the
+  // older 完全访问 with the older name, and neither may land.
+  await page.getByRole("button", { name: "会话设置" }).click();
+  await expect(
+    page.getByRole("button", { name: /权限模式/u }).locator(".session-menu-value"),
+  ).toHaveText("询问");
 });
 
 test("a draft left in one Project is not carried to the next", async ({ page }) => {

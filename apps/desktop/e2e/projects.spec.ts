@@ -20,6 +20,7 @@
  * neither can pass on local React state alone.
  */
 import { expect, test } from "@playwright/test";
+import assert from "node:assert/strict";
 
 import { DEFAULT_PROJECT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
 
@@ -59,6 +60,46 @@ test("a Project renamed by double-clicking its name is written through", async (
   await page.reload();
 
   await expect(page.locator(".side-project-toggle .label")).toHaveText("脓毒症研究");
+});
+
+test("a Project name too long for the column ends in … and still leaves room for its controls", async ({ page }) => {
+  const name = "超长项目名称".repeat(12);
+  await installMockApi(page, { projects: [{ ...DEFAULT_PROJECT, name }] });
+  await page.goto("/");
+
+  const row = page.locator(".side-row.side-project");
+  const label = row.locator(".side-project-toggle .label");
+  await expect(label).toBeVisible();
+
+  // The name is clipped inside its own label, not laid out past the row: a
+  // button's automatic minimum size is the whole name, which is how the fold
+  // used to grow wider than the column and carry its `+` and `⋯` out of view.
+  const clip = await label.evaluate((node) => ({
+    ellipsis: getComputedStyle(node).textOverflow === "ellipsis",
+    truncated: node.scrollWidth > node.clientWidth,
+  }));
+  assert.deepEqual(clip, { ellipsis: true, truncated: true });
+
+  const add = page.getByRole("button", { name: `在「${name}」中新建会话` });
+  const menu = page.getByRole("button", { name: "项目菜单" });
+  // At rest the fold is quiet, like a Session row.
+  await expect(add).toBeHidden();
+  await expect(menu).toBeHidden();
+
+  // Hovering brings both back, inside the row rather than beyond the column,
+  // which clips its horizontal overflow.
+  await row.hover();
+  const rowBox = await row.boundingBox();
+  assert.ok(rowBox, "the Project row has no box");
+  for (const control of [add, menu]) {
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    assert.ok(box, "a Project control has no box");
+    assert.ok(
+      box.x >= rowBox.x && box.x + box.width <= rowBox.x + rowBox.width + 1,
+      "a Project control escaped its row",
+    );
+  }
 });
 
 test("deleting a Project asks first, then removes its fold", async ({ page }) => {
@@ -129,6 +170,6 @@ test("deleting the Project of the open Session leaves a draft in the inbox", asy
   // A draft, not a conversation that no longer exists: the bar is nameless and
   // the column has nothing left to list.
   await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
-  await expect(page.getByText("还没有最近会话", { exact: true })).toBeVisible();
+  await expect(page.getByText("还没有会话", { exact: true })).toBeVisible();
   await expect.poll(() => mock.state.sessions.length).toBe(0);
 });

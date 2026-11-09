@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "os:windows", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { RECEIPT_PATTERN } from "@sciencediscovery/operational-logging/feedback";
+import { FEEDBACK_MAX_BYTES, RECEIPT_PATTERN } from "@sciencediscovery/operational-logging/feedback";
 import { handleRequest, type KVNamespaceLike, type WorkerEnv, type FeedbackDeps } from "./index.js";
 
 const NOW = new Date("2026-11-03T10:00:00Z");
@@ -31,13 +31,20 @@ class MemoryKV implements KVNamespaceLike {
   }
 }
 
-function makeEnv(): WorkerEnv {
+/** The Worker treats the binding as optional (a missing one is a 503); tests
+ *  always supply it, so they use a narrower type and can call it directly. */
+type TestEnv = WorkerEnv & { FEEDBACK_KV: MemoryKV };
+
+function makeEnv(): TestEnv {
   return {
     FEEDBACK_KV: new MemoryKV(),
     GITHUB_TOKEN: "secret-token",
     REPO_OWNER: "owner",
     REPO_NAME: "repo",
+    INSTALL_DAILY_LIMIT: "5",
+    IP_HOURLY_LIMIT: "10",
     DAILY_ISSUE_LIMIT: "200",
+    DEDUP_TTL_SECONDS: String(7 * 24 * 60 * 60),
   };
 }
 
@@ -59,6 +66,23 @@ const validSubmission = {
   meta: { installId: "inst-1", version: "0.3.0", os: "win32 x64", locale: "zh-CN" },
   clientTs: "2026-11-03T09:59:00Z",
 };
+
+const validImage = { name: "shot.png", mime: "image/png", data: "A".repeat(4 * 1000) };
+
+/** Answers Contents API PUTs with a usable URL and everything else with an issue. */
+function makeImageFetch(uploadStatus = 201): { fetchImpl: typeof fetch; calls: { url: string; init: RequestInit }[] } {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), init: init! });
+    if (init?.method === "PUT") {
+      return new Response(JSON.stringify({
+        content: { html_url: "https://github.com/owner/repo/blob/main/feedback-images/FB-AAAA-2345/1.png" },
+      }), { status: uploadStatus });
+    }
+    return new Response(JSON.stringify({ number: 1, html_url: "https://github.com/owner/repo/issues/1" }), { status: 201 });
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
 
 function post(body: unknown, opts: { origin?: string | null; ip?: string } = {}): Request {
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -95,7 +119,7 @@ test("oversized bodies are rejected with 413 before parsing", async () => {
   const big = new Request("https://feedback.science.test/api/feedback", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "x".repeat(20 * 1024),
+    body: "x".repeat(FEEDBACK_MAX_BYTES + 1),
   });
   const res = await handleRequest(big, env, deps);
   assert.equal(res.status, 413);
@@ -143,6 +167,27 @@ test("a duplicate within the window returns 409 with the original receipt", asyn
   const secondBody = await second.json() as { error: string; receipt: string };
   assert.equal(secondBody.error, "duplicate");
   assert.equal(secondBody.receipt, firstBody.receipt);
+});
+
+test("a duplicate retry is rejected before it spends the install quota", async () => {
+  const env = makeEnv();
+  const { fetchImpl } = makeFetch();
+  const first = await handleRequest(post(validSubmission), env, { fetchImpl, now: () => NOW });
+  assert.equal(first.status, 201);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const retry = await handleRequest(post(validSubmission), env, { fetchImpl, now: () => NOW });
+    assert.equal(retry.status, 409);
+  }
+  assert.equal(await env.FEEDBACK_KV.get("rl:install:2026-11-03:inst-1"), "1");
+
+  // The allowance is intact, so a genuinely different report still goes through.
+  const different = await handleRequest(
+    post({ ...validSubmission, body: `${validSubmission.body}（补充说明）` }),
+    env,
+    { fetchImpl, now: () => NOW },
+  );
+  assert.equal(different.status, 201);
 });
 
 test("two reporters sending identical text each get their own issue and receipt", async () => {
@@ -210,4 +255,131 @@ test("a GitHub 5xx surfaces 502 without leaking the token", async () => {
   assert.equal(res.status, 502);
   const text = await res.text();
   assert.ok(!text.includes("secret-token"));
+});
+
+test("missing bindings, the repository quota, or invalid values are a 503", async () => {
+  const names = [
+    "FEEDBACK_KV",
+    "GITHUB_TOKEN",
+    "REPO_OWNER",
+    "REPO_NAME",
+    "DAILY_ISSUE_LIMIT",
+  ] as const;
+  for (const name of names) {
+    const env = { ...makeEnv(), [name]: undefined } as WorkerEnv;
+    const res = await handleRequest(post(validSubmission), env, deps);
+    assert.equal(res.status, 503, name);
+    assert.deepEqual(await res.json(), { error: "misconfigured" });
+  }
+  const invalid = await handleRequest(
+    post(validSubmission),
+    { ...makeEnv(), IP_HOURLY_LIMIT: "ten" },
+    deps,
+  );
+  assert.equal(invalid.status, 503);
+  const tooShortTtl = await handleRequest(
+    post(validSubmission),
+    { ...makeEnv(), DEDUP_TTL_SECONDS: "30" },
+    deps,
+  );
+  assert.equal(tooShortTtl.status, 503);
+});
+
+test("missing limits fall back to the values wrangler.toml used to carry", async () => {
+  const env = {
+    ...makeEnv(),
+    INSTALL_DAILY_LIMIT: undefined,
+    IP_HOURLY_LIMIT: undefined,
+    DEDUP_TTL_SECONDS: undefined,
+  } as WorkerEnv;
+  const { fetchImpl } = makeFetch();
+  const res = await handleRequest(post(validSubmission), env, { fetchImpl, now: () => NOW });
+  assert.equal(res.status, 201);
+});
+
+test("screenshots are uploaded to the repository and embedded in the issue", async () => {
+  const { fetchImpl, calls } = makeImageFetch();
+  const res = await handleRequest(
+    post({ ...validSubmission, images: [validImage] }),
+    makeEnv(),
+    { fetchImpl, now: () => NOW },
+  );
+
+  assert.equal(res.status, 201);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0]!.url, /\/contents\/feedback-images\/[^/]+\/1\.png$/);
+  assert.equal(calls[0]!.init.method, "PUT");
+  const uploadBody = JSON.parse(String(calls[0]!.init.body)) as { content: string };
+  assert.equal(uploadBody.content, validImage.data);
+
+  const issueBodyText = (JSON.parse(String(calls[1]!.init.body)) as { body: string }).body;
+  assert.ok(issueBodyText.includes("### 截图"));
+  assert.ok(issueBodyText.includes("![shot.png](https://github.com/owner/repo/raw/main/feedback-images/FB-AAAA-2345/1.png)"));
+});
+
+test("a failed screenshot upload still creates the issue and marks the image", async () => {
+  const { fetchImpl, calls } = makeImageFetch(500);
+  const res = await handleRequest(
+    post({ ...validSubmission, images: [validImage] }),
+    makeEnv(),
+    { fetchImpl, now: () => NOW },
+  );
+
+  assert.equal(res.status, 201);
+  assert.equal(calls.length, 2);
+  const issueBodyText = (JSON.parse(String(calls[1]!.init.body)) as { body: string }).body;
+  assert.ok(issueBodyText.includes("上传失败"));
+  assert.ok(!issueBodyText.includes("![shot.png]"));
+});
+
+test("an issue that cannot be created removes the screenshots it uploaded", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init! });
+    if (init?.method === "PUT") {
+      return new Response(JSON.stringify({
+        content: { html_url: "https://github.com/owner/repo/blob/main/feedback-images/FB-AAAA-2345/1.png" },
+      }), { status: 201 });
+    }
+    if (init?.method === "DELETE") return new Response(null, { status: 200 });
+    if (url.includes("/contents/")) return new Response(JSON.stringify({ sha: "blob-sha" }), { status: 200 });
+    return new Response(JSON.stringify({ message: "boom" }), { status: 500 });
+  }) as typeof fetch;
+
+  const res = await handleRequest(
+    post({ ...validSubmission, images: [validImage] }),
+    makeEnv(),
+    { fetchImpl, now: () => NOW },
+  );
+
+  assert.equal(res.status, 502);
+  const removal = calls.find((call) => call.init.method === "DELETE");
+  assert.ok(removal, "the uploaded screenshot should be deleted");
+  assert.match(removal.url, /\/contents\/feedback-images\/[^/]+\/1\.png$/);
+  assert.equal((JSON.parse(String(removal.init.body)) as { sha: string }).sha, "blob-sha");
+});
+
+test("dedupe treats a different screenshot as a different report", async () => {
+  const env = makeEnv();
+  const { fetchImpl } = makeImageFetch();
+  const first = await handleRequest(
+    post({ ...validSubmission, images: [validImage] }),
+    env,
+    { fetchImpl, now: () => NOW },
+  );
+  const same = await handleRequest(
+    post({ ...validSubmission, images: [validImage] }),
+    env,
+    { fetchImpl, now: () => NOW },
+  );
+  const other = await handleRequest(
+    post({ ...validSubmission, images: [{ ...validImage, data: "B".repeat(4 * 1000) }] }),
+    env,
+    { fetchImpl, now: () => NOW },
+  );
+
+  assert.equal(first.status, 201);
+  assert.equal(same.status, 409);
+  assert.equal(other.status, 201);
 });

@@ -35,7 +35,9 @@ parent selection, mutation prompt, options, and emitted events.
 
 PUCT uses `blast_radius: 1.0` and a `solved_threshold` of `2.0` (never skip); OpenEvolve uses
 `0.6` and `1.0` (skip once optimal) because its shards are seeds for one objective. Both read
-staleness policy from options. OpenEvolve defaults model retries/backoff to `2 / 1.0`.
+staleness policy from options. OpenEvolve forwards `model_retries` / `retry_backoff` to the
+shared transient HTTP retry policy, which defaults to `2 / 0.5`; completed empty or capped
+replies are not sent again.
 
 PUCT emits `expanded` with depth, parent index, and score. OpenEvolve adds island, program ID, and
 inspiration indexes, and emits `inserted` (complexity bin, diversity bin, island, insertion or
@@ -76,6 +78,9 @@ POST /runs/{search_id}/stop  → stop a run
   scorecard, scorecard hash, baseline code and score, rubric, evaluator script, source material,
   limits, packages, and resume sequence. Scorecard and script are passed by value so the sidecar
   needs no CAS access.
+- Thinking settings: `thinking` is `auto`, `enabled`, or `disabled`; `auto` leaves the provider
+  default untouched, while an explicit `enabled` mode may carry `thinking_effort`. The effort is
+  retained in the frozen run record even when the mode is `auto`, but is not sent on that wire.
 - Filesystem paths: `dataset_dir` and `workspace_dir`. This is the sole hard coupling.
 - Callback URLs and temporary credentials: `llm: {url, token}` and `judge: {url, token}`. URLs
   must be absolute so a remote sidecar need not guess an API origin.

@@ -18,9 +18,11 @@ import type { AddressInfo } from "node:net";
 import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import { retryRead } from "./read-retry.ts";
 import { RunPollRecovery } from "./run-poll-recovery.js";
 import { RunChainSettler } from "./run-chain.ts";
 import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
+import type { ModelApiVariant, ModelThinkingEffort, ModelThinkingMode } from "@sciencediscovery/schema";
 
 export interface JourneyModel {
   id: string;
@@ -285,7 +287,9 @@ export function scriptedModel(
           // Read only the execution's scalar fields, without evaluating that
           // wrapper or treating a foreground wait deadline as completion.
           const result = String([...messages].reverse().find(message => message.role === "tool")?.content ?? "");
-          const executionId = result.match(/"id"\s*:\s*"([^"]+)"/)?.[1];
+          // Projected execution results expose `executionId`; retain `id` as
+          // a fallback for older execution_status fixtures during upgrades.
+          const executionId = result.match(/"(?:executionId|id)"\s*:\s*"([^"]+)"/)?.[1];
           const state = result.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
           if (!executionId || !state) throw new Error("Scripted shell returned no execution id/state");
           if (state === "queued" || state === "running") {
@@ -297,6 +301,14 @@ export function scriptedModel(
               throw new Error(`Scripted shell did not succeed: state=${state}, exitCode=${exitCode ?? "missing"}`);
             }
             waitingForShell[route] = false;
+            // execution_status intentionally projects only lifecycle facts.
+            // Fetch retained output before the fixture advances so dependent
+            // scripted steps observe the command's actual stdout/stderr. A
+            // foreground run_shell result already carries those sections.
+            if (!result.includes("stdout:")) {
+              step = { tool: "execution_logs", arguments: { execution_id: executionId } };
+              pollingShell = true;
+            }
           }
         }
 
@@ -387,7 +399,8 @@ export function scriptedModel(
 /** Register either a spec-owned local stub or an explicitly gated real model. */
 export function registerModel(
   page: Page,
-  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" },
+  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+    thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode },
 ): Promise<JourneyModel> {
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
@@ -425,10 +438,13 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
+    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+      thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
+    thinkingEffort?: ModelThinkingEffort;
+    thinkingMode?: ModelThinkingMode;
   },
 ): Promise<JourneyFixture> {
   const model = input.model ? await registerModel(page, input.model) : undefined;
@@ -443,6 +459,8 @@ export async function createProjectAndSession(
     let session = await apiJson<JourneySession>(page, `/api/sessions/${encodeURIComponent(created.firstSession.id)}`, {
       data: {
         ...(model?.id || input.modelId ? { modelId: model?.id ?? input.modelId } : {}),
+        ...((input.thinkingEffort ?? input.model?.thinkingEffort) ? { thinkingEffort: input.thinkingEffort ?? input.model?.thinkingEffort } : {}),
+        ...((input.thinkingMode ?? input.model?.thinkingMode) ? { thinkingMode: input.thinkingMode ?? input.model?.thinkingMode } : {}),
         title: input.sessionTitle,
       },
       method: "PATCH",
@@ -487,7 +505,9 @@ export async function openProjectSession(
 /** Send one natural-language user request and return the persisted Run it creates. */
 export async function sendUserMessage(page: Page, sessionId: string, prompt: string): Promise<JourneyRun> {
   const runsPath = `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
-  const before = new Set((await apiJson<JourneyRun[]>(page, runsPath)).map((run) => run.id));
+  const readRuns = () => retryRead(`GET ${runsPath}`, timeoutMs =>
+    apiJson<JourneyRun[]>(page, runsPath, { timeoutMs }));
+  const before = new Set((await readRuns()).map((run) => run.id));
   const request = page.waitForRequest((candidate) =>
     candidate.method() === "POST" && /\/api\/sessions\/[^/]+\/messages$/.test(candidate.url()));
   await page.locator("form.composer").getByRole("textbox").fill(prompt);
@@ -496,7 +516,7 @@ export async function sendUserMessage(page: Page, sessionId: string, prompt: str
 
   let created: JourneyRun | undefined;
   await expect.poll(async () => {
-    created = (await apiJson<JourneyRun[]>(page, runsPath))
+    created = (await readRuns())
       .find((run) => !before.has(run.id) && run.prompt === prompt);
     return created?.id;
   }, { message: "the submitted user message should create a persisted Run", timeout: 20_000 }).toBeTruthy();
@@ -579,7 +599,7 @@ export async function waitForRunChainTerminal(
 }
 
 /** Stop wake admission first, then cancel and verify all work in this isolated E2E Session. */
-export async function cancelActiveSessionRuns(page: Page, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
+export async function cancelActiveSessionRuns(page: Pick<Page, "request">, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
   const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
   const request = <T>(path: string, method: "GET" | "POST" = "GET", timeoutMs = 5_000) =>
     apiJson<T>(page, path, { method, timeoutMs: Math.min(5_000, timeoutMs) });
@@ -852,8 +872,8 @@ export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Arr
 }
 
 /** Query the setup state without triggering installation or other environment changes. */
-export function environmentSetup(page: Page): Promise<{ message: string; state: string }> {
-  return apiJson(page, "/api/environment-setup");
+export function environmentSetup(page: Page, timeoutMs = 10_000): Promise<{ message: string; state: string }> {
+  return apiJson(page, "/api/environment-setup", { timeoutMs });
 }
 
 /** Records a first-run journey cannot tolerate, counted before anything is deleted. */
@@ -977,10 +997,21 @@ export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promi
   const api = await request.newContext();
   try {
     const client = { request: api };
+    // A blocked/repairing run still owns project resources. Stop and verify the
+    // session first so project deletion cannot race the run scheduler and yield
+    // a transient 409 during teardown.
+    await cancelActiveSessionRuns(client, fixture.session.id).catch((error) => {
+      console.warn(`[journey-cleanup] session shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
       data: { confirmationId: fixture.project.id },
       method: "DELETE",
-    }).catch(() => undefined);
+    }).catch(async (error) => {
+      // A fixture may have been removed by a failed setup path; preserve that
+      // benign case while exposing real teardown conflicts to the test runner.
+      if (error instanceof Error && /-> 404:/.test(error.message)) return;
+      throw error;
+    });
     if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
   } finally { await api.dispose(); }
 }

@@ -90,7 +90,7 @@ test.describe("entering the workspace", () => {
       .toHaveLength(1);
     expect(mock.calls.some((call) => call.method === "POST" && call.path === "/api/projects")).toBe(false);
     await expect(page.getByText("还没有项目", { exact: true })).toBeVisible();
-    await expect(page.getByText("还没有最近会话", { exact: true })).toBeVisible();
+    await expect(page.getByText("还没有会话", { exact: true })).toBeVisible();
     // No Session yet: the composer stands on the welcome page rather than an
     // empty transcript.
     await expect(page.getByRole("heading", { name: "ScienceDiscovery" })).toBeVisible();

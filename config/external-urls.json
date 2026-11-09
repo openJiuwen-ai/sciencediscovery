@@ -66,7 +66,7 @@
       "search_template": "https://europepmc.org/search?query=EXT_ID%3A{identifier}"
     },
     "preprints": {
-      "details_by_days_template": "https://api.biorxiv.org/details/{server}/{days}d/0/json",
+      "details_by_range_template": "https://api.biorxiv.org/details/{server}/{start}/{end}/{cursor}/json",
       "details_by_doi_template": "https://api.biorxiv.org/details/{server}/{doi}/na/json",
       "content_template": "https://www.{server}.org/content/{doi}v{version}",
       "pdf_template": "https://www.{server}.org/content/{doi}v{version}.full.pdf"

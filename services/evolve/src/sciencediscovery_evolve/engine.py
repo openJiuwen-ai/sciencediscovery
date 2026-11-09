@@ -16,9 +16,10 @@
 
 An engine is handed a :class:`RunSpec`, an ``emit`` callback and a
 ``should_stop`` predicate, and is expected to emit the event sequence described
-in ``events.py``. Two implementations: ``stub_engine`` (deterministic, executes
-nothing) and ``puct_engine``; the OpenEvolve port lands behind the same seam
-later.
+in ``events.py``. The available implementations are ``stub_engine``
+(deterministic, executes nothing), ``puct_engine`` and ``openevolve_engine``.
+The two search engines share this seam; only their selection/archive state and
+engine-specific progress fields differ.
 
 .. danger:: Parallel expansion uses AgentDescent's ``ThreadExecutor``.
 
@@ -98,10 +99,12 @@ class RunSpec:
     #: second token because the proxy pins the model to the token.
     judge_url: str = ""
     judge_token: str = ""
-    #: ``"disabled"`` / ``"enabled"`` / empty for the provider's own default.
+    #: ``"auto"``, ``"disabled"`` or ``"enabled"``. ``auto`` is omitted at
+    #: the provider boundary so the provider's own default remains in force.
     #: The user's trade, not this process's: on, a reasoning model spends ~46k
     #: output tokens per call for better candidates; off, ~1.2k for weaker ones.
     thinking: str = ""
+    thinking_effort: str = ""
     #: Ceiling for one mutation call. Below the algorithm's floor a reasoning
     #: model spends it on hidden thinking and returns nothing; the control
     #: plane's pre-flight refuses that before the run is created.

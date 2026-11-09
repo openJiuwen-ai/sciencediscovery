@@ -89,3 +89,67 @@ for (const locale of ["en", "zh-CN"] as const) {
     });
   }
 }
+
+test("a stalled repair-card read is aborted and polling recovers without restarting the run", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  let firstSignal: AbortSignal | undefined;
+  const client = { listExecutionBlocks: async (_sessionId: string, signal?: AbortSignal) => {
+    calls++;
+    if (calls === 1) {
+      firstSignal = signal;
+      return new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("read timed out")), { once: true });
+      });
+    }
+    return [{ id: "recovered-poll", kind: "mcp", runnerId: "MCP", reason: "selected source unavailable", alternatives: [] }];
+  } } as unknown as ApiClient;
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(ExecutionBlockCards, { client, sessionId: "s" })); });
+  try {
+    await act(async () => { context.mock.timers.tick(5_000); });
+    assert.equal(firstSignal?.aborted, true);
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(calls, 2);
+    assert.match(JSON.stringify(view.toJSON()), /Waiting for MCP repair/);
+    assert.match(JSON.stringify(view.toJSON()), /selected source unavailable/);
+  } finally { await act(async () => view.unmount()); }
+  await act(async () => { context.mock.timers.tick(10_000); });
+  assert.equal(calls, 2, "an unmounted card must not keep polling");
+});
+
+test("changing sessions aborts the old repair-card read", async () => {
+  const signals: AbortSignal[] = [];
+  const client = { listExecutionBlocks: async (_sessionId: string, signal?: AbortSignal) => {
+    if (signal) signals.push(signal);
+    return [];
+  } } as unknown as ApiClient;
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(ExecutionBlockCards, { client, sessionId: "old" })); });
+  try {
+    await act(async () => { view.update(createElement(ExecutionBlockCards, { client, sessionId: "new" })); });
+    assert.equal(signals.length, 2);
+    assert.equal(signals[0]?.aborted, true);
+    assert.equal(signals[1]?.aborted, false);
+  } finally { await act(async () => view.unmount()); }
+  assert.equal(signals[1]?.aborted, true);
+});
+
+test("switching sessions cancels the old read and ignores its late result", async () => {
+  let resolveOld!: (value: unknown[]) => void;
+  const signals: AbortSignal[] = [];
+  const client = { listExecutionBlocks: async (session: string, signal: AbortSignal) => {
+    signals.push(signal);
+    if (session === "old") return new Promise(resolve => { resolveOld = resolve; });
+    return [{ id: "new", kind: "mcp", runnerId: "MCP", reason: "current session", alternatives: [] }];
+  } } as unknown as ApiClient;
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(ExecutionBlockCards, { client, sessionId: "old" })); });
+  try {
+    await act(async () => view.update(createElement(ExecutionBlockCards, { client, sessionId: "new" })));
+    assert.equal(signals[0]!.aborted, true);
+    await act(async () => resolveOld([{ id: "old", runnerId: "local", reason: "obsolete", alternatives: [] }]));
+    assert.match(JSON.stringify(view.toJSON()), /current session/);
+    assert.doesNotMatch(JSON.stringify(view.toJSON()), /obsolete/);
+  } finally { await act(async () => view.unmount()); }
+});

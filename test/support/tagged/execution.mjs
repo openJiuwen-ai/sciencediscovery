@@ -58,6 +58,26 @@ export function mockedShards(plan) {
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// A local complete run executes the CI partitions one after another. Keeping
+// this projection beside mockedShards prevents the local driver from merging
+// partitions merely because they happen to share a product fixture.
+export function mockedBatches(plan) {
+  return mockedShards(plan).flatMap(partition => {
+    const entries = plan.entries.filter(entry => partition.keys.includes(entry.key));
+    const batch = (suffix, selected, checks = []) => ({
+      shard: partition.name, group: 'mocked', fixture: partition.fixture,
+      key: `mocked-${partition.name}${suffix}`, entries: selected, checks,
+    });
+    if (partition.name !== 'standard-config') return [batch('', entries, partition.checks)];
+    const fresh = entries.filter(entry => entry.tags.includes('isolation:fresh'));
+    const global = entries.filter(entry => entry.tags.includes('isolation:global'));
+    return [
+      ...(fresh.length ? [batch('-fresh', fresh)] : []),
+      ...(global.length ? [batch('-global', global, partition.checks)] : []),
+    ];
+  });
+}
+
 // A fresh-library journey must run before other global-state journeys.
 // Fail before execution if collection order or concurrency breaks that contract.
 export function assertMockedOrder(catalog, config) {

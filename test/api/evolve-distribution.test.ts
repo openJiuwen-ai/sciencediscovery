@@ -25,7 +25,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { defaultBootstrapIo, type BootstrapIo } from "../../services/launcher/src/bootstrap.js";
@@ -37,6 +37,10 @@ const run = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const BASELINE = '"""Predict the training mean."""\nimport pandas as pd\ndef train_and_predict(train_path, test_path):\n    train = pd.read_csv(train_path)\n    test = pd.read_csv(test_path)\n    return [float(train["y"].mean())] * len(test)\n';
 const CANDIDATE = '```python\n"""Learn the linear relation."""\nimport pandas as pd\nfrom sklearn.linear_model import LinearRegression\ndef train_and_predict(train_path, test_path):\n    train = pd.read_csv(train_path)\n    test = pd.read_csv(test_path)\n    model = LinearRegression()\n    model.fit(train[["x"]], train["y"])\n    return list(model.predict(test[["x"]]))\n```';
+const proxyEnvironment = Object.fromEntries(
+  ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]
+    .flatMap(name => process.env[name] ? [[name, process.env[name]]] : []),
+);
 
 test("a user initializes the pinned release into an empty installation and completes a real Evolve task", { timeout: 15 * 60_000 }, async () => {
   const workspace = await mkdtemp(join(tmpdir(), "evolve-distribution-"));
@@ -84,7 +88,16 @@ test("a user initializes the pinned release into an empty installation and compl
             }
           }
         }
-        return await realIo.fetch(url, options);
+        const started = Date.now();
+        try {
+          const response = await realIo.fetch(url, options);
+          record("Installer fetch response", { resource: String(url) === EVOLVE_RELEASE.url ? "Evolve source" : "bootstrap", status: response.status, durationMs: Date.now() - started });
+          return response;
+        } catch (error) {
+          const failure = error as Error & { cause?: { code?: string } };
+          record("Installer fetch failed", { resource: String(url) === EVOLVE_RELEASE.url ? "Evolve source" : "bootstrap", name: failure.name, code: failure.cause?.code, durationMs: Date.now() - started });
+          throw error;
+        }
       },
       run: async (command, args, options) => {
         if (args[0] === "pip" && injectDependencyFailure) {
@@ -107,11 +120,24 @@ test("a user initializes the pinned release into an empty installation and compl
           assert(signal.aborted);
           throw new Error("controlled dependency-installer failure");
         }
-        return await realIo.run(command, args, options);
+        // Record phase boundaries without command arguments, output, URLs or
+        // environment values, which may contain operator paths/credentials.
+        const phase = args[0] === "pip" ? "dependency installation" : args[0] === "venv" ? "virtual environment" : "Python verification/extraction";
+        const started = Date.now();
+        record("Installer command started", { phase, executable: basename(command) });
+        try {
+          const result = await realIo.run(command, args, options);
+          record("Installer command completed", { phase, durationMs: Date.now() - started });
+          return result;
+        } catch (error) {
+          const failure = error as Error & { code?: string; cause?: { code?: string } };
+          record("Installer command failed", { phase, name: failure.name, code: failure.code ?? failure.cause?.code, aborted: options?.signal?.aborted ?? false, durationMs: Date.now() - started });
+          throw error;
+        }
       },
     };
     const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest, io,
-      env: { PATH: process.env.PATH, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || "https://pypi.org/simple" }, log };
+      env: { PATH: process.env.PATH, ...proxyEnvironment, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || "https://pypi.org/simple" }, log };
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "not_initialized");
     assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");
@@ -131,9 +157,10 @@ test("a user initializes the pinned release into an empty installation and compl
     record("A controlled dependency-installer failure cleans staging and leaves the service unavailable");
     const [init, concurrent] = await Promise.all([0, 1].map(() => fetch(initUrl, { method: "POST", headers, signal: AbortSignal.timeout(12 * 60_000) })));
     assert.equal(init!.status, 200); assert.equal(concurrent!.status, 200);
-    assert.equal((await concurrent!.json() as { state: string }).state, "ready");
+    const [result, concurrentResult] = await Promise.all([init!.json(), concurrent!.json()]) as [{ state: string; error?: string }, { state: string; error?: string }];
+    record("Concurrent initialization results", { primary: result, concurrent: concurrentResult });
+    assert.equal(concurrentResult!.state, "ready", concurrentResult!.error ?? "Concurrent Evolve initialization failed");
     assert.equal(sourceDownloads, 2, "one failed attempt and one coalesced retry download");
-    const result = await init!.json() as { state: string; error?: string };
     assert.equal(result.state, "ready", result.error ?? "Evolve did not initialize");
     const connection = control.runtime.connection()!;
     record("Explicit Init downloads, verifies and installs the designated source plus frozen candidate dependencies", { release: EVOLVE_RELEASE.release, commit: EVOLVE_RELEASE.commit, sourceSha256: EVOLVE_RELEASE.sha256, requirementsSha256: EVOLVE_RELEASE.requirementsSha256 });

@@ -209,15 +209,30 @@ export function classifyModelWireError(error: unknown): ModelWireErrorClass {
       ?? (error.diagnostics?.hasReasoning ? "reasoning_only" : "empty_completion");
   }
   if (error instanceof ModelRequestError) return "provider_http";
-  const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  // Undici commonly wraps a mid-stream socket reset as `TypeError("terminated")`
+  // and puts the useful `UND_ERR_SOCKET`/`ECONNRESET` code on `cause`. Walk the
+  // bounded cause chain so a response that already sent 2xx headers remains a
+  // retryable transport failure instead of being mistaken for malformed JSON.
+  const details: Array<{ code?: string; name?: string; message: string }> = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== null && typeof current === "object"; depth += 1) {
+    const value = current as Record<string, unknown>;
+    details.push({
+      code: typeof value.code === "string" ? value.code : undefined,
+      name: typeof value.name === "string" ? value.name : undefined,
+      message: current instanceof Error ? current.message : String(current),
+    });
+    current = value.cause;
+  }
+  const code = details.map(detail => detail.code ?? "").join(" ");
   if (/TIMEOUT|TIMEDOUT/i.test(code)) return "timeout";
-  if (code.startsWith("UND_ERR_") || /^(?:ECONN|EHOST|ENET|EAI_|EPIPE)/.test(code)) return "network";
-  const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : "";
-  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/(?:^|\s)UND_ERR_/.test(code) || /(?:^|\s)(?:ECONN|EHOST|ENET|EAI_|EPIPE)/.test(code)) return "network";
+  const name = details.map(detail => detail.name ?? "").join(" ");
+  const message = details.map(detail => detail.message).join(" ");
   if (name === "AbortError" || name === "TimeoutError" || /\baborted\b/i.test(message)) return "aborted";
   if (/timed? ?out/i.test(message)) return "timeout";
   if (/malformed|unparseable|JSON/i.test(message)) return "parse";
-  if (/model endpoint is unavailable|fetch failed|socket|connection/i.test(message)) return "network";
+  if (/model endpoint is unavailable|fetch failed|socket|connection|terminated/i.test(message)) return "network";
   if (/model stream|model returned|chat completion|completion omitted|changed an already streamed/i.test(message)) return "invalid_response";
   return "unknown";
 }
@@ -255,6 +270,10 @@ function toolDeltaEmitter(callbacks: ModelStreamCallbacks) {
 }
 
 export interface ModelClientPolicy {
+  /** Optional transport injection; protocol assembly remains shared. */
+  fetchImpl?: typeof fetch;
+  /** Auxiliary completions may normalize a provider JSON response to a stream request. */
+  acceptJsonResponse?: boolean;
   maxRetries: number;
   maxTokens: number;
   requestTimeoutMs: number;
@@ -262,6 +281,14 @@ export interface ModelClientPolicy {
   temperature?: number;
   topP?: number;
   thinking?: { type: string };
+}
+
+/** Internal response handoff to the auxiliary completion normalizer, not a retryable failure. */
+export class ModelJsonResponse extends Error {
+  constructor(readonly body: string) {
+    super("Model returned a JSON response to a streaming request");
+    this.name = "ModelJsonResponse";
+  }
 }
 
 export class ModelRequestError extends Error {
@@ -535,9 +562,10 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
     let statusCode: number;
     let responseBody: AsyncIterable<Uint8Array> & { dump(): Promise<void> };
     let retryAfterMs: number | undefined;
+    let contentType: string | undefined;
     try {
       recorder.dispatch();
-      const response = await request(options.url, {
+      const init = {
         method: "POST",
         headers: options.headers,
         body: options.body,
@@ -545,11 +573,33 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
         bodyTimeout: 0,
         headersTimeout: options.policy.requestTimeoutMs,
         ...(dispatcher ? { dispatcher } : {}),
-      });
-      statusCode = response.statusCode;
-      responseBody = response.body;
-      recorder.headers(statusCode, response.headers as Record<string, string | string[] | undefined>);
-      const retryAfter = response.headers["retry-after"];
+      } as const;
+      let headers: Record<string, string | string[] | undefined>;
+      if (options.policy.fetchImpl) {
+        const response = await options.policy.fetchImpl(options.url, init);
+        statusCode = response.status;
+        headers = Object.fromEntries(response.headers);
+        const stream = response.body;
+        responseBody = Object.assign((async function* () {
+          const reader = stream?.getReader();
+          if (!reader) return;
+          try {
+            for (;;) {
+              const part = await reader.read();
+              if (part.done) return;
+              yield part.value;
+            }
+          } finally { await reader.cancel(); }
+        })(), { dump: async () => {} });
+      } else {
+        const response = await request(options.url, init);
+        statusCode = response.statusCode;
+        responseBody = response.body;
+        headers = response.headers as Record<string, string | string[] | undefined>;
+      }
+      contentType = String(headers["content-type"] ?? "");
+      recorder.headers(statusCode, headers);
+      const retryAfter = headers["retry-after"];
       if (typeof retryAfter === "string" && Number.isFinite(Number(retryAfter))) {
         retryAfterMs = Number(retryAfter) * 1_000;
       }
@@ -564,7 +614,20 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
       await dispatcher?.close();
       throw new Error(`Model endpoint is unavailable: ${lastError.message}`);
     }
-    if (statusCode >= 200 && statusCode < 300) return { body: boundedModelBody(responseBody, dispatcher, options.policy.maxResponseBytes) };
+    if (statusCode >= 200 && statusCode < 300) {
+      const body = boundedModelBody(responseBody, dispatcher, options.policy.maxResponseBytes);
+      if (options.policy.acceptJsonResponse && /^application\/(?:[\w.-]+\+)?json(?:\s*;|$)/i.test(contentType ?? "")) {
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of body) {
+          recorder.byte(chunk.byteLength);
+          chunks.push(chunk);
+        }
+        // Consume this same response under the stream's byte/cancellation limits.
+        // Never issue a second request or reinterpret a partial SSE stream as JSON.
+        throw new ModelJsonResponse(Buffer.concat(chunks).toString("utf8"));
+      }
+      return { body };
+    }
     let detail = (await collectBounded(responseBody, 2_000)).trim();
     for (const [key, value] of Object.entries(options.headers)) {
       if (["authorization", "x-api-key"].includes(key.toLowerCase())) {
@@ -738,6 +801,142 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
   }
 }
 
+const thinkingControlFields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
+interface ThinkingControlRequest { body: string; headers: Record<string, string>; url: string }
+/**
+ * A 400 proves a control was *rejected* only when it says so next to the field
+ * name. A bare mention is not proof: "thinking budget exceeds max_tokens"
+ * complains about the value of a control the provider accepts, and a body echo
+ * names every field sent without rejecting any. These phrases are the ones
+ * providers use for an unknown/unsupported parameter; deliberately not a bare
+ * "invalid", which is what a generic "invalid request" says.
+ */
+const rejectedControlWording = /unsupported|not supported|does not support|unknown (?:parameter|field|argument|property|key)|unrecogni[sz]ed (?:[a-z]+ ){0,3}(?:parameter|field|argument|property|key)|invalid (?:parameter|field|argument|property|key)|unexpected (?:parameter|field|argument|property|key)|not allowed|not permitted|no such (?:parameter|field|argument)/;
+/**
+ * A complaint about a control's *value* or the *state* it was sent in is not a
+ * rejection of the parameter. OpenAI answers `param: "reasoning_effort"` with
+ * `code: invalid_value` when only the value is unsupported, and a gateway says
+ * "temperature is not supported when thinking is enabled" about `temperature`.
+ * Stripping the control would silently change the requested mode, so clauses
+ * carrying these words are dropped before any rejection wording is looked for.
+ */
+const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
+/** How close the rejection word must be to the field name to describe it. */
+const rejectedControlWordingWindow = 80;
+const rejectedThinkingControls = new Map<string, Set<string>>();
+
+/** `detail` (lower-cased) without the clauses that complain about a value or a state. */
+function withoutValueComplaints(detail: string): string {
+  return detail
+    .split(/[.;]\s*|\r?\n/)
+    .filter((clause) => !valueComplaintWording.test(clause))
+    .join(". ");
+}
+
+function thinkingControlEndpointKey(endpoint: ModelEndpoint): string {
+  return [endpointRoot(endpoint.baseUrl), endpoint.model, endpointProtocol(endpoint), endpointVariant(endpoint)].join("\0");
+}
+
+function withoutThinkingControls(request: ThinkingControlRequest, fields = thinkingControlFields) {
+  let body: Record<string, unknown>;
+  try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return undefined; }
+  if (!fields.some((field) => field in body)) return undefined;
+  for (const field of fields) delete body[field];
+  return { ...request, body: JSON.stringify(body) };
+}
+
+/** Whether `detail` rejects `field`, not merely mentions it: either the
+ *  provider's own `param` pointer names it, or a rejection phrase sits within a
+ *  short window of the name. A value or state complaint proves neither, even
+ *  when it points at the field. */
+function detailRejectsField(lower: string, field: string): boolean {
+  if (new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower) && !valueComplaintWording.test(lower)) return true;
+  const claims = withoutValueComplaints(lower);
+  for (let at = claims.indexOf(field); at !== -1; at = claims.indexOf(field, at + field.length)) {
+    const window = claims.slice(
+      Math.max(0, at - rejectedControlWordingWindow),
+      at + field.length + rejectedControlWordingWindow,
+    );
+    if (rejectedControlWording.test(window)) return true;
+  }
+  return false;
+}
+
+/**
+ * The thinking controls `detail` rejects, judged by the rule the streamed sender
+ * uses: the provider's own `param` pointer names the field, or a rejection
+ * phrase sits next to it; a complaint about a control's value or the state it
+ * was sent in proves nothing, and a body echo names every field without
+ * rejecting any.
+ *
+ * Exported for callers that own their own retry. The non-stream boundary in
+ * `completion.ts` deliberately carries no fallback (see its doc comment), so a
+ * caller such as the Settings connectivity probe strips exactly the controls a
+ * 400 named and retries once itself — after intersecting with
+ * {@link carriedThinkingControls}, because a 400 can name a control the request
+ * never carried.
+ */
+export function rejectedThinkingControlFields(detail: string): Set<string> {
+  const lower = detail.toLowerCase();
+  return new Set(thinkingControlFields.filter((field) => detailRejectsField(lower, field)
+    || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))));
+}
+
+/**
+ * The thinking controls `body` — a serialized chat request — actually carries.
+ *
+ * Only useful together with {@link rejectedThinkingControlFields}: a 400 names
+ * what the endpoint refused, never what this request sent. Which controls a
+ * variant injects cannot be answered from the endpoint either, because the mode
+ * is resolved through the catalog first (`constrainCatalogThinking` may rewrite
+ * `auto` to a model's declared default), so the serialized body is the only
+ * trustworthy answer. A caller that strips a control it never sent reports a
+ * recovery that did not happen and pays a second request to learn nothing.
+ */
+export function carriedThinkingControls(body: string): Set<string> {
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(body) as Record<string, unknown>; } catch { return new Set(); }
+  return new Set(thinkingControlFields.filter((field) => field in parsed));
+}
+
+function rejectedThinkingFields(request: Pick<ThinkingControlRequest, "body">, detail: string): Set<string> {
+  const carried = carriedThinkingControls(request.body);
+  return new Set([...rejectedThinkingControlFields(detail)].filter((field) => carried.has(field)));
+}
+
+function retryWithoutRejectedThinkingFields(
+  request: ThinkingControlRequest,
+  error: unknown,
+) {
+  if (!(error instanceof ModelRequestError)) return undefined;
+  return thinkingControlFallback(request, error.statusCode, error.responseDetail);
+}
+
+/** The stripped request for a 400 that rejected controls it carried, or
+ *  `undefined` when the 400 does not prove a rejection (a failed status, a value
+ *  complaint, a body echo). */
+function thinkingControlFallback(request: ThinkingControlRequest, status: number | undefined, detail: string) {
+  if (status !== 400 || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(detail)) return undefined;
+  // Strip exactly what this 400 named: a control it did not complain about is
+  // still wanted, and dropping all four would silently disable a mode the
+  // provider accepts.
+  const fields = rejectedThinkingFields(request, detail);
+  if (!fields.size) return undefined;
+  const fallback = withoutThinkingControls(request, [...fields]);
+  if (!fallback) return undefined;
+  return { fallback, fields };
+}
+
+function withoutKnownRejectedThinkingControls(endpoint: ModelEndpoint, request: ThinkingControlRequest): ThinkingControlRequest {
+  const fields = rejectedThinkingControls.get(thinkingControlEndpointKey(endpoint));
+  return (fields?.size ? withoutThinkingControls(request, [...fields]) : undefined) ?? request;
+}
+
+function rememberRejectedThinkingControls(endpoint: ModelEndpoint, fields: Iterable<string>): void {
+  const key = thinkingControlEndpointKey(endpoint);
+  rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...fields]));
+}
+
 interface OpenAiToolCallFragment {
   function?: { arguments?: string; name?: string };
   id?: string;
@@ -802,10 +1001,30 @@ async function streamOpenAiTurn(
   recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
-  const { body } = await requestWithRetry({
-    ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
-    policy, proxy: endpoint.proxy, signal,
-  }, recorder);
+  let request = withoutKnownRejectedThinkingControls(endpoint, createModelRequest(endpoint, systemPrompt, history, tools, policy, true));
+  // A provider may report unknown fields one 400 at a time, so each 400 strips
+  // only the fields it names and the request is reissued. The memory is written
+  // once such a request actually succeeds: a fallback that itself fails (429,
+  // 5xx, 401, timeout) has proved nothing and must not downgrade the endpoint.
+  let streamed: Awaited<ReturnType<typeof requestWithRetry>> | undefined;
+  let lastError: unknown;
+  const rejectedHere = new Set<string>();
+  for (let attempt = 0; attempt <= thinkingControlFields.length; attempt += 1) {
+    try {
+      streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
+      break;
+    } catch (error) {
+      lastError = error;
+      const retry = retryWithoutRejectedThinkingFields(request, error);
+      if (!retry) throw error;
+      for (const field of retry.fields) rejectedHere.add(field);
+      recorder.retry("provider_http");
+      request = retry.fallback;
+    }
+  }
+  if (!streamed) throw lastError;
+  if (rejectedHere.size) rememberRejectedThinkingControls(endpoint, rejectedHere);
+  const { body } = streamed;
 
   let text = "";
   let deepseekReasoning = "";
@@ -1296,7 +1515,7 @@ async function streamAnthropicTurn(
     toolCalls,
     streamDiagnostics,
     completionObserved,
-    ...(inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens) ? { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens } } : {}),
+    ...(inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens) ? { usage: { inputTokens, outputTokens, reasoningTokens: null, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens } } : {}),
     ...(truncated ? { truncated } : {}),
   };
 }
@@ -1405,7 +1624,7 @@ export async function streamModelTurn(
         break;
     }
   } catch (error) {
-    const diagnostics = emit(classifyModelWireError(error));
+    const diagnostics = emit(error instanceof ModelJsonResponse ? undefined : classifyModelWireError(error));
     if (typeof error === "object" && error !== null) wireDiagnosticsByError.set(error, diagnostics);
     throw error;
   }

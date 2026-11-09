@@ -95,3 +95,11 @@ test("native Responses cache fields take precedence and preserve explicit zero",
   }
   assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 2, input_tokens_details: { cached_tokens: .5 } }, "openai-responses")?.cacheReadTokens, null);
 });
+
+test("reasoning tokens are preserved separately from output across compatible response dialects", () => {
+  assert.equal(normalizeUsage({ prompt_tokens: 10, completion_tokens: 7, total_tokens: 17,
+    completion_tokens_details: { reasoning_tokens: 5 } }, "openai-chat-completions")?.reasoningTokens, 5);
+  assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 7, total_tokens: 17,
+    output_tokens_details: { reasoning_tokens: 5 } }, "openai-responses")?.reasoningTokens, 5);
+  assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 7, total_tokens: 17 }, "openai-responses")?.reasoningTokens, null);
+});

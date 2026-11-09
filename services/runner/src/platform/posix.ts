@@ -44,4 +44,7 @@ export const posixAdaptation: OsAdaptation = {
   environmentShellPath(prefixPath) {
     return resolve(prefixPath, "bin", "bash");
   },
+  environmentShellUtilityPath(prefixPath, utility) {
+    return resolve(prefixPath, "bin", utility);
+  },
 };

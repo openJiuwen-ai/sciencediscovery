@@ -545,7 +545,7 @@ jobs:
       - name: Summarize the JiuwenSwarm checks
         if: always()
         run: |
-          checks=.ci-results/mocked-standard/e2e/jiuwenswarm-checks.log
+          checks=.ci-results/mocked-standard-config-global/e2e/jiuwenswarm-checks.log
           if [[ -f "$checks" ]]; then
             {
               echo

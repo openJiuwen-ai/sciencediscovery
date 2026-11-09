@@ -159,6 +159,9 @@ class IdeaTreeEngine:
         template = self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))
         fields = {'design': 'designSystemPrompt', 'aggregate': 'aggregatorSystemPrompt', 'propagate': 'propagateInsightSystemPrompt'}
         if role == 'ideate':
+            nodes = self.state['nodes']
+            if not any(n['kind'] == 'candidate' for n in nodes) or not any(n.get('insightRecords') for n in nodes):
+                return prompts.IDEATE + '\n' + prompts.IDEATE_EXPLORE_ONLY
             return prompts.IDEATE
         assessor = next((item for item in template['assessors'] if item['id'] == role), None)
         if assessor:
@@ -454,9 +457,12 @@ class IdeaTreeEngine:
         insights = {record['id']: record for n in self.state['nodes'] for record in n.get('insightRecords', [])}
         source_ids = proposal.get('basedOnCandidateIds', [])
         insight_ids = proposal.get('addressesInsightIds', [])
+        is_exploit = proposal.get('explorationType') == 'exploit'
+        if is_exploit and (not candidates or not insights):
+            raise ValueError('Use explorationType=explore until a candidate and an insight exist')
         if not set(source_ids).issubset(candidates) or not set(insight_ids).issubset(insights):
             raise ValueError('Proposal references an unknown candidate or insight')
-        if proposal.get('explorationType', 'explore') == 'exploit':
+        if is_exploit:
             for key in ('targetedWeakness', 'expectedImprovement', 'newRisk'):
                 text(proposal.get(key), key, 2000)
             if not source_ids or not insight_ids:

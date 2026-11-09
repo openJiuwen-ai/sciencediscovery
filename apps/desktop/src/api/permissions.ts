@@ -13,7 +13,25 @@
 // limitations under the License.
 
 import type { ApiClient } from "./client.js";
-import type { PermissionDecision, PermissionDecisionResult } from "./types.js";
+import type { PermissionDecision, PermissionDecisionResult, PermissionRequest } from "./types.js";
+
+/**
+ * Every request the Session ever raised, decided ones included.
+ *
+ * A replay is rebuilt from the run's own event stream, and a decision can
+ * reach the catalog without reaching that stream — artifact downloads and
+ * remote jobs answered outside a run's own wait were recorded only as a
+ * catalog state in older builds. Opening a Session compares the two so such a
+ * request does not come back as a card that can no longer be answered.
+ */
+export function listPermissionRequests(
+  client: ApiClient,
+  sessionId: string,
+): Promise<PermissionRequest[]> {
+  return client.request<PermissionRequest[]>(
+    `/api/permission-requests?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
 
 /**
  * Answer one authorization request.

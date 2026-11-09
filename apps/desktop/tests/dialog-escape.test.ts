@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import { claimsEscape } from "../src/views/dialog-escape.js";
+import { claimsEscape, enterDialog, isTopDialog, leaveDialog } from "../src/views/dialog-escape.js";
 
 const { describe, it } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
@@ -49,5 +49,39 @@ describe("Escape in a stack of dialogs", () => {
   it("ignores every other key", () => {
     assert.equal(claimsEscape(keydown("Enter")), false);
     assert.equal(claimsEscape(keydown("Tab")), false);
+  });
+});
+
+describe("which dialog owns the key", () => {
+  it("gives it to the dialog opened last, not the one that mounted first", () => {
+    // Both listen on `document`, so registration order would hand the key to
+    // the dialog underneath. The stack is what says otherwise.
+    const report = enterDialog();
+    const card = enterDialog();
+    assert.equal(isTopDialog(report), false);
+    assert.equal(isTopDialog(card), true);
+    leaveDialog(card);
+    assert.equal(isTopDialog(report), true);
+    leaveDialog(report);
+  });
+
+  it("falls back to the one below when the top one leaves", () => {
+    const first = enterDialog();
+    const second = enterDialog();
+    leaveDialog(second);
+    leaveDialog(first);
+    // Nothing is open, so nothing claims Escape.
+    assert.equal(isTopDialog(first), false);
+    assert.equal(isTopDialog(second), false);
+  });
+
+  it("ignores a dialog that has already left the stack", () => {
+    const gone = enterDialog();
+    leaveDialog(gone);
+    const top = enterDialog();
+    // A second cleanup, as a remount or a double effect teardown produces.
+    leaveDialog(gone);
+    assert.equal(isTopDialog(top), true);
+    leaveDialog(top);
   });
 });

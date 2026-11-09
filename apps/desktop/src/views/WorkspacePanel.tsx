@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { PanelResize } from "../app/use-panel-width.js";
 import type { PreviewSlot, TabState, WorkspaceActions } from "../app/use-workspace.js";
@@ -25,14 +25,20 @@ import { fileFolder, fileName } from "../app/paths.js";
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, PANEL_NUDGE_STEP, PANEL_NUDGE_STRIDE } from "../app/panel-width.js";
 import type { ToolDetail as ToolDetailData } from "../app/tool-io.js";
 import { detectStructureFormat } from "../molecular.js";
-import type { Session, SessionArtifactOutput, Subagent, WorkspaceFile } from "../api/types.js";
+import type {
+  ComposerReference,
+  Session,
+  SessionArtifactOutput,
+  Subagent,
+  WorkspaceFile,
+} from "../api/types.js";
 import { subagentTask } from "../run-stream/subagent.js";
 import { TEXT } from "../text.js";
 import { DocumentPreview } from "./DocumentPreview.js";
 import { SubagentDetail } from "./SubagentDetail.js";
 import { ToolDetail } from "./ToolDetail.js";
 
-export type PanelGroup = "artifacts" | "files";
+export type PanelGroup = "artifacts" | "files" | "task";
 
 interface Props {
   actions: WorkspaceActions;
@@ -42,6 +48,8 @@ interface Props {
    *  way out of the mode `subagent` and `tool` open. */
   onCloseDetail: () => void;
   onCollapse: () => void;
+  /** Opens the memory card behind a citation chip in a report. */
+  onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
   onSelectGroup: (group: PanelGroup) => void;
   outputs: SessionArtifactOutput[];
   resize: PanelResize;
@@ -56,13 +64,28 @@ interface Props {
   subagent?: Subagent;
   /** The catalog read that fills a replayed child's steps is still in flight. */
   subagentLoading?: boolean;
+  /** The record has stopped refreshing: a run of failed catalog reads. The
+   *  steps shown may be behind what the child has done. */
+  subagentStale?: boolean;
   /** One input or result block of a tool call, opened from the run. It is the
    *  same mode as `subagent`: the panel shows only that text. */
   tool?: ToolDetailData;
+  /** The search the open Session is running or has finished, shown under the
+   *  任务 tab. Absent when the Session has no runs, and then the tab is absent
+   *  too: an empty 任务 page would be a door into a room with nothing in it. */
+  task?: ReactNode;
   tabs: TabState;
 }
 
 function GroupIcon({ group }: { group: PanelGroup }) {
+  if (group === "task") {
+    return (
+      <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="16">
+        <rect height="16" rx="3" width="16" x="4" y="4" />
+        <path d="M8 9h8M8 12.5h8M8 16h4" />
+      </svg>
+    );
+  }
   if (group === "artifacts") {
     return (
       <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="16">
@@ -441,13 +464,15 @@ function VersionPicker({
 }
 
 /**
- * The right column: 产物 and 工作区.
+ * The right column: 任务, 产物 and 工作区.
  *
- * Both groups keep a 240px list on the left and open the selected document in
- * tabs on the right. A document belongs to the group it was opened from, so
- * switching groups does not show an artifact under the workspace tab. 任务 is
- * not a tab: the run's progress is already the conversation, and a second list
- * of the same tool calls said nothing new.
+ * 产物 and 工作区 keep a 240px list on the left and open the selected document
+ * in tabs on the right. A document belongs to the group it was opened from, so
+ * switching groups does not show an artifact under the workspace tab.
+ *
+ * 任务 is a mode rather than a list: a search is one thing, and its detail has
+ * the whole column. The tab appears only while the Session has a run, because
+ * every other Session has nothing to put behind it.
  */
 export function WorkspacePanel({
   actions,
@@ -455,6 +480,7 @@ export function WorkspacePanel({
   files,
   onCloseDetail,
   onCollapse,
+  onReferenceClick,
   onSelectGroup,
   outputs,
   resize,
@@ -462,6 +488,8 @@ export function WorkspacePanel({
   sessions = [],
   subagent,
   subagentLoading,
+  subagentStale,
+  task,
   tool,
   tabs,
 }: Props) {
@@ -586,6 +614,7 @@ export function WorkspacePanel({
   const shownTree = filterFileTree(buildFileTree(files), fileQuery);
 
   const groups: { id: PanelGroup; label: string }[] = [
+    ...(task === undefined ? [] : [{ id: "task" as const, label: TEXT.workspace.groups.task }]),
     { id: "artifacts", label: TEXT.workspace.groups.artifacts },
     { id: "files", label: TEXT.workspace.groups.files },
   ];
@@ -680,10 +709,20 @@ export function WorkspacePanel({
             {active === undefined ? (
               <div className="doc-placeholder">{TEXT.workspace.open}</div>
             ) : structure ? (
-              <DocumentPreview expanded={expanded} onExpand={setExpanded} slot={active} />
+              <DocumentPreview
+                expanded={expanded}
+                onExpand={setExpanded}
+                onReferenceClick={onReferenceClick}
+                slot={active}
+              />
             ) : (
               <div className="artifact-canvas">
-                <DocumentPreview expanded={expanded} onExpand={setExpanded} slot={active} />
+                <DocumentPreview
+                  expanded={expanded}
+                  onExpand={setExpanded}
+                  onReferenceClick={onReferenceClick}
+                  slot={active}
+                />
               </div>
             )}
           </div>
@@ -777,6 +816,8 @@ export function WorkspacePanel({
         <div className="panel-body is-tool">
           <ToolDetail detail={tool} />
         </div>
+      ) : subagent === undefined && activeGroup === "task" ? (
+        <div className="panel-body is-task">{task}</div>
       ) : subagent === undefined ? (
         <div
           className={`panel-body${panel.split.docClosed ? " is-doc-closed" : ""}${listClosed ? " is-list-closed" : ""}`}
@@ -829,7 +870,15 @@ export function WorkspacePanel({
         </div>
       ) : (
         <div className="panel-body is-subagent">
-          <SubagentDetail loading={subagentLoading ?? false} subagent={subagent} />
+          {/* Keyed by the record: a fold's mounted body belongs to the child it
+              was opened for, and reusing the component for the next child would
+              mount that child's whole timeline while it is still folded. */}
+          <SubagentDetail
+            key={subagent.id}
+            loading={subagentLoading ?? false}
+            stale={subagentStale ?? false}
+            subagent={subagent}
+          />
         </div>
       )}
     </aside>

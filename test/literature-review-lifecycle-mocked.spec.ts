@@ -7,11 +7,12 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMe
   waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 import { researchModel, type ResearchScriptStep } from "./helpers/research-model.ts";
 
-const cases = ["LR-01", "LR-02", "LR-03", "LR-04", "LR-05", "LR-06", "LR-17"] as const;
+const cases = ["LR-01", "LR-02", "LR-03", "LR-04", "LR-05", "LR-06", "LR-17", "LR-18"] as const;
 const names = { "LR-01": "invalid arguments are never executed and the model re-issues the call", "LR-02": "broken model stream does not execute a partial call",
   "LR-03": "five children roll through two lifecycle permits", "LR-04": "one failed child does not lose sibling results",
   "LR-05": "child timeout releases the queued task", "LR-06": "parent cancellation removes queued work",
-  "LR-17": "repeated invalid arguments fail explicitly after bounded recovery" };
+  "LR-17": "repeated invalid arguments fail explicitly after bounded recovery",
+  "LR-18": "a clean EOF inside tool arguments recovers without executing the partial call" };
 const INVALID_SHELL = { name: "run_shell", arguments: {}, rawArguments: '{"command":"printf LR_SHOULD_NOT_EXECUTE' };
 const RECOVERY_FEEDBACK = "[Tool argument recovery ";
 const lastUserText = (messages: Array<{ role?: string; content?: unknown }>) =>
@@ -71,7 +72,12 @@ test("LR-16 upstream 503 cancellation leaves the same session and shared MCP usa
 });
 
 async function api<T>(page: Page, path: string, method = "GET", data?: unknown): Promise<T> {
-  const response = await page.request.fetch(`${apiBaseUrl()}${path}`, { method, headers: authorizationHeader(), ...(data === undefined ? {} : { data }) });
+  // Only idempotent reads may retry connection resets. Keep HTTP errors and
+  // lifecycle assertions visible, and never replay cancellation/configuration writes.
+  const response = await page.request.fetch(`${apiBaseUrl()}${path}`, {
+    method, headers: authorizationHeader(), ...(data === undefined ? {} : { data }),
+    ...(method === "GET" ? { maxRetries: 2, timeout: 10_000 } : {}),
+  });
   expect(response.ok(), `${method} ${path}: ${response.status()}`).toBe(true);
   return response.json();
 }
@@ -107,12 +113,12 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
   journey.scenario({ goal: names[id], preconditions: ["exclusive Swarm stack", "local scripted model", "no external sources"] });
   const scripts: Record<string, ResearchScriptStep[]> = {};
   let timeoutRoute: string | undefined;
-  if (id === "LR-01") {
+  if (id === "LR-01" || id === "LR-18") {
     // The withheld call never enters the replayed history, so the same step is
     // asked again; only the recovery feedback makes this script re-issue it.
     scripts.main = [({ messages }) => lastUserText(messages).startsWith(RECOVERY_FEEDBACK)
       ? { tools: [{ name: "run_shell", arguments: { command: "printf LR_REISSUED_CALL" } }] }
-      : { tools: [INVALID_SHELL] },
+      : { tools: [INVALID_SHELL], ...(id === "LR-18" ? { omitCompletion: true } : {}) },
     { text: "LR_RECOVERED_FINAL: the re-issued call ran." }];
   } else if (id === "LR-02" || id === "LR-17") {
     scripts.main = [{ tools: [INVALID_SHELL], ...(id === "LR-02" ? { disconnect: true } : {}) }];
@@ -145,9 +151,11 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
     await api(page, "/api/quota-settings", "PUT", { ...priorQuota, maxConcurrentSubagents: id === "LR-05" || id === "LR-06" ? 1 : 2 });
     fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `Literature ${id} local fixture` },
       projectName: `Literature ${id} ${Date.now()}`, sessionTitle: names[id] });
-    await openProjectSession(page, fixture);
-    const run = await sendUserMessage(page, fixture.session.id, `Run deterministic literature lifecycle fixture ${id}. Use only local synthetic data.`);
-    runId = run.id;
+    await journey.step("Start local research", "Open the session and submit the scripted research request.", async () => {
+      await openProjectSession(page, fixture!);
+      const run = await sendUserMessage(page, fixture!.session.id, `Run deterministic literature lifecycle fixture ${id}. Use only local synthetic data.`);
+      runId = run.id;
+    });
     if (id === "LR-03") {
       // Both first children must be waiting inside real model requests. A third
       // starting here is a pool defect, not a model planning choice.
@@ -169,7 +177,7 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
       expect(admitted[0]!.status).toBe("running");
       expect(admitted[0]!.input.prompt).toContain(`LR_CHILD_${started}:`);
       await api(page, `/api/sessions/${fixture.session.id}/runs/${runId}/cancel`, "POST");
-      expect((await waitForRunTerminal(page, fixture.session.id, runId, 30_000)).status).toBe("cancelled");
+      expect((await waitForRunTerminal(page, fixture.session.id, runId!, 30_000)).status).toBe("cancelled");
       await expect.poll(async () => (await children()).filter(c => c.status === "running").length, { timeout: 15_000 }).toBe(0);
       expect(stub.calls.filter(c => !["main", "title"].includes(c.route)).map(c => c.route)).toEqual([started]);
       // Refreshing must not start orphaned queued work.
@@ -180,77 +188,79 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
       expect((await children()).every(c => c.status !== "running")).toBe(true);
       expect(stub.calls.slice(count).some(c => !["main", "title"].includes(c.route))).toBe(false);
     } else {
-      const terminal = await waitForRunTerminal(page, fixture.session.id, runId, 90_000);
-      const main = stub.calls.filter(c => c.route === "main");
-      if (id === "LR-01") {
-        expect(terminal.status, terminal.error).toBe("completed");
-        const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture.session.id}/agent-activity`);
-        await info.attach("recovered-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
-        expect(activity.executions, "Only the re-issued call may run").toHaveLength(1);
-        expect(JSON.stringify(activity)).not.toContain("LR_SHOULD_NOT_EXECUTE");
-        // The model was told which call failed and why, and the re-issued call's output reached it.
-        expect(main).toHaveLength(3);
-        expect(lastUserText(main[1]!.messages)).toMatch(/^\[Tool argument recovery 1\/2; invalid_tool_arguments\]/);
-        expect(lastUserText(main[1]!.messages)).toContain("run_shell (");
-        expect(main[2]!.results.join("\n")).toContain("LR_REISSUED_CALL");
-        await expect(page.locator(".message.assistant").last()).toContainText("LR_RECOVERED_FINAL");
-        // The withheld-response notice is for Swarm's recovery boundary, never shown to the user.
-        await expect(page.locator("body")).not.toContainText("tool_calls_withheld");
-      } else if (id === "LR-02" || id === "LR-17") {
-        // Explicit terminal failure, NOT silent success.
-        expect(terminal.status).toBe("failed");
-        expect(terminal.error).toBeTruthy();
-        const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture.session.id}/agent-activity`);
-        await info.attach("failed-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
-        expect(activity.executions, "No shell execution may be created from partial/invalid JSON").toHaveLength(0);
-        if (id === "LR-17") {
-          // One answer plus two bounded recovery attempts, then the run names the cause.
+      await journey.step("Verify the research outcome", "Observe the terminal result and confirm that only complete, re-issued calls execute.", async () => {
+        const terminal = await waitForRunTerminal(page, fixture!.session.id, runId!, 90_000);
+        const main = stub.calls.filter(c => c.route === "main");
+        if (id === "LR-01" || id === "LR-18") {
+          expect(terminal.status, terminal.error).toBe("completed");
+          const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture!.session.id}/agent-activity`);
+          await info.attach("recovered-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
+          expect(activity.executions, "Only the re-issued call may run").toHaveLength(1);
+          expect(JSON.stringify(activity)).not.toContain("LR_SHOULD_NOT_EXECUTE");
+          // The model was told which call failed and why, and the re-issued call's output reached it.
           expect(main).toHaveLength(3);
-          expect(main.slice(1).map(c => lastUserText(c.messages).slice(0, 32)))
-            .toEqual(["[Tool argument recovery 1/2; inv", "[Tool argument recovery 2/2; inv"]);
-          expect(terminal.error).toContain("invalid tool arguments (tools: run_shell) after 2 recovery attempts");
-          await expect(page.locator("body")).toContainText(/could not be read|参数无法解析/);
+          expect(lastUserText(main[1]!.messages)).toMatch(/^\[Tool argument recovery 1\/2; invalid_tool_arguments\]/);
+          expect(lastUserText(main[1]!.messages)).toContain("run_shell (");
+          expect(main[2]!.results.join("\n")).toContain("LR_REISSUED_CALL");
+          await expect(page.locator(".message.assistant").last()).toContainText("LR_RECOVERED_FINAL");
+          // The withheld-response notice is for Swarm's recovery boundary, never shown to the user.
           await expect(page.locator("body")).not.toContainText("tool_calls_withheld");
-        } else {
-          await expect(page.locator("body")).toContainText(/error|failed|错误|失败/i);
-        }
-      } else {
-        expect(terminal.status, terminal.error).toBe("completed");
-        const records = await children();
-        expect(records).toHaveLength(id === "LR-03" ? 5 : 2);
-        expect(records.some(c => c.status === "running")).toBe(false);
-        const results = stub.calls.filter(c => c.route === "main" && c.step === 1).flatMap(c => c.results).join("\n");
-        if (id === "LR-03") {
-          for (const name of ["a", "b", "c", "d", "e"]) expect(results).toContain(`SOURCE_RESULT_${name}`);
-          expect(records.every(c => c.status === "completed")).toBe(true);
-          const events = records.flatMap(c => [{ time: Date.parse(c.createdAt), delta: 1 }, { time: Date.parse(c.finishedAt!), delta: -1 }])
-            .sort((a, b) => a.time - b.time || a.delta - b.delta);
-          let active = 0;
-          for (const event of events) { active += event.delta; expect(active).toBeLessThanOrEqual(2); }
-        } else {
-          if (id === "LR-05") expect(timeoutRoute, "a child must reach the gated model request before timing out").toBeTruthy();
-          const failedRoute = id === "LR-05" ? timeoutRoute! : "a";
-          const healthyRoute = failedRoute === "a" ? "b" : "a";
-          const failed = records.find(c => c.input.prompt.includes(`LR_CHILD_${failedRoute}:`))!;
-          // Existing lifecycle contract classifies both time and turn budget
-          // exhaustion as timed_out; distinguish them by the exact cause.
-          expect(failed.status).toBe("timed_out");
-          expect(results).toContain(`SOURCE_RESULT_${healthyRoute}`);
-          expect(results).toMatch(id === "LR-05" ? /timed_out|timeout|timed out/i : /maxTurns=1/);
-          if (id === "LR-04") {
-            expect(stub.calls.filter(c => c.route === "a")).toHaveLength(1);
-            expect(results).not.toContain("UNEXPECTED_BEYOND_CHILD_TURN_LIMIT");
+        } else if (id === "LR-02" || id === "LR-17") {
+          // Explicit terminal failure, NOT silent success.
+          expect(terminal.status).toBe("failed");
+          expect(terminal.error).toBeTruthy();
+          const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture!.session.id}/agent-activity`);
+          await info.attach("failed-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
+          expect(activity.executions, "No shell execution may be created from partial/invalid JSON").toHaveLength(0);
+          if (id === "LR-17") {
+            // One answer plus two bounded recovery attempts, then the run names the cause.
+            expect(main).toHaveLength(3);
+            expect(main.slice(1).map(c => lastUserText(c.messages).slice(0, 32)))
+              .toEqual(["[Tool argument recovery 1/2; inv", "[Tool argument recovery 2/2; inv"]);
+            expect(terminal.error).toContain("invalid tool arguments (tools: run_shell) after 2 recovery attempts");
+            await expect(page.locator("body")).toContainText(/could not be read|参数无法解析/);
+            await expect(page.locator("body")).not.toContainText("tool_calls_withheld");
+          } else {
+            await expect(page.locator("body")).toContainText(/error|failed|错误|失败/i);
           }
-          if (id === "LR-05") {
-            const healthy = records.find(c => c.input.prompt.includes(`LR_CHILD_${healthyRoute}:`))!;
-            expect(healthy.status).toBe("completed");
-            expect(stub.calls.filter(c => !["main", "title"].includes(c.route)).map(c => c.route))
-              .toEqual([failedRoute, healthyRoute]);
-            expect(Date.parse(healthy.createdAt)).toBeGreaterThanOrEqual(Date.parse(failed.finishedAt!));
+        } else {
+          expect(terminal.status, terminal.error).toBe("completed");
+          const records = await children();
+          expect(records).toHaveLength(id === "LR-03" ? 5 : 2);
+          expect(records.some(c => c.status === "running")).toBe(false);
+          const results = stub.calls.filter(c => c.route === "main" && c.step === 1).flatMap(c => c.results).join("\n");
+          if (id === "LR-03") {
+            for (const name of ["a", "b", "c", "d", "e"]) expect(results).toContain(`SOURCE_RESULT_${name}`);
+            expect(records.every(c => c.status === "completed")).toBe(true);
+            const events = records.flatMap(c => [{ time: Date.parse(c.createdAt), delta: 1 }, { time: Date.parse(c.finishedAt!), delta: -1 }])
+              .sort((a, b) => a.time - b.time || a.delta - b.delta);
+            let active = 0;
+            for (const event of events) { active += event.delta; expect(active).toBeLessThanOrEqual(2); }
+          } else {
+            if (id === "LR-05") expect(timeoutRoute, "a child must reach the gated model request before timing out").toBeTruthy();
+            const failedRoute = id === "LR-05" ? timeoutRoute! : "a";
+            const healthyRoute = failedRoute === "a" ? "b" : "a";
+            const failed = records.find(c => c.input.prompt.includes(`LR_CHILD_${failedRoute}:`))!;
+            // Existing lifecycle contract classifies both time and turn budget
+            // exhaustion as timed_out; distinguish them by the exact cause.
+            expect(failed.status).toBe("timed_out");
+            expect(results).toContain(`SOURCE_RESULT_${healthyRoute}`);
+            expect(results).toMatch(id === "LR-05" ? /timed_out|timeout|timed out/i : /maxTurns=1/);
+            if (id === "LR-04") {
+              expect(stub.calls.filter(c => c.route === "a")).toHaveLength(1);
+              expect(results).not.toContain("UNEXPECTED_BEYOND_CHILD_TURN_LIMIT");
+            }
+            if (id === "LR-05") {
+              const healthy = records.find(c => c.input.prompt.includes(`LR_CHILD_${healthyRoute}:`))!;
+              expect(healthy.status).toBe("completed");
+              expect(stub.calls.filter(c => !["main", "title"].includes(c.route)).map(c => c.route))
+                .toEqual([failedRoute, healthyRoute]);
+              expect(Date.parse(healthy.createdAt)).toBeGreaterThanOrEqual(Date.parse(failed.finishedAt!));
+            }
           }
+          await expect(page.locator(".message.assistant").last()).toContainText("Fixture synthesis complete");
         }
-        await expect(page.locator(".message.assistant").last()).toContainText("Fixture synthesis complete");
-      }
+      });
     }
     expect(stub.errors).toEqual([]);
   } finally {

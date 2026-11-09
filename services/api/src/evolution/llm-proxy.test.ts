@@ -50,6 +50,7 @@ function fakeStore(overrides: { apiToken?: string; model?: typeof MODEL | undefi
       resolveProxy: () => ({ mode: "direct" }),
       getModel: () => ("model" in overrides ? overrides.model : MODEL),
       getModelApiToken: () => ("apiToken" in overrides ? overrides.apiToken : "sk-provider-secret"),
+      listProviders: () => [],
     } as never,
   };
 }
@@ -57,6 +58,16 @@ function fakeStore(overrides: { apiToken?: string; model?: typeof MODEL | undefi
 /** Mount the handler on a bare server: `createApiServer` cannot be imported on
  *  macOS (its environment probe shells out to `/usr/bin/bash`). */
 async function mount(deps: Parameters<typeof handleEvolveCompletion>[3]): Promise<{ origin: string }> {
+  // Existing fixtures describe completed Chat messages. Serve them as actual
+  // SSE deltas now that the proxy requests streaming from the provider.
+  const transport = deps.fetchImpl;
+  if (transport) deps = { ...deps, fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+    const response = await transport(...args);
+    if (!response.ok || response.headers.get("content-type")?.includes("text/event-stream")) return response;
+    const payload = await response.json() as any;
+    return new Response(`data: ${JSON.stringify({ choices: payload.choices.map((c: any) => ({ delta: c.message, finish_reason: c.finish_reason ?? "stop" })), usage: payload.usage })}\n\ndata: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch };
   const server: Server = createServer((request, response) => {
     const match = request.url?.match(/^\/internal\/evolve-llm\/([^/]+)\/v1\/chat\/completions$/);
     if (!match || request.method !== "POST") {
@@ -418,6 +429,42 @@ test("a run's two models get two tokens, and neither buys the other", async () =
   assert.equal(tokens.resolve("run-1", mutate), undefined);
   assert.equal(tokens.resolve("run-1", judge), undefined);
   assert.equal(tokens.size, 0);
+});
+
+test("a frozen search keeps low effort after the model profile changes", async () => {
+  const tokens = new RunTokenRegistry();
+  const model = { ...MODEL, apiVariant: "deepseek", thinkingMode: "enabled", thinkingEffort: "high" };
+  const { store } = fakeStore({ model });
+  const seen: any[] = [];
+  const { origin } = await mount({ store, tokens, fetchImpl: (async (_url, init) => {
+    seen.push(JSON.parse(String(init?.body)));
+    return Response.json({ choices: [{ message: { content: "program" } }] });
+  }) as typeof fetch });
+  const token = tokens.issue("frozen", "s1", model.id, { thinkingMode: "enabled", thinkingEffort: "low" });
+  model.thinkingEffort = "max";
+  assert.equal((await completion(origin, "frozen", token)).status, 200);
+  assert.equal(seen[0].stream, true);
+  assert.equal(seen[0].reasoning_effort, "low");
+  assert.deepEqual(seen[0].thinking, { type: "enabled" });
+});
+
+test("revoking a run token aborts its active upstream request", async () => {
+  const tokens = new RunTokenRegistry();
+  const { store } = fakeStore();
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let aborted = false;
+  const { origin } = await mount({ store, tokens, fetchImpl: (async (_url, init) => {
+    entered();
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }, { once: true });
+    });
+  }) as typeof fetch });
+  const pending = completion(origin, "cancel", tokens.issue("cancel", "s1", MODEL.id));
+  await started;
+  tokens.revoke("cancel");
+  await pending;
+  assert.equal(aborted, true);
 });
 
 test('provider errors preserve original status and bounded redacted causes for plain, primitive and JSON bodies', async () => {

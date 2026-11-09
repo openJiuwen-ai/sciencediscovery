@@ -19,10 +19,13 @@ import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 
+import type { PermissionRequest, RunStreamEvent, SessionRun } from "@sciencediscovery/schema";
+
 import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
 import { SessionStore } from "../store.js";
 import {
   appendToolProgress,
+  publishResolvedPermissions,
   publishRunEvent,
   buildCompletedToolTrace,
   buildSubagentToolStep,
@@ -209,6 +212,67 @@ test("run snapshots narrow legacy Responses max to the selected model wire capab
   assert.equal(snapshot.thinkingEffort, "xhigh");
 });
 
+test("run snapshots preserve explicit effort for an unknown DeepSeek gateway", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `deepseek-snapshot-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  const model = await store.createModel({ name: "Gateway", model: "deepseek-flash", baseUrl: "https://example.test/v1", apiVariant: "deepseek", apiToken: "test-token" });
+  const project = await store.createProject("Gateway effort");
+  const session = await store.createSession(project.id, "Gateway effort", model.id);
+  assert.equal(computeSettingsSnapshot(store, session.id).thinkingEffort, "high");
+  for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+    await store.updateSession(session.id, { thinkingEffort: effort, thinkingMode: "enabled" });
+    const snapshot = computeSettingsSnapshot(store, session.id);
+    assert.equal(snapshot.thinkingMode, "enabled");
+    assert.equal(snapshot.thinkingEffort, effort);
+  }
+});
+
+
+test("computeSettingsSnapshot rejects a session whose effective model was deleted", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-missing-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const otherProvider = await store.createProvider({ apiToken: "test-token-2", presetId: "openai" });
+  const other = await store.materializeProviderModel(otherProvider.id, "gpt-5.5");
+  const project = await store.createProject("Project");
+  const session = await store.createSession(project.id, "Session", model.id);
+  await store.deleteModel(model.id);
+
+  // The explicit unavailable choice persists while the effective mirror is empty.
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  // The deleted model must not silently switch to the remaining one.
+  assert.equal(store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+  // Creating a run should fail early with a structured error.
+  try {
+    computeSettingsSnapshot(store, session.id);
+    assert.fail("expected rejection");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "The session model is not available");
+  }
+
+  // After the user explicitly selects another model, the session works again.
+  await store.updateSession(session.id, { modelId: other.id, reviewModelId: other.id });
+  const snapshot = computeSettingsSnapshot(store, session.id);
+  assert.equal(snapshot.modelId, other.id);
+});
+
 
 test("completed subagent tools retain intermediate output beside their final result", () => {
   const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false,
@@ -259,4 +323,79 @@ test("completed traces retain bounded authoritative evidence and actual per-resp
   }
   for(const value of ["null","plain evidence","{}",'{"sourceId":"other","toolId":"search","records":[]}',
     '{"sourceId":"pubmed","toolId":"read","records":[]}','{"sourceId":"pubmed","toolId":"search","records":3}']) assert.equal(trace(value).paperCount,undefined);
+});
+
+/** A store whose only job is to record what reached the run stream. */
+function permissionStreamStore(
+  runs: SessionRun[],
+  subagents: Array<{ id: string; parentTurnId: string }> = [],
+): { published: Array<{ event: RunStreamEvent; runId: string }>; store: SessionStore } {
+  const published: Array<{ event: RunStreamEvent; runId: string }> = [];
+  const store = {
+    appendSessionRunEvent: async (sessionId: string, runId: string, event: RunStreamEvent) => {
+      published.push({ event, runId });
+      return { createdAt: "2026-11-07T00:00:00.000Z", event, runId, sequence: published.length, sessionId };
+    },
+    getSubagent: (_sessionId: string, subagentId: string) => subagents.find((child) => child.id === subagentId),
+    listSessionRuns: async () => runs,
+  } as unknown as SessionStore;
+  return { published, store };
+}
+
+const permissionRequest = (id: string, executionId?: string): PermissionRequest => ({
+  action: "artifact_download",
+  createdAt: "2026-11-07T00:00:00.000Z",
+  ...(executionId ? { executionId } : {}),
+  id,
+  resource: `artifact:biorxiv:${id}`,
+  state: "allowed",
+  summary: `Download ${id}`,
+});
+
+const sessionRun = (id: string, status: SessionRun["status"]): SessionRun => ({ id, status } as SessionRun);
+
+test("a decision recorded outside a run's wait is written to the run that asked", async () => {
+  const { published, store } = permissionStreamStore([sessionRun("run-1", "completed")]);
+  await publishResolvedPermissions(store, "session-a", [permissionRequest("request-1", "run-1")]);
+  assert.deepEqual(published.map((item) => [item.runId, item.event.type]), [["run-1", "permission.resolved"]]);
+});
+
+test("a subagent's request resolves on its parent run", async () => {
+  const { published, store } = permissionStreamStore(
+    [sessionRun("run-1", "running")],
+    [{ id: "subagent-1", parentTurnId: "run-1" }],
+  );
+  await publishResolvedPermissions(store, "session-b", [permissionRequest("request-2", "subagent-1")]);
+  assert.deepEqual(published.map((item) => item.runId), ["run-1"]);
+});
+
+test("a request whose execution id is a tool call falls back to the run still going", async () => {
+  const { published, store } = permissionStreamStore([
+    sessionRun("run-old", "completed"),
+    sessionRun("run-current", "running"),
+  ]);
+  await publishResolvedPermissions(store, "session-c", [permissionRequest("request-3", "tool-call-1")]);
+  assert.deepEqual(published.map((item) => item.runId), ["run-current"]);
+});
+
+test("a request this process saw raised keeps its run after the execution id stops matching", async () => {
+  const { published, store } = permissionStreamStore([sessionRun("run-1", "completed")]);
+  const request = permissionRequest("request-4", "tool-call-1");
+  await publishRunEvent(store, "session-d", "run-1", { request: { ...request, state: "pending" }, type: "permission.required" });
+  await publishResolvedPermissions(store, "session-d", [request]);
+  assert.deepEqual(published.map((item) => item.runId), ["run-1", "run-1"]);
+});
+
+test("the same resolution is written once, whichever path records it first", async () => {
+  const { published, store } = permissionStreamStore([sessionRun("run-1", "running")]);
+  const request = permissionRequest("request-5", "run-1");
+  await publishRunEvent(store, "session-e", "run-1", { request, type: "permission.resolved" });
+  await publishResolvedPermissions(store, "session-e", [request]);
+  assert.equal(published.filter((item) => item.event.type === "permission.resolved").length, 1);
+});
+
+test("a request with no run to own it is skipped rather than failing the decision", async () => {
+  const { published, store } = permissionStreamStore([]);
+  await publishResolvedPermissions(store, "session-f", [permissionRequest("request-6", "nothing")]);
+  assert.deepEqual(published, []);
 });

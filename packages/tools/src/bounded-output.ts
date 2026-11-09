@@ -223,23 +223,27 @@ export class ToolOutputGuard {
     return (await this.applyDetailed(toolName, content, selfBounded)).content;
   }
 
-  async applyDetailed(toolName: string, content: string, selfBounded = false): Promise<ToolOutputGuardResult> {
+  async applyDetailed(toolName: string, content: string, selfBounded = false, retainedContent?: string): Promise<ToolOutputGuardResult> {
     const tolerance = selfBounded ? SELF_BOUNDED_TOLERANCE : 1;
     const keep = this.keepTailTools.has(toolName) ? "tail" : "head";
-    const bounded = boundText(content, {
+    let bounded = boundText(content, {
       keep,
       maxBytes: this.maxBytes * tolerance,
       maxLines: this.maxLines * tolerance,
     });
     let record: ToolOutputRecord | undefined;
-    if (bounded.truncated || (!selfBounded && Buffer.byteLength(content, "utf8") > this.retentionBytes)) {
+    if (retainedContent !== undefined || bounded.truncated || (!selfBounded && Buffer.byteLength(content, "utf8") > this.retentionBytes)) {
       try {
-        record = await this.options.sink.save(toolName, content);
+        record = await this.options.sink.save(toolName, retainedContent ?? content);
       } catch {
         // Storage is best effort: a bounded result without a reference is still
         // far better than an oversized one that fails the whole request.
         record = undefined;
       }
+    }
+    if (retainedContent !== undefined) {
+      content = retainedOutputNotice(content, record);
+      bounded = boundText(content, { keep, maxBytes: this.maxBytes * tolerance, maxLines: this.maxLines * tolerance });
     }
     if (!bounded.truncated) return { content, ...(record ? { record } : {}), truncated: false };
     const preview = headTailPreview(content, this.maxBytes * tolerance, this.maxLines * tolerance, keep);
@@ -266,4 +270,17 @@ function describeBound(toolName: string, bounded: BoundedText, preview: string, 
     lines.push("The full output could not be stored for re-reading. Re-run the tool with a narrower request or explicit pagination.");
   }
   return lines.join("\n");
+}
+
+/** Keep structured previews parseable while exposing the full-result reader. */
+export function retainedOutputNotice(content: string, record?: ToolOutputRecord): string {
+  const notice = record ? {
+    ref: record.ref, bytes: record.bytes, lines: record.lines,
+    instruction: `Content was omitted from this projection. Read the complete safe result with read_tool_output(ref="${record.ref}", query=<text>) or charOffset/charLimit for a character range.`,
+  } : { instruction: "Content was omitted and the full result could not be stored for re-reading. Re-run with a narrower request or explicit pagination." };
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return JSON.stringify({ ...parsed, _retainedOutput: notice });
+  } catch { /* Plain-text tools keep their existing format. */ }
+  return `${content}\n${JSON.stringify({ _retainedOutput: notice })}`;
 }

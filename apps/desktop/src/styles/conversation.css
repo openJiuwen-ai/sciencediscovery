@@ -411,6 +411,79 @@
   letter-spacing: .03em;
 }
 
+/* A single compact card owns both the failure and its supporting evidence. */
+.message.run-failure-row {
+  display: block;
+  margin: 10px 0 20px;
+}
+.run-failure {
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--text);
+}
+.run-failure-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+}
+.run-failure-icon { flex: 0 0 auto; }
+.run-failure-heading h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.run-failure-summary {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.run-failure-details { margin-top: 10px; }
+.run-failure-details summary {
+  width: fit-content;
+  padding: 4px 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.run-failure-details summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.run-failure-diagnostics {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.run-failure-code { margin: 0 0 8px; }
+.run-failure-code code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-sunk);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.run-failure-diagnostics pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* A short note where a body would go: a truncated answer, or a section with
    nothing in it yet. */
 .workspace-empty {

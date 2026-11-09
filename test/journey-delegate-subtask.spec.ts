@@ -191,10 +191,12 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         const boundaryIndex = transcript.lastIndexOf(boundary);
         expect(boundaryIndex).toBeGreaterThanOrEqual(0);
         expect(transcript.slice(0, boundaryIndex)).toContain("PRIVATE-FILE-VERIFIED");
-        const completed = JSON.parse(transcript.slice(boundaryIndex + boundary.length));
-        expect(completed.state).toBe("completed");
-        expect(completed.result.exitCode).toBe(0);
-        expect(completed.result.stdout).toContain("PRIVATE-FILE-VERIFIED");
+        const projected = transcript.slice(boundaryIndex + boundary.length);
+        expect(JSON.parse(projected)).toMatchObject({ state: "completed", exitCode: 0 });
+        const stdout = execution.locator(".tool-io-section").filter({
+          has: page.locator(".tool-io-label", { hasText: /^stdout$/ }),
+        }).locator("pre");
+        await expect(stdout).toContainText("PRIVATE-FILE-VERIFIED");
         const reply = conversation.locator(".run-timeline .message.assistant").last();
         await expect(reply).toContainText("review notes are ready");
         await expect(reply).toContainText(childMarker);

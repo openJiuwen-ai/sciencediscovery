@@ -811,6 +811,47 @@ test("managed Shell HTTP submission detaches, exposes incremental logs, queues w
   assert.equal((await replay.json() as { code: string }).code, "EXECUTION_ID_CONFLICT");
 });
 
+test("an unavailable managed Shell accepts the managed request and records a deterministic pre-admission failure", async (context) => {
+  const { dataDir, workspaceRoot } = await workspaceFixture(context);
+  const unavailableReason = "Managed Bash is missing required utilities: head";
+  context.mock.method(RunnerReadiness.prototype, "get", async () => ({
+    instanceId: "mock-readiness", checkedAt: new Date().toISOString(), sandbox: "bubblewrap",
+    dependencyAvailable: true, sandboxUsable: true, ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason },
+  }));
+  const server = createRunnerServer({ ...config(dataDir), npuBrokerEnabled: false });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token" };
+  const input = { agentId: "main", executionId: "shell-gap", workspaceRoot, permissionEpoch: epoch(), code: "echo never" };
+  const submitted = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", input));
+  // A 503 here would be indistinguishable from a lost submission, so the API
+  // would file an unverified outcome and block the workspace.
+  const submittedBody = await submitted.text();
+  assert.equal(submitted.status, 202, submittedBody);
+  const owner = new URLSearchParams({ sessionId: input.permissionEpoch.sessionId, agentId: input.agentId });
+  let execution = JSON.parse(submittedBody) as import("@sciencediscovery/schema").ManagedExecution;
+  const deadline = Date.now() + 8_000;
+  while (execution.state !== "failed" && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 10));
+    execution = await fetch(`${origin}/shell-executions/shell-gap?${owner}`, { headers })
+      .then((response) => response.json()) as typeof execution;
+  }
+  assert.equal(execution.state, "failed", "the accepted request settles deterministically");
+  assert.equal(execution.error, unavailableReason);
+  assert.equal(execution.startedAt, undefined, "no process started, so no start time is recorded");
+  assert.equal(execution.result, undefined, "no execution result is fabricated");
+  assert.equal(execution.version, undefined);
+  assert.equal(execution.evidence?.terminationReason, "not_started");
+  // The synchronous route has no execution record to settle and keeps failing closed.
+  const synchronous = await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", { ...input, executionId: "sync-gap" }));
+  assert.equal(synchronous.status, 503);
+  const body = await synchronous.json() as { code: string; error: string };
+  assert.equal(body.code, "EXECUTION_UNAVAILABLE");
+  assert.equal(body.error, unavailableReason);
+});
+
 test("remote workspace executes signed Shell and Python without a local projects tree", async (context) => {
   const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-execution-"));
   context.after(() => rm(dataDir, { recursive: true, force: true }));

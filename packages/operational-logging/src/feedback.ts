@@ -30,7 +30,17 @@ export const FEEDBACK_MIN_BODY = 10;
 export const FEEDBACK_MAX_BODY = 2000;
 export const FEEDBACK_MAX_TITLE = 120;
 export const FEEDBACK_MAX_DIAGNOSTICS = 4000;
-export const FEEDBACK_MAX_BYTES = 16 * 1024;
+
+/**
+ * Screenshots are compressed in the client before they reach the wire (max edge
+ * 1600px, WebP), so these caps describe already-compressed payloads rather than
+ * what a user may pick from disk. The request budget leaves room for the Base64
+ * expansion of eight 2 MiB images plus the text fields.
+ */
+export const FEEDBACK_MAX_IMAGES = 8;
+export const FEEDBACK_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+export const FEEDBACK_MAX_IMAGE_NAME = 120;
+export const FEEDBACK_MAX_BYTES = 24 * 1024 * 1024;
 export const FEEDBACK_DUPLICATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const FEEDBACK_ENDPOINT = "https://sciencediscovery-feedback.sciencediscovery.workers.dev";
@@ -142,6 +152,42 @@ export function classifyContact(value: string): ContactType | undefined {
 // ---------------------------------------------------------------------------
 
 export interface FeedbackContact { type: ContactType; value: string }
+
+/** MIME types a screenshot may use. Anything else is rejected before upload. */
+export const FEEDBACK_IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export type FeedbackImageMime = (typeof FEEDBACK_IMAGE_MIME_TYPES)[number];
+
+/**
+ * One attached screenshot. `data` is raw Base64 (no `data:` prefix): the Worker
+ * forwards it to the GitHub Contents API and the client must not spend budget
+ * on a wrapper the relay would only strip again.
+ */
+export interface FeedbackImage {
+  name: string;
+  mime: FeedbackImageMime;
+  data: string;
+}
+
+/** Decoded byte length of a Base64 string, or `undefined` when it is malformed. */
+export function base64DecodedBytes(data: string): number | undefined {
+  if (data.length === 0 || data.length % 4 !== 0) return undefined;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return undefined;
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return (data.length / 4) * 3 - padding;
+}
+
+/** Filenames are display-only. Strip controls and Markdown syntax so a name
+ *  cannot break out of the `![alt](url)` construct the Worker renders. */
+export function sanitizeFeedbackImageName(name: string): string {
+  const cleaned = name
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[[\]()<>|!]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, FEEDBACK_MAX_IMAGE_NAME);
+  return cleaned || "image";
+}
+
 export interface FeedbackMeta {
   version?: string;
   os?: string;
@@ -160,6 +206,7 @@ export interface FeedbackSubmission {
   contact?: FeedbackContact;
   meta?: FeedbackMeta;
   diagnostics?: string;
+  images?: FeedbackImage[];
   clientTs: string;
 }
 
@@ -175,6 +222,7 @@ export interface BuildFeedbackOptions {
   contact?: FeedbackContact;
   meta?: FeedbackMeta;
   diagnostics?: string;
+  images?: FeedbackImage[];
   clientTs?: string;
 }
 
@@ -191,6 +239,13 @@ export function buildFeedbackPayload(options: BuildFeedbackOptions): FeedbackSub
   if (options.contact) payload.contact = options.contact;
   if (options.meta && Object.keys(options.meta).length > 0) payload.meta = options.meta;
   if (options.diagnostics !== undefined) payload.diagnostics = options.diagnostics.slice(0, FEEDBACK_MAX_DIAGNOSTICS);
+  if (options.images && options.images.length > 0) {
+    payload.images = options.images.slice(0, FEEDBACK_MAX_IMAGES).map((image) => ({
+      name: sanitizeFeedbackImageName(image.name),
+      mime: image.mime,
+      data: image.data,
+    }));
+  }
   return payload;
 }
 
@@ -229,6 +284,43 @@ export function validateFeedbackSubmission(input: FeedbackSubmission): FeedbackF
       errors.push({ field: "diagnostics", reason: "expected string" });
     } else if (raw.diagnostics.length > FEEDBACK_MAX_DIAGNOSTICS) {
       errors.push({ field: "diagnostics", reason: `max ${FEEDBACK_MAX_DIAGNOSTICS}` });
+    }
+  }
+
+  // Screenshots are validated like every other JSON field: shape first, then
+  // type, then size. Decoding to check the real byte count (rather than the
+  // Base64 length) keeps the limit identical to what the client compressed to.
+  if (raw.images !== undefined) {
+    const images = raw.images;
+    if (!Array.isArray(images)) {
+      errors.push({ field: "images", reason: "expected array" });
+    } else if (images.length > FEEDBACK_MAX_IMAGES) {
+      errors.push({ field: "images", reason: `max ${FEEDBACK_MAX_IMAGES}` });
+    } else {
+      for (let index = 0; index < images.length; index += 1) {
+        const field = `images[${index}]`;
+        const image = asRecord(images[index]);
+        if (!image) {
+          errors.push({ field, reason: "expected object" });
+          continue;
+        }
+        if (!isString(image.name) || image.name.length === 0 || image.name.length > FEEDBACK_MAX_IMAGE_NAME) {
+          errors.push({ field: `${field}.name`, reason: `1..${FEEDBACK_MAX_IMAGE_NAME}` });
+        }
+        if (!isString(image.mime) || !FEEDBACK_IMAGE_MIME_TYPES.includes(image.mime as FeedbackImageMime)) {
+          errors.push({ field: `${field}.mime`, reason: FEEDBACK_IMAGE_MIME_TYPES.join("|") });
+        }
+        if (!isString(image.data)) {
+          errors.push({ field: `${field}.data`, reason: "expected base64 string" });
+          continue;
+        }
+        const bytes = base64DecodedBytes(image.data);
+        if (bytes === undefined) {
+          errors.push({ field: `${field}.data`, reason: "invalid base64" });
+        } else if (bytes > FEEDBACK_MAX_IMAGE_BYTES) {
+          errors.push({ field: `${field}.data`, reason: `max ${FEEDBACK_MAX_IMAGE_BYTES} bytes` });
+        }
+      }
     }
   }
 

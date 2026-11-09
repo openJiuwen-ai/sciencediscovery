@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { ApiStatusError } from "../http/api-status-error.js";
+export { ApiStatusError };
 import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
 import { createNativeAgent } from "../native-agent/index.js";
 import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
@@ -29,6 +31,7 @@ import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -122,6 +125,7 @@ import type {
   PromptManifest,
   PromptSkillLibraryRef,
   PlanSnapshot,
+  PermissionRequest,
   RuntimeNotice,
   SubagentStep,
   UpdateSpecialistRequest,
@@ -134,6 +138,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
+  MODEL_THINKING_EFFORTS,
   resolveModelFacts,
   SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
@@ -164,6 +169,7 @@ import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
 import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
+import { runnerNpuBrokerEnabled } from "./runner-health.js";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
@@ -442,19 +448,6 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
   return store.getSpecialist(sessionSpecialistId);
 }
 
-export class ApiStatusError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    /** Machine-readable reason, so a client can act on it instead of matching prose. */
-    readonly code?: string,
-    /** Structured payload the client needs to offer a next step. */
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
-
 /** Empty match-response shape with a degradation reason (feature off / unreachable). */
 export function emptyMatch(reason: "memory_graph_disabled" | "memory_graph_unreachable") {
   return { hits: [] as unknown[], total: 0, truncated: false, reason };
@@ -560,6 +553,8 @@ export type EvolveRuntimeFactory = (context: EvolveTurnContext) => EvolveToolRun
 
 /** What the capability needs from the turn that is running it. */
 export interface EvolveTurnContext {
+  thinkingMode?: EffectiveRuntimeSettings["thinkingMode"];
+  thinkingEffort?: EffectiveRuntimeSettings["thinkingEffort"];
   approvalMode?: "always_allow" | "ask_for_dangerous";
   /** Publishes `evolve_run.created` into the turn's event stream. */
   emit: RunEventSink;
@@ -687,6 +682,11 @@ async function executeAgentRun(
   }
   const project = store.getProject(session.projectId);
   if (!project) throw new ApiStatusError(404, "Project not found");
+  // Validate the queued run's frozen selection before touching execution services.
+  const selectedModel = store.getModel(settingsSnapshot.modelId);
+  if (!selectedModel) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   // Remote machines are an addition, not a replacement: this run always has the
   // local runner, and each allowed machine is one more place the model may ask
   // to run. A machine that is not connected only fails the calls that name it.
@@ -805,11 +805,7 @@ async function executeAgentRun(
   const enabledBuiltinSpecialists = store
     .listSpecialists()
     .filter((specialist) => specialist.builtIn && specialist.enabled !== false);
-  const selectedModel = store.getModel(settingsSnapshot.modelId);
   const initialPermissionEpoch = store.getSessionPermissionEpoch(sessionId);
-  if (!selectedModel) {
-    throw new ApiStatusError(400, "The session model is not available");
-  }
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
@@ -831,6 +827,7 @@ async function executeAgentRun(
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
   let activeSkills: RuntimeSkillSnapshot[];
+  const librarySkillIds = new Set<string>();
   try {
     // `/` attachments must stay inside the Session's effective skill set: in
     // `selected` mode a skill outside the whitelist is not usable at all.
@@ -856,6 +853,9 @@ async function executeAgentRun(
         )
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    for (const skill of librarySkills) {
+      if (!manualSkillIds.has(skill.id)) librarySkillIds.add(skill.id);
+    }
     activeSkills = [
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
@@ -870,6 +870,7 @@ async function executeAgentRun(
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
   const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+    ...(librarySkillIds.has(id) ? { importOnRun: true } : {}),
     content,
     description,
     hash,
@@ -1332,6 +1333,7 @@ async function executeAgentRun(
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
     ...(approvalsByJiuwenSwarm ? { requestApproval } : {}),
     memoryGraphEnabled: memoryGraphSink.enabled,
+    seedModelContext: Boolean(session.researchSnapshot && promptHistory.length),
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
@@ -1346,7 +1348,7 @@ async function executeAgentRun(
       kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
       maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
       maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-      npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+      npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
@@ -1593,6 +1595,8 @@ async function executeAgentRun(
       // loop neither knows its dependencies nor forwards them.
       const turnExecution = mainExecution;
       const runtime = evolve?.({
+        thinkingMode: settingsSnapshot.thinkingMode,
+        thinkingEffort: settingsSnapshot.thinkingEffort,
         approvalMode: session.approvalMode,
         beginExternalWait: turnExecution ? () => turnExecution.beginExternalWait() : undefined,
         emit,
@@ -1879,7 +1883,7 @@ async function executeAgentRun(
               kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
               maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
               maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-              npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+              npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
               permission: childExecution.permission,
               permissionScopeLabel: `in subagent ${subagent.id}`,
               artifactPathPrefix: handoff.privateWorkspacePath,
@@ -2654,6 +2658,12 @@ async function executeAgentRun(
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
       return "cancelled";
     }
+    runLog.error("run_execution_failed", {
+      errorMessage: shortErrorMessage(runFailureMessage(error)),
+      ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+      runId,
+      sessionId,
+    });
     rememberTimeout(timeoutFailure(error));
     try {
       await persistObservedTimeouts();
@@ -2927,6 +2937,132 @@ export function subagentStreamId(subagentId: string): string {
 }
 
 /**
+ * What the stream knows about one permission request: the run its events
+ * belong on, and whether its resolution has already been written.
+ *
+ * A request records only the `executionId` it was asked with, and that is not
+ * always a run id: a subagent asks with its own id, and the Reviewer's MCP
+ * tools ask with a toolCallId (`turnId: toolCallId ?? runId`). Publishing is
+ * the one moment that knows the run, so it remembers it here; a decision
+ * recorded outside the run's own wait then has somewhere to go.
+ *
+ * The same entry keeps one decision from being written twice. A request that
+ * is answered while its run polls for the answer arrives from both the
+ * endpoint that recorded the decision and the poll that noticed it, and the
+ * timeline should carry the resolution once.
+ */
+interface PermissionEventOwner {
+  resolved: boolean;
+  runId: string;
+}
+
+const permissionEventOwners = new Map<string, PermissionEventOwner>();
+/** Enough history for every request a long session could still be answering;
+ *  the oldest entry is dropped past this, and the fallback in
+ *  `publishResolvedPermissions` still finds the run. */
+const PERMISSION_EVENT_OWNERS_LIMIT = 10_000;
+
+function permissionEventKey(sessionId: string, requestId: string): string {
+  return `${sessionId}:${requestId}`;
+}
+
+function rememberPermissionOwner(sessionId: string, runId: string, requestId: string): void {
+  const key = permissionEventKey(sessionId, requestId);
+  const existing = permissionEventOwners.get(key);
+  if (existing) {
+    existing.runId = runId;
+    return;
+  }
+  if (permissionEventOwners.size >= PERMISSION_EVENT_OWNERS_LIMIT) {
+    const oldest = permissionEventOwners.keys().next().value;
+    if (oldest !== undefined) permissionEventOwners.delete(oldest);
+  }
+  permissionEventOwners.set(key, { resolved: false, runId });
+}
+
+/** True when this request's resolution is already on a run stream. The catalog
+ *  accepts one decision per request, so a duplicate is always the same answer
+ *  arriving by a second path. */
+function markPermissionResolved(sessionId: string, runId: string, requestId: string): boolean {
+  const key = permissionEventKey(sessionId, requestId);
+  const existing = permissionEventOwners.get(key);
+  if (existing?.resolved) return true;
+  if (existing) {
+    existing.resolved = true;
+    return false;
+  }
+  if (permissionEventOwners.size >= PERMISSION_EVENT_OWNERS_LIMIT) {
+    const oldest = permissionEventOwners.keys().next().value;
+    if (oldest !== undefined) permissionEventOwners.delete(oldest);
+  }
+  permissionEventOwners.set(key, { resolved: true, runId });
+  return false;
+}
+
+/** Where to write a resolution whose request this process never saw raised —
+ *  the API restarted between the question and the answer. */
+async function permissionOwnerRunId(
+  store: SessionStore,
+  sessionId: string,
+  request: PermissionRequest,
+  runs: readonly SessionRun[],
+): Promise<string | undefined> {
+  const executionId = request.executionId;
+  if (executionId) {
+    if (runs.some((run) => run.id === executionId)) return executionId;
+    const owner = store.getSubagent(sessionId, executionId);
+    if (owner) return owner.parentTurnId;
+  }
+  // A Reviewer MCP tool asks with its toolCallId, which nothing maps back to a
+  // run. A Session runs one run at a time, so the one still going is the one
+  // that asked.
+  return runs.findLast((run) => run.status === "running" || run.status === "blocked")?.id;
+}
+
+/**
+ * Write the resolutions a decision recorded in the catalog onto the run stream.
+ *
+ * Most requests are answered by the run that asked: it polls for the answer
+ * and publishes `permission.resolved` itself. The ones decided outside a run's
+ * own wait — artifact downloads, remote jobs, and every pending request an
+ * approval-mode switch settles — have no such poller, so without this the
+ * decision reached only the catalog. A reloaded Session then replays the
+ * request as still pending: a card whose buttons can never work.
+ *
+ * A publishing failure is logged and swallowed. The decision is already
+ * committed; losing its audit line must not turn a successful authorization
+ * into an HTTP error.
+ */
+export async function publishResolvedPermissions(
+  store: SessionStore,
+  sessionId: string,
+  requests: readonly PermissionRequest[],
+): Promise<void> {
+  if (requests.length === 0) return;
+  // Read the run index at most once: it carries every run's settings snapshot,
+  // and "allow matching" can settle several requests in one decision.
+  let runs: SessionRun[] | undefined;
+  const sessionRuns = async (): Promise<SessionRun[]> => (runs ??= await store.listSessionRuns(sessionId));
+  for (const request of requests) {
+    try {
+      const registered = permissionEventOwners.get(permissionEventKey(sessionId, request.id));
+      const runId = registered?.runId || await permissionOwnerRunId(store, sessionId, request, await sessionRuns());
+      if (!runId) {
+        runLog.warn("permission_resolved_unowned", { requestId: request.id, sessionId });
+        continue;
+      }
+      await publishRunEvent(store, sessionId, runId, { request, type: "permission.resolved" });
+    } catch (error) {
+      runLog.warn("permission_resolved_publish_failed", {
+        errorMessage: error instanceof Error ? error.message : String(error),
+        requestId: request.id,
+        sessionId,
+      });
+    }
+  }
+}
+
+/**
  * Persist an event where it belongs before fanning it out to live subscribers.
  * Growable payloads (tool output, subagent process steps) land in the run's
  * child streams and are broadcast without a main-stream sequence; the catalog's
@@ -2940,6 +3076,13 @@ export async function publishRunEvent(
   event: RunStreamEvent,
   delivery?: RunEventDelivery,
 ): Promise<SessionRunEvent> {
+  if (event.type === "permission.required") {
+    rememberPermissionOwner(sessionId, runId, event.request.id);
+  } else if (event.type === "permission.resolved" && markPermissionResolved(sessionId, runId, event.request.id)) {
+    // Already on the stream: the same answer by a second path. Live-only
+    // record, so a caller that reads the return still gets one.
+    return { createdAt: new Date().toISOString(), event, runId, sequence: 0, sessionId };
+  }
   let record: SessionRunEvent;
   if (delivery?.transient) {
     // Live-only: no sequence is allocated because nothing is stored, matching
@@ -3093,7 +3236,9 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);
   const model = store.getModel(snapshot.modelId);
-  if (!model) return snapshot;
+  if (!model) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
     ? "anthropic-messages"
     : "openai-chat-completions");
@@ -3122,7 +3267,8 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
     ? [...model.facts.thinkingEfforts]
     : catalog?.thinking?.efforts ?? [];
   if (!model.facts?.thinkingEfforts?.length && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
-    if (variant === "gemini") efforts = ["low", "medium", "high"];
+    if (variant === "deepseek") efforts = [...MODEL_THINKING_EFFORTS];
+    else if (variant === "gemini") efforts = ["low", "medium", "high"];
     else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
     else if (variant === "kimi-k3") efforts = ["low", "high", "max"];
@@ -3344,9 +3490,17 @@ export async function createSkillEvolutionRun(
   }, ideaTreeRepository);
 }
 
-export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
+export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun | undefined> {
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
-  const settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  let settingsSnapshot: EffectiveRuntimeSettings;
+  try {
+    settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  } catch (error) {
+    // Keep the inbox unread until the user repairs the model selection. Other
+    // owners must still receive their notices during this tick.
+    if (error instanceof ApiStatusError && error.code === "SESSION_MODEL_UNAVAILABLE") return undefined;
+    throw error;
+  }
   const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
   return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),
@@ -3375,11 +3529,12 @@ export function scheduleSessionRuns(
   evolve: EvolveRuntimeFactory | undefined,
   executionGovernance?: ExecutionGovernance,
 ): void {
-  if (scheduledSessions.has(sessionId)) return;
+  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
   void (async () => {
     try {
       while (true) {
+        if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
         const runs = await store.listSessionRuns(sessionId);
         if (runs.some((run) => run.status === "blocked" && run.configurationWait)) return;
         const next = runs.find((run) => run.status === "queued");
@@ -3571,6 +3726,7 @@ export function scheduleSessionRuns(
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
+      if (isEvidenceSessionReadOnly(session)) continue;
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {

@@ -100,7 +100,8 @@ const server = createApiServer(config, {
   });
 await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
 context.after(async () => {
-    await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); });
+    server.closeAllConnections();
+    await new Promise<void>((done) => { server.close(() => done()); });
     await rm(root, { force: true, recursive: true });
   });
 const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

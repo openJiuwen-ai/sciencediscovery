@@ -45,18 +45,18 @@ test("the column lists the projects first and the conversations outside them las
     recent: [session("s1", "结构比对")],
     sessionsByProject: { p1: [session("s2", "文献综述", "2026-01-02T00:00:00.000Z", "p1")] },
   });
-  // 项目 leads with the fold and its own session; 最近会话 holds the standalone
-  // conversation last. A Project's sessions never appear in 最近会话, and the
+  // 项目 leads with the fold and its own session; 会话 holds the standalone
+  // conversation last. A Project's sessions never appear in 会话, and the
   // inbox's never appear under a Project — that separation is the feature.
   const projectLabel = markup.indexOf(">项目<");
   const fold = markup.indexOf("side-row side-project");
   const own = markup.indexOf("文献综述");
-  const recentLabel = markup.indexOf("最近会话");
+  const recentLabel = markup.indexOf('side-label-spaced">会话<');
   const standalone = markup.indexOf("结构比对");
   assert.ok(projectLabel >= 0 && recentLabel >= 0, "a section label is missing");
   assert.ok(projectLabel < fold && fold < own, "the projects do not lead");
-  assert.ok(own < recentLabel, "最近会话 is not below the projects");
-  assert.ok(recentLabel < standalone, "the standalone session is not under 最近会话");
+  assert.ok(own < recentLabel, "the 会话 section is not below the projects");
+  assert.ok(recentLabel < standalone, "the standalone session is not under the 会话 section");
 });
 
 test("a project lists its sessions most recently used first", () => {
@@ -109,9 +109,8 @@ test("the projects section offers a way to make one", () => {
 
 test("a project with nothing in it is quiet, and each empty section says so once", () => {
   const markup = render({ projects: [project("p1", "脓毒症研究")] });
-  assert.equal(markup.split("还没有最近会话").length - 1, 1);
-  // The fold has no sessions of its own; that is the only 暂无会话 left, now
-  // that the 会话 section it used to share the sentence with is gone.
+  assert.equal(markup.split("还没有会话").length - 1, 1);
+  // The fold has no sessions of its own; that is the only 暂无会话 left.
   assert.equal(markup.split("暂无会话").length - 1, 1);
   assert.doesNotMatch(markup, /还没有项目/);
   assert.doesNotMatch(markup, /暂无任务/);
@@ -120,7 +119,7 @@ test("a project with nothing in it is quiet, and each empty section says so once
 test("a column with no projects says so instead of showing an empty fold", () => {
   const markup = render();
   assert.equal(markup.split("还没有项目").length - 1, 1);
-  assert.equal(markup.split("还没有最近会话").length - 1, 1);
+  assert.equal(markup.split("还没有会话").length - 1, 1);
   assert.doesNotMatch(markup, /side-row side-project/);
 });
 
@@ -131,7 +130,7 @@ test("the running session is marked on its own row, not in a section of its own"
     running: true,
   });
   // One row, one spinner: the run belongs to the Session the user is looking
-  // at, and 最近会话 now sits where the old 会话 section used to.
+  // at, not to a section of its own.
   assert.equal(markup.split("side-spinner").length - 1, 1);
   assert.doesNotMatch(markup, /side-task-row/);
   const active = markup.indexOf('class="side-row side-sub is-active"');

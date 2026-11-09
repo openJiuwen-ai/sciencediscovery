@@ -44,7 +44,11 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   const explorerName = /Idea Tree (explorer|浏览器)/;
   const panel = page.getByRole("dialog", {name: explorerName});
   const read = async () => {
-    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, {headers: authorizationHeader()});
+    // Retry connection resets only for this idempotent status read. HTTP
+    // errors and an incorrect research state must still fail the journey.
+    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, {
+      headers: authorizationHeader(), maxRetries: 2, timeout: 10_000,
+    });
     expect(response.ok()).toBe(true);
     return (await response.json()).items;
   };

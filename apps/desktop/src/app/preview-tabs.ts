@@ -24,6 +24,8 @@
  * reachable rather than destructive.
  */
 
+import type { ComposerReference } from "../api/types.js";
+
 /** Which panel group opened a document. The artifact and file lists are two
  *  views of the same workspace, and a tab belongs to the one it came from:
  *  switching groups must not show an artifact under 文件 or a source file
@@ -54,6 +56,13 @@ export interface PreviewSlot {
   mediaType?: string;
   /** The workspace path, when the document has one. Artifacts may not. */
   path: string;
+  /** The citations this version carries, when the document is a final report.
+   *  Kept on the tab rather than looked up at render time so switching versions
+   *  switches the chips with the text. */
+  references?: ComposerReference[];
+  /** The Session the version was written in; a chip's node is read from the
+   *  graph under the same Session. */
+  sessionId?: string;
   source?: DocumentSource;
   /** Too large to hold in the tab; the panel offers the download instead. */
   tooLarge?: boolean;
@@ -71,6 +80,8 @@ export interface DocumentRequest {
   artifactId?: string;
   label: string;
   path: string;
+  /** A final report version's citation map; absent for every other document. */
+  references?: ComposerReference[];
   /** The Session the version was written in. The artifact list shows every
    *  Session's output, and a version is read through the Session that made it;
    *  absent means the open one. */
@@ -173,6 +184,8 @@ function documentSlot(request: DocumentRequest, id: string): PreviewSlot {
     label: request.label,
     loading: true,
     path: request.path,
+    references: request.references,
+    sessionId: request.sessionId,
     source: request.source,
     versionId: request.versionId,
   };

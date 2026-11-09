@@ -75,6 +75,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Download case execution details
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: case-execution-details.md
+          path: case-execution
       - name: Summarize
         env:
           RESULT: ${{ needs.gate.result }}
@@ -87,6 +93,10 @@ jobs:
             echo
             echo "Binaries are attached to this run as \`binary-release-x86_64\`"
             echo "and \`binary-release-aarch64\`."
+            if [[ -f case-execution/case-execution-details.md ]]; then
+              echo
+              cat case-execution/case-execution-details.md
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           # A skipped or cancelled gate is not a pass either; only success is.
           [[ "${RESULT}" == "success" ]]

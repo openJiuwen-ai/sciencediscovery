@@ -12,23 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   FEEDBACK_KINDS,
   FEEDBACK_MAX_BODY,
+  FEEDBACK_MAX_IMAGES,
   FEEDBACK_MIN_BODY,
   buildFeedbackPayload,
   classifyContact,
   deriveFeedbackTitle,
   detectFeedbackPii,
   redactFeedbackText,
+  type FeedbackImage,
   type FeedbackKind,
   type FeedbackMeta,
 } from "@sciencediscovery/operational-logging/feedback";
 import { errorIssueUrl } from "@sciencediscovery/operational-logging/diagnostics";
 
 import { submitFeedback, type FeedbackFailure } from "./api/feedback.js";
+import { FEEDBACK_IMAGE_ACCEPT, prepareFeedbackImages, type ImagePrepareError } from "./feedback-images.js";
 import {
   clearFeedbackDraft,
   loadFeedbackDraft,
@@ -41,7 +44,7 @@ import {
   type FeedbackStorage,
 } from "./feedback-store.js";
 import { subscribeFeedbackOpen, type FeedbackSeed } from "./feedback-open.js";
-import { CloseIcon, SendIcon, SpinnerIcon, TrashIcon } from "./icons.js";
+import { CloseIcon, ImageIcon, SendIcon, SpinnerIcon, TrashIcon } from "./icons.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
 declare const __SCIENCE_DISCOVERY_BUILD__: string;
@@ -78,6 +81,12 @@ const FAILURE_MESSAGE_KEYS: Record<FeedbackFailure["code"], MessageKey> = {
   upstream: "feedback.failure.unavailable",
   invalid: "feedback.failure.invalid",
   http: "feedback.failure.network",
+};
+
+const IMAGE_ERROR_KEYS: Record<ImagePrepareError, MessageKey> = {
+  type: "feedback.images.error.type",
+  size: "feedback.images.error.size",
+  decode: "feedback.images.error.decode",
 };
 
 type SubmitState =
@@ -127,6 +136,10 @@ export function FeedbackDialog() {
   const [submitState, setSubmitState] = useState<SubmitState>({ state: "idle" });
   const [history, setHistory] = useState<FeedbackRecord[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [images, setImages] = useState<FeedbackImage[]>([]);
+  const [imageError, setImageError] = useState<ImagePrepareError | undefined>(undefined);
+  const [preparingImages, setPreparingImages] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   function optionLabel(map: Record<string, MessageKey>, value: string): string {
     const key = map[value];
@@ -142,6 +155,9 @@ export function FeedbackDialog() {
     setPiiConfirmed(false);
     setCopyState("idle");
     setSubmitting(false);
+    setImages([]);
+    setImageError(undefined);
+    setPreparingImages(false);
     setKind(incoming?.kind ?? draft.kind);
     setBody(incoming?.body ?? draft.body);
     setContact(draft.contact);
@@ -168,24 +184,32 @@ export function FeedbackDialog() {
   const showBodyTooShort = body.length > 0 && bodyTooShort;
   const contactInvalid = contact.trim().length > 0 && contactType === undefined;
   const piiBlocking = piiHints.length > 0 && !piiConfirmed;
-  // Frequency and impact are required: a report without them cannot be
-  // triaged, so the dialog will not send one.
-  const detailsMissing = reproducibility === "" || impact === "";
-  const canSubmit = !submitting && !bodyTooShort && !contactInvalid && !piiBlocking && !detailsMissing;
+  // Frequency and impact only make sense for a defect report; an idea or an
+  // open-ended note has nothing to reproduce, so those fields stay hidden.
+  const showTriage = kind === "bug";
+  const detailsMissing = showTriage && (reproducibility === "" || impact === "");
+  const canSubmit = !submitting && !preparingImages && !bodyTooShort && !contactInvalid && !piiBlocking && !detailsMissing;
 
   /** The triage lines are appended after the description, so the description
    *  must leave room for them; measuring the suffix lets the counter state the
    *  real budget instead of a cap the send path then trims. */
   const triageSuffix = useMemo(() => {
     const lines: string[] = [];
-    if (reproducibility) {
+    if (showTriage && reproducibility) {
       lines.push(`${t("feedback.reproducibility.label")}: ${optionLabel(REPRODUCIBILITY_LABEL_KEYS, reproducibility)}`);
     }
-    if (impact) lines.push(`${t("feedback.impact.label")}: ${optionLabel(IMPACT_LABEL_KEYS, impact)}`);
+    if (showTriage && impact) lines.push(`${t("feedback.impact.label")}: ${optionLabel(IMPACT_LABEL_KEYS, impact)}`);
     return lines.length ? `\n\n${lines.join("\n")}` : "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reproducibility, impact, t]);
+  }, [showTriage, reproducibility, impact, t]);
   const bodyBudget = FEEDBACK_MAX_BODY - triageSuffix.length;
+
+  /** `maxLength` only stops new keystrokes; text written before a budget change
+   *  would stay in the box and get trimmed by the send path without a word.
+   *  Clamping keeps the visible text and the budget identical. */
+  useEffect(() => {
+    setBody((current) => (current.length > bodyBudget ? current.slice(0, bodyBudget) : current));
+  }, [bodyBudget]);
 
   const piiKindLabels = useMemo(() => {
     const labels = new Set<string>();
@@ -207,11 +231,14 @@ export function FeedbackDialog() {
   function fullText(): string {
     const lines: string[] = [];
     lines.push(`${t("feedback.kind.label")}: ${t(KIND_LABEL_KEYS[kind])}`);
-    if (reproducibility) lines.push(`${t("feedback.reproducibility.label")}: ${optionLabel(REPRODUCIBILITY_LABEL_KEYS, reproducibility)}`);
-    if (impact) lines.push(`${t("feedback.impact.label")}: ${optionLabel(IMPACT_LABEL_KEYS, impact)}`);
+    if (showTriage && reproducibility) lines.push(`${t("feedback.reproducibility.label")}: ${optionLabel(REPRODUCIBILITY_LABEL_KEYS, reproducibility)}`);
+    if (showTriage && impact) lines.push(`${t("feedback.impact.label")}: ${optionLabel(IMPACT_LABEL_KEYS, impact)}`);
+    // Diagnostics come before the free text: the GitHub issue URL is capped,
+    // and a long pasted error would otherwise push the identifying header and
+    // request id past the cap.
+    if (includeDiagnostics && diagnostics) lines.push("", `${t("feedback.diagnostics.label")}:`, diagnostics);
     lines.push("", body);
     if (contact.trim()) lines.push("", `${t("feedback.contact.label")}: ${contact.trim()}`);
-    if (includeDiagnostics && diagnostics) lines.push("", `${t("feedback.diagnostics.label")}:`, diagnostics);
     return lines.join("\n");
   }
 
@@ -239,6 +266,7 @@ export function FeedbackDialog() {
         contact: contactType ? { type: contactType, value: contact.trim() } : undefined,
         meta,
         diagnostics: includeDiagnostics ? diagnostics : undefined,
+        images: images.length > 0 ? images : undefined,
       });
       const outcome = await submitFeedback(payload);
       if (outcome.ok) {
@@ -251,6 +279,8 @@ export function FeedbackDialog() {
         });
         clearFeedbackDraft(storage());
         setHistory(loadFeedbackHistory(storage()));
+        setImages([]);
+        setImageError(undefined);
         setSubmitState({ state: "success", receipt: outcome.receipt });
       } else {
         setSubmitState({ state: "failure", failure: outcome.failure });
@@ -264,26 +294,55 @@ export function FeedbackDialog() {
     setHistory(removeFeedbackRecord(storage(), receipt));
   }
 
+  async function addImages(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0 || preparingImages) return;
+    setPreparingImages(true);
+    setImageError(undefined);
+    try {
+      const result = await prepareFeedbackImages(Array.from(files), images);
+      setImages(result.images);
+      setImageError(result.error);
+    } finally {
+      setPreparingImages(false);
+      // Clear the input so picking the same file again still fires `change`.
+      if (imageInputRef.current) imageInputRef.current.value = "";
+    }
+  }
+
+  function removeImage(index: number): void {
+    setImages((current) => current.filter((_, position) => position !== index));
+    setImageError(undefined);
+  }
+
   async function copyReceipt(receipt: string): Promise<void> {
     setCopyState(await copyToClipboard(receipt) ? "copied" : "failed");
   }
 
-  function openIssueFromFailure(): void {
+  /** Shared by the compose footer and the failure view: both hand the draft to
+   *  GitHub when the anonymous route is unwanted or unavailable. The text is
+   *  redacted like the submit path, because the description can carry server
+   *  output (paths, key assignments) that must not reach a shared issue. */
+  function openIssue(): void {
     const tabWindow = window.open("about:blank", "_blank");
     if (!tabWindow) return;
     tabWindow.opener = null;
     tabWindow.document.write('<meta name="referrer" content="no-referrer">');
-    tabWindow.location.replace(errorIssueUrl(titleForPayload(), fullText()));
+    tabWindow.location.replace(errorIssueUrl(titleForPayload(), redactFeedbackText(fullText())));
   }
 
   if (!open) return null;
 
   return (
-    <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <div className="config-backdrop feedback-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
       <section aria-label={t("feedback.dialogTitle")} aria-modal="true" className="config-panel feedback-dialog" role="dialog">
         <div className="config-header">
           <div><span className="eyebrow">{t("feedback.entry")}</span><h2>{t("feedback.dialogTitle")}</h2></div>
-          <button className="icon-button" onClick={close} aria-label={t("feedback.close")} title={t("feedback.close")}><CloseIcon size={20} /></button>
+          <div className="feedback-header-actions">
+            {tab === "compose" && submitState.state === "idle" ? (
+              <button className="feedback-issue-link" onClick={openIssue} type="button">{t("feedback.openIssue")}</button>
+            ) : null}
+            <button className="icon-button" onClick={close} aria-label={t("feedback.close")} title={t("feedback.close")}><CloseIcon size={20} /></button>
+          </div>
         </div>
 
         <div className="feedback-tabs" role="tablist">
@@ -321,12 +380,22 @@ export function FeedbackDialog() {
             {submitState.failure.code === "duplicate" && submitState.failure.receipt ? (
               <div className="feedback-receipt-banner">{submitState.failure.receipt}</div>
             ) : null}
+            {submitState.failure.code === "invalid" && submitState.failure.fields ? (
+              <div className="feedback-field-errors">
+                <p>{t("feedback.failure.fieldsTitle")}</p>
+                <ul>
+                  {Object.entries(submitState.failure.fields).map(([field, reason]) => (
+                    <li key={field}><code>{field}</code> {reason}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <p>{t("feedback.failure.kept")}</p>
             <div className="feedback-actions">
               <button className="secondary-button" type="button" onClick={() => void copyToClipboard(fullText()).then((ok) => setCopyState(ok ? "copied" : "failed"))}>
                 {copyState === "copied" ? t("feedback.success.copied") : t("feedback.failure.copyAll")}
               </button>
-              <button className="secondary-button" type="button" onClick={openIssueFromFailure}>{t("feedback.failure.openIssue")}</button>
+              <button className="secondary-button" type="button" onClick={openIssue}>{t("feedback.failure.openIssue")}</button>
               <button className="secondary-button" type="button" onClick={() => setSubmitState({ state: "idle" })}>{t("feedback.back")}</button>
             </div>
           </div>
@@ -355,33 +424,89 @@ export function FeedbackDialog() {
             </label>
             {showBodyTooShort ? <p className="feedback-inline-error" role="status">{t("feedback.body.tooShort", { min: FEEDBACK_MIN_BODY })}</p> : null}
 
-            <label>
-              <span>{t("feedback.contact.label")}</span>
-              <input
-                className="feedback-contact"
-                onChange={(event) => setContact(event.target.value)}
-                placeholder={t("feedback.contact.placeholder")}
-                value={contact}
-              />
-            </label>
-            {contactInvalid ? <p className="feedback-inline-error" role="status">{t("feedback.contact.invalid")}</p> : null}
-
-            <div className="feedback-option-grid">
-              <label>
-                <span>{t("feedback.reproducibility.label")}</span>
-                <select value={reproducibility} onChange={(event) => setReproducibility(event.target.value)}>
-                  <option value="">{t("feedback.selectPlaceholder")}</option>
-                  {REPRODUCIBILITY_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(REPRODUCIBILITY_LABEL_KEYS, option)}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>{t("feedback.impact.label")}</span>
-                <select value={impact} onChange={(event) => setImpact(event.target.value)}>
-                  <option value="">{t("feedback.selectPlaceholder")}</option>
-                  {IMPACT_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(IMPACT_LABEL_KEYS, option)}</option>)}
-                </select>
-              </label>
+            {/* Attachments belong to the description, so they sit right under it
+                instead of trailing the submit button across the dialog. */}
+            <div className="feedback-images">
+              <div className="feedback-images-head">
+                <div className="feedback-images-title">
+                  <span>{t("feedback.images.label")}</span>
+                  <small>{t("feedback.images.privacy")}</small>
+                </div>
+                <input
+                  accept={FEEDBACK_IMAGE_ACCEPT}
+                  className="feedback-image-input"
+                  multiple
+                  onChange={(event) => void addImages(event.target.files)}
+                  ref={imageInputRef}
+                  type="file"
+                />
+                <button
+                  className="secondary-button feedback-image-add"
+                  disabled={submitting || preparingImages || images.length >= FEEDBACK_MAX_IMAGES}
+                  onClick={() => imageInputRef.current?.click()}
+                  type="button"
+                >
+                  <ImageIcon size={14} />
+                  {images.length >= FEEDBACK_MAX_IMAGES
+                    ? t("feedback.images.limit", { max: FEEDBACK_MAX_IMAGES })
+                    : t("feedback.images.add")}
+                </button>
+              </div>
+              {images.length > 0 ? (
+                <ul className="feedback-image-list">
+                  {images.map((image, index) => (
+                    <li className="feedback-image-item" key={`${image.name}-${index}`}>
+                      <img alt={image.name} src={`data:${image.mime};base64,${image.data}`} />
+                      <button
+                        aria-label={t("feedback.images.remove")}
+                        className="feedback-image-remove"
+                        disabled={submitting}
+                        onClick={() => removeImage(index)}
+                        title={t("feedback.images.remove")}
+                        type="button"
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {preparingImages ? <p className="feedback-hint" role="status">{t("feedback.images.preparing")}</p> : null}
+              {imageError ? <p className="feedback-inline-error" role="status">{t(IMAGE_ERROR_KEYS[imageError])}</p> : null}
             </div>
+
+            {/* The dialog is wide, so contact and the two triage selects share
+                one row while wrapping to fewer columns as the window narrows. */}
+            <div className="feedback-meta-grid">
+              <label>
+                <span>{t("feedback.contact.label")}</span>
+                <input
+                  className="feedback-contact"
+                  onChange={(event) => setContact(event.target.value)}
+                  placeholder={t("feedback.contact.placeholder")}
+                  value={contact}
+                />
+              </label>
+              {showTriage ? (
+                <>
+                  <label>
+                    <span>{t("feedback.reproducibility.label")}</span>
+                    <select value={reproducibility} onChange={(event) => setReproducibility(event.target.value)}>
+                      <option value="">{t("feedback.selectPlaceholder")}</option>
+                      {REPRODUCIBILITY_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(REPRODUCIBILITY_LABEL_KEYS, option)}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{t("feedback.impact.label")}</span>
+                    <select value={impact} onChange={(event) => setImpact(event.target.value)}>
+                      <option value="">{t("feedback.selectPlaceholder")}</option>
+                      {IMPACT_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(IMPACT_LABEL_KEYS, option)}</option>)}
+                    </select>
+                  </label>
+                </>
+              ) : null}
+            </div>
+            {contactInvalid ? <p className="feedback-inline-error" role="status">{t("feedback.contact.invalid")}</p> : null}
             {detailsMissing ? <p className="feedback-hint">{t("feedback.requiredHint")}</p> : null}
 
             <div className="feedback-diagnostics">

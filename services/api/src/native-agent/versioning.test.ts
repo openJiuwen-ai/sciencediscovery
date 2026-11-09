@@ -56,7 +56,7 @@ test("production AgentRun records exact contexts, complete observations, sequent
     async execute(id) {
       if (id === "last") await new Promise((done) => setTimeout(done, 15));
       await writeFile(resolve(workspace, "result.txt"), id);
-      return largeResult;
+      return id === "first" ? { data: largeResult, nested: [{ apiToken: "audit-secret", body: "private-body" }] } : largeResult;
     },
   };
   let turn = 0;
@@ -123,8 +123,15 @@ test("production AgentRun records exact contexts, complete observations, sequent
     assert.equal(state.transcript.length, 5);
     assert.equal(state.transcript.at(-1)?.provider_extension, "preserved");
     assert.equal(state.observations.length, 2);
-    const observation = (await store.readRecord<{ content: import("@sciencediscovery/cas").AgentStateRef }>(state.observations[0]!)).value;
-    assert.equal(JSON.parse((await store.readState(observation.content)).toString()), largeResult);
+    const observation = (await store.readRecord<{ content: import("@sciencediscovery/cas").AgentStateRef; details: unknown }>(state.observations[0]!)).value;
+    assert.deepEqual(observation.details, {
+      data: largeResult, nested: [{ apiToken: "[redacted]", body: "[omitted]" }],
+    }, "persisted observations retain safe metadata without credentials or raw payloads");
+    assert.doesNotMatch(JSON.stringify(observation.details), /audit-secret|private-body/);
+    const modelObservation = JSON.parse((await store.readState(observation.content)).toString()) as { data: { text: string; truncated: boolean } };
+    assert.equal(modelObservation.data.truncated, true);
+    assert.equal(largeResult.startsWith(modelObservation.data.text.replace(/\.\.\.$/, "")), true);
+    assert.ok(Buffer.byteLength(JSON.stringify(modelObservation), "utf8") <= 48 * 1024);
     const tree = (await store.readRecord<WorkspaceTree>(state.workspace)).value;
     const entry = tree.entries.find((item) => Buffer.from(item.name, "base64url").toString() === "result.txt")!;
     assert.equal(entry.type, "file");

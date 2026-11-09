@@ -35,6 +35,7 @@ import {
 
 import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
+import { MCP_MODEL_RESULT_MAX_BYTES } from "./mcp-result-view.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -71,6 +72,25 @@ test("direct recovery tools describe reachable remote scope and forward consent 
     authorization_id: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account,
   }, controller.signal);
   assert.deepEqual(calls[1], [{ authorizationId: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account }, controller.signal, "new-call"]);
+});
+
+test("run_shell describes the target-specific Windows shell contract", () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    executeShell: async () => ({}) as ShellExecutionResult,
+    runnerReadiness: {
+      check: async () => ({
+        checkedAt: "2026-10-31T00:00:00.000Z", connected: true, ready: true,
+        reason: "ready", runnerId: "local", suggestions: [],
+      }),
+      wait: async () => ({ action: "cancel" }),
+    },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  assert.match(shell.description, /check_runner capability is authoritative/);
+  assert.match(shell.description, /Windows direct-execution Runners use managed Bash/);
+  assert.match(shell.description, /cat, grep, head, sed, tail and wc/);
+  assert.match(tools.find((tool) => tool.name === "check_runner")!.description, /platform, Shell, guaranteed utilities/);
 });
 
 test("Runner waiting instructions distinguish a requested card from repair authorization", async () => {
@@ -177,7 +197,12 @@ test("run_shell selects the latest environment by ID and preserves its execution
   const result = await tool.execute("tool-call", { command: "python -m sample", runner_id: "runner-test", environment_id: "env-test", cwd: "analysis" });
   assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
-  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+  const modelText = result.content[0]?.type === "text" ? result.content[0].text : "";
+  assert.deepEqual(JSON.parse(modelText.split("\nstdout:\n", 1)[0]!), {
+    executionId: "execution", state: "completed", exitCode: 0,
+    createdFiles: [], modifiedFiles: [],
+  });
+  assert.match(modelText, /\nstdout:\nok\nstderr:\n$/);
 });
 
 test("a command written with the workspace's host path uses the sandbox's /workspace instead", () => {
@@ -612,6 +637,7 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
   assert.match(resultText, /createdFiles/);
   assert.match(resultText, /artifacts/);
+  assert.doesNotMatch(resultText, /session-1|workspaceRoot|configPath|"logs"/);
   assert.deepEqual(declaredArtifacts, ["antibody_pipeline/runs/run-1/01_rfdiffusion/output_000000.pdb"]);
 });
 
@@ -1246,6 +1272,149 @@ test("MCP tools marked parallel-safe opt into concurrent dispatch", () => {
   assert.equal(tools.find((tool) => tool.name === "mcp__pubmed__search")?.isConcurrencySafe?.({}), true);
 });
 
+test("MCP evidence results keep canonical details but expose a compact bounded model view", async () => {
+  const citation = {
+    identifier: "2407.21787v3", identifierType: "arxiv identifier",
+    label: "Arxiv 2407.21787v3: Example", markdown: "[Arxiv:2407.21787v3](https://arxiv.org/abs/2407.21787v3)",
+    role: "preprint", source: "arxiv", url: "https://arxiv.org/abs/2407.21787v3",
+  };
+  const canonical = {
+    attribution: "Cornell University arXiv", license: "provider terms", invocationId: "invocation-1",
+    sourceId: "arxiv", toolId: "search", retrievedAt: "2026-10-31T00:00:00Z", untrusted: true,
+    data: { query: "inference scaling", returned: 25, total: 200, offset: 0, hasMore: true, nextOffset: 25,
+      sortBy: "relevance", sortOrder: "descending" },
+    warnings: ["arXiv records are preprints."],
+    records: Array.from({ length: 25 }, (_, index) => ({
+      abstract: `Abstract ${index} ${"α".repeat(20_000)}`,
+      authors: Array.from({ length: 20 }, (_unused, author) => `Author ${author} ${"x".repeat(200)}`),
+      citations: [citation], contentScope: "abstract", crossReferences: [], fullTextRetrieved: false,
+      identifier: `${2407 + index}.21787v3`, identifierType: "arxiv identifier", primaryCitation: citation,
+      source: "arxiv", structuredData: { published: "2024-01-01", updated: "2024-02-01" },
+      title: `Paper ${index}`, url: `https://arxiv.org/abs/${2407 + index}.21787v3`,
+      warnings: ["arXiv records are preprints."], year: "2024",
+    })),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Search arXiv", displayName: "arXiv search", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__search", parallelSafe: true,
+      routing: { keywords: ["arxiv"], mode: "prefer", priority: 90 }, sourceId: "arxiv", toolId: "search",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__search")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const view = JSON.parse(text) as Record<string, unknown>;
+
+  assert.equal(response.bounded, true);
+  assert.equal(response.details, canonical, "audit and governed follow-up operations retain the canonical result");
+  assert.ok(Buffer.byteLength(text, "utf8") <= MCP_MODEL_RESULT_MAX_BYTES);
+  assert.equal(view.invocationId, "invocation-1");
+  assert.equal(view.total, 200);
+  assert.equal(view.hasMore, true);
+  assert.match(String(view.instruction), /nextOffset/);
+  assert.equal((view.warnings as string[]).length, 1, "record-level duplicate warnings are lifted once");
+  assert.ok(Array.isArray(view.papers));
+  assert.doesNotMatch(text, /primaryCitation|citations|fullTextRetrieved|identifierType|retrievedAt|untrusted/);
+  assert.match(text, /abstractTruncated|recordsOmitted|authorsTruncated/);
+});
+
+test("opaque MCP results remain valid bounded JSON when their provider payload is huge", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Custom search", displayName: "Custom search",
+      execute: async () => ({ rows: Array.from({ length: 100 }, () => ({ body: `\"\\${"z".repeat(20_000)}\n` })) }),
+      inputSchema: { type: "object" }, name: "mcp__custom__search",
+      routing: { keywords: ["custom"], mode: "prefer", priority: 50 }, sourceId: "custom", toolId: "search",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__custom__search")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  assert.doesNotThrow(() => JSON.parse(text));
+  assert.ok(Buffer.byteLength(text, "utf8") <= MCP_MODEL_RESULT_MAX_BYTES);
+  assert.match(text, /truncated/);
+});
+
+test("generic MCP envelopes with empty records retain their actionable data", async () => {
+  const marker = "SPECIALIST-MCP-MARKER";
+  const canonical = { sourceId: "custom", toolId: "echo", records: [], warnings: [], data: {
+    content: [{ type: "text", text: marker }], structuredContent: { echoed: marker },
+  } };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{ description: "Echo", displayName: "Echo", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__custom__echo", routing: { keywords: [], mode: "off", priority: 0 },
+      sourceId: "custom", toolId: "echo" }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__custom__echo")!.execute("call", {});
+  assert.match(response.content[0]!.text, new RegExp(marker));
+  assert.equal(response.details, canonical);
+});
+
+test("MCP artifact plans retain download identifiers, terms and estimated size", async () => {
+  const canonical = {
+    sourceId: "arxiv", toolId: "prepare_paper_download", invocationId: "invocation-download",
+    records: [], warnings: ["The PDF is a candidate and has not been read."],
+    artifacts: [{
+      attribution: "arXiv", format: "pdf", id: "arxiv:2407.21787v3:pdf", kind: "paper",
+      license: "provider terms", logicalName: "arxiv-2407.21787v3.pdf", mimeType: "application/pdf",
+      sourceId: "arxiv", sourceRecordId: "2407.21787v3", sourceUrl: "https://arxiv.org/pdf/2407.21787v3",
+      expectedBytes: 240_000_000,
+    }],
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Prepare paper", displayName: "Prepare paper", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__prepare_paper_download",
+      routing: { keywords: ["paper"], mode: "prefer", priority: 98 }, sourceId: "arxiv", toolId: "prepare_paper_download",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__prepare_paper_download")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const view = JSON.parse(text) as { invocationId: string; candidates: Array<{
+    candidateId: string; license: string; attribution: string; expectedBytes?: number;
+  }> };
+  assert.equal(response.details, canonical);
+  assert.equal(view.invocationId, "invocation-download");
+  assert.equal(view.candidates[0]?.candidateId, "arxiv:2407.21787v3:pdf");
+  assert.match(text, /artifact_download/);
+  assert.equal(view.candidates[0]?.license, "provider terms");
+  assert.equal(view.candidates[0]?.attribution, "arXiv");
+  assert.equal(view.candidates[0]?.expectedBytes, 240_000_000);
+  assert.doesNotMatch(text, /sourceUrl|https:\/\/arxiv.org\/pdf/);
+});
+
+test("arXiv get_paper preserves a complete ordinary abstract in the model view", async () => {
+  const abstract = `Complete abstract ${"evidence ".repeat(1_500)}`;
+  const canonical = {
+    sourceId: "arxiv", toolId: "get_paper", invocationId: "paper-invocation", warnings: [],
+    records: [{
+      abstract, authors: ["A. Author"], citations: [], contentScope: "abstract", crossReferences: [],
+      fullTextRetrieved: false, identifier: "2407.21787v3", identifierType: "arxiv identifier",
+      peerReviewStatus: "preprint", primaryCitation: {
+        markdown: "[Arxiv:2407.21787v3](https://arxiv.org/abs/2407.21787v3)",
+      }, source: "arxiv", structuredData: {}, title: "Complete paper",
+      url: "https://arxiv.org/abs/2407.21787v3", warnings: [], year: "2024",
+    }],
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Get arXiv paper", displayName: "arXiv paper", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__get_paper", parallelSafe: true,
+      routing: { keywords: ["arxiv"], mode: "prefer", priority: 95 }, sourceId: "arxiv", toolId: "get_paper",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__get_paper")!.execute("call", {});
+  const view = JSON.parse(response.content[0]?.type === "text" ? response.content[0].text : "{}") as {
+    papers: Array<{ abstract: string; abstractTruncated?: boolean }>;
+  };
+  assert.equal(view.papers[0]?.abstract, abstract);
+  assert.equal(view.papers[0]?.abstractTruncated, undefined);
+});
+
 test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {
   const calls: Array<{ operation: string; runnerId?: string; input?: unknown }> = [];
   const environments: Environment[] = [];
@@ -1330,8 +1499,11 @@ test("managed environments expose governed create, delete, install, and uninstal
     .execute("list-call", {});
   await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.create)!
     .execute("create-call", { language: "python", name: "analysis" });
-  await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
+  const installed = await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
     .execute("install-call", { environmentId: "task-test", packages: ["numpy=2.0"] });
+  const installedText = installed.content[0]?.type === "text" ? installed.content[0].text : "";
+  assert.match(installedText, /revisionId/);
+  assert.doesNotMatch(installedText, /packageSpecHash|provisioner|runnerVersion|snapshot/);
   await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
     .execute("pip-install-call", {
       environmentId: "task-test",
@@ -1722,6 +1894,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
         createdAt: "2026-08-20T00:00:00.000Z",
         draftId: "11111111-1111-4111-8111-111111111111",
         fileCount: 1 + (input.resources?.length ?? 0),
+        files: [{ content: input.instructions, path: "SKILL.md" }],
         name: input.name,
         updatedAt: "2026-08-20T00:00:00.000Z",
       };
@@ -1760,6 +1933,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
   assert.equal(request?.metadata?.version, "1.0.0");
   assert.equal(request?.resources?.[0]?.path, "references/rubric.md");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /pending draft/);
+  assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /Apply the rubric|"files"/);
 });
 
 test("subagent tools preserve structured governance inputs", async () => {
@@ -2126,7 +2300,11 @@ test("independent SSH/SLURM jobs are not offered to the model", () => {
 
 test("workspace_transfer exposes explicit mappings and independent management operations", async () => {
   const calls: string[] = [];
-  const record = { id: "transfer", state: "queued" } as import("@sciencediscovery/schema").WorkspaceTransfer;
+  const record = {
+    agentId: "agent-secret", createdAt: "2026-10-30T00:00:00.000Z", files: [{ sourcePath: "in", targetPath: "out" }],
+    id: "transfer", progress: [{ bytes: 2, sha256: "hash-secret", size: 10, sourcePath: "in", state: "copying", targetPath: "out" }],
+    sessionId: "session-secret", sourceSnapshotId: "snapshot-secret", sourceWorkspaceId: "own", state: "running", targetWorkspaceId: "remote",
+  } as import("@sciencediscovery/schema").WorkspaceTransfer;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
     workspaceTransfers: {
@@ -2142,7 +2320,10 @@ test("workspace_transfer exposes explicit mappings and independent management op
   assert.match((listed.content[0] as { text: string }).text, /own/);
   await tool.execute("copy", { operation: "start", source_workspace_id: "own", target_workspace_id: "remote", files: [{ source_path: "in", target_path: "out" }] });
   assert.deepEqual(JSON.parse(calls[0]!), { sourceWorkspaceId: "own", targetWorkspaceId: "remote", files: [{ sourcePath: "in", targetPath: "out" }], conflict: "reject" });
-  await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  const status = await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  const statusText = (status.content[0] as { text: string }).text;
+  assert.match(statusText, /transferId.*transfer/);
+  assert.doesNotMatch(statusText, /agent-secret|session-secret|snapshot-secret|hash-secret|"files"/);
   await tool.execute("cancel", { operation: "cancel", transfer_id: "transfer" });
   assert.deepEqual(calls.slice(1), ["status:transfer", "cancel:transfer"]);
   await assert.rejects(tool.execute("missing", { operation: "start" }), /explicit file mappings/);
@@ -2150,7 +2331,20 @@ test("workspace_transfer exposes explicit mappings and independent management op
 
 test("Shell background mode and management tools do not start additional Shells", async () => {
   const calls: string[] = [];
-  const job = { id: "job", state: "running", runnerId: "remote" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const job = {
+    accepted: true, agentId: "agent", id: "job", provenance: "committed" as const,
+    queuedAt: "2026-10-30T09:20:40.636Z", runnerId: "remote", sessionId: "session",
+    state: "running" as const, turnId: "turn", workspaceId: "workspace",
+    result: {
+      cgroupMode: "none" as const, createdFiles: [], environmentRevisionId: "environment",
+      environmentVariables: { SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret" },
+      executionId: "job", exitCode: 0, finishedAt: "2026-10-30T09:20:41.285Z",
+      kernelId: "ephemeral:job", kernelMode: "ephemeral" as const, language: "shell" as const,
+      modifiedFiles: [], networkPolicy: "none" as const, runnerVersion: "test",
+      sandbox: "bubblewrap" as const, startedAt: "2026-10-30T09:20:40.755Z",
+      stderr: "large stderr", stdout: "large stdout", workingDirectory: "/workspace",
+    },
+  } satisfies import("@sciencediscovery/schema").AgentShellExecution;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
     executeShell: async () => { throw new Error("legacy endpoint must not run"); },
@@ -2169,10 +2363,127 @@ test("Shell background mode and management tools do not start additional Shells"
   assert.match((background.content[0] as { text: string }).text, /still running/);
   await shell.execute("foreground", { command: "echo next", wait_ms: 5 });
   assert.equal(calls.at(-1), "wait:job:5");
-  await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  const status = await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  const statusText = (status.content[0] as { text: string }).text;
+  assert.doesNotMatch(statusText, /runner-secret|large stdout|large stderr|environmentVariables/);
   await tools.find((tool) => tool.name === "execution_logs")!.execute("logs", { execution_id: "job", cursor: 3 });
   await tools.find((tool) => tool.name === "execution_cancel")!.execute("cancel", { execution_id: "job" });
   assert.deepEqual(calls.slice(-3), ["wait:job:0", "logs:job:3", "cancel:job"]);
+});
+
+test("run_shell exposes a compact model result without execution internals or environment secrets", async () => {
+  const result = {
+    cgroupMode: "none" as const,
+    createdFiles: ["report.txt"],
+    environmentRevisionId: "revision-secret",
+    environmentVariables: {
+      SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret",
+      HTTP_PROXY: "http://proxy-secret",
+      PATH: "/internal/path",
+    },
+    executionId: "duplicate-inner-id",
+    exitCode: 127,
+    finishedAt: "2026-10-30T09:20:41.285Z",
+    kernelId: "ephemeral:execution",
+    kernelMode: "ephemeral" as const,
+    language: "shell" as const,
+    modifiedFiles: ["notes.txt"],
+    networkDeniedHosts: ["blocked.example:443"],
+    networkPermission: {
+      authorizationId: "spent-network-token",
+      blockedHosts: [{ host: "blocked.example:443", reason: "not approved" }],
+      hosts: ["blocked.example:443"],
+      instruction: "Request the complete host set before a new execution",
+      state: "blocked" as const,
+    },
+    networkPolicy: "domain-allowlist" as const,
+    runnerVersion: "runner-internal",
+    sandbox: "bubblewrap" as const,
+    startedAt: "2026-10-30T09:20:40.755Z",
+    stderr: "head: command not found\n",
+    stdout: "shell-test:\nbash\n",
+    workingDirectory: "/internal/workspace",
+    workspaceSnapshot: { pool: "agent-state" as const, digest: `sha256:${"a".repeat(64)}` as const, size: 1, mediaType: "record" },
+  };
+  const execution = {
+    accepted: true,
+    agentId: "agent-internal",
+    finalization: "committed" as const,
+    finishedAt: "2026-10-30T09:20:41.285Z",
+    id: "execution-visible",
+    provenance: "committed" as const,
+    queuedAt: "2026-10-30T09:20:40.636Z",
+    result,
+    runnerId: "runner-internal",
+    runnerVersionId: `sha256:${"b".repeat(64)}`,
+    sessionId: "session-internal",
+    startedAt: "2026-10-30T09:20:40.755Z",
+    state: "failed" as const,
+    turnId: "turn-internal",
+    workspaceId: "workspace-internal",
+  } satisfies import("@sciencediscovery/schema").AgentShellExecution;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("managed path only"); },
+    shellExecutions: {
+      start: async () => execution,
+      wait: async () => execution,
+      get: async () => execution,
+      list: () => [execution],
+      logs: async () => { throw new Error("unused"); },
+      cancel: async () => execution,
+    },
+  });
+
+  const response = await tools.find((tool) => tool.name === "run_shell")!
+    .execute("shell", { command: "test command" });
+  const text = response.content[0]!.text;
+  const [metadata, stdout, stderr] = text.split("\nstdout:\n").flatMap((part, index) => index === 0 ? [part] : part.split("\nstderr:\n"));
+  const modelResult = { ...JSON.parse(metadata!), stdout, stderr };
+  assert.deepEqual(modelResult, {
+    executionId: "execution-visible",
+    state: "failed",
+    exitCode: 127,
+    stdout: "shell-test:\nbash\n",
+    stderr: "head: command not found\n",
+    createdFiles: ["report.txt"],
+    modifiedFiles: ["notes.txt"],
+    networkDeniedHosts: ["blocked.example:443"],
+    networkPermission: {
+      state: "blocked",
+      hosts: ["blocked.example:443"],
+      blockedHosts: [{ host: "blocked.example:443", reason: "not approved" }],
+      instruction: "Request the complete host set before a new execution",
+    },
+  });
+  assert.deepEqual(response.details, {
+    ...modelResult, id: "execution-visible", agentId: "agent-internal", runnerId: "runner-internal",
+    workspaceId: "workspace-internal", startedAt: "2026-10-30T09:20:40.755Z", finishedAt: "2026-10-30T09:20:41.285Z",
+  });
+  assert.doesNotMatch(JSON.stringify(response.details), /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
+  assert.doesNotMatch(text, /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
+});
+
+test("run_shell compact output keeps pending and unknown recovery instructions", async () => {
+  const states = ["running", "unknown"] as const;
+  for (const state of states) {
+    const execution = { id: `execution-${state}`, state } as import("@sciencediscovery/schema").AgentShellExecution;
+    const tools = createWorkspaceTools(process.cwd(), {
+      enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+      executeShell: async () => { throw new Error("managed path only"); },
+      shellExecutions: { start: async () => execution, wait: async () => execution,
+        get: async () => execution, list: () => [execution], logs: async () => { throw new Error("unused"); }, cancel: async () => execution },
+    });
+    const response = await tools.find((tool) => tool.name === "run_shell")!
+      .execute("shell", { command: "long command", background: true });
+    const modelResult = JSON.parse(response.content[0]!.text);
+    assert.equal(modelResult.executionId, `execution-${state}`);
+    assert.equal(modelResult.state, state);
+    assert.match(modelResult.instruction, state === "unknown" ? /outcome is unconfirmed/ : /still running or queued/);
+    assert.deepEqual(response.details, { ...modelResult, id: `execution-${state}` });
+    assert.deepEqual(Object.keys(modelResult).sort(), ["executionId", "instruction", "state"]);
+  }
 });
 
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {

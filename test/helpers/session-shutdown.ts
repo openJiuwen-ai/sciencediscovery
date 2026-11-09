@@ -82,7 +82,7 @@ export async function stopAndVerifySession<R extends ShutdownRun>(
     try { await adapter.stop(remaining()); } catch (error) { record("stop", error); }
   };
   await stop();
-  while (now() <= deadline) {
+  while (now() < deadline) {
     let snapshot: SessionSnapshot<R>;
     try {
       snapshot = await adapter.snapshot(remaining());

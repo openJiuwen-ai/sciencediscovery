@@ -132,6 +132,19 @@ test("whole-tree export refuses existing destinations and never deletes their co
   assert.equal(await readFile(join(workspace, "keep"), "utf8"), "keep");
 });
 
+test("whole-tree export reports excluded directories instead of silently dropping them", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await writeFile(join(workspace, "run"), "kept");
+  await mkdir(join(workspace, "deps"), { recursive: true });
+  await writeFile(join(workspace, "deps", "pkg"), "big");
+  const snapshot = await committedWorkspaceSnapshot(versions, workspace);
+  const destination = join(workspace, "..", "export-excluded");
+  const { excludedPaths } = await materializeWorkspaceSnapshot(versions, snapshot, destination);
+  assert.deepEqual(excludedPaths, ["deps"]);
+  assert.equal(await readFile(join(destination, "run"), "utf8"), "kept");
+  await assert.rejects(stat(join(destination, "deps")), { code: "ENOENT" });
+});
+
 test("whole-tree export does not publish corrupt bytes or traversal entries", async (t) => {
   const { workspace, versions } = await fixture(t);
   await writeFile(join(workspace, "file"), "valid");

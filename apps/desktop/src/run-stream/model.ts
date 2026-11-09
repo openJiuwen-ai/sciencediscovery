@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionRequest, SessionRunStatus, Subagent, ToolTrace } from "../api/types.js";
+import type {
+  ChatMessage,
+  ComposerReference,
+  PermissionRequest,
+  SessionRunStatus,
+  Subagent,
+  ToolTrace,
+} from "../api/types.js";
 
 /** One model invoke attempt's visible text. A turn can hold several: the model
  *  may be re-invoked after a tool call, and each attempt gets its own
@@ -92,7 +99,7 @@ export interface RunStreamState {
   /** Number of earlier events the server could not replay. Non-zero means the
    *  transcript below is genuinely incomplete and must say so. */
   droppedEvents: number;
-  error?: { code?: string; message: string };
+  error?: { code?: string; message: string; timeout?: ChatMessage["timeout"] };
   /** `run.completed.message.content` — the persisted answer, which outranks
    *  anything assembled from deltas. */
   finalContent?: string;
@@ -104,11 +111,32 @@ export interface RunStreamState {
    * fields.
    */
   finishedAt?: number;
+  /**
+   * How many searches this stream has announced (`evolve_run.created`).
+   *
+   * The search is designed in the conversation and then starts on the server,
+   * so the run list changes without any client request — and the list is only
+   * polled while something is running, which cannot be true yet. This counter
+   * is the event the app watches to re-read the list once, immediately, rather
+   * than waiting for the next poll or a manual refresh.
+   */
+  evolveRunsCreated: number;
   /** Largest replay cursor seen, for `?after=` on a reconnect. */
   lastSequence?: number;
   modelName?: string;
   /** Every authorization request this run raised, oldest first. */
   permissions: PermissionEntry[];
+  /**
+   * The aliases this run's answer cites, as the server back-filled them onto
+   * the persisted message (`run.completed.message.references`).
+   *
+   * A finished answer is drawn from the run's own text, not from the stored
+   * `ChatMessage`, so without this the `[artifact1]` tokens in a live or
+   * replayed transcript would stay plain text while the same body in the
+   * report preview shows chips. Absent while the run is going (the aliases are
+   * back-filled at completion) and on records written before the back-fill.
+   */
+  references?: ComposerReference[];
   /**
    * Text that arrived before the frame naming its turn, keyed by `responseId`.
    *
@@ -133,6 +161,7 @@ export interface RunStreamState {
 export function emptyRunStream(): RunStreamState {
   return {
     droppedEvents: 0,
+    evolveRunsCreated: 0,
     pendingResponses: {},
     permissions: [],
     terminal: false,

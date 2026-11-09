@@ -196,7 +196,9 @@ describe("a run folds into one line", () => {
     });
     assert.doesNotMatch(html, /<div class="role">/u);
     assert.doesNotMatch(html, /run-fold/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
   });
 
   it("says what it is waiting for rather than that it is thinking", () => {
@@ -303,13 +305,74 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     assert.match(html, /已中断/u);
   });
 
+  it("offers model selection recovery for a queued run with a deleted model", () => {
+    const html = render({ error: { code: "SESSION_MODEL_UNAVAILABLE", message: "The session model is not available" }, status: "failed", terminal: true });
+    assert.equal(html.match(/原模型已删除，请重新选择/gu)?.length, 1);
+    assert.doesNotMatch(html, /run-failure-row/u);
+  });
+
   it("keeps the marked notice for what actually went wrong", () => {
     // The divider is for a run that stopped; an error is a run that broke, and
     // it still owes the reader a mark and the reason.
     const html = render({ error: { message: "gateway died" }, status: "failed", terminal: true });
-    assert.match(html, /is-notice/u);
+    assert.match(html, /run-failure-row/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
     assert.doesNotMatch(html, /is-divider/u);
+  });
+
+  it("surfaces a localized run-failure summary and tucks raw diagnostics into details", () => {
+    const html = render({
+      error: { code: "timeout", message: "no gateway progress for 1000 ms" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /run-failure-row/u);
+    assert.match(html, /<h3>运行超时<\/h3>/u);
+    assert.match(html, /Agent 在 1 秒内没有产生进展，运行已终止/u);
+    assert.match(html, /适当增加 Agent 空闲超时时间/u);
+    assert.match(html, /<circle cx="12" cy="12" r="9"><\/circle>/u);
+    // The original errorCode and error.message live inside the technical details.
+    assert.match(html, /class="run-failure-details"/u);
+    assert.match(html, /class="run-failure-code"/u);
+    assert.match(html, /timeout/u);
+    assert.match(html, /no gateway progress for 1000 ms/u);
+  });
+
+  it("uses the unknown summary for an unrecognised error code", () => {
+    const html = render({
+      error: { code: "mystery-code", message: "something odd happened" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /mystery-code/u);
+    assert.match(html, /something odd happened/u);
+  });
+
+  it("uses the unknown summary when no error code is supplied", () => {
+    const html = render({ error: { message: "no code attached" }, status: "failed", terminal: true });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /no code attached/u);
+  });
+
+  it("does not render a run-failure summary when a tool timed out but the run succeeded", () => {
+    // A failed tool call (e.g. execution timeout) is shown by the tool card;
+    // it must not be mistaken for a run failure.
+    const html = render({
+      status: "completed",
+      terminal: true,
+      turns: [
+        turn({
+          responses: [{ content: "done", responseId: "r1", settled: true, truncated: false }],
+          tools: [{ after: 0, id: "t1", trace: { id: "t1", name: "execute", status: "failed" } }],
+        }),
+      ],
+    });
+    assert.doesNotMatch(html, /run-failure-details/u);
+    assert.doesNotMatch(html, /任务未能完成/u);
+    assert.doesNotMatch(html, /运行超时/u);
   });
 });
 
@@ -437,5 +500,44 @@ describe("a delegated subagent is one line inside the run", () => {
     assert.match(html, /msg-collapse run-fold/);
     assert.match(html, /read the literature/);
     assert.match(html, /执行中/);
+  });
+});
+
+describe("an answer's citations become chips", () => {
+  const reference = { id: "artifact-6", kind: "artifact" as const, label: "artifact6", version: 1 };
+
+  function renderWithReferences(content: string, references?: typeof reference[]): string {
+    return renderToStaticMarkup(
+      <AssistantTurns
+        client={client}
+        onDecide={() => Promise.resolve()}
+        onReferenceClick={() => undefined}
+        references={references}
+        run={{
+          ...emptyRunStream(),
+          modelName: "m",
+          runId: "r1",
+          terminal: true,
+          turns: [turn({ responses: [{ content, responseId: "a", settled: true, truncated: false }] })],
+        }}
+        sessionId="s1"
+      />,
+    );
+  }
+
+  it("turns [artifact6] into a chip the card can open", () => {
+    const html = renderWithReferences("交付物：out/report/REPORT.md [artifact6]", [reference]);
+    // The alias the answer wrote is the chip's label: no new vocabulary.
+    assert.match(html, /class="graph-chip is-artifact"/u);
+    assert.match(html, />artifact6</u);
+    assert.doesNotMatch(html, /\[artifact6\]/u);
+  });
+
+  it("leaves the token as plain text when the answer carries no references", () => {
+    // An older record, or a run whose aliases were never declared: the alias
+    // is still readable, it just is not a door.
+    const html = renderWithReferences("交付物：out/report/REPORT.md [artifact6]");
+    assert.doesNotMatch(html, /graph-chip/u);
+    assert.match(html, /\[artifact6\]/u);
   });
 });

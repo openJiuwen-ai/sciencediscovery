@@ -18,8 +18,10 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
+import asyncio
 import json
 import os
+import re
 import socket
 import socketserver
 import ssl
@@ -27,14 +29,17 @@ import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from sciencediscovery_gateway.public_biomed_mcp import (
     SERVER,
+    _arxiv_get_paper,
     _arxiv_search,
     _get_text,
     _pdb_entry,
@@ -250,10 +255,310 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
                 prepared["artifacts"][0]["sourceUrl"].startswith(f"https://www.{source}.org/")
             )
 
+    async def test_preprint_search_requests_a_dated_range_from_the_newest_offset(self) -> None:
+        calls: list[tuple[str, dict[str, str] | None]] = []
+        pages = {
+            # 61 records => the newest 30 start at offset 31.
+            0: {"messages": [{"status": "ok", "total": 61}], "collection": []},
+            1: {"messages": [{"status": "ok", "total": 61}], "collection": []},
+            31: {
+                "messages": [{"status": "ok", "total": 61}],
+                "collection": [{
+                    "abstract": "Liver abstract",
+                    "authors": "A. Author",
+                    "date": "2026-01-01",
+                    "doi": "10.1101/2026.01.01.123456",
+                    "title": "Liver preprint",
+                    "version": "1",
+                }],
+            },
+        }
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            calls.append((url, params))
+            return pages[int(url.rsplit("/", 2)[1])]
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 30, 5, "immunology")
+
+        pattern = re.compile(
+            r"https://api\.biorxiv\.org/details/biorxiv/(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})/(\d+)/json"
+        )
+        # Probe offset 0 first, then scan backwards from the newest offset.
+        self.assertEqual([pattern.fullmatch(url).group(3) for url, _ in calls], ["0", "31", "1"])
+        start_text, end_text, cursor = pattern.fullmatch(calls[0][0]).groups()
+        self.assertEqual(cursor, "0")
+        start, end = date.fromisoformat(start_text), date.fromisoformat(end_text)
+        self.assertEqual(end, datetime.now(UTC).date())
+        self.assertEqual((end - start) + timedelta(days=1), timedelta(days=30))
+        self.assertEqual([params for _, params in calls], [{"category": "immunology"}] * 3)
+        self.assertEqual([record["identifier"] for record in result["records"]], ["10.1101/2026.01.01.123456"])
+        self.assertIn("Scanned 1 of 61 preprints", result["warnings"][0])
+
+    async def test_preprint_search_surfaces_a_rejected_provider_request(self) -> None:
+        rejected = {
+            "messages": [{"status": "Both dates must be in yyyy-mm-dd format"}],
+            "collection": [],
+        }
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=rejected),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Both dates must be in yyyy-mm-dd format"):
+                await _preprint_search("biorxiv", "liver", 30, 5, None)
+
+    async def test_preprint_search_names_a_missing_total_as_an_oldest_first_scan(self) -> None:
+        payload = {"collection": [{
+            "abstract": "Liver abstract",
+            "authors": "A. Author",
+            "date": "2026-01-01",
+            "doi": "10.1101/2026.01.01.123456",
+            "title": "Liver preprint",
+            "version": "1",
+        }]}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=payload),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 30, 5, None)
+
+        self.assertEqual(len(result["records"]), 1)
+        self.assertIn("did not report a total", result["warnings"][0])
+        self.assertIn("oldest first", result["warnings"][0])
+
+    async def test_preprint_search_prefers_newest_records_and_skips_repeats(self) -> None:
+        requested: list[int] = []
+        total = 66
+
+        def item(identifier: int) -> dict[str, str]:
+            return {
+                "abstract": "",
+                "authors": "A. Author",
+                "date": "2026-01-01",
+                "doi": f"10.1101/2026.01.01.{identifier}",
+                "title": f"Liver preprint {identifier}",
+                "version": "1",
+            }
+
+        pages = {
+            0: [item(0)],
+            total - 30: [item(65)],
+            # The window shifts while paging, so a record can reappear.
+            total - 60: [item(65), item(30)],
+        }
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            requested.append(cursor)
+            return {"messages": [{"status": "ok", "total": total}], "collection": pages[cursor]}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 30, 2, None)
+
+        self.assertEqual(requested, [0, total - 30, total - 60])
+        self.assertEqual(
+            [record["identifier"] for record in result["records"]],
+            ["10.1101/2026.01.01.65", "10.1101/2026.01.01.30"],
+        )
+
+    async def test_preprint_search_caps_the_scan_length(self) -> None:
+        requested: list[int] = []
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            requested.append(cursor)
+            return {"messages": [{"status": "ok", "total": 66376}], "collection": []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 365, 5, None)
+
+        # The 20-page budget includes the probe, which is reused as the tail.
+        self.assertEqual(len(requested), 20)
+        self.assertEqual(requested.count(0), 1)
+        self.assertEqual(requested[0], 0)
+        self.assertEqual(requested[1], 66376 - 30)
+        self.assertIn("Scanned 0 of 66376 preprints", result["warnings"][0])
+
+    async def test_preprint_search_treats_an_empty_window_as_a_result(self) -> None:
+        empty = {"messages": [{"status": "no posts found"}], "collection": []}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=empty),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 1, 5, "zoology")
+
+        self.assertEqual(result["records"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("no preprints published between", result["warnings"][0])
+
+    async def test_preprint_search_reuses_the_probe_as_the_oldest_page(self) -> None:
+        requested: list[int] = []
+        total = 100
+
+        def page(cursor: int) -> dict[str, Any]:
+            return {
+                "messages": [{"status": "ok", "total": total}],
+                "collection": [{
+                    "abstract": "",
+                    "authors": "A. Author",
+                    "date": "2026-01-01",
+                    "doi": f"10.1101/2026.01.01.{offset}",
+                    "title": f"Preprint {offset}",
+                    "version": "1",
+                } for offset in range(cursor, min(cursor + 30, total))],
+            }
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            requested.append(cursor)
+            return page(cursor)
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            result = await _preprint_search("biorxiv", "preprint", 30, 1000, None)
+
+        # Offsets 0..9 only exist on the probe page, and it is never fetched twice.
+        self.assertEqual(requested, [0, 70, 40, 10])
+        self.assertEqual(len(result["records"]), total)
+        self.assertIn("Scanned 100 of 100 preprints", result["warnings"][0])
+
+    async def test_preprint_search_stops_at_the_time_budget(self) -> None:
+        requested: list[int] = []
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            requested.append(cursor)
+            if cursor:
+                await asyncio.sleep(30)
+            return {"messages": [{"status": "ok", "total": 66376}], "collection": []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.5):
+            result = await _preprint_search("biorxiv", "liver", 365, 5, None)
+
+        # The probe answered; the scan pages did not, and are dropped.
+        self.assertEqual(requested[0], 0)
+        self.assertEqual(requested[1], 66376 - 30)
+        self.assertIn("time budget", result["warnings"][0])
+        self.assertIn("older matches may be missing", result["warnings"][0])
+
+    async def test_preprint_search_reconnects_after_a_dropped_connection(self) -> None:
+        attempts: list[int] = []
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            attempts.append(cursor)
+            if cursor and attempts.count(cursor) == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return {"messages": [{"status": "ok", "total": 61}], "collection": [{
+                "abstract": "",
+                "authors": "A. Author",
+                "date": "2026-01-01",
+                "doi": "10.1101/2026.01.01.123456",
+                "title": "Liver preprint",
+                "version": "1",
+            }] if cursor == 31 else []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 30, 5, None)
+
+        # Each scan page is tried twice: the drop, then the reconnect.
+        self.assertEqual(attempts, [0, 31, 31, 1, 1])
+        self.assertEqual(len(result["records"]), 1)
+
+    async def test_preprint_search_keeps_pages_that_answered_before_the_budget(self) -> None:
+        total = 100
+
+        def page(cursor: int) -> dict[str, Any]:
+            return {
+                "messages": [{"status": "ok", "total": total}],
+                "collection": [{
+                    "abstract": "",
+                    "authors": "A. Author",
+                    "date": "2026-01-01",
+                    "doi": f"10.1101/2026.01.01.{cursor}",
+                    # The newest page does not match, so the scan moves on.
+                    "title": "Other" if cursor == 70 else "Preprint",
+                    "version": "1",
+                }],
+            }
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            if cursor not in (0, 70, 40):
+                await asyncio.sleep(30)
+            return page(cursor)
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.5):
+            result = await _preprint_search("biorxiv", "preprint", 30, 10, None)
+
+        # Offset 40 answered inside the budget and is matched; offset 10 hangs
+        # and is dropped, and the warning says the scan stopped early.
+        self.assertEqual([record["identifier"] for record in result["records"]], ["10.1101/2026.01.01.40"])
+        self.assertIn("time budget", result["warnings"][0])
+
+    async def test_preprint_search_bounds_the_probe_by_the_budget(self) -> None:
+        async def fake_get_json(url: str, *, params=None, client=None):
+            await asyncio.sleep(30)
+            return {"messages": [{"status": "ok", "total": 61}], "collection": []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.2):
+            result = await _preprint_search("biorxiv", "liver", 30, 5, None)
+
+        self.assertEqual(result["records"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("did not answer the first page", result["warnings"][0])
+        self.assertIn("time budget", result["warnings"][0])
+
+    async def test_preprint_search_fetches_scan_pages_concurrently(self) -> None:
+        in_flight = 0
+        peak = 0
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            nonlocal in_flight, peak
+            cursor = int(url.rsplit("/", 2)[1])
+            if cursor == 0:
+                return {"messages": [{"status": "ok", "total": 66376}], "collection": []}
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return {"messages": [{"status": "ok", "total": 66376}], "collection": []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ):
+            await _preprint_search("biorxiv", "liver", 365, 5, None)
+
+        self.assertGreaterEqual(peak, 2)
+
     async def test_server_registers_the_complete_manifest_tool_set(self) -> None:
         actual = {tool.name for tool in await SERVER.list_tools()}
         self.assertEqual(actual, {
-            "arxiv_prepare_paper_download", "arxiv_search",
+            "arxiv_get_paper", "arxiv_prepare_paper_download", "arxiv_search",
             "biorxiv_lookup_doi", "biorxiv_prepare_paper_download", "biorxiv_search_preprints",
             "chembl_search_activities", "chembl_search_molecules", "chembl_search_targets",
             "chembl_similarity_search",
@@ -347,7 +652,8 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_arxiv_fixture_becomes_a_canonical_record(self) -> None:
         atom = """<?xml version="1.0"?>
-        <feed xmlns="http://www.w3.org/2005/Atom">
+        <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+          <opensearch:totalResults>8</opensearch:totalResults>
           <entry>
             <id>https://arxiv.org/abs/2101.00001v1</id>
             <title>Example preprint</title>
@@ -361,13 +667,56 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "sciencediscovery_gateway.public_biomed_mcp._get_text",
             new=AsyncMock(return_value=atom),
         ):
-            result = await _arxiv_search("example", 5)
+            result = await _arxiv_search("example", 1, 3)
         self.assertEqual(result["sourceId"], "arxiv")
         self.assertEqual(result["records"][0]["identifier"], "2101.00001v1")
         self.assertEqual(
             result["records"][0]["primaryCitation"]["markdown"],
             "[Arxiv:2101.00001v1](https://arxiv.org/abs/2101.00001v1)",
         )
+        self.assertEqual(result["records"][0]["peerReviewStatus"], "preprint")
+        self.assertEqual(result["records"][0]["warnings"], [])
+        self.assertEqual(result["warnings"], [
+            "arXiv records are preprints or e-prints; preserve the submitted version."
+        ])
+        self.assertEqual(result["data"], {
+            "hasMore": True,
+            "nextOffset": 4,
+            "offset": 3,
+            "query": "example",
+            "returned": 1,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+            "total": 8,
+        })
+
+    async def test_arxiv_get_paper_uses_identifier_lookup_and_returns_one_complete_record(self) -> None:
+        atom = """<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>https://arxiv.org/abs/2101.00001v1</id>
+            <title>Example preprint</title>
+            <summary>Complete abstract text.</summary>
+            <published>2021-01-01T00:00:00Z</published>
+            <updated>2021-01-02T00:00:00Z</updated>
+            <author><name>A. Author</name></author>
+          </entry>
+        </feed>"""
+        request_params = []
+
+        async def get_text(_url, *, params, **_kwargs):
+            request_params.append(params)
+            return atom
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=get_text,
+        ):
+            result = await _arxiv_get_paper("2101.00001v1")
+        self.assertEqual(request_params, [{"id_list": "2101.00001v1", "max_results": 1}])
+        self.assertEqual(result["toolId"], "get_paper")
+        self.assertEqual(result["data"], {"requestedIdentifier": "2101.00001v1", "returned": 1})
+        self.assertEqual(result["records"][0]["abstract"], "Complete abstract text.")
 
     async def test_arxiv_enables_tls_post_handshake_auth_without_changing_other_sources(self) -> None:
         atom = '<feed xmlns="http://www.w3.org/2005/Atom" />'
