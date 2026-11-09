@@ -25,7 +25,7 @@ export function resolveConnection(health: HealthReport): "degraded" | "online" {
 }
 
 export interface CatalogDecision {
-  /** "setup" means there is no model at all, which is the first-run condition. */
+  /** An empty catalog always requires model configuration, even with history. */
   boot: "ready" | "setup";
   defaultModelId?: string;
 }
@@ -34,10 +34,9 @@ export interface CatalogDecision {
 export function resolveCatalog(
   profiles: ModelProfile[],
   overrides: RuntimeSettingsOverrides,
-  hasHistory = false,
 ): CatalogDecision {
   const first = profiles[0];
-  if (first === undefined) return { boot: hasHistory ? "ready" : "setup" };
+  if (first === undefined) return { boot: "setup" };
   const configured = overrides.modelId;
   const known = configured !== undefined && profiles.some((profile) => profile.id === configured);
   return { boot: "ready", ...(known ? { defaultModelId: configured } : {}) };

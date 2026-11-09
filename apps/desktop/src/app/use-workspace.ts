@@ -582,19 +582,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         setModels(profiles);
         setPresets(catalog.presets);
         setProviders(catalog.providers);
-        let hasHistory = false;
-        if (!profiles.length) {
-          const [projects, inbox] = await Promise.all([listProjects(client), ensureInbox(client)]);
-          hasHistory = projects.length > 0 || (await listSessions(client, inbox.id, "all")).length > 0;
-          if (cancelled) return;
-        }
-        const decision = resolveCatalog(profiles, settings.overrides, hasHistory);
+        const decision = resolveCatalog(profiles, settings.overrides);
         if (decision.boot === "setup") {
           setBoot("setup");
           return;
         }
         setDefaultModelId(decision.defaultModelId);
-        setSelectedModelId(decision.defaultModelId);
+        setSelectedModelId(decision.defaultModelId ?? profiles[0]?.id);
         if (cancelled) return;
         setBoot("ready");
       } catch (reason) {
@@ -635,6 +629,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           setPresets(catalog.presets);
           setProviders(catalog.providers);
         }
+        if (!profiles.length) {
+          draftModelOverride.current = undefined;
+          setDefaultModelId(undefined);
+          setSelectedModelId(undefined);
+          setBoot("setup");
+          return;
+        }
         setDefaultModelId(settings.overrides.modelId);
         if (fresh && target) {
           setDetail(current => {
@@ -647,7 +648,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           setSelectedModelId(fresh.effective.modelId);
         } else {
           const inherited = projectSettings ? projectSettings.effective.modelId : settings.overrides.modelId;
-          setSelectedModelId(draftModelOverride.current ?? inherited);
+          setSelectedModelId(draftModelOverride.current ?? inherited ?? profiles[0]?.id);
         }
       } catch (reason) {
         // Background reads retry on the next tick; rejected credentials still

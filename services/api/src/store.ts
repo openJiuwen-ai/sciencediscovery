@@ -4683,6 +4683,8 @@ export class SessionStore {
     } = {},
     options: {
       allowUnconfiguredModel?: boolean;
+      /** Choose a saved model for a new interactive session when no default is set. */
+      selectFallbackModel?: boolean;
       researchSnapshot?: Session["researchSnapshot"];
       restorationSessionId?: string;
     } = {},
@@ -4693,10 +4695,23 @@ export class SessionStore {
       ? { modelId: input, reviewModelId: input }
       : input);
     if (settingsOverrides.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
-    const resolved = this.resolveSettingsLayers([
+    let resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: settingsOverrides, source: "session" },
     ]);
+    if (options.selectFallbackModel && resolved.effective.modelId === undefined
+      && settingsOverrides.modelId === undefined) {
+      const fallback = this.listModels()[0];
+      if (fallback) {
+        // Persist only this new session's fallback. Global/Project defaults and
+        // existing sessions (including deleted explicit choices) stay intact.
+        settingsOverrides.modelId = fallback.id;
+        resolved = this.resolveSettingsLayers([
+          ...this.projectSettingsLayers(project),
+          { overrides: settingsOverrides, source: "session" },
+        ]);
+      }
+    }
     const selectedModel = this.getModel(resolved.effective.modelId);
     if (!selectedModel && !options.allowUnconfiguredModel) {
       throw new SessionStoreHttpError("A task model is required", 400, "SESSION_MODEL_UNAVAILABLE");

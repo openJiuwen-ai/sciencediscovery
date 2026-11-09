@@ -2864,7 +2864,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             UNTITLED_SESSION_TITLE,
             {},
             {},
-            { allowUnconfiguredModel: true },
+            { allowUnconfiguredModel: true, selectFallbackModel: true },
           );
           sendJson(response, 201, { ...project, firstSession, project });
         } catch (error) {
@@ -3004,6 +3004,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           {
             allowUnconfiguredModel: body.modelId === undefined && body.settingsOverrides?.modelId === undefined,
+            selectFallbackModel: true,
           },
         ));
         return;
