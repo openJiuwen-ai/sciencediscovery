@@ -47,7 +47,10 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
   let renderer: ReturnType<typeof create> | undefined;
   t.after(async () => {
     try { await act(async () => renderer?.unmount()); }
-    finally { for (const restore of restoreGlobals.reverse()) restore(); }
+    finally {
+      restoreGlobals.reverse();
+      for (const restore of restoreGlobals) restore();
+    }
   });
   await act(async () => { renderer = create(createElement(Harness)); });
   return { data, calls, current: () => { assert.ok(handle); return handle; } };
