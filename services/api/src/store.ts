@@ -19,7 +19,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
-import { effectiveRunnerIds, isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds, isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -2540,7 +2540,7 @@ export class SessionStore {
     const settings = this.getSessionSettings(sessionId);
     const project = this.getProject(session.projectId)!;
     const model = this.getModel(target);
-    const provider = this.getProvider(model?.providerId);
+    const provider = this.getProvider(["provider.connection", "provider.credential", "provider.remove_credential"].includes(capabilityId) ? target : model?.providerId);
     const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
     // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
     const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
@@ -2570,6 +2570,14 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
+    if (["provider.connection", "provider.credential", "provider.remove_credential"].includes(capabilityId)) {
+      const children = this.catalog.models.filter(model => model.providerId === target);
+      const keys = new Set([providerSecretKey(target), ...children.map(model => model.id)]);
+      systemVersions = { providerConnection: version([provider ?? null, children, this.providerDiscoveryRevision(target) ?? null,
+        secretRows.filter(row => keys.has(String(row.model_id)))]) };
+    }
+    if (capabilityId === "model.api_identity") systemVersions = { modelApiIdentity: version([model ?? null, provider ?? null,
+      secretRows.filter(row => row.model_id === target || model?.providerId && row.model_id === providerSecretKey(model.providerId))]) };
     const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
     const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
       this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
@@ -2598,6 +2606,7 @@ export class SessionStore {
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
+        ...(["provider.connection", "provider.credential", "provider.remove_credential"].includes(capabilityId) ? { providerConnection: this.configurationProviderConnectionSource(target), providers: structuredClone(this.listProviders()) } : {}),
         installedConnectorIds: [...this.connectorIds], inheritedConnectorIds: [...this.getProjectSettings(project.id).effective.enabledConnectorIds],
         sources: structuredClone(settings.sources),
         projectOverrides: structuredClone(project.settingsOverrides),
@@ -2953,7 +2962,7 @@ export class SessionStore {
     if (!policy.startsWith("proxy:")) return;
     const serverId = policy.slice("proxy:".length);
     if (!this.getProxyServer(serverId)) {
-      throw new Error(`${field} references an unknown proxy server`);
+      throw new SessionStoreHttpError(`${field} references an unknown proxy server`, 400);
     }
   }
 
@@ -3886,6 +3895,34 @@ export class SessionStore {
     }
   }
 
+  private normalizeConnectionUpdateToken(value: string | null | undefined): string | undefined {
+    try { return normalizeApiToken(value); }
+    catch { throw new SessionStoreHttpError("A provided LLM API token must be a non-empty string of at most 16384 characters", 400); }
+  }
+
+  private applyModelMetadataSync(profile: ModelProfile, metadata: Pick<ModelProfile, "name" | "vision" | "thinkingMode" | "thinkingEffort" | "facts">, clearFacts: boolean): void {
+    Object.assign(profile, { name: metadata.name, vision: metadata.vision, thinkingMode: metadata.thinkingMode, thinkingEffort: metadata.thinkingEffort, updatedAt: new Date().toISOString() });
+    if (clearFacts) delete profile.facts;
+    else if (metadata.facts) profile.facts = structuredClone(metadata.facts);
+  }
+
+  configurationModelApiIdentityCandidate(profile: ModelProfile, values: ConfigurationValues) {
+    return validateLiveModel({ ...structuredClone(profile), model: values.apiModel === undefined ? profile.model : String(values.apiModel),
+      apiVariant: values.apiVariant === undefined ? profile.apiVariant : values.apiVariant as ModelProfile["apiVariant"] });
+  }
+
+  private applyModelApiIdentitySync(profile: ModelProfile, candidate: Pick<ModelProfile, "model" | "apiVariant" | "thinkingMode" | "thinkingEffort">): void {
+    Object.assign(profile, { model: candidate.model, apiVariant: candidate.apiVariant, thinkingMode: candidate.thinkingMode,
+      thinkingEffort: candidate.thinkingEffort, updatedAt: new Date().toISOString() });
+  }
+
+  applyModelApiIdentityConfigurationSync(modelId: string, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Model API identity writes require the shared transaction");
+    const profile = this.getModel(modelId);
+    if (!profile) throw new Error("Model not found");
+    this.applyModelApiIdentitySync(profile, this.configurationModelApiIdentityCandidate(profile, values));
+  }
+
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
@@ -3894,18 +3931,21 @@ export class SessionStore {
     if (provider && (normalized.baseUrl !== provider.baseUrl || normalized.apiProtocol !== provider.apiProtocol)) {
       throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
     }
-    Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
-    // `null` is an explicit "drop my overrides" so the listing and the catalog
-    // answer again; an absent key keeps whatever was saved.
-    if (input.facts === null) delete profile.facts;
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
+    const { name, vision, thinkingMode, thinkingEffort, facts, ...connection } = normalized;
+    Object.assign(profile, connection);
+    this.applyModelMetadataSync(profile, { name, vision, thinkingMode, thinkingEffort, facts }, input.facts === null);
+    this.applyModelApiIdentitySync(profile, normalized);
     if (input.proxyPolicy !== undefined) {
-      profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      profile.proxyPolicy = proxyPolicy;
     }
     if (input.apiToken === null) {
       this.setModelApiToken(modelId, undefined);
       profile.hasApiToken = provider?.hasApiToken === true;
     } else if (input.apiToken !== undefined) {
-      this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
+      this.setModelApiToken(modelId, apiToken);
       profile.hasApiToken = true;
     }
     await this.saveCatalog();
@@ -3980,6 +4020,20 @@ export class SessionStore {
     return this.catalog.providers.find((provider) => provider.id === providerId);
   }
 
+  /** Internal discovery-cache identity. Credential generations are ciphertext, never plaintext key hashes. */
+  providerDiscoveryRevision(providerId: string): string | undefined {
+    const provider = this.getProvider(providerId);
+    if (!provider) return undefined;
+    const database = this.getConfigurationDatabase();
+    const policy = provider.proxyPolicy === "inherit" ? this.catalog.proxyDefaultPolicy : provider.proxyPolicy;
+    const proxyId = policy.startsWith("proxy:") ? policy.slice(6) : undefined;
+    return createHash("sha256").update(canonicalConfiguration([
+      provider, database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id=?").get(providerSecretKey(providerId)) ?? null,
+      policy, proxyId ? this.catalog.proxyServers.find(server => server.id === proxyId) ?? null : null,
+      proxyId ? database.prepare("SELECT encrypted_url FROM proxy_server_secrets WHERE server_id=?").get(proxyId) ?? null : null,
+    ])).digest("hex");
+  }
+
   private setProviderApiToken(providerId: string, apiToken: string | undefined): void {
     this.setModelApiToken(providerSecretKey(providerId), apiToken);
   }
@@ -4027,31 +4081,82 @@ export class SessionStore {
     return provider;
   }
 
+  configurationProviderConnectionSource(providerId: string) {
+    const provider = this.getProvider(providerId);
+    return { provider: provider ? structuredClone(provider) : undefined,
+      children: this.catalog.models.filter(model => model.providerId === providerId).map(model => structuredClone(model)) };
+  }
+
+  private normalizeProviderConnection(provider: ModelProvider, input: UpdateModelProviderRequest) {
+    return validateLiveProvider({ apiProtocol: input.apiProtocol ?? provider.apiProtocol,
+      apiVariant: input.apiVariant ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
+      baseUrl: input.baseUrl ?? provider.baseUrl, modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
+      name: input.name ?? provider.name, presetId: provider.presetId });
+  }
+
+  configurationProviderConnectionCandidate(provider: ModelProvider, values: ConfigurationValues) {
+    const input = { ...values } as UpdateModelProviderRequest;
+    if (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol) {
+      input.apiVariant ??= DEFAULT_MODEL_API_VARIANT[input.apiProtocol];
+      input.modelDiscovery ??= DEFAULT_MODEL_DISCOVERY[input.apiProtocol];
+    }
+    return this.normalizeProviderConnection(provider, input);
+  }
+
+  private applyProviderConnectionSync(provider: ModelProvider, connection: ReturnType<SessionStore["normalizeProviderConnection"]>): void {
+    Object.assign(provider, connection, { updatedAt: new Date().toISOString() });
+  }
+
+  applyProviderConnectionConfigurationSync(providerId: string, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider connection writes require the shared transaction");
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const previousProtocol = provider.apiProtocol;
+    this.applyProviderConnectionSync(provider, this.configurationProviderConnectionCandidate(provider, values));
+    this.syncProviderModels(provider, previousProtocol);
+  }
+
+  /** Shared by formal settings and the transactional conversational credential adapter. */
+  private applyProviderCredentialSync(provider: ModelProvider, apiToken: string | undefined): void {
+    this.setProviderApiToken(provider.id, apiToken);
+    provider.hasApiToken = Boolean(apiToken);
+    provider.updatedAt = new Date().toISOString();
+    for (const profile of this.catalog.models) if (profile.providerId === provider.id) {
+      profile.hasApiToken = this.profileHasOwnToken(profile.id) || provider.hasApiToken;
+      profile.updatedAt = provider.updatedAt;
+    }
+  }
+
+  applyProviderCredentialConfigurationSync(providerId: string, apiToken: string): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider credential writes require the shared transaction");
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const normalized = this.normalizeConnectionUpdateToken(apiToken);
+    if (!normalized) throw new Error("A replacement credential is required");
+    this.applyProviderCredentialSync(provider, normalized);
+  }
+
+  removeProviderCredentialConfigurationSync(providerId: string): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider credential writes require the shared transaction");
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    this.applyProviderCredentialSync(provider, undefined);
+  }
+
   async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
     const previousProtocol = provider.apiProtocol;
-    const normalized = validateLiveProvider({
-      apiProtocol: input.apiProtocol ?? provider.apiProtocol,
-      apiVariant: input.apiVariant
-        ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
-      baseUrl: input.baseUrl ?? provider.baseUrl,
-      modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
-      name: input.name ?? provider.name,
-      presetId: provider.presetId,
-    });
-    Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
+    const normalized = this.normalizeProviderConnection(provider, input);
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? provider.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
+    this.applyProviderConnectionSync(provider, normalized);
     if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
     if (input.proxyPolicy !== undefined) {
-      provider.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      provider.proxyPolicy = proxyPolicy;
     }
-    if (input.apiToken === null) {
-      this.setProviderApiToken(providerId, undefined);
-      provider.hasApiToken = false;
-    } else if (input.apiToken !== undefined) {
-      this.setProviderApiToken(providerId, normalizeApiToken(input.apiToken));
-      provider.hasApiToken = true;
-    }
+    if (input.apiToken !== undefined) this.applyProviderCredentialSync(provider, apiToken);
     this.syncProviderModels(provider, previousProtocol);
     await this.saveCatalog();
     return provider;

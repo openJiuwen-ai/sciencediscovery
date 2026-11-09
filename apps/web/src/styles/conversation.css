@@ -459,3 +459,7 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .configuration-endpoint bdi, .configuration-endpoint code { overflow-wrap: anywhere; word-break: break-word; }
 .configuration-endpoint p { margin: 0; }
 .configuration-endpoint button { justify-self: start; max-width: 100%; white-space: normal; }
+
+.configuration-settings-handoff { gap: 8px; }
+.configuration-settings-handoff > strong { font-size: 14px; }
+.configuration-settings-handoff .conversation-configuration-actions > button { flex: 0 1 auto; }

@@ -12,6 +12,10 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createProviderKeyRemovalAdapter } from "./provider-key-removal-adapter.js";
+import { createProviderCredentialAdapter } from "./provider-credential-adapter.js";
+import { createProviderConnectionAdapter } from "./provider-connection-adapter.js";
+import { createModelApiIdentityAdapter } from "./model-api-identity-adapter.js";
 import { createWebCredentialAdapter } from "./web-credential-adapter.js";
 import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
@@ -118,7 +122,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createProviderConnectionAdapter(store, this.destinations), createProviderCredentialAdapter(store, this.credentials, this.destinations), createProviderKeyRemovalAdapter(store), createModelApiIdentityAdapter(store, this.destinations), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -206,7 +210,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.api_identity" || ["provider.connection", "provider.credential", "provider.remove_credential"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
@@ -329,6 +333,9 @@ export class ConversationalConfigurationFramework {
     await this.reconcileLifecycle(sessionId, id);
     if (source === "auto") this.assertAutoAuthorized(this.service.getRecord(sessionId, id));
     const deciding = this.service.getRecord(sessionId, id);
+    if (input.decision === "apply" && ["provider.connection", "provider.credential"].includes(deciding.view.capabilityId)) this.destinations.assert(deciding, true);
+    if (input.decision === "apply" && deciding.view.capabilityId === "model.api_identity")
+      this.destinations.assert(deciding, this.store.getModel(deciding.target)?.hasApiToken !== false);
     if (!this.options.nativeExecutor && deciding.view.runId && !["applied", "dismissed"].includes(deciding.view.state)
       && !this.liveWaitRunId(sessionId, id))
       throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting; do not replay this proposal", 409);

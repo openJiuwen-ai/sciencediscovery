@@ -17,6 +17,10 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "provider.remove_credential": "provider remove delete clear api key 服务商 移除 删除 清除 密钥",
+  "provider.credential": "provider shared credential authentication api key replacement 服务商 共享 凭据 密钥 轮换",
+  "provider.connection": "provider service endpoint protocol model discovery 服务商 连接 地址 协议 模型发现",
+  "model.api_identity": "model api identifier protocol variant 模型 API 标识 模型名 协议变体",
   "web.credential": "web service provider credential search key 网页 搜索 服务商 凭据 密钥 替换 清除",
 
   "settings.inherit": "inherit reset restore parent override 继承 恢复 重置 上级 覆盖",
@@ -104,12 +108,13 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     if (id === "web.credential") return store.getWebSettings().providers.filter(item => webCredentialProviders(Boolean(native)).includes(item.provider)).map(item => ({ id: item.provider, name: item.provider, credential: item.hasApiKey ? "provided" : "missing", authenticationVerified: false }));
     if (id === "web.configure" && native) return store.configurationWebProxyPolicies().map(id => ({ id, kind: "proxy_policy", name: id }));
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
-    if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
+    if (["model.select", "model.repair_credential", "model.api_identity", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
       const catalog = skills();
       return [...catalog.ids.map(id => ({ id, kind: "skill", name: text(id), enabled: settings.effective.skillSelectionMode === "all" || settings.effective.enabledSkillIds.includes(id) })),
         ...catalog.libraries.map(item => ({ id: item.id, kind: "library", name: text(item.name), versionId: item.headVersionId ?? null, ready: Boolean(item.headVersionId) }))];
     }
+    if (["provider.connection", "provider.credential", "provider.remove_credential"].includes(id)) return store.listProviders().map(provider => ({ id: provider.id, name: text(provider.name), protocol: provider.apiProtocol, modelCount: store.configurationProviderConnectionSource(provider.id).children.length }));
     return [];
   };
   const availabilityCache = new Map<ConfigurationCapabilityId, Row>();
@@ -155,6 +160,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     const all = await connectors();
     current = { runtimeEnabled: preview(all.filter(row => row.runtimeEnabled).map(row => row.id)), sessionSaved: preview(effective.enabledConnectorIds), runtimeStateKnown: all.some(row => row.runtimeStateKnown) };
   } else if (id === "skill.select") current = { skillSelectionMode: effective.skillSelectionMode, enabledSkills: preview(effective.enabledSkillIds), enabledLibraries: preview(effective.enabledSkillLibraries.map(item => item.libraryId)) };
+  else if (["provider.connection", "provider.credential", "provider.remove_credential"].includes(id)) { const source = store.configurationProviderConnectionSource(input.targetId ?? ""); current = source.provider ? { providerId: source.provider.id, name: text(source.provider.name), apiProtocol: source.provider.apiProtocol, apiVariant: source.provider.apiVariant, modelDiscovery: source.provider.modelDiscovery, childModelCount: source.children.length, independentDestinationConfirmation: true } : { selectExistingProvider: true }; }
+  else if (id === "model.api_identity") { const profile = input.targetId ? store.getModel(input.targetId) : undefined; current = profile ? { modelId: profile.id, apiModel: profile.model, apiProtocol: profile.apiProtocol, apiVariant: profile.apiVariant, name: text(profile.name), credential: profile.hasApiToken ? "provided" : "missing" } : { selectExistingModel: true }; }
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
@@ -185,7 +192,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     : id === "web.credential" ? { ...registered, webProvider: { ...registered.webProvider, choices: webCredentialProviders(Boolean(native)) } }
     : registered;
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields,
-    scopes: descriptor.scopes.filter(scope => ["plugin.json_viewer"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    scopes: descriptor.scopes.filter(scope => ["plugin.json_viewer", "provider.connection", "provider.credential", "provider.remove_credential", "model.api_identity"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
     instruction: id === "web.credential" ? "Only this backend provider list is supported. Omit scope. Keys are write-only through the secure user card, never ordinary values. No authentication probe or automatic retry. Native later requests read the key; Jiuwen credential mirroring requires restart." : id === "web.configure" ? "Deployment-wide: omit scope. Only the displayed backend fields are supported. Provider selections do not test connectivity or change keys. Swarm saves require API restart and successful startup synchronization; remote activation is not verified. Existing proxy IDs only; never submit credentials or arbitrary URLs." : id === "settings.inherit" ? "Remove only selected finite ordinary override fields at the current Session (default) or its own Project. No Global or security reset. An equal explicit value still needs removal; absent fields produce no_change. Inherited Skill all mode can expose more installed content. Frozen task settings remain unchanged. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "reviewer.enable" ? "Only enabled:boolean may be proposed. Omit scope. This is the global Reviewer Specialist gate; it preserves session preferences and feedback policy, may admit paid reviews, and does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },

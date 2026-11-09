@@ -9,6 +9,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ConfigurationRequestView } from "@sciencediscovery/schema";
 import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol } from "@sciencediscovery/schema";
 import { ConfigurationRequestCard, type ConfigurationRequestActions } from "../src/configuration/ConfigurationRequestCard.js";
+import { providerCardPresentation } from "../src/configuration/provider-card-presentation.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { genericConfigurationPresentation, isConfigurationProposalTrace, mergeConfigurationRequests, shouldPollConfigurationRequest } from "../src/configuration/presentation.js";
@@ -76,10 +77,10 @@ function actions(overrides: Partial<ConfigurationRequestActions> = {}): Configur
     decide: async () => request({ state: "applied", allowedActions: [] }), query: async () => request(),
     continue: async () => request(), reversal: async () => request(), ...overrides };
 }
-async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: (value: ConfigurationRequestView) => void = () => undefined, locale: "en" | "zh" = "en") {
+async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: (value: ConfigurationRequestView) => void = () => undefined, locale: "en" | "zh" = "en", extra: { onOpenModelSettings?: () => void; readOnly?: boolean; runActive?: boolean } = {}) {
   let renderer: ReactTestRenderer;
   await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, {
-    request: view, actions: api, onUpdate,
+    request: view, actions: api, onUpdate, ...extra,
   }))); });
   return renderer!;
 }
@@ -210,8 +211,6 @@ test("CFG model protocol changes use the existing model metadata to update the v
   assert.deepEqual(previews, [{ expectedRevision: 2, values: { apiProtocol: second, apiVariant: DEFAULT_MODEL_API_VARIANT[second!] } }]);
   await act(async () => { renderer.unmount(); });
 });
-
-
 
 function choiceRequest(overrides: Partial<ConfigurationRequestView> = {}): ConfigurationRequestView {
   return request({ protocolVersion: 3, capabilityId: "connector.enable", selectedOptionId: "save", fields: [], options: [
@@ -639,7 +638,22 @@ test("CFG-R02 custom endpoints require a separate user destination approval befo
   assert.equal(button(renderer!, "Allow this exact endpoint"), undefined);
   await act(async () => { latest = { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, classification: "public_http", status: "confirmed" } }; renderer!.update(render()); });
   assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0, "remote cleartext endpoint never collects a credential");
+  assert.match(JSON.stringify(renderer!.toJSON()), /Public HTTP is unencrypted/);
   await act(async () => renderer!.unmount());
+});
+
+test("CFG-R02 keyless public HTTP states the plaintext risk in both locales before confirmation", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "model.connect", fields: [
+      { id: "baseUrl", kind: "url", label: "API URL", required: true, value: "http://203.0.113.10/v1" },
+      { id: "tokenOptional", kind: "boolean", label: "No key", required: false, value: true },
+    ], endpointAuthorization: { endpointTarget: "http://203.0.113.10/v1/chat/completions", host: "203.0.113.10", classification: "public_http", status: "required", revision: 2 } }), actions({ consent: async () => request() }), () => undefined, locale);
+    const text = JSON.stringify(renderer.toJSON());
+    assert.match(text, locale === "zh" ? /公网 HTTP 不加密/ : /Public HTTP is unencrypted/);
+    assert.match(text, locale === "zh" ? /提示词、模型输出和连接检查/ : /Prompts, model output and connection checks/);
+    assert.equal(button(renderer, locale === "zh" ? "允许此精确端点" : "Allow this exact endpoint").props.disabled, false);
+    await act(async () => renderer.unmount());
+  }
 });
 
 test("CFG-R02 a model card with no destination cannot collect a key before its first target preview", async () => {
@@ -917,4 +931,211 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+const providerChoices = { protocolVersion: 3 as const, selectedOptionId: "persist", options: [
+  { id: "persist", kind: "persisted_apply" as const, label: "Save this configuration", description: "Apply the change to the displayed saved settings scope.", available: true },
+  { id: "dismiss", kind: "dismiss" as const, label: "Continue without configuring", description: "Do not change settings; return this choice to the original task.", available: true },
+] };
+function providerView(capabilityId: "provider.connection" | "provider.credential" | "provider.remove_credential"): ConfigurationRequestView {
+  const fields: ConfigurationRequestView["fields"] = [{ id: "providerId", kind: "enum", label: "Provider", required: true, value: "owned", choices: [{ id: "owned", label: "Owned provider" }] }];
+  if (capabilityId === "provider.credential") fields.push({ id: "apiToken", kind: "credential", label: "Key", required: true, status: "missing" });
+  if (capabilityId === "provider.connection") fields.push({ id: "baseUrl", kind: "url", label: "Address", required: true, value: "https://owned.invalid/v1" });
+  return request({ ...providerChoices, capabilityId, scope: { kind: "global" }, fields, changes: [{ field: capabilityId === "provider.connection" ? "baseUrl" : "providerCredential", after: "changed" }],
+    impact: { resourceLocation: "Shared provider", effectiveScope: "All its models", message: "LONG_PROVIDER_DECLARATION ".repeat(40) },
+    endpointAuthorization: { endpointTarget: "opaque-target", host: "owned.invalid", classification: "public_https", status: "required", revision: 2 } });
+}
+function metadataView(fieldId = "name"): ConfigurationRequestView {
+  return request({ ...providerChoices, capabilityId: "model.metadata" as ConfigurationRequestView["capabilityId"], scope: { kind: "global" }, changes: [{ field: fieldId, before: "previous", after: "proposed" }],
+    impact: { resourceLocation: "Shared model", effectiveScope: "Global", message: "LONG_METADATA_DECLARATION ".repeat(40) }, fields: [
+      { id: "modelId", label: "Model", kind: "enum", required: true, value: "owned", choices: [{ id: "owned", label: "Research model" }] },
+      { id: "operation", label: "Operation", kind: "enum", required: true, value: "update", choices: [{ id: "update", label: "Update" }, { id: "clear_facts", label: "Clear facts" }] },
+      { id: "name", label: "Model profile name", kind: "text", required: false, value: "Research model v2" },
+      { id: "vision", label: "Vision", kind: "boolean", required: false, value: true },
+      { id: "contextWindow", label: "Context window", kind: "number", required: false, value: 4096 },
+      { id: "maxOutputTokens", label: "Output limit", kind: "number", required: false, value: 1024 },
+    ] });
+}
+
+test("CFG-X02f: provider key changes open real settings without collecting, uploading or approving a credential", async () => {
+  for (const locale of ["en", "zh"] as const) for (const capabilityId of ["provider.credential", "provider.remove_credential"] as const) {
+    let opened = 0, writes = 0;
+    const rejectWrite = async () => { writes++; throw new Error("Navigation must not write"); };
+    const renderer = await mount(providerView(capabilityId), actions({ consent: rejectWrite, preview: rejectWrite, credential: rejectWrite, decide: rejectWrite }), undefined, locale, { onOpenModelSettings() { opened++; } });
+    assert.equal(renderer.root.findAllByType("input").length, 0);
+    assert.equal(renderer.root.findAllByType("form").length, 0);
+    assert.equal(renderer.root.findAllByType("p").length, 1);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /LONG_PROVIDER_DECLARATION|opaque-target|owned.invalid|configuration-endpoint|configuration-verification/);
+    const open = button(renderer, locale === "zh" ? "前往模型设置" : "Open model settings");
+    await act(async () => { open.props.onClick(); open.props.onClick(); });
+    assert.equal(opened, 2); assert.equal(writes, 0);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X02e: provider connection navigation preserves the request and never confirms destinations or applies values", async () => {
+  let writes = 0, opened = 0;
+  const rejectWrite = async () => { writes++; throw new Error("No writes"); };
+  const renderer = await mount(providerView("provider.connection"), actions({ consent: rejectWrite, preview: rejectWrite, decide: rejectWrite }), undefined, "en", { onOpenModelSettings() { opened++; } });
+  assert.equal(renderer.root.findAllByType("input").length, 0);
+  await act(async () => button(renderer, "Open model settings").props.onClick());
+  assert.equal(opened, 1); assert.equal(writes, 0);
+  for (const props of [{ readOnly: true }, { runActive: true }]) {
+    await act(async () => renderer.update(createElement(ConfigurationRequestCard, { request: providerView("provider.connection"), actions: actions(), onUpdate() {}, onOpenModelSettings() {}, ...props })));
+    assert.equal(button(renderer, "Open model settings").props.disabled, true);
+  }
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X02d: model API identity has no existing editor and cannot falsely navigate or approve a destination", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "model.api_identity", scope: { kind: "global" }, endpointAuthorization: {
+      endpointTarget: "https://owned.invalid/v1/responses", host: "owned.invalid", classification: "public_https", revision: 2, status: "required" } }), actions(), undefined, locale, { onOpenModelSettings() { assert.fail("No identity editor exists"); } });
+    assert.equal(renderer.root.findAllByType("form").length, 0);
+    assert.equal(button(renderer, locale === "zh" ? "前往模型设置" : "Open model settings"), undefined);
+    assert.equal(renderer.root.findAllByType("p").length, 1);
+    assert.match(JSON.stringify(renderer.toJSON()), locale === "zh" ? /暂不支持/ : /not supported/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X02d/e: insecure destinations and unavailable settings never fall back to the long credential form", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const view = providerView("provider.credential");
+    view.endpointAuthorization = { ...view.endpointAuthorization!, status: "blocked", classification: "public_http" };
+    const renderer = await mount(view, actions(), undefined, locale);
+    assert.equal(renderer.root.findAllByType("input").length, 0);
+    assert.equal(renderer.root.findAllByType("form").length, 0);
+    assert.equal(renderer.root.findAllByType("button").length, 1);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /LONG_PROVIDER_DECLARATION|configuration-endpoint/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("provider handoff keeps Not now as the original explicit dismiss and cannot accidentally apply", async () => {
+  const decisions: unknown[] = [];
+  const renderer = await mount(providerView("provider.credential"), actions({ preview: async input => ({ ...providerView("provider.credential"), revision: 3, previewDigest: "dismiss-3", selectedOptionId: input.selectedOptionId }), decide: async value => { decisions.push(value); return { ...providerView("provider.credential"), state: "dismissed" }; } }), undefined, "en", { onOpenModelSettings() {} });
+  await act(async () => button(renderer, "Not now").props.onClick());
+  assert.deepEqual(decisions, [{ revision: 3, previewDigest: "dismiss-3", decision: "dismiss", selectedOptionId: "dismiss" }]);
+  await act(async () => renderer.unmount());
+});
+
+test("provider navigation fails closed for unsupported discovery overrides, scopes and schemas", () => {
+  const source = providerView("provider.connection");
+  for (const changed of [ { ...source, scope: { kind: "session" as const, id: "s1" } }, { ...source, schemaVersion: 2 },
+    { ...source, changes: [{ field: "modelDiscovery", after: "custom" }] },
+    { ...source, fields: [...source.fields, { id: "unexpected", kind: "text" as const, required: false, label: "Unexpected", value: "hidden" }] } ]) {
+    assert.deepEqual(providerCardPresentation(changed), { kind: "unsupported" });
+  }
+});
+
+test("retired model metadata has no editor or settings navigation in either locale", async () => {
+  for (const locale of ["en", "zh"] as const) for (const id of ["name", "vision", "contextWindow", "maxOutputTokens"]) {
+    const renderer = await mount(metadataView(id), actions(), undefined, locale, { onOpenModelSettings() { assert.fail("No metadata settings editor exists"); } });
+    assert.equal(renderer.root.findAllByType("input").length, 0);
+    assert.equal(renderer.root.findAllByType("form").length, 0);
+    assert.equal(button(renderer, locale === "zh" ? "前往模型设置" : "Open model settings"), undefined);
+    assert.match(JSON.stringify(renderer.toJSON()), locale === "zh" ? /暂不支持/ : /not supported/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("complex, destructive, long or unknown metadata stays unsupported instead of hiding safety data", () => {
+  const base = metadataView();
+  const cases: ConfigurationRequestView[] = [ { ...base, changes: [{ field: "priceInput", after: "1" }] },
+    { ...base, fields: base.fields.map(field => field.id === "operation" ? { ...field, value: "clear_facts" } : field) },
+    { ...base, fields: base.fields.map(field => field.id === "modelId" && field.kind === "enum" ? { ...field, choices: [{ id: "owned", label: "长名称".repeat(30) }] } : field) },
+    { ...base, fields: [...base.fields, { id: "unknown", kind: "text", required: false, label: "Unknown" }] },
+    { ...base, changes: [...base.changes, { field: "vision", after: "false" }] },
+    { ...base, verificationPlan: { ...base.verificationPlan, mayCharge: true } },
+    { ...base, endpointAuthorization: { endpointTarget: "target", host: "host", classification: "public_https", status: "required", revision: 2 } },
+  ];
+  for (const value of cases) assert.deepEqual(providerCardPresentation(value), { kind: "unsupported" });
+});
+
+
+test("provider handoff refreshes stale standalone requests before another dismissal", async () => {
+  let latest = { ...providerView("provider.credential"), runId: undefined }, renderer!: ReactTestRenderer;
+  let attempts = 0, queries = 0;
+  const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, previewDigest: "dismiss-next", selectedOptionId: input.selectedOptionId }),
+    decide: async input => { attempts++; if (attempts === 1) throw new ApiRequestError("private-server-detail", 409, "STALE_CONFIGURATION_PREVIEW");
+    assert.equal(input.revision, 4); assert.equal(input.selectedOptionId, "dismiss"); return { ...latest, state: "dismissed" }; },
+    query: async () => { queries++; return { ...latest, revision: 3, previewDigest: "fresh" }; } });
+  const draw = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, {
+    request: latest, actions: api, onOpenModelSettings() {}, onUpdate(next) { latest = { ...next, runId: undefined }; renderer.update(draw()); },
+  }));
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => button(renderer, "Not now").props.onClick());
+  assert.equal(button(renderer, "Not now").props.disabled, true);
+  assert.equal(renderer.root.findAllByType("p").length, 1);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /private-server-detail/);
+  await act(async () => button(renderer, "Refresh current state").props.onClick());
+  await act(async () => button(renderer, "Not now").props.onClick());
+  assert.equal(queries, 1); assert.equal(attempts, 2);
+  assert.equal(latest.state, "dismissed");
+  assert.equal(renderer.root.findAllByProps({ role: "alert" }).length, 0);
+  await act(async () => renderer.unmount());
+});
+
+
+test("provider navigation leaves an expandable opened record in both languages without applying settings", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const view = providerView("provider.connection"); let opens = 0, writes = 0;
+    const rejectWrite = async () => { writes++; throw new Error("No request mutation"); };
+    const renderer = await mount(view, actions({ preview: rejectWrite, decide: rejectWrite, credential: rejectWrite, consent: rejectWrite }), undefined, locale, { onOpenModelSettings() { opens++; } });
+    await act(async () => button(renderer, locale === "en" ? "Open model settings" : "前往模型设置").props.onClick());
+    assert.match(JSON.stringify(renderer.toJSON()), locale === "en" ? /Settings opened/ : /已打开设置/);
+    const record = renderer.root.findByType("details");
+    assert.equal(record.props.open, false);
+    assert.equal(renderer.root.findByType("summary").findByProps({ className: "record-label" }).children.join(""), locale === "en" ? "Settings opened" : "已打开设置");
+    assert.equal(renderer.root.findAllByType("button").length, 0);
+    assert.equal(renderer.root.findAll(node => String(node.props.className ?? "").split(" ").includes("conversation-configuration-card")).length, 0);
+    assert.equal(view.state, "awaiting_confirmation"); assert.equal(writes, 0);
+    for (const open of [true, false, true]) {
+      const target = { open };
+      await act(async () => renderer.root.findByType("details").props.onToggle({ target, currentTarget: target }));
+      assert.equal(renderer.root.findByType("details").props.open, open);
+    }
+    assert.match(JSON.stringify(renderer.toJSON()), locale === "en" ? /View or edit configuration in settings/ : /请在设置页查看或修改配置/);
+    assert.equal(opens, 1); assert.equal(writes, 0);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Settings saved|Configuration saved|设置已修改|设置已保存/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("navigation receipt survives a remount but cannot cross session, request, capability or revision", async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage"), values = new Map<string, string>();
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } });
+  try {
+    const source = providerView("provider.connection");
+    let renderer = await mount(source, actions(), undefined, "en", { onOpenModelSettings() {} });
+    await act(async () => button(renderer, "Open model settings").props.onClick());
+    await act(async () => renderer.unmount());
+    renderer = await mount(source, actions(), undefined, "en", { onOpenModelSettings() {} });
+    assert.match(JSON.stringify(renderer.toJSON()), /Settings opened/);
+    await act(async () => renderer.unmount());
+    for (const change of [{ sessionId: "different" }, { id: "different" }, { capabilityId: "provider.remove_credential", fields: source.fields.slice(0, 1) }, { revision: 3 }]) {
+      renderer = await mount({ ...source, ...change }, actions(), undefined, "en", { onOpenModelSettings() {} });
+      assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Settings opened/);
+      await act(async () => renderer.unmount());
+    }
+    assert.deepEqual([...values.values()], ["1"]);
+    assert.doesNotMatch([...values.keys()].join(""), /owned.invalid|opaque-target|Research provider/);
+  } finally { if (saved) Object.defineProperty(globalThis, "sessionStorage", saved); else Reflect.deleteProperty(globalThis, "sessionStorage"); }
+});
+
+test("navigation stays usable without storage and a failed open does not create a receipt", async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, get() { throw new Error("Storage disabled"); } });
+  try {
+    const source = providerView("provider.connection"); let fails = true;
+    const renderer = await mount(source, actions(), undefined, "en", { onOpenModelSettings() { if (fails) throw new Error("private-navigation-detail"); } });
+    await act(async () => button(renderer, "Open model settings").props.onClick());
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Settings opened|private-navigation-detail/);
+    fails = false;
+    await act(async () => button(renderer, "Open model settings").props.onClick());
+    assert.match(JSON.stringify(renderer.toJSON()), /Settings opened/);
+    assert.equal(renderer.root.findAllByProps({ role: "alert" }).length, 0);
+    await act(async () => renderer.unmount());
+  } finally { if (saved) Object.defineProperty(globalThis, "sessionStorage", saved); else Reflect.deleteProperty(globalThis, "sessionStorage"); }
 });

@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
+export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "provider.connection" | "provider.credential" | "provider.remove_credential" | "model.api_identity" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -134,12 +134,17 @@ export interface ConfigurationCredentialInput {
 export interface ConfigurationCredentialDraftView { handle: string; expiresAt: string; }
 export interface ConfigurationEndpointAuthorization {
   endpointTarget: string;
+  /** Server-derived recipients shown together for a shared-resource acknowledgement. */
+  destinations?: Array<{ label: string; url: string }>;
   host: string;
   classification: "trusted_preset" | "public_https" | "loopback" | "private_network" | "public_http";
   status: "required" | "confirmed" | "trusted" | "blocked";
   revision: number;
 }
 export interface ConfigurationEndpointConsentInput { revision: number; endpointTarget: string; }
+export function isPublicPlaintextEndpoint(classification: ConfigurationEndpointAuthorization["classification"] | undefined): boolean {
+  return classification === "public_http";
+}
 export interface ConfigurationCapabilityView {
   id: ConfigurationCapabilityId;
   adapterVersion: number;

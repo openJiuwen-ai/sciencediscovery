@@ -2,13 +2,14 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, isPublicPlaintextEndpoint, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
   ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
 import { useLocale } from "../i18n/index.js";
 import { ProcessRecord } from "../ProcessRecord.js";
 import { configurationMessages } from "./messages.js";
+import { providerCardPresentation } from "./provider-card-presentation.js";
 
 export interface ConfigurationRequestActions {
   consent?(input: { revision: number; endpointTarget: string }, key: string): Promise<ConfigurationRequestView>;
@@ -30,13 +31,17 @@ function ownMessage(table: Record<string, string>, key: string, fallback: string
   return Object.hasOwn(table, key) ? table[key] ?? fallback : fallback;
 }
 
+function settingsWasOpened(key: string): boolean {
+  try { return globalThis.sessionStorage?.getItem(key) === "1"; } catch { return false; }
+}
+
 export function isConfigurationRequestView(request: object): request is ConfigurationRequestView {
   return "capabilityId" in request;
 }
 
 /** The form is driven exclusively by the server's registered schema. Secrets and
  * credential handles are component-local, never written into timeline snapshots. */
-export function ConfigurationRequestCard({ request, actions, runActive: sourceRunActive = false, readOnly = false, onUpdate, onUnavailable, onStopTask }: {
+export function ConfigurationRequestCard({ request, actions, runActive: sourceRunActive = false, readOnly = false, onUpdate, onUnavailable, onStopTask, onOpenModelSettings }: {
   request: ConfigurationRequestView;
   actions: ConfigurationRequestActions;
   runActive?: boolean;
@@ -44,10 +49,17 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   onUpdate: (request: ConfigurationRequestView) => void;
   onUnavailable?: () => void;
   onStopTask?: () => Promise<void>;
+  onOpenModelSettings?: () => void;
 }) {
   const runActive = sourceRunActive && request.liveWait !== true;
   const { locale } = useLocale();
   const m = configurationMessages(locale);
+  const presentation = providerCardPresentation(request);
+  const visibleFields = request.fields;
+  const navigationKey = `configuration-settings-opened:${JSON.stringify([request.sessionId, request.id, request.capabilityId, request.revision])}`;
+  const [openedSettingsKey, setOpenedSettingsKey] = useState<string | undefined>(() => settingsWasOpened(navigationKey) ? navigationKey : undefined);
+  const settingsOpened = openedSettingsKey === navigationKey;
+  useEffect(() => { setOpenedSettingsKey(settingsWasOpened(navigationKey) ? navigationKey : undefined); }, [navigationKey]);
   const id = useId();
   const [values, setValues] = useState(() => fieldValues(request));
   const [selectedOptionId, setSelectedOptionId] = useState(request.selectedOptionId);
@@ -66,7 +78,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "providerId", "modelDiscovery", "apiModel", "webProvider", "operation"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -105,9 +117,11 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "provider.connection", "provider.credential", "model.api_identity"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
-  const credentialReady = endpointReady && authorization?.classification !== "public_http";
+  const publicPlaintext = isPublicPlaintextEndpoint(authorization?.classification);
+  const insecureEndpointCopy = request.capabilityId === "provider.connection" ? m.providerEndpointChangeInsecure : m.endpointChangeInsecure;
+  const credentialReady = endpointReady && !publicPlaintext;
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
@@ -149,8 +163,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
     } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
-      ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) })); }
+      ...(["model.connect", "provider.connection"].includes(request.capabilityId) && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
+        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol], ...(["provider.connection", "provider.credential"].includes(request.capabilityId) ? { modelDiscovery: DEFAULT_MODEL_DISCOVERY[value as ModelApiProtocol] } : {}) } : {}) })); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -216,7 +230,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         setError(m.expired);
       } else if (reason instanceof ApiRequestError && reason.status === 400) {
         setDirty(true);
-        setError(m.invalidInput);
+        setError(reason.code === "CONFIGURATION_ENDPOINT_INSECURE" ? insecureEndpointCopy : m.invalidInput);
         if (typeof reason.details?.field === "string") setErrorField(reason.details.field);
       } else if (reason instanceof ApiRequestError && reason.status === 429) {
         setRefreshRequired(true);
@@ -274,7 +288,18 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       return next;
     }, () => uploading);
   }
-  const title = m.capability[request.capabilityId] ?? request.capabilityId;
+  function openModelSettings() {
+    if (!onOpenModelSettings || busy || readOnly || runActive || mutationsBlocked) return;
+    try {
+      onOpenModelSettings();
+      // A navigation receipt is not a configuration decision or a saved value.
+      // Keep it for this tab only, scoped to the exact request revision.
+      setOpenedSettingsKey(navigationKey);
+      try { globalThis.sessionStorage?.setItem(navigationKey, "1"); } catch { /* Navigation remains usable without storage. */ }
+      setError(undefined);
+    } catch { setError(m.requestFailed); }
+  }
+  const title = String(request.capabilityId) === "model.metadata" ? m.providerCompact.unsupported : m.capability[request.capabilityId] ?? request.capabilityId;
   const scope = `${m.scope[request.scope.kind]}${request.scope.kind !== "global" ? ` · ${request.scope.id}` : ""}`;
   const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
     `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
@@ -318,7 +343,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.decisionSource ? <><dt>{m.decisionSourceLabel}</dt><dd>{m.decisionSource[request.decisionSource]}</dd></> : null}
       <dt>{m.updatedAt}</dt><dd><time dateTime={request.updatedAt}>{formattedTime(request.updatedAt)}</time></dd>
     </dl>
-    {request.error ? <p className="conversation-configuration-error" role="alert">{request.error.message} <span>({request.error.code})</span></p> : null}
+    {request.error ? <p className="conversation-configuration-error" role="alert">{request.error.code === "CONFIGURATION_ENDPOINT_INSECURE" ? insecureEndpointCopy : <>{request.error.message} <span>({request.error.code})</span></>}</p> : null}
     {request.state === "stale" ? <p role="status">{m.stale}</p> : null}
     {request.state === "needs_fix" ? <p role="status">{m.needsFix}</p> : null}
   </>;
@@ -348,6 +373,26 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {error ? <p role="alert" className="conversation-configuration-error">{error}</p> : null}
     </section>
   </ProcessRecord>{expiredTaskControls}</>;
+  if (presentation?.kind === "settings" && onOpenModelSettings && settingsOpened) return <div id={`configuration-request-${request.id}`}>
+    <ProcessRecord className="conversation-configuration-record" label={m.providerCompact.settingsOpened}>
+      <section aria-label={title} className="conversation-configuration-record-details">
+        <p>{title}</p><p>{m.providerCompact.settingsOpenedDetail}</p>
+      </section>
+    </ProcessRecord>
+  </div>;
+  if (presentation) return <section id={`configuration-request-${request.id}`} aria-label={title}
+    className="conversation-configuration-card configuration-settings-handoff" aria-busy={busy}>
+    <strong>{title}</strong>
+    <p role={error ? "alert" : "status"}>{error ? m.requestFailed : scheduledAt && remainingSeconds !== undefined
+      ? m.autoCountdown(remainingSeconds) : presentation.kind === "settings" && onOpenModelSettings ? m.providerCompact.settingsHint : m.providerCompact.unsupported}</p>
+    <div className="conversation-configuration-actions">
+      {presentation.kind === "settings" && onOpenModelSettings ? <button type="button" className="primary-button"
+        disabled={busy || readOnly || runActive || mutationsBlocked} onClick={openModelSettings}>{m.providerCompact.openSettings}</button> : null}
+      {canDismiss ? <button type="button" className="secondary-button" disabled={busy || readOnly || mutationsBlocked || runActive || refreshRequired}
+        onClick={dismiss}>{scheduledAt ? m.cancelChange : m.providerCompact.notNow}</button> : null}
+      {refreshRequired || error || request.state === "stale" ? secondaryActions : null}
+    </div>
+  </section>;
   return <section id={`configuration-request-${request.id}`} aria-label={title} className="conversation-configuration-card configuration-request" aria-busy={busy}>
     <div className="conversation-configuration-heading">
       <div><span className="eyebrow">{m.eyebrow}</span><h3>{title}</h3></div>
@@ -362,9 +407,12 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     </div> : null}
     {authorization ? <section className="configuration-endpoint" aria-label={m.endpoint}>
       <strong>{m.endpoint}: <bdi>{authorization.host}</bdi></strong>
-      <p><code>{authorization.endpointTarget}</code></p>
+      {authorization.destinations?.length ? <ul>{authorization.destinations.map(destination => <li key={destination.url}><strong>{destination.label}</strong><p><code>{destination.url}</code></p></li>)}</ul> : <p><code>{authorization.endpointTarget}</code></p>}
       {["loopback", "private_network"].includes(authorization.classification) ? <p>{m.endpointLocal}</p> : null}
-      <p role="status">{authorization.status === "blocked" ? m.endpointBlocked : endpointReady ? m.endpointConfirmed : m.endpointRequired}</p>
+      {publicPlaintext ? <p>{m.endpointPublicPlaintext}</p> : null}
+      <p role="status">{authorization.status === "blocked" ? m.endpointBlocked : endpointReady
+        ? ["provider.connection", "provider.credential"].includes(request.capabilityId) ? m.providerEndpointConfirmed : m.endpointConfirmed
+        : ["provider.connection", "provider.credential"].includes(request.capabilityId) ? m.providerEndpointRequired : m.endpointRequired}</p>
       {authorization.status === "required" && !targetEdited && actions.consent ? <button type="button" className="secondary-button" disabled={busy || readOnly || runActive} onClick={() => void perform(() => actions.consent!({ revision: request.revision, endpointTarget: authorization.endpointTarget }, operationKey(`consent:${request.revision}:${authorization.endpointTarget}`)))}>{m.endpointConsent}</button> : null}
     </section> : null}
     <form className="configuration-fields" onSubmit={(event) => void preview(event)}>
@@ -385,26 +433,26 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             ? <button type="button" className="secondary-button" disabled={!editable || runActive} onClick={() => void selectOption(option.id)}>{m.selectChoice}</button> : null}
         </div>)}
       </section> : null}
-      {request.fields.map((field) => {
+      {visibleFields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
         const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{m.fieldsByCapability[request.capabilityId]?.[field.id] ?? ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
               placeholder={field.status === "provided" ? m.providedPlaceholder : field.placeholder}
-              onChange={(event) => edit(field, event.target.value)} /> : <p>{authorization?.classification === "public_http" ? m.endpointBlocked : m.endpointRequired}</p>}
+              onChange={(event) => edit(field, event.target.value)} /> : <p>{publicPlaintext ? m.endpointBlocked : m.endpointRequired}</p>}
             <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.description}` : ""}</p>
           </> : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
             onChange={(event) => edit(field, Array.from(event.target.selectedOptions, option => option.value))}>
             {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
             <option value="">{m.choose}</option>
-            {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
+            {(["model.connect", "provider.connection"].includes(request.capabilityId) && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
               ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
                 ? ownMessage(m.credentialOperation, choice.id, choice.label) : choice.label}</option>)}
