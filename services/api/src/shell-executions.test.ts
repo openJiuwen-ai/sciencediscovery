@@ -844,31 +844,36 @@ test("the export projection holds its blocked value while a commit retry is in f
   // duration of every attempt, so a preview sampled mid-retry still saw a moving
   // revision. The package carries `state`, so the projection must not move.
   //
-  // The read happens *inside* the attempt, not after a tick: a test that waits
-  // for the retry to start is a race, which is why the first version of this
-  // case failed on CI and passed locally.
+  // Attempt 1 fails the commit on purpose, so the second call is a genuine retry
+  // of a pinned commit. The read happens while that retry is blocked inside
+  // `finalize` — signalled from inside it, not after a tick — so nothing races.
   const f = await fixture(context);
   const lost = await lostAck(f, async id => recoveredTerminal(id, f));
-  const failing = { runner: () => lost.runner,
-    finalize: async () => { throw new Error("storage unavailable"); } };
-  await f.service.reconcile(lost.job.id, owner, failing).catch(() => undefined);
+  const entered = deferred<void>();
+  const gate = deferred<void>();
+  let attempts = 0;
+  const handlers = { runner: () => lost.runner,
+    finalize: async (_context: unknown, result: ShellExecutionResult) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("storage unavailable");
+      entered.resolve();
+      await gate.promise;
+      return result;
+    } };
+  await f.service.reconcile(lost.job.id, owner, handlers).catch(() => undefined);
   const before = f.service.revisionSnapshot(owner.sessionId);
   assert.equal(before[0]?.state, "unknown");
   assert.equal(before[0]?.finalization, "failed");
 
-  let midAttempt: unknown;
-  let reached = 0;
-  const retrying = { runner: () => lost.runner,
-    finalize: async () => {
-      reached += 1;
-      // This is the moment a concurrent preview would read the record.
-      midAttempt = f.service.revisionSnapshot(owner.sessionId);
-      throw new Error("storage unavailable");
-    } };
-  await f.service.reconcile(lost.job.id, owner, retrying).catch(() => undefined);
-  assert.equal(reached, 1, "the retry reached the finalizer");
-  assert.deepEqual(midAttempt, before, "a preview read during the attempt sees the same blocked record");
-  assert.deepEqual(f.service.revisionSnapshot(owner.sessionId), before);
+  const inFlight = f.service.reconcile(lost.job.id, owner, handlers).catch(() => undefined);
+  await entered.promise;
+  assert.deepEqual(f.service.revisionSnapshot(owner.sessionId), before,
+    "a preview read during the attempt sees the same blocked record");
+
+  gate.resolve();
+  await inFlight;
+  assert.equal((await f.service.get(lost.job.id, owner)).state, "completed",
+    "and the retry still commits once the storage problem clears");
 });
 
 test("the export revision projection ignores retry bookkeeping", async context => {
