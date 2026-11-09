@@ -95,6 +95,23 @@ function success(): McpInvokeResponse {
     durationMs: 1, isError: false, requestId: "success", serverId: "biomed", toolName: "search" };
 }
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test("the call rendezvous names the call it waits for and resolves only on it", async t => {
+  // The fault observation is an event this suite triggers, not a clock reading: a
+  // loaded runner can only delay the call, it cannot turn the wait into a failure.
+  // `nextCall(2)` names its call, so it must stay pending until that call enters
+  // the transport.
+  const f = await fixture(t);
+  f.setFault(async () => success());
+  await f.invoke("first");
+  let secondEntered = false;
+  const second = f.nextCall(2).then(() => { secondEntered = true; });
+  await settle();
+  assert.equal(secondEntered, false, "the rendezvous must not resolve before the call it names");
+  await f.invoke("second");
+  await second;
+  assert.equal(f.calls(), 2);
+});
 const FAULT_OBSERVATION_DEADLINE_MS = 10_000;
 interface FaultWait {
   timeoutMs?: number;
@@ -155,10 +172,11 @@ test("parallel 429 callers share cooldown, drain their queue and do not retry in
     await new Promise<void>(resolve => { finish = resolve; });
     return failure("rate-limited", 60_000);
   });
-  const settled: unknown[] = [];
   const requests = Array.from({ length: 12 }, (_, i) => f.invoke(`parallel-${i}`, "arxiv", `sibling-${i}`)
-    .catch((error: unknown) => { settled.push(error); return error; }));
-  await waitFor(() => f.calls() === 1, { diagnose: () => `calls=${f.calls()} settled=[${describeSettled(settled)}]` });
+    .catch((error: unknown) => error));
+  // The first request entering the transport is an event this test triggers, so
+  // wait for that call by name instead of polling a clock for it.
+  await f.nextCall(1);
   await settle(); finish();
   const errors = await Promise.all(requests);
   assert.equal(f.calls(), 1);
@@ -229,7 +247,7 @@ test("cooldown admits one recovery probe, excludes siblings and restores access 
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
   const probe = f.invoke("probe");
-  await waitFor(() => f.calls() === 2, { diagnose: () => `calls=${f.calls()} invocations=[${f.invocations.map(invocation => invocation.error?.code ?? "ok").join(", ")}]` });
+  await f.nextCall(2);
   const siblings = await Promise.all(Array.from({ length: 8 }, (_, i) => f.invoke(`probe-peer-${i}`).catch(error => error)));
   assert.ok(siblings.every((error: McpInvocationError) => error.invocation.error?.sourceHealth?.decision === "probe-in-flight"));
   assert.equal(f.calls(), 2);
@@ -273,7 +291,7 @@ test("queue exhaustion, timeout and cancellation free resources for subsequent r
   const f = await fixture(t);
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
-  const active = f.invoke("active"); await waitFor(() => f.calls() === 1, { diagnose: () => `calls=${f.calls()} invocations=[${f.invocations.map(invocation => invocation.error?.code ?? "ok").join(", ")}]` });
+  const active = f.invoke("active"); await f.nextCall(1);
   const controller = new AbortController();
   const cancelled = f.invoke("cancelled", "arxiv", "session", controller.signal).catch(error => error);
   await settle(); controller.abort(new DOMException("Cancelled", "AbortError"));
