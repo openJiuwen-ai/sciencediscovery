@@ -380,7 +380,11 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: evolveParameters,
   };
   tools.push(createEvolveRun);
-  if (runtime.stopEvolveRun) {
+  // Captured once so the tool body calls a local binding: reading the optional
+  // member inside the closure would need a non-null assertion that the compiler
+  // already considers redundant.
+  const stopRuntime = runtime.stopEvolveRun;
+  if (stopRuntime) {
     const stopParameters = Type.Object({
       runId: Type.String({
         description: "The id create_evolve_run returned for the search to stop (a UUID). "
@@ -401,7 +405,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "this to make a search you just started finish faster: it discards the work done "
         + "so far.",
       execute: async (_toolCallId, params) => {
-        const result = await runtime.stopEvolveRun!(params.runId);
+        const result = await stopRuntime(params.runId);
         const text = result.stopping
           ? [`Stopping search ${result.runId}.`, "Report that to the user, then propose the replacement search if that is what they asked for."]
           : [`Search ${result.runId} is not running any more (status: ${result.status}).`, "Nothing was stopped; read it with get_evolve_run if the outcome matters."];
