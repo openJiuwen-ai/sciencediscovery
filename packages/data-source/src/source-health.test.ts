@@ -113,6 +113,19 @@ test("the fault wait tolerates a loaded runner instead of a 200 ms budget", asyn
   await assert.rejects(() => waitFor(() => false, 50), /Timed out waiting for local fault injection/);
 });
 
+test("the fault wait stays bounded while Date is mocked", async t => {
+  // Three call sites of `waitFor` run under `t.mock.timers.enable({ apis: ["Date"] })`,
+  // where Date stands still. A deadline read from Date never arrives there, so a
+  // probe that is never admitted would spin instead of failing the gate.
+  t.mock.timers.enable({ apis: ["Date"] });
+  const startedAt = performance.now();
+  await assert.rejects(
+    () => waitFor(() => false, { timeoutMs: 100, diagnose: () => "calls=0 settled=[]" }),
+    /Timed out waiting for local fault injection after \d+ ms: calls=0 settled=\[\]/,
+  );
+  assert.ok(performance.now() - startedAt < 5_000, "the deadline must not depend on the mocked Date");
+});
+
 test("parallel 429 callers share cooldown, drain their queue and do not retry inside one slot", async t => {
   const f = await fixture(t);
   let finish!: () => void;
