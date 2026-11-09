@@ -164,9 +164,12 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
 
     TEMP_ROOT = REPOSITORY_ROOT / "services" / "api" / ".tmp"
     API_ROOT = REPOSITORY_ROOT / "services" / "api"
-    # The egress contract test scans packages/ and services/ only, so a probe here
-    # is invisible to it while the walk (NODE_ROOTS includes apps/web) still sees it.
-    PROBE_ROOT = REPOSITORY_ROOT / "apps" / "web"
+    # `services/api` is the root #918 names first, so the positive half stays inside
+    # it. A `.mdx` probe is still text for the walk, while the datasource egress
+    # contract worker only opens `.ts`, so no other worker reads a file this case
+    # creates and removes.
+    PROBE_ROOT = REPOSITORY_ROOT / "services" / "api" / "src"
+    PROBE_SUFFIX = ".mdx"
 
     def setUp(self) -> None:
         self.TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -179,11 +182,12 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
     def positive_probe_path(self) -> Path:
         """Where the positive case plants the file the walk must report.
 
-        It sits under `apps/web`, which `_node_boundary_failures` walks but the
-        datasource egress contract test does not scan, so no other worker reads a
-        file this case creates and removes.
+        It sits under `services/api/src`, the root #918 names first, so narrowing or
+        ignoring that tree fails this case instead of leaving it green. The `.mdx`
+        suffix keeps it out of the datasource egress contract test, which reads only
+        `.ts` files under `packages/` and `services/`.
         """
-        return self.PROBE_ROOT / f"probe-boundary-{os.getpid()}.ts"
+        return self.PROBE_ROOT / f"probe-boundary-{os.getpid()}{self.PROBE_SUFFIX}"
 
     def test_a_generated_workspace_is_not_walked(self) -> None:
         self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
@@ -234,11 +238,11 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
     def test_the_positive_probe_is_not_written_where_the_egress_worker_scans(self) -> None:
         # The egress contract test reads every `.ts` under packages/ and services/.
         # A probe there races that read and can outlive a killed run, so the probe
-        # must sit outside both roots.
+        # must use a suffix that worker never opens.
         self.assertFalse(
             _egress_scan_reads(self.positive_probe_path()),
             f"{self.positive_probe_path().relative_to(REPOSITORY_ROOT).as_posix()} is read by the "
-            "datasource egress worker while it exists; plant the probe under apps/web instead",
+            "datasource egress worker while it exists; give the probe a suffix it never opens",
         )
 
 
