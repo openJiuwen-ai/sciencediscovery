@@ -502,7 +502,7 @@ export class ShellExecutions {
     execution.observation = { ...execution.observation, status: "blocked", failureCount,
       ...(retryable && !commitRetryExhausted ? { nextRetryAt: new Date(Date.now() + Math.min(1_000 * 2 ** Math.min(failureCount - 1, 6), 60_000)).toISOString() } : {}),
       lastError: { code, message: commitRetryExhausted
-        ? `${detail}. Retrying the commit stopped after ${COMMIT_RETRY_LIMIT} attempts; cancel this execution to release the workspace`
+        ? `${detail}. Retrying the commit stopped after ${COMMIT_RETRY_LIMIT} attempts; the result may still exist on the Runner. This workspace refuses new shell commands until this execution settles: restarting the local service retries the commit once, and cancel asks the Runner to stop it.`
         : detail,
         retryable: retryable && !commitRetryExhausted,
         ...(safeCause && safeCause !== code ? { cause: safeCause } : {}), ...(httpStatus ? { httpStatus } : {}) } };
