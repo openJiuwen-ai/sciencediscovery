@@ -74,7 +74,7 @@ test("a model profile is tested against the real endpoint", { tag: [...REAL_TAGS
     // Including a reasoning model: the probe asks for a very short reply, and
     // one that spends the budget thinking comes back truncated. The endpoint
     // answered, so that is a pass rather than a skipped journey.
-    await expect(probe).toContainText("✓ 可用", { timeout: 60_000 });
+    await expect(probe).toContainText("✓ 基础检查通过", { timeout: 60_000 });
   } finally {
     if (owned) {
       await api(page, `/api/models/${encodeURIComponent(profile.id)}`, { method: "DELETE" }).catch(() => undefined);
