@@ -1174,6 +1174,8 @@ def _walk_hops(
     next→ResearchGoal hop because the goal IS that button's target.
     """
     eids: list[str] = list(start_eids)
+    if not eids:
+        return []
     for entry in hops:
         edge_type, direction, target_label = entry[0], entry[1], entry[2]
         depth = entry[3] if len(entry) > 3 else "1"
@@ -1182,11 +1184,21 @@ def _walk_hops(
         label_filter = f" AND next:{target_label}" if len(entry) > 5 and entry[5] else ""
         rel = f"`{edge_type}`*{depth}"
         pattern = f"<-[:{rel}]-" if direction == "in" else f"-[:{rel}]->"
+        # Bind the start set BEFORE the variable-length expansion. The local
+        # interpreter has no planner: an unlabelled, property-less ``(src)``
+        # binds every node in the graph (``_cypher._candidates``) and applies
+        # ``elementId(src) IN $eids`` only as a post-filter, so a ``*1..``
+        # pattern would expand from the whole graph and exhaust the work
+        # budget on a few-thousand-node session (issue #1023). The split form
+        # starts the expansion from the bound eids — identical rows, work
+        # proportional to the reachable set instead of the graph — and is
+        # also valid Cypher for the Neo4j backend.
         step = session.run(
             f"""
-            MATCH (src){pattern}(next)
+            MATCH (src)
             WHERE elementId(src) IN $eids
-              AND ($sid IS NULL OR next.session_id = $sid OR next:Paper){label_filter}
+            MATCH (src){pattern}(next)
+            WHERE ($sid IS NULL OR next.session_id = $sid OR next:Paper){label_filter}
             RETURN collect(DISTINCT elementId(next)) AS new_eids
             """,
             eids=eids,
@@ -1759,11 +1771,16 @@ def get_trace(
                 # carries no label, so ``_node_label`` would return ``None`` and
                 # drop every hop hit. ``WITH DISTINCT next`` dedupes before the
                 # three plain ``collect``s, keeping them length-aligned.
+                # Bind the start set before the expansion; see the same note
+                # in ``_walk_hops``. Without the split the local interpreter
+                # expands ``*1..`` from every node in the graph and exhausts
+                # the work budget (issue #1023).
                 step = session.run(
                     f"""
-                    MATCH (src){pattern}(next)
+                    MATCH (src)
                     WHERE elementId(src) IN $eids
-                      AND ($sid IS NULL OR next.session_id = $sid OR next:Paper)
+                    MATCH (src){pattern}(next)
+                    WHERE ($sid IS NULL OR next.session_id = $sid OR next:Paper)
                     WITH DISTINCT next
                     RETURN collect(next) AS reached,
                            collect(elementId(next)) AS reached_eids,

@@ -2094,6 +2094,68 @@ def test_trace_rejects_bad_max_hops(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "bad_request"
 
 
+def test_trace_and_view_goal_fit_the_budget_on_a_long_next_spine(
+    local_client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1023: hop expansion must start from the bound eid set.
+
+    The local interpreter has no planner. An unlabelled ``(src)`` in
+    ``MATCH (src)<-[:next*1..]-(next) WHERE elementId(src) IN $eids`` binds
+    every node in the graph and applies the eid filter afterwards, so the
+    variable-length expansion fans out from the whole graph — a 400-node
+    ``next`` spine already exhausts the 250k work budget and answers 503.
+    Binding the start in its own MATCH makes the same walk linear (identical
+    rows). The reduced budget keeps the regression honest: at this size the
+    bound hop costs ~9.2k work and the start lookup ~18k, while the unbound
+    form exceeds 50k.
+    """
+    from sciencediscovery_memory_graph import _cypher
+    from sciencediscovery_memory_graph.backend import handle
+
+    spine = 400
+    with handle().session() as s:
+        s.run(
+            "UNWIND range(0, $last) AS i "
+            "CREATE (:Evidence {seq: i, evidence_id: 'e' + toString(i), session_id: 'spine'})",
+            last=spine - 1,
+        )
+        s.run("CREATE (:ResearchGoal {goal_id: 'goal', session_id: 'spine'})")
+        # Upstream direction: e(i+1) -[:next]-> e(i), goal -> tail.
+        s.run(
+            "UNWIND range(0, $last) AS i "
+            "MATCH (a:Evidence {seq: i}), (b:Evidence {seq: i + 1}) "
+            "CREATE (b)-[:next]->(a)",
+            last=spine - 2,
+        )
+        s.run(
+            "MATCH (tail:Evidence {seq: $last}), (g:ResearchGoal {goal_id: 'goal'}) "
+            "CREATE (g)-[:next]->(tail)",
+            last=spine - 1,
+        )
+
+    monkeypatch.setattr(_cypher, "_MAX_QUERY_WORK", 50_000)
+
+    trace = local_client.post(
+        "/trace/provenance",
+        json={"node_id": "e0", "target_label": "ResearchGoal", "session_id": "spine"},
+        headers=_HEADERS,
+    )
+    assert trace.status_code == 200, trace.text
+    body = trace.json()
+    assert body["broken"] is False
+    assert body["truncated"] is False
+    assert body["chain"][-1]["is_terminal"] is True
+
+    # viewGoal walks the same `next` hop table; it used to answer 503 too.
+    exists = local_client.post(
+        "/query/chain-exists",
+        json={"node_id": "e0", "session_id": "spine", "kinds": ["viewGoal"]},
+        headers=_HEADERS,
+    )
+    assert exists.status_code == 200, exists.text
+    assert exists.json()["viewGoal"] is True
+
+
 @needs_neo4j
 def test_observe_execution_mirrors_provenance_fields(live_client: TestClient) -> None:
     """The five provenance fields' addressing info lands on the right nodes:

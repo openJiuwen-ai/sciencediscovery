@@ -791,7 +791,8 @@ test("traceProvenance posts the right shape and maps snake→camel fields", asyn
 
 test("traceProvenance degrades to broken:true when the sidecar is unreachable", async () => {
   // postJson swallows a 500 into a degraded-empty shell (no `chain`); toTraceResult
-  // translates that into broken:true + memory_graph_unreachable, never throwing.
+  // translates that into broken:true. A detail with no business code (here a
+  // bare string) still degrades to memory_graph_unreachable.
   const server = await startFakeMemoryGraph(() => ({ status: 500, json: { detail: "boom" } }));
   try {
     const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
@@ -801,6 +802,27 @@ test("traceProvenance degrades to broken:true when the sidecar is unreachable", 
     assert.deepEqual(result.chain, []);
     assert.equal(result.startNode, null);
     assert.equal(result.reason, "memory_graph_unreachable");
+  } finally {
+    await close(server);
+  }
+});
+
+test("traceProvenance carries the sidecar's budget code instead of reporting it unreachable", async () => {
+  // The sidecar answers a budget refusal with 503 {detail:{code:"memory_graph_query_limit"}}.
+  // Losing that body would make a healthy-but-busy graph look unreachable; the
+  // code must survive as the reason so the reviewer/UI can tell them apart.
+  const server = await startFakeMemoryGraph(() => ({
+    status: 503,
+    json: { detail: { code: "memory_graph_query_limit", message: "Memory graph query exceeded its local work or time limit" } },
+  }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.traceProvenance({ nodeId: "art-1" });
+    assert.equal(result.broken, true);
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.chain, []);
+    assert.equal(result.startNode, null);
+    assert.equal(result.reason, "memory_graph_query_limit");
   } finally {
     await close(server);
   }
