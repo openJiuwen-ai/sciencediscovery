@@ -61,7 +61,7 @@ test("condaActivationPaths is just bin/ on POSIX", () => {
 
 test("starterPackages keep the upstream matplotlib spec on POSIX", () => {
   assert.deepEqual(starterPackages("python"),
-    ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib=3.9"]);
+    ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib=3.9", "pysocks=1.7.1"]);
   assert.deepEqual(starterPackages("r"), ["r-base=4.4", "r-tidyverse=2.0", "r-data.table=1.16"]);
 });
 

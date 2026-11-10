@@ -11,9 +11,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sciencediscovery/network": "workspace:*",
     "@sciencediscovery/runtime-core": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
-    "undici": "8.12.2"
+    "undici": "8.12.4"
   },
   "devDependencies": { "@types/node": "26.1.1" }
 }

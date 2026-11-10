@@ -28,7 +28,7 @@ from .agent_runs import AgentRunner, agent_router
 from .config import Settings
 from .llm_proxy import DEFAULT_ALIAS, LlmRoutes, llm_router
 from .mcp_server import ToolsetRegistry, mcp_router
-from .network import loopback_mounts
+from .network import InternalClient
 from .proxy import proxy_to_legacy
 
 
@@ -63,18 +63,19 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
         # reuse. Tool calls may have side effects, so retrying a ReadError is
         # unsafe; avoid the stale pool instead.
         bridge_limits = httpx.Limits(max_keepalive_connections=0)
-        # Bypass environment proxies only for the local service addresses.
-        # Keep trust_env enabled for remote proxies and custom CA certificates.
-        mounts = loopback_mounts(settings.legacy_url)
         async with (
-            # These clients connect to local companion services. Do not let an
-            # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
-            httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False, limits=legacy_limits, mounts=mounts) as legacy,
-            httpx.AsyncClient(timeout=timeout, limits=bridge_limits, mounts=mounts) as bridge,
-            # Model routes are external destinations and must retain proxy
-            # support, including SOCKS configured through the environment.
-            httpx.AsyncClient(timeout=timeout, trust_env=True, mounts=mounts) as models,
+            # All three clients bypass environment proxies for loopback
+            # destinations: legacy/bridge by construction, models because a
+            # user-configured model endpoint may itself be a local server
+            # (e.g. an Ollama on 127.0.0.1) that must not be sent to the
+            # ambient HTTP(S)/SOCKS proxy. External destinations (model
+            # routes) are routed per-request through the lazy proxy-aware
+            # client inside InternalClient, keeping SOCKS via the environment.
+            InternalClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
+                           limits=legacy_limits) as legacy,
+            # Tool-bridge calls go to loopback URLs the caller names, not to the legacy base URL.
+            InternalClient(timeout=timeout, limits=bridge_limits) as bridge,
+            InternalClient(timeout=timeout) as models,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge

@@ -44,8 +44,9 @@ async function openProxySettings(page: Page) {
   if (!(await settingsNavigation.isVisible())) {
     await configuration.getByRole("button", { name: /^Settings directory/ }).click();
   }
-  await configuration.getByRole("button", { name: "Network proxies" }).click();
-  await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
+  await configuration.getByRole("button", { name: "Network and proxy" }).click();
+  await expect(configuration.getByRole("heading", { name: "Network and proxy" })).toBeVisible();
+  await configuration.getByText("Advanced: saved proxies", { exact: true }).click();
   return configuration;
 }
 
@@ -174,7 +175,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
   await expect(form).toBeHidden();
 
   await expect(configuration.getByLabel("WebSearch proxy")).toBeVisible();
-  await configuration.getByRole("heading", { name: "Network proxies" }).scrollIntoViewIfNeeded();
+  await configuration.getByRole("heading", { name: "Network and proxy" }).scrollIntoViewIfNeeded();
   await page.screenshot({
     path: `${screenshotDirectory}/issue-143-proxy-settings-desktop.png`,
     fullPage: false,
@@ -264,12 +265,15 @@ test("custom URL remains complete after refresh and is prefilled for editing", {
   await addForm.getByRole("button", { name: "Add", exact: true }).click();
   await expect(addForm).toBeHidden();
   const normalizedUrl = `${url}/`;
-  await expect(configuration.getByText(normalizedUrl, { exact: true })).toBeVisible();
+  // The staged entry shows a redacted URL until Save persists it.
+  const displayedUrl = "http://***:***@proxy.example.test:8080/";
+  await configuration.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(configuration.getByText(displayedUrl, { exact: true })).toBeVisible();
 
   await page.reload();
   configuration = await openProxySettings(page);
   const card = configuration.locator(".proxy-server-card").filter({ hasText: name });
-  await expect(card.getByText(normalizedUrl, { exact: true })).toBeVisible();
+  await expect(card.getByText(displayedUrl, { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Edit" }).click();
   const editForm = configuration.getByRole("form", { name: `Edit proxy server ${name}` });
   await expect(editForm.getByRole("textbox", { name: "Proxy URL", exact: true })).toHaveValue(normalizedUrl);
@@ -277,8 +281,10 @@ test("custom URL remains complete after refresh and is prefilled for editing", {
   await editForm.getByRole("button", { name: "Cancel" }).click();
 
   page.once("dialog", (dialog) => void dialog.accept());
+  await configuration.locator("#proxy-global-default").selectOption("proxy:environment");
   await card.getByRole("button", { name: "Delete" }).click();
   await expect(card).toBeHidden();
+  await configuration.getByRole("button", { name: "Save", exact: true }).click();
 });
 
 });

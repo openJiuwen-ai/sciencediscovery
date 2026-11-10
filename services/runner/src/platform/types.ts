@@ -24,7 +24,11 @@ export interface RestrictToOwnerOptions {
  * Platform files may substitute individual entries — see win32.ts.
  */
 export const STARTER_PACKAGE_SPECS = {
-  python: ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib=3.9"],
+  // pysocks ships SOCKS support for the requests/urllib stack: a global
+  // socks5:// policy reaches pip through all_proxy, and pip refuses SOCKS
+  // URLs without this module. Existing prefixes pick it up through
+  // upgradeStarterPackages like any other contract growth.
+  python: ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib=3.9", "pysocks=1.7.1"],
   r: ["r-base=4.4", "r-tidyverse=2.0", "r-data.table=1.16"],
 } as const;
 

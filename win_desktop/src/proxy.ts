@@ -35,9 +35,13 @@ export function parseRegDword(raw: string | null): boolean {
  * ProxyServer registry forms handled:
  *   "proxy:8080"                          → http + https
  *   "http=proxy:8080;https=proxy:8080"   → per-scheme
- *   "socks=127.0.0.1:7890"               → not mirrored (Node stacks here
- *                                            don't speak socks in v1; better
- *                                            direct than half-broken)
+ *   "socks=127.0.0.1:7890"               → ALL_PROXY=socks5://… (the stack's
+ *                                            consumers — undici ProxyAgent and
+ *                                            httpx[socks] — both speak SOCKS5,
+ *                                            so mirroring is no longer
+ *                                            half-broken; kept out of
+ *                                            HTTP(S)_PROXY so per-scheme
+ *                                            entries still win where present)
  */
 export function proxyEnvFromSystem(settings: SystemProxySettings | null): NodeJS.ProcessEnv | null {
   if (!settings || !settings.enabled) return null;
@@ -45,24 +49,31 @@ export function proxyEnvFromSystem(settings: SystemProxySettings | null): NodeJS
   let http: string | null = null;
   let https: string | null = null;
   let bare: string | null = null;
+  let socks: string | null = null;
   for (const entry of entries) {
     const [scheme, rest] = entry.includes("=") ? entry.split("=", 2) : ["", entry];
     switch (scheme.toLowerCase()) {
       case "http": http = rest.trim(); break;
       case "https": https = rest.trim(); break;
-      case "socks": break; // v1: not mirrored — direct beats half-broken
+      case "socks": socks = rest.trim(); break;
       case "": bare = rest.trim(); break;
       default: break;
     }
   }
   const server = http ?? https ?? bare;
-  if (!server) return null;
-  const env: NodeJS.ProcessEnv = {
-    HTTP_PROXY: `http://${server}`,
-    HTTPS_PROXY: `http://${https ?? server}`,
-    // The whole local stack talks 127.0.0.1 — never route it through the proxy.
-    NO_PROXY: "localhost,127.0.0.1",
-    no_proxy: "localhost,127.0.0.1",
-  };
+  if (!server && !socks) return null;
+  const env: NodeJS.ProcessEnv = {};
+  if (server) {
+    env.HTTP_PROXY = `http://${server}`;
+    env.HTTPS_PROXY = `http://${https ?? server}`;
+  }
+  if (socks) {
+    env.ALL_PROXY = `socks5://${socks}`;
+    env.all_proxy = `socks5://${socks}`;
+  }
+  // The whole local stack talks 127.0.0.1 and ::1 — never route loopback
+  // through the proxy. Mirrors proxyProcessEnvironment's bypass list.
+  env.NO_PROXY = "localhost,127.0.0.1,::1";
+  env.no_proxy = "localhost,127.0.0.1,::1";
   return env;
 }

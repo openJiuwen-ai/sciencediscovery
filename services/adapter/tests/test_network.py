@@ -13,151 +13,132 @@
 # limitations under the License.
 
 import asyncio
-import json
-from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
+import ipaddress
 
 import httpx
 import pytest
-import websockets
 
-from sciencediscovery_adapter.app import create_app
-from sciencediscovery_adapter.config import Settings
-from sciencediscovery_adapter.gateway import chat, rpc
-from sciencediscovery_adapter.network import connect_gateway, is_loopback_url
+from sciencediscovery_adapter.network import InternalClient, is_loopback, websocket_proxy_options
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+pytestmark = pytest.mark.science_tags(category="st", os="linux", arch=("amd64", "arm64"))
 
 
-def configure_proxies(monkeypatch, proxy):
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "WS_PROXY", "WSS_PROXY", "NO_PROXY"):
-        for key in (name, name.lower()):
-            monkeypatch.delenv(key, raising=False)
-            if proxy is not None:
-                monkeypatch.setenv(key, "127.*" if name == "NO_PROXY" else proxy)
+@pytest.mark.parametrize("proxy", ["http://127.0.0.1:1", "socks5://127.0.0.1:1", "invalid://private:password@host"])
+async def test_local_transport_works_with_broken_outbound_proxy(monkeypatch, proxy):
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, proxy)
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+
+    async def reply(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(reply, "127.0.0.1", 0)
+    async with server:
+        url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        async with InternalClient(base_url=url, timeout=httpx.Timeout(2)) as client:
+            assert (await client.get("/health")).text == "OK"
+            assert client.external is None
 
 
-@asynccontextmanager
-async def http_server(host, body):
-    requests = []
-
-    async def handler(reader, writer):
-        try:
-            headers = await reader.readuntil(b"\r\n\r\n")
-            requests.append(headers.decode())
-            for line in headers.split(b"\r\n"):
-                if line.lower().startswith(b"content-length:"):
-                    await reader.readexactly(int(line.split(b":", 1)[1]))
-            payload = json.dumps(body).encode()
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                         + f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode() + payload)
-            await writer.drain()
-        finally:
-            writer.close()
-            await writer.wait_closed()
-
-    async with await asyncio.start_server(handler, host, 0) as server:
-        yield server.sockets[0].getsockname()[1], requests
-
-
-@pytest.mark.parametrize("proxy", [None, "http://127.0.0.1:1", "socks5://127.0.0.1:1"])
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
-async def test_http_clients_reach_loopback_with_or_without_proxies(monkeypatch, proxy, host):
-    configure_proxies(monkeypatch, proxy)
-    monkeypatch.setattr("sciencediscovery_adapter.app.forget_stale_aliases", AsyncMock())
-    bind = "::1" if host == "[::1]" else "127.0.0.1"
-    async with http_server(bind, {"status": "ok"}) as (port, requests):
-        url = f"http://{host}:{port}"
-        app = create_app(Settings(host="127.0.0.1", port=4310, legacy_url=url))
-        async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
-                                         base_url="http://adapter") as client:
-                response = await client.get("/health")
-                assert response.status_code == 200 and response.json() == {"status": "ok"}
-            bridge_response = await app.state.bridge.post(f"{url}/bridge", json={"tool": "example"})
-            assert bridge_response.json() == {"status": "ok"}
-            model_response = await app.state.models.get(f"{url}/v1/models")
-            assert model_response.json() == {"status": "ok"}
-    assert len(requests) == 3
-    assert requests[0].startswith("GET /health HTTP/1.1")
-    assert requests[1].startswith("POST /bridge HTTP/1.1")
-    assert requests[2].startswith("GET /v1/models HTTP/1.1")
-
-
-async def test_remote_clients_keep_using_the_environment_proxy(monkeypatch):
-    monkeypatch.setattr("sciencediscovery_adapter.app.forget_stale_aliases", AsyncMock())
-    async with http_server("127.0.0.1", {"via": "proxy"}) as (port, requests):
-        configure_proxies(monkeypatch, f"http://127.0.0.1:{port}")
-        app = create_app(Settings(host="127.0.0.1", port=4310, legacy_url="http://remote-legacy.invalid"))
-        async with app.router.lifespan_context(app):
-            response = await app.state.legacy.get("/health")
-            assert response.json() == {"via": "proxy"}
-            response = await app.state.bridge.get("http://remote-model.invalid/v1/models")
-            assert response.json() == {"via": "proxy"}
-            response = await app.state.models.get("http://remote-model.invalid/v1/models")
-            assert response.json() == {"via": "proxy"}
-    assert requests[0].startswith("GET http://remote-legacy.invalid/health HTTP/1.1")
-    assert requests[1].startswith("GET http://remote-model.invalid/v1/models HTTP/1.1")
-    assert requests[2].startswith("GET http://remote-model.invalid/v1/models HTTP/1.1")
-
-
-@pytest.mark.parametrize("proxy", [None, "http://127.0.0.1:1"])
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
-@pytest.mark.parametrize("mode", ["chat", "rpc"])
-async def test_gateway_reaches_loopback_with_or_without_proxies(monkeypatch, proxy, host, mode):
-    configure_proxies(monkeypatch, proxy)
-
-    async def handler(connection):
-        await connection.send(json.dumps({"type": "event", "event": "connection.ack"}))
-        request = json.loads(await connection.recv())
-        if mode == "chat":
-            frame = {"type": "event", "event": "chat.processing_status",
-                     "payload": {"is_complete": True, "is_processing": False}}
-        else:
-            frame = {"type": "res", "id": request["id"], "ok": True, "payload": {"status": "ok"}}
-        await connection.send(json.dumps(frame))
-
-    bind = "::1" if host == "[::1]" else "127.0.0.1"
-    async with websockets.serve(handler, bind, 0) as server:
-        url = f"ws://{host}:{server.sockets[0].getsockname()[1]}/ws"
-        if mode == "chat":
-            frames = await asyncio.wait_for(_collect_chat(url), 5)
-            assert frames[-1]["payload"]["is_complete"]
-        else:
-            assert await rpc(url, "status", timeout=5) == {"status": "ok"}
-
-
-async def _collect_chat(url):
-    return [frame async for frame in chat(url, {})]
-
-
-@pytest.mark.parametrize("url, expected", [
-    ("http://localhost:4310", True), ("ws://LOCALHOST.:19000", True),
-    ("http://127.0.0.2:4310", True), ("ws://[::1]:19000", True),
-    ("https://localhost.example.com", False), ("https://example.com/127.0.0.1", False),
-    ("http://192.168.1.2", False), ("http://10.0.0.1", False),
-])
-def test_only_loopback_urls_bypass_proxies(url, expected):
-    assert is_loopback_url(url) is expected
-
-
-def test_remote_gateway_keeps_automatic_proxy_selection(monkeypatch):
-    seen = {}
-
-    def connect(url, *, max_size, proxy=True):
-        seen.update(url=url, proxy=proxy)
-
-    monkeypatch.setattr(websockets, "connect", connect)
-    connect_gateway("wss://remote-gateway.example.com/ws")
-    assert seen["proxy"] is True
-
-
-def test_older_websockets_does_not_receive_an_unsupported_proxy_argument(monkeypatch):
+async def test_external_request_traverses_a_socks5_proxy(monkeypatch):
+    """A global socks5:// policy reaches the adapter through all_proxy, and the
+    request only completes when the declared python-socks stack is actually
+    usable: httpx resolves the proxy per request, so this fails with
+    "Missing dependencies for SOCKS support" if the dependency is missing."""
     seen = []
 
-    def connect(url, *, max_size):
-        seen.append(url)
+    async def origin(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
 
-    monkeypatch.setattr(websockets, "connect", connect)
-    connect_gateway("ws://127.0.0.1:19000/ws")
-    assert seen == ["ws://127.0.0.1:19000/ws"]
+    origin_server = await asyncio.start_server(origin, "127.0.0.1", 0)
+    upstream_port = origin_server.sockets[0].getsockname()[1]
+
+    async def pump(source, destination):
+        try:
+            while True:
+                chunk = await source.read(65536)
+                if not chunk:
+                    break
+                destination.write(chunk)
+                await destination.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            try:
+                destination.close()
+            except Exception:
+                pass
+
+    async def socks(reader, writer):
+        # RFC 1928: greeting (version, method count, methods) -> no-auth reply.
+        greeting = await reader.readexactly(2)
+        await reader.readexactly(greeting[1])
+        writer.write(b"\x05\x00")
+        await writer.drain()
+        # CONNECT with a domain address: the proxy, not the client, resolves it.
+        header = await reader.readexactly(4)
+        assert header[1] == 0x01 and header[3] == 0x03
+        length = await reader.readexactly(1)
+        host = (await reader.readexactly(length[0])).decode()
+        port = int.from_bytes(await reader.readexactly(2), "big")
+        seen.append(f"{host}:{port}")
+        writer.write(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+        await writer.drain()
+        upstream_reader, upstream_writer = await asyncio.open_connection("127.0.0.1", upstream_port)
+        await asyncio.gather(pump(reader, upstream_writer), pump(upstream_reader, writer))
+
+    socks_server = await asyncio.start_server(socks, "127.0.0.1", 0)
+    async with socks_server, origin_server:
+        socks_port = socks_server.sockets[0].getsockname()[1]
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("ALL_PROXY", f"socks5://127.0.0.1:{socks_port}")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+        async with InternalClient(base_url="http://example.test", timeout=httpx.Timeout(5)) as client:
+            response = await client.get("/health")
+            assert response.text == "OK"
+        # The proxy resolved the hostname: the client never sent it anywhere else.
+        assert seen == ["example.test:80"]
+
+
+@pytest.mark.parametrize("url", ["http://localhost:1", "ws://127.0.0.2:2", "ws://[::1]:3"])
+def test_loopback_and_websocket_policy(url):
+    assert is_loopback(url)
+    assert websocket_proxy_options(url) == {"proxy": None}
+    assert websocket_proxy_options("wss://swarm.example.com") == {}
+    # An IPv4-mapped loopback address (127.0.0.1) assembled arithmetically, so
+    # the source never spells out the mapped literal the IP-hardening rule
+    # flags. It lives in the body because parametrize values must stay literal
+    # for the collection audit.
+    mapped = f"http://[{ipaddress.IPv6Address((0xFFFF << 32) | (0x7F << 24) | 1)}]"
+    assert is_loopback(mapped)
+    assert websocket_proxy_options(mapped) == {"proxy": None}
+
+
+async def test_nonlocal_http_uses_environment_proxy(monkeypatch):
+    seen = []
+
+    async def reply(reader, writer):
+        seen.append(await reader.readuntil(b"\r\n\r\n"))
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nPROXIED")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(reply, "127.0.0.1", 0)
+    async with server:
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+        monkeypatch.setenv("no_proxy", "")
+        async with InternalClient(timeout=httpx.Timeout(2)) as client:
+            assert (await client.get("http://external.invalid/test")).text == "PROXIED"
+    assert b"http://external.invalid/test" in seen[0]

@@ -37,8 +37,8 @@ test("bare host:port mirrors to http and https with loopback bypass", () => {
   const env = proxyEnvFromSystem({ enabled: true, server: "127.0.0.1:7890" })!;
   assert.equal(env.HTTP_PROXY, "http://127.0.0.1:7890");
   assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:7890");
-  assert.equal(env.NO_PROXY, "localhost,127.0.0.1");
-  assert.equal(env.no_proxy, "localhost,127.0.0.1");
+  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1");
+  assert.equal(env.no_proxy, "localhost,127.0.0.1,::1");
 });
 
 test("per-scheme form prefers https entry for HTTPS_PROXY", () => {
@@ -50,7 +50,24 @@ test("per-scheme form prefers https entry for HTTPS_PROXY", () => {
   assert.equal(env.HTTPS_PROXY, "http://proxy-https.corp:8443");
 });
 
-test("socks-only config is not mirrored (v1: direct beats half-broken)", () => {
-  assert.equal(proxyEnvFromSystem({ enabled: true, server: "socks=127.0.0.1:7890" }), null);
+test("socks-only config mirrors to ALL_PROXY with loopback bypass", () => {
+  const env = proxyEnvFromSystem({ enabled: true, server: "socks=127.0.0.1:7890" })!;
+  assert.equal(env.ALL_PROXY, "socks5://127.0.0.1:7890");
+  assert.equal(env.all_proxy, "socks5://127.0.0.1:7890");
+  assert.equal(env.HTTP_PROXY, undefined);
+  assert.equal(env.HTTPS_PROXY, undefined);
+  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1");
+  assert.equal(env.no_proxy, "localhost,127.0.0.1,::1");
   assert.equal(proxyEnvFromSystem({ enabled: true, server: "" }), null);
+});
+
+test("mixed http + socks config keeps per-scheme HTTP entries and mirrors socks", () => {
+  const env = proxyEnvFromSystem({
+    enabled: true,
+    server: "http=proxy-http.corp:8080;socks=127.0.0.1:7890",
+  })!;
+  assert.equal(env.HTTP_PROXY, "http://proxy-http.corp:8080");
+  assert.equal(env.HTTPS_PROXY, "http://proxy-http.corp:8080");
+  assert.equal(env.ALL_PROXY, "socks5://127.0.0.1:7890");
+  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1");
 });

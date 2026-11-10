@@ -45,9 +45,11 @@ Node `fetch` 调用可用 `proxyDispatcher(resolved, targetUrl)` 获得按目标
 
 - 旧 Web `environment/custom/direct` 设置在首次加载时迁移为统一策略；旧 custom URL 会重新加密到 registry，迁移后删除旧密文记录。
 - custom URL 使用与模型 token 相同的 AES-256-GCM 密钥文件保护；catalog 与数据库密文字段不保存明文。备份或迁移数据目录时必须连同密钥文件一起保护。
-- 完整 custom URL 和有效 environment 值只在受认证的代理 settings API 及其设置页面明文显示。运行日志、审计数据、错误响应和其他 API 不得记录或返回完整代理 URL；运维人员应按凭据管理界面保护登录 token 与浏览器会话。
+- custom URL 可通过受认证的 settings API 编辑；environment 摘要会隐藏凭据。运行日志、审计数据和诊断错误不得暴露代理凭据；请保护登录 token 与浏览器会话。
 - `system` 当前只支持 GNOME 手工代理。headless Linux、PAC/auto 模式或无法读取 `gsettings` 时会明确报错，不会静默直连；服务器部署优先使用 `environment`。解析结果（含失败）会缓存约 60 秒，因此修复 `gsettings` 配置后最多需等待 60 秒才会生效。
 - 内建 MCP 当前是 stdio transport，代理通过子进程环境注入。未来 HTTP/SSE MCP transport 需要在对应客户端显式接入 dispatcher/client proxy。
 - MCP stdio 的 environment 代理读取 Gateway 进程环境，而非 Node 控制面的 environment 投影；标准 `.env` 部署下两者一致，但 Node 与 Gateway 环境变量不同的非标准部署下，UI 显示与 MCP 出站可能不一致。
-- Runner 引导托管科学环境时下载 micromamba，**不经过**这里的代理策略：它发生在 Runner 进程内、Session 与模型策略之外，控制面的 registry 对它不可见。无法直连发布站点的机器有三条受支持的路径：由控制面在部署 Runner 时把固定版本的 micromamba 一并送过去（SSH 部署默认如此）、用 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 指向可达镜像、或用 `SCIENCE_AGENT_PROVISIONER_PATH` 指向机器上已有的可执行文件。三条路径都仍按固定版本校验 SHA-256。
-- 本功能不提供代理健康检查、自动切换、流量审计看板，也不提供 Project/Session 级 registry 覆盖。
+- 托管环境初始化、创建和装包按操作接收全局代理策略。Runner 使用异步局部上下文，将策略传给 micromamba 下载与装包子进程，不修改进程级环境变量。environment 模式在 Runner 所在机器解析；远程 Runner 会拒绝指向控制机回环地址的自定义代理。固定版本、校验和、缓存及原有重试机制保留。
+- `packages/network` 提供安装脚本与服务共享的路由和下载实现。回环目标直连；Adapter 按需创建读取环境代理的外部 HTTP 客户端，内部回环 HTTP/WebSocket 显式直连。Python HTTP/WebSocket 的 SOCKS 依赖已声明并锁定。
+- `POST /api/proxy/test` 使用草稿策略检测下载源，不保存配置。这是用户主动诊断，不是启动门禁，也不代表所有 Provider 均可达。不提供自动故障切换、流量看板或 Project/Session 级 registry 覆盖。
+- 设置在底部保存前仅为草稿。多区块保存采用顺序 API 请求，并非跨区块事务；后续失败不会回滚此前成功的写入。沙箱联网授权与代理路由仍然独立。
