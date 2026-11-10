@@ -16,7 +16,8 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
@@ -171,4 +172,76 @@ test("stages the frozen revision even after the live package is edited on disk",
   assert.equal(prepared.manifest.skills[0]?.revision, 1);
   // The staged tree is read-only for the sandbox user, even before any bind mount.
   assert.equal((await stat(resolve(snapshotRoot, "portable-skill", "scripts", "unused.py"))).mode & 0o222, 0);
+});
+
+test("losing the snapshot rename race is tolerated for the Windows EPERM code too", async (context) => {
+  // Windows NTFS refuses a rename onto an existing directory with EPERM rather
+  // than the POSIX ENOTEMPTY/EEXIST, so parallel subagents that share one
+  // content-addressed snapshot killed each other before their first turn
+  // (#1033). A loser is acceptable only while the winner staged the same
+  // bytes, which is what the manifest comparison decides.
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `skill-sandbox-race-${process.pid}-${Date.now()}`);
+  const workspaceRoot = resolve(fixtureRoot, "workspace");
+  const snapshotRoot = resolve(fixtureRoot, "session", "skill-snapshots", "run-1");
+  await mkdir(workspaceRoot, { recursive: true });
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const skill = snapshot("raced-skill", new Map([
+    ["SKILL.md", Buffer.from("---\nname: raced-skill\ndescription: race\n---\n\nFrozen instructions.\n")],
+    ["scripts/run.py", Buffer.from("print('raced')\n")],
+  ]), 1);
+  // The winner has already published the snapshot this run will lose against.
+  await prepareSkillSandbox(snapshotRoot, workspaceRoot, [skill]);
+
+  // Model the race deterministically: the pre-check runs before the winner's
+  // directory is visible, then the rename lands on that existing directory.
+  const realReadFile = fs.readFile;
+  let firstManifestRead = true;
+  const read = context.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (firstManifestRead && String(args[0]).endsWith(SKILL_SNAPSHOT_MANIFEST)) {
+      firstManifestRead = false;
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    return realReadFile(...args);
+  });
+  const rename = context.mock.method(fs, "rename", async () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  });
+  syncBuiltinESMExports();
+  try {
+    const prepared = await prepareSkillSandbox(snapshotRoot, workspaceRoot, [skill]);
+    assert.equal(prepared.root, snapshotRoot);
+    assert.equal(prepared.manifest.skills[0]?.id, "raced-skill");
+    // The loser cleans its staging directory instead of leaving it behind.
+    const siblings = (await fs.readdir(resolve(fixtureRoot, "session", "skill-snapshots")))
+      .filter((name) => name.endsWith(".skill-snapshot"));
+    assert.deepEqual(siblings, []);
+  } finally {
+    rename.mock.restore();
+    read.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("a rename EPERM with no matching snapshot still fails instead of being swallowed", async (context) => {
+  // The tolerance is scoped to "the winner staged the same bytes". A genuine
+  // permission failure leaves no matching manifest, so it must still raise.
+  const fixtureRoot = resolve(process.cwd(), ".tmp", `skill-sandbox-denied-${process.pid}-${Date.now()}`);
+  const workspaceRoot = resolve(fixtureRoot, "workspace");
+  const snapshotRoot = resolve(fixtureRoot, "session", "skill-snapshots", "run-1");
+  await mkdir(workspaceRoot, { recursive: true });
+  context.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+  const skill = snapshot("denied-skill", new Map([
+    ["SKILL.md", Buffer.from("---\nname: denied-skill\ndescription: denied\n---\n\nFrozen instructions.\n")],
+  ]), 1);
+
+  const rename = context.mock.method(fs, "rename", async () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(prepareSkillSandbox(snapshotRoot, workspaceRoot, [skill]), /operation not permitted/u);
+  } finally {
+    rename.mock.restore();
+    syncBuiltinESMExports();
+  }
 });

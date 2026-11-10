@@ -205,11 +205,17 @@ export async function prepareSkillSandbox(
     try {
       await rename(staging, root);
     } catch (error) {
-      // Concurrent runs sharing one content-addressed root race here; POSIX
-      // reports a non-empty destination as ENOTEMPTY or EEXIST depending on the
-      // platform. Either is fine as long as the winner staged the same bytes.
+      // Concurrent runs sharing one content-addressed root race here: the
+      // winning rename turns the destination into a non-empty directory, which
+      // each platform reports differently — ENOTEMPTY on Linux, EEXIST on
+      // macOS, and EPERM on Windows NTFS, which refuses a rename onto an
+      // existing directory before any emptiness check (#1033). Losing the race
+      // is fine as long as the winner staged the same bytes, and the manifest
+      // comparison below is what decides that: a genuine permission problem
+      // leaves no matching manifest, so it still raises.
       const code = (error as NodeJS.ErrnoException).code;
-      if ((code !== "EEXIST" && code !== "ENOTEMPTY") || !await existingSnapshotMatches(root, expectedManifest)) {
+      const lostRenameRace = code === "EEXIST" || code === "ENOTEMPTY" || code === "EPERM";
+      if (!lostRenameRace || !await existingSnapshotMatches(root, expectedManifest)) {
         throw error;
       }
     }
