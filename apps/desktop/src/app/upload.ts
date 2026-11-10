@@ -25,6 +25,8 @@
  *  server refuses comes back as a per-file error the user can read, while
  *  refusing locally on a guess the server would have accepted is a dead end
  *  with no way around it. */
+import { sizeInUnit } from "./size-units.js";
+
 export const DEFAULT_MAX_FILE_BYTES = 1_073_741_824;
 
 /** The ladder the limit is written in: a limit is a round number to compare a
@@ -37,14 +39,10 @@ export const DEFAULT_MAX_FILE_BYTES = 1_073_741_824;
 export function formatByteLimit(bytes: number): string | undefined {
   if (bytes <= 0) return undefined;
   const units = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
-  return `${rounded} ${units[unit]}`;
+  const print = (value: number): number => Number.isInteger(value) ? value : Number(value.toFixed(1));
+  // Promoted on the printed number, so a limit never reads "1024 MiB".
+  const { unit, value } = sizeInUnit(bytes, print, units.length);
+  return `${print(value)} ${units[unit]}`;
 }
 
 /**

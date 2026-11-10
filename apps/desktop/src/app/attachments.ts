@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { uploadFileName } from "../api/sessions.js";
+import { sizeInUnit } from "./size-units.js";
 
 /**
  * The files waiting in the composer, and the decisions about them that do not
@@ -157,20 +158,16 @@ export function attachmentType(name: string): string {
 /**
  * A file's size at the card's scale: one decimal below a hundred units
  * (`16.5KB`, the handoff's own example), a whole number above it (`256KB`), and
- * the unit the size is actually in.
+ * the unit the size is actually in. The unit follows the number this ladder
+ * prints, so a size one byte under a MiB reads `1MB`, never `1024KB`.
  */
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0KB";
   const units = ["B", "KB", "MB", "GB", "TB"] as const;
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
+  const print = (value: number): number => value < 100 ? Number(value.toFixed(1)) : Math.round(value);
+  const { unit, value } = sizeInUnit(bytes, print, units.length);
   if (unit === 0) return `${Math.round(value)}B`;
-  const rounded = value < 100 ? Number(value.toFixed(1)) : Math.round(value);
-  return `${rounded}${units[unit]}`;
+  return `${print(value)}${units[unit]}`;
 }
 
 /**

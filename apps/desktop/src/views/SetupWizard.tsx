@@ -110,12 +110,20 @@ function bootHeading(boot: BootView): { title: string; sub: string } {
   }
 }
 
-/** The shell prints the same sizes; keeping the rounding here avoids a second
- *  formatting convention on one screen. */
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
-  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)}MB`;
-  return `${Math.max(0, Math.round(bytes / 1024))}KB`;
+/** The shell's own convention, kept: whole KB and MB, one decimal GB, no space and
+ *  no byte level. The unit follows the number each level prints, so a free-space
+ *  line one byte under a GiB reads "1.0GB", never "1024MB". */
+export function formatFreeSpace(bytes: number): string {
+  // The ladder starts at KB, so the value starts there too, and its GB level is the
+  // only one that prints a decimal.
+  const print = (value: number, unit: number): number => unit === 2 ? Number(value.toFixed(1)) : Math.round(value);
+  let value = Math.max(0, bytes) / 1024;
+  let unit = 0;
+  while (unit < 2 && print(value, unit) >= 1024) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 2 ? `${value.toFixed(1)}GB` : `${Math.round(value)}${unit === 0 ? "KB" : "MB"}`;
 }
 
 type CheckTone = "ok" | "warn" | "err";
@@ -270,12 +278,12 @@ export function SetupWizard({
           } else if (result.freeOk === false) {
             lines.push({
               tone: "err",
-              text: TEXT.wizard.workspace.check.freeLow(formatBytes(result.freeBytes)),
+              text: TEXT.wizard.workspace.check.freeLow(formatFreeSpace(result.freeBytes)),
             });
           } else {
             lines.push({
               tone: "ok",
-              text: TEXT.wizard.workspace.check.free(formatBytes(result.freeBytes)),
+              text: TEXT.wizard.workspace.check.free(formatFreeSpace(result.freeBytes)),
             });
           }
           for (const warning of result.warnings ?? []) {
