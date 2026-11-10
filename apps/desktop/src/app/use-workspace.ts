@@ -62,13 +62,14 @@ import {
   updateSession,
   uploadWorkspaceFiles,
 } from "../api/sessions.js";
-import { decidePermissionRequest } from "../api/permissions.js";
+import { decidePermissionRequest, listPermissionRequests } from "../api/permissions.js";
 import { listRunEvents, streamMessage, subscribeRunEvents, type RunEventHandler } from "../api/stream.js";
 import type {
   ApprovalMode,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
+  RuntimeSettingsDetails,
   PermissionDecision,
   Project,
   Session,
@@ -80,6 +81,7 @@ import type {
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
 import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run-stream/model.js";
+import { pendingPermissions, reconcilePermissions } from "../run-stream/permission.js";
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
 
@@ -100,8 +102,9 @@ export interface Toast {
 export interface ConfirmRequest {
   accept: string;
   body: string;
+  modelReplacement?: { label: string; emptyLabel: string; models: ModelProfile[] };
   eyebrow?: string;
-  onAccept: () => void | Promise<void>;
+  onAccept: (replacementModelId?: string) => void | Promise<void>;
   title: string;
 }
 
@@ -154,7 +157,7 @@ export interface WorkspaceState {
   /** The Projects the user made, oldest first. The inbox is not here. */
   projects: Project[];
   providers: ModelProvider[];
-  /** The inbox's Sessions, newest first — the sidebar's 最近会话 section. */
+  /** The inbox's Sessions, newest first — the sidebar's 会话 section. */
   recent: Session[];
   /** The run that is streaming right now, or the one that was still going when
    *  the session was opened. Finished runs are not here — they are in
@@ -218,6 +221,8 @@ export interface WorkspaceActions {
   renameSession: (session: Session, title: string) => Promise<void>;
   /** Re-read the model catalog after the wizard or settings changed it. */
   refreshCatalog: () => Promise<void>;
+  /** Re-read session rows after research import, continuation or branching. */
+  refreshSessions: () => Promise<void>;
   /** Take one card out of the composer. The file stays in the workspace: the
    *  upload has already happened, and this is the tray, not the workspace. */
   removeAttachment: (id: string) => void;
@@ -363,8 +368,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** The inbox, for the paths that write a Session before a render can hand
    *  them one. `refreshSessionLists` is the only reader that may not fail. */
   const inboxRef = useRef<Project | undefined>(undefined);
-  const defaultModelRef = useRef<string | undefined>(undefined);
-  const selectedModelRef = useRef<string | undefined>(undefined);
+  const draftModelOverride = useRef<string | undefined>(undefined);
+  const modelSelectionEpoch = useRef(0);
+  const modelSelectionQueue = useRef(Promise.resolve());
   const runningRef = useRef(false);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const runRef = useRef<RunStreamState>(emptyRunStream());
@@ -410,13 +416,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  counted against) loses it too. The epoch is how `settle` can tell whether
    *  the reads it started with are still the newest truth. */
   const sendEpoch = useRef(0);
+  /** Bumped by every settle and by every session change. A settle issues its
+   *  reads when a turn ends and writes what they return once they land — a whole
+   *  round trip later, with the composer already usable again (`running` is
+   *  cleared before it is awaited), so two settles can overlap. Only the newest
+   *  one may write: an older one's reads predate everything the newer one read,
+   *  and writing them last would put the older turn back on screen and replace
+   *  the session's replay list with an older, shorter one. */
+  const settleEpoch = useRef(0);
 
   sessionRef.current = sessionId;
   projectRef.current = activeProjectId;
   inboxRef.current = inboxProject;
   sessionsByProjectRef.current = sessionsByProject;
-  defaultModelRef.current = defaultModelId;
-  selectedModelRef.current = selectedModelId;
 
   const toast = useCallback((message: string, tone: Toast["tone"] = "error") => {
     const id = (toastSeq.current += 1);
@@ -486,7 +498,29 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         );
         for (const replay of rebuilt) if (replay) held.set(replay.runId, replay);
       }
-      return { epoch, replays: runs.flatMap((entry) => held.get(entry.id) ?? []) };
+      const replays = runs.flatMap((entry) => held.get(entry.id) ?? []);
+      // A request the catalog has already answered but whose
+      // `permission.resolved` never reached the run stream replays as a card
+      // nobody can press. The catalog is the only place that still knows the
+      // answer, so one read settles every such card at once. Asked only when a
+      // replay actually holds a pending one, which a healthy Session never
+      // does.
+      if (!replays.some((replay) => pendingPermissions(replay.state.permissions).length > 0)) {
+        return { epoch, replays };
+      }
+      // Display-only correction: a failed read leaves the replay as it was.
+      const authoritative = await listPermissionRequests(client, target).catch(() => undefined);
+      if (!authoritative) return { epoch, replays };
+      const reconciled = replays.map((replay) => {
+        const permissions = reconcilePermissions(replay.state.permissions, authoritative);
+        return permissions === replay.state.permissions
+          ? replay
+          : { ...replay, state: { ...replay.state, permissions } };
+      });
+      // The corrected replay replaces the cached copy, so the next settle does
+      // not have to ask again.
+      for (const replay of reconciled) held.set(replay.runId, replay);
+      return { epoch, replays: reconciled };
     },
     [client],
   );
@@ -541,14 +575,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         setModels(profiles);
         setPresets(catalog.presets);
         setProviders(catalog.providers);
-        const decision = resolveCatalog(profiles, settings.overrides);
+        let hasHistory = false;
+        if (!profiles.length) {
+          const [projects, inbox] = await Promise.all([listProjects(client), ensureInbox(client)]);
+          hasHistory = projects.length > 0 || (await listSessions(client, inbox.id, "all")).length > 0;
+          if (cancelled) return;
+        }
+        const decision = resolveCatalog(profiles, settings.overrides, hasHistory);
         if (decision.boot === "setup") {
           setBoot("setup");
           return;
         }
         setDefaultModelId(decision.defaultModelId);
         setSelectedModelId(decision.defaultModelId);
-        if (decision.adopt !== undefined) await setGlobalModel(client, decision.adopt);
         if (cancelled) return;
         setBoot("ready");
       } catch (reason) {
@@ -568,44 +607,45 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   const retryBoot = useCallback(() => setAttempt((current) => current + 1), []);
 
-  /**
-   * Re-read the model catalog.
-   *
-   * Called after the model form writes anything, so the new profile shows up in
-   * the composer's list. The default is read back from the server too, so the
-   * card's 默认 tag follows a write the form just made; merely adding a profile
-   * changes nothing, because the server's default is still the old one. When
-   * the stored default names no profile at all it falls back to the first,
-   * which is the only case where the catalog itself decides.
-   */
+  /** Restore catalog and selection together after a local or another window's write. */
   const refreshModels = useCallback(
-    async (withProviders = false) => {
+    async (background = false) => {
+      const target = sessionRef.current;
+      const projectId = projectRef.current;
+      const epoch = modelSelectionEpoch.current;
+      const view = viewEpoch.current;
       try {
-        const [profiles, settings, catalog] = await Promise.all([
-          listModels(client),
-          withProviders ? getSettings(client).catch(() => undefined) : Promise.resolve(undefined),
-          withProviders
-            ? listProviders(client).catch(() => ({ presets: [], providers: [] }))
+        const [profiles, settings, catalog, fresh, projectSettings] = await Promise.all([
+          listModels(client), getSettings(client), listProviders(client).catch(() => undefined),
+          target ? client.request<RuntimeSettingsDetails>(`/api/sessions/${encodeURIComponent(target)}/settings`) : Promise.resolve(undefined),
+          !target && projectId
+            ? client.request<RuntimeSettingsDetails>(`/api/projects/${encodeURIComponent(projectId)}/settings`)
             : Promise.resolve(undefined),
         ]);
+        if (viewEpoch.current !== view || modelSelectionEpoch.current !== epoch) return;
         setModels(profiles);
         if (catalog) {
           setPresets(catalog.presets);
           setProviders(catalog.providers);
         }
-        const current = defaultModelRef.current;
-        const stored = settings?.overrides.modelId;
-        if (stored !== undefined && profiles.some((profile) => profile.id === stored)) {
-          setDefaultModelId(stored);
-          return;
-        }
-        const fallback = profiles[0]?.id;
-        if (fallback !== undefined && !profiles.some((profile) => profile.id === current)) {
-          setDefaultModelId(fallback);
-          setSelectedModelId(fallback);
+        setDefaultModelId(settings.overrides.modelId);
+        if (fresh && target) {
+          setDetail(current => {
+            if (!current || current.id !== target) return current;
+            const next = { ...current, modelId: fresh.effective.modelId, reviewModelId: fresh.effective.reviewModelId,
+              settingsOverrides: fresh.overrides, thinkingMode: fresh.effective.thinkingMode, thinkingEffort: fresh.effective.thinkingEffort };
+            rememberBounded(detailsBySession.current, target, next);
+            return next;
+          });
+          setSelectedModelId(fresh.effective.modelId);
+        } else {
+          const inherited = projectSettings ? projectSettings.effective.modelId : settings.overrides.modelId;
+          setSelectedModelId(draftModelOverride.current ?? inherited);
         }
       } catch (reason) {
-        report(reason);
+        // Background reads retry on the next tick; rejected credentials still
+        // go through the authentication gate. Explicit actions keep their toast.
+        if (!background || isAuthFailure(reason)) report(reason);
       }
     },
     [client, report],
@@ -670,7 +710,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * The inbox is read alongside the user's Projects even though the server
    * leaves it out of `GET /api/projects`: this map is replaced whole on every
    * refresh (after each create, rename and delete), so a listing that skipped
-   * it would empty 最近会话 the first time the user did anything. */
+   * it would empty 会话 the first time the user did anything. */
   const refreshSessionLists = useCallback(async (): Promise<Session[] | undefined> => {
     try {
       const inbox = inboxRef.current ?? (await ensureInbox(client));
@@ -722,17 +762,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     const inFlight = sessionCreation.current;
     if (inFlight !== undefined && inFlight.projectId === projectId) return inFlight.promise;
     const epoch = viewEpoch.current;
-    const modelId = selectedModelRef.current ?? defaultModelRef.current;
+    const explicitModelId = draftModelOverride.current;
     const token = {};
     const creation = (async () => {
       try {
-        const created = await createSession(client, projectId, modelId ? { modelId } : {});
+        const created = await createSession(client, projectId, explicitModelId ? { modelId: explicitModelId } : {});
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
           const fresh = { ...created, messages: [] };
           rememberBounded(detailsBySession.current, created.id, fresh);
           setDetail(fresh);
+          draftModelOverride.current = undefined;
+          setSelectedModelId(created.modelId);
         }
         await refreshSessionLists();
         return created.id;
@@ -985,8 +1027,33 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // row in the sidebar. The service publishes that rename on this stream,
         // ahead of the run's own events, so the row appears with the message
         // rather than at the end of its first answer. A later rename lands in
-        // the same list; the read is shared and rare.
-        if (event?.type === "session.updated") void refreshSessionLists();
+        // the same list; the read is shared and rare. The bar over the
+        // conversation prints the open Session's own record, so it takes the
+        // event's copy of that record: waiting for the read-back that follows
+        // the run would leave the bar under the old name — 未命名会话 for a
+        // Session's first message — for as long as the answer streams.
+        if (event?.type === "session.updated") {
+          const incoming = event.session;
+          setDetail((current) => {
+            if (current?.id !== incoming.id) return current;
+            // This stream is followed from cursor 0, so opening a Session whose
+            // run is still going replays that run's earlier events — including
+            // a `session.updated` older than the record `openSession` has just
+            // read. Folding it would take the bar back to the name from before
+            // the user's own rename, and the composer back to the approval mode
+            // and expert it had then, until the run ends. Every write stamps
+            // `updatedAt`, so the newer record wins whatever order they arrive
+            // in; a record of the same age is the same state and may land.
+            if (incoming.updatedAt < current.updatedAt) return current;
+            const next = { ...current, ...incoming };
+            // The cache is what paints the Session on the way back to it, so it
+            // has to hear this too: without it, leaving and returning shows the
+            // older record until `getSession` lands.
+            rememberBounded(detailsBySession.current, next.id, next);
+            return next;
+          });
+          void refreshSessionLists();
+        }
         // 产物 and the workspace tree are read back from the service rather
         // than folded in from the event: the artifact list spans Sessions and
         // every version, and a read is what keeps it agreeing with the
@@ -1013,24 +1080,37 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    */
   const settle = useCallback(
     async (target: string) => {
+      const settleId = ++settleEpoch.current;
+      // Asked at each write rather than captured once: a newer settle may start
+      // while this one is still reading, and whether this one is still the last
+      // word has to be decided at the moment of writing.
+      const newest = () => settleEpoch.current === settleId;
       const epoch = sendEpoch.current;
       try {
         const [fresh, runs] = await Promise.all([getSession(client, target), listRuns(client, target)]);
         const batch = await buildReplays(target, runs);
-        // `commitReplays` drops a batch read for a Session that is no longer
-        // open; the transcript and the live run need the same gate. The reads
-        // belong to the Session the run was in — the run keeps going on the
-        // server, and coming back resumes it — so writing here would put that
-        // Session over the one now on screen. The list below is shared and
-        // stays worth refreshing either way.
-        commitReplays(target, batch);
-        rememberBounded(detailsBySession.current, target, fresh);
-        if (sessionRef.current === target) {
-          setDetail(fresh);
-          // A send that started while these reads were in flight has already
-          // closed the finished run and opened its own; resetting here would
-          // erase the stream it is writing.
-          if (sendEpoch.current === epoch) resetRun();
+        // A settle started after this one has read — or is reading — the turn
+        // that came after this snapshot. Both the transcript and the rebuilt
+        // replay list belong to the older turn: landing them now would hide the
+        // newer message and answer, drop the newer run from the replay cache, and
+        // leave the design anchor counting against the previous design.
+        if (newest()) {
+          // `commitReplays` drops a batch read for a Session that is no longer
+          // open; the transcript and the live run need the same gate. The reads
+          // belong to the Session the run was in — the run keeps going on the
+          // server, and coming back resumes it — so writing here would put that
+          // Session over the one now on screen. The list below is shared and
+          // stays worth refreshing either way.
+          commitReplays(target, batch);
+          rememberBounded(detailsBySession.current, target, fresh);
+          if (sessionRef.current === target) {
+            setDetail(fresh);
+            setSelectedModelId(fresh.modelId);
+            // A send that started while these reads were in flight has already
+            // closed the finished run and opened its own; resetting here would
+            // erase the stream it is writing.
+            if (sendEpoch.current === epoch) resetRun();
+          }
         }
       } catch (reason) {
         if (!isAuthFailure(reason) && sessionRef.current === target) report(reason);
@@ -1038,8 +1118,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // Only the pending message this settle was started for may be cleared.
       // One sent since then is not in `fresh` — that read predates its
       // persistence — so clearing it would drop a message the user can see is
-      // already on its way.
-      if (sessionRef.current === target && sendEpoch.current === epoch) setPendingMessage(undefined);
+      // already on its way. A newer settle clears its own.
+      if (newest() && sessionRef.current === target && sendEpoch.current === epoch) setPendingMessage(undefined);
+      // The list and the panel are shared by every Session; a stale settle's
+      // refresh is still a refresh, so it stays unconditional.
       await Promise.all([refreshSessionLists(), refreshPanel(target)]);
     },
     [buildReplays, client, commitReplays, refreshPanel, refreshSessionLists, report, resetRun],
@@ -1203,6 +1285,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     // Any batch still being read belongs to the session being left behind. What
     // it rebuilt stays in `replaysBySession`, so coming back needs no re-read.
     replayEpoch.current += 1;
+    // A settle still reading belongs to the Session being left. Bumping the
+    // epoch here also covers the case nothing else does: leaving and reopening
+    // the *same* Session before that settle lands would otherwise make it look
+    // current again.
+    settleEpoch.current += 1;
     setReplays([]);
     // Open documents belong to the session's workspace, so leaving the session
     // takes them with it rather than showing another session's file contents.
@@ -1237,11 +1324,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     setSessionId(undefined);
     setDraftEpoch((epoch) => epoch + 1);
     sessionRef.current = undefined;
-    setSelectedModelId(defaultModelRef.current);
+    draftModelOverride.current = undefined;
+    modelSelectionEpoch.current += 1;
+    setSelectedModelId(undefined);
+    void refreshModels();
     // A draft is not waiting on anything: an open that was still reading its
     // Session has been abandoned above, and will not clear this itself.
     setLoadingSession(false);
-  }, [clearSession]);
+  }, [clearSession, refreshModels]);
 
   /**
    * The welcome page's project picker: point the *next* conversation
@@ -1311,7 +1401,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // is what says which Project it is in.
         projectRef.current = fresh.projectId;
         setActiveProjectId(fresh.projectId);
-        setSelectedModelId(fresh.modelId ?? defaultModelRef.current);
+        draftModelOverride.current = undefined;
+        setSelectedModelId(fresh.modelId);
         void refreshPanel(id);
         setLoadingSession(false);
         // Replaying a run is the only way its thinking block comes back — the
@@ -1405,17 +1496,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   const selectModel = useCallback(
     async (modelId: string) => {
-      setSelectedModelId(modelId);
-      selectedModelRef.current = modelId;
+      modelSelectionEpoch.current += 1;
+      const epoch = modelSelectionEpoch.current;
       const target = sessionRef.current;
       // With no Session yet there is nothing to point at; the choice rides
       // into the Session this app is about to create.
-      if (!target) return;
+      if (!target) {
+        draftModelOverride.current = modelId;
+        setSelectedModelId(modelId);
+        return;
+      }
       try {
-        await updateSession(client, target, { modelId });
+        const write = modelSelectionQueue.current.then(() => updateSession(client, target, { modelId }));
+        modelSelectionQueue.current = write.then(() => undefined, () => undefined);
+        const updated = await write;
+        if (sessionRef.current !== target || modelSelectionEpoch.current !== epoch) return;
+        modelSelectionEpoch.current += 1;
+        setSelectedModelId(updated.modelId);
         setDetail((current) => {
           if (!current) return current;
-          const next = { ...current, modelId };
+          const next = { ...current, ...updated };
           rememberBounded(detailsBySession.current, target, next);
           return next;
         });
@@ -1492,11 +1592,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           return;
         }
         setDefaultModelId(modelId);
+        await refreshModels();
       } catch (reason) {
         report(reason);
       }
     },
-    [client, report],
+    [client, refreshModels, report],
   );
 
   // ── mutations ────────────────────────────────────────────────────────────
@@ -1585,6 +1686,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           artifactId: output.artifact.id,
           label: artifactName(output),
           path: output.version.sourcePath ?? "",
+          // A final report carries the aliases its prose cites; the chip
+          // renderer needs them, and every other version arrives without one.
+          references: output.version.references,
           sessionId: output.version.sessionId || undefined,
           source: "artifact",
           versionId: output.version.id,
@@ -1621,8 +1725,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
                 error: undefined,
                 loading: true,
                 // A version may have been written elsewhere than the one before
-                // it, and the preview picks its renderer from this path.
+                // it, and the preview picks its renderer from this path. The
+                // citation map belongs to the version too: an older report's
+                // chips must not open the newer report's nodes.
                 path: output.version.sourcePath ?? "",
+                references: output.version.references,
+                sessionId: output.version.sessionId || undefined,
                 versionId,
               }
             : tab),
@@ -1664,7 +1772,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** After the model form writes a provider or a profile, both halves of the
    *  catalog are stale: the composer reads `models`, the form reads `providers`. */
-  const refreshCatalog = useCallback(() => refreshModels(true), [refreshModels]);
+  const refreshCatalog = useCallback(() => refreshModels(), [refreshModels]);
 
   // ── data loading once the app is usable ──────────────────────────────────
   const usable = boot === "ready";
@@ -1674,7 +1782,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       try {
         // The inbox is where a launch with no Project begins. It is created
         // here rather than a Project invented for the user: a fresh install
-        // now opens with no Projects at all, and 最近会话 is simply where the
+        // now opens with no Projects at all, and 会话 is simply where the
         // first conversation lands.
         const inbox = await ensureInbox(client);
         inboxRef.current = inbox;
@@ -1711,6 +1819,21 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     void refreshModels();
   }, [refreshModels, usable]);
 
+  useEffect(() => {
+    if (!usable) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible" && !runningRef.current) void refreshModels(true);
+    };
+    const timer = window.setInterval(refresh, 5_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [refreshModels, usable]);
+
   // The upload ceiling is a quota setting, so it can only be read from the
   // service. A failure leaves it unknown rather than guessed, and uploading
   // still works — the check it enables is a convenience, not a permission.
@@ -1742,7 +1865,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     return listed;
   }, [sessionsByProject]);
 
-  // 最近会话 is the inbox's own list, not every Session in the workspace: the
+  // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
   const recent = useMemo(
     () => (inboxProject === undefined ? [] : byRecency(listedByProject[inboxProject.id] ?? [])),
@@ -1831,8 +1954,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         }
       },
       renameSession: (session, title) =>
-        mutate({ id: session.id, operation: () => updateSession(client, session.id, { title }) }),
+        mutate({
+          id: session.id,
+          operation: async () => {
+            const updated = await updateSession(client, session.id, { title });
+            // The reply is the only news the open Session gets when no run is
+            // streaming. The bar prints its title, so without this the row says
+            // the new name while the bar keeps the old one until the Session is
+            // reopened. The cache takes it too — it is what paints the Session
+            // on the way back to it — or leaving and returning would show the
+            // name it had before the rename until the read lands.
+            setDetail((current) => {
+              if (current?.id !== updated.id) return current;
+              const next = { ...current, ...updated };
+              rememberBounded(detailsBySession.current, next.id, next);
+              return next;
+            });
+          },
+        }),
       refreshCatalog,
+      refreshSessions: async () => { await refreshSessionLists(); },
       removeAttachment,
       retryAttachment,
       retryBoot,

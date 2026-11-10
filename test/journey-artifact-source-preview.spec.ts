@@ -280,10 +280,11 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
         }
         expect(newTabs).toBe(0);
       });
-      await journey.step("查看截断提示并下载全文", "日志预览有截断说明，下载保留完整的原始内容。", async () => {
+      await journey.step("查看日志并下载全文", "日志预览保留 256 KiB 内的完整内容，下载保留完整的原始内容。", async () => {
         await open("large.log");
         const reader = page.getByRole("dialog", { name: "Text file: large.log" });
-        await expect(reader.getByText(/Preview truncated at 100,000/)).toBeVisible();
+        await expect(reader.getByText(/Preview truncated at/)).toHaveCount(0);
+        await expect(reader.locator(".numbered-source")).toContainText("FULL_FILE_END");
         const downloadPromise = page.waitForEvent("download");
         await reader.getByRole("button", { name: "Download full file" }).click();
         let content = "";

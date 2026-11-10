@@ -21,11 +21,18 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
+import { isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
-import type { Subagent, SubagentStep } from "./api/types.js";
+import type {
+  ComposerReference,
+  PermissionDecision,
+  PermissionRequest,
+  SessionArtifactOutput,
+  Subagent,
+  SubagentStep,
+} from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
@@ -38,10 +45,12 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import {
+  composeEvolveMessage,
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveSkill,
+  splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
 import { useEvolve } from "./evolve/use-evolve.js";
@@ -56,19 +65,22 @@ import {
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
+import { ArtifactDialog } from "./views/ArtifactDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
 import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
-import { Composer } from "./views/Composer.js";
+import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
-import { EvolveOverlay } from "./views/evolve/EvolveOverlay.js";
-import { EvolveShelf } from "./views/evolve/EvolveShelf.js";
+import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
+import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
+import { MemoryCardDialog } from "./views/MemoryCardDialog.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
+import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
 import { SetupWizard } from "./views/SetupWizard.js";
 import {
   SystemSettingsDialog,
@@ -84,6 +96,7 @@ interface Props {
 }
 
 export function App({ initialToken }: Props) {
+  const [packageRequest, setPackageRequest] = useState<PackageRequest>();
   const [token, setToken] = useState(initialToken);
   /** Set when the server answered 401, so the gate can say "this one was
    *  refused" instead of the generic "we have no credential". */
@@ -92,6 +105,25 @@ export function App({ initialToken }: Props) {
    *  reopening lands where the user left off. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroup>("general");
+  /** The citation whose memory card is open. It is a dialog over whichever
+   *  document cites it, not a surface: closing it leaves the reader exactly
+   *  where the chip was pressed. */
+  const [memoryReference, setMemoryReference] = useState<{
+    reference: ComposerReference;
+    sessionId?: string;
+  } | undefined>();
+  /** The artifact whose preview dialog is open. An artifact citation opens the
+   *  document itself in the middle of the window, as the old web UI did, so
+   *  the reader never leaves the report they were reading. */
+  const [artifactReference, setArtifactReference] = useState<{
+    reference: ComposerReference;
+    sessionId?: string;
+  } | undefined>();
+  /** The artifact a 上游文件 link in the open dialog put in the panel. While the
+   *  panel is still showing it, the dialog moves out of the panel's way instead
+   *  of covering it. It clears when the dialog closes: the link is a reading aid
+   *  for the document on screen, not a lasting mode of the panel. */
+  const [linkedArtifactId, setLinkedArtifactId] = useState<string | undefined>();
   /** The task sidebar folds away; the conversation's does too when the panel
    *  needs the room. */
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -135,15 +167,26 @@ export function App({ initialToken }: Props) {
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   const resize = usePanelWidth();
 
-  /** The runtime and the open Session's searches. The shelf reads `runs`
-   *  directly, which is why the hook exists at this level rather than inside
-   *  the panel: the searches must stay reachable while the panel is closed. */
+  /** The runtime and the open Session's searches. The transcript's run cards
+   *  read `runs` directly, which is why the hook exists at this level rather
+   *  than inside the panel: the searches must stay reachable while the panel is
+   *  closed. */
   const evolve = useEvolve(client, state.sessionId);
   const refreshEvolve = evolve.refresh;
   /** Which search the panel is showing, by id. Storing the id rather than the
-   *  record keeps the panel reading the same list the shelf does, so a status
+   *  record keeps the panel reading the same list the run cards do, so a status
    *  that moves while the panel is open changes both at once. */
   const [evolveRunId, setEvolveRunId] = useState<string>();
+  /** Set the moment a design command leaves the composer, and cleared when the
+   *  new run opens or the reader moves on. Only a run this window started opens
+   *  任务 by itself: a reload or a session switch leaves the panel where it was,
+   *  because the search is not news to the person who just came back to it. */
+  const [awaitingRun, setAwaitingRun] = useState(false);
+  /** The ids the list already held, so "new" means new and not merely "the
+   *  first list a slow poll happened to return". */
+  const seenRunIds = useRef<Set<string>>(new Set());
+  /** The instant the command was sent; a run older than it was already there. */
+  const awaitingSince = useRef(0);
   /** The create dialog, open with a typed goal when the command was diverted
    *  here because the runtime is not ready. */
   const [evolveCreate, setEvolveCreate] = useState<{
@@ -151,14 +194,65 @@ export function App({ initialToken }: Props) {
     checkpointMode?: "auto" | "confirm";
     goal?: string;
   } | undefined>();
+  /** A design command the dialog placed in the composer instead of sending.
+   *  Held here because the composer has two mounts — the welcome page and the
+   *  conversation — and the dialog opens over either. Cleared when the composer
+   *  sends, when the reader removes the token, and when the session changes: a
+   *  token that outlived its session would turn the next ordinary message into
+   *  a long, costly search the reader never asked for. */
+  const [seededCommand, setSeededCommand] = useState<SeededCommand>();
 
   // An open panel belongs to one session's searches, like a selected
   // subagent. The create dialog is deliberately left alone: it starts a run
   // in whichever session is open when it sends, and the session the app is
   // opening as it boots is not a reason to close a dialog the user just opened.
+  //
+  // The seeded command is not left alone: the dialog collected its goal for
+  // the session it was opened in, and the composer it would land in survives
+  // the switch.
   useEffect(() => {
     setEvolveRunId(undefined);
+    setAwaitingRun(false);
+    setSeededCommand(undefined);
+    seenRunIds.current = new Set();
   }, [state.sessionId]);
+
+  // A start is only visible once the list is re-read, and the list poll is
+  // idle until something is active. Looking every few seconds until the new
+  // run lands is what makes the panel open at the start rather than at the
+  // next unrelated refresh.
+  useEffect(() => {
+    if (!awaitingRun) return;
+    void refreshEvolve();
+    const timer = window.setInterval(() => void refreshEvolve(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [awaitingRun, refreshEvolve]);
+
+  // Open a run this window started. Everything the list held before the
+  // command is recorded as seen, and a run older than the command does not
+  // count even if a slow load delivers it late.
+  useEffect(() => {
+    const fresh = awaitingRun
+      ? evolve.runs.find((run) => {
+        if (seenRunIds.current.has(run.id)) return false;
+        const created = Date.parse(run.createdAt);
+        return Number.isNaN(created) || created >= awaitingSince.current - 2_000;
+      })
+      : undefined;
+    for (const run of evolve.runs) seenRunIds.current.add(run.id);
+    if (fresh === undefined) return;
+    setAwaitingRun(false);
+    setEvolveRunId(fresh.id);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  }, [awaitingRun, evolve.runs]);
+
+  // 任务 is a tab an open panel shows; when the Session's runs go away (a new
+  // Session, a deleted run) the tab goes with them, and an empty mode would
+  // leave the column with nothing in it.
+  useEffect(() => {
+    if (panelGroup === "task" && evolve.runs.length === 0) setPanelGroup("artifacts");
+  }, [evolve.runs.length, panelGroup]);
 
   // A search is created by the server while the agent's turn is running, and
   // the list is not polled until one is active. The created event is therefore
@@ -424,6 +518,48 @@ export function App({ initialToken }: Props) {
   }, []);
 
   /**
+   * What a citation chip does.
+   *
+   * An Artifact chip is the artifact, not a record about it: pressing it opens
+   * the document in a dialog in the middle of the window, the way the old web
+   * UI did — a panel of path / media type / content hash was a detour between
+   * the reader and the figure they cited. An Evidence chip has no document to
+   * open, so it keeps its card.
+   *
+   * The reference names the Session that wrote the artifact when the report
+   * carries one; the transcript's own Session is the fallback, since a chip is
+   * always rendered inside the Session that cited it.
+   *
+   * Stable across renders on purpose: the transcript and the panel are
+   * memoised on their props, and a new function here would make every chip
+   * press re-render every answer it sits in — which is the bulk of the wait
+   * between the press and the dialog.
+   */
+  const openReference = useCallback((reference: ComposerReference, sessionId?: string) => {
+    if (reference.kind === "artifact") {
+      // A new document is a new reading: the panel link belonged to the one
+      // before it.
+      setLinkedArtifactId(undefined);
+      setArtifactReference({ reference, sessionId });
+      return;
+    }
+    setMemoryReference({ reference, sessionId });
+  }, []);
+
+  const closeArtifactDialog = useCallback(() => {
+    setArtifactReference(undefined);
+    setLinkedArtifactId(undefined);
+  }, []);
+
+  // Same reason as `openReference`: the transcript is memoised, and this is a
+  // prop it would otherwise see as new on every render.
+  const decidePermission = useCallback(
+    (request: PermissionRequest, decision: PermissionDecision) =>
+      actions.decidePermission(request.id, decision),
+    [actions],
+  );
+
+  /**
    * Upload, then show where the file went.
    *
    * The files land in the workspace tree, which lives on the panel's home tab
@@ -447,7 +583,7 @@ export function App({ initialToken }: Props) {
   // to write into. The listeners are installed regardless of that: a file
   // dropped on a page that ignores it would otherwise navigate away from the
   // app entirely.
-  const canUpload = boot === "ready" && state.detail?.archivedAt === undefined;
+  const canUpload = boot === "ready" && state.detail?.archivedAt === undefined && !isEvidenceSessionReadOnly(state.detail);
   const dragging = useFileDrop((files) => void upload(files), canUpload);
 
   /** A session with nothing to read yet shows the welcome page instead of an
@@ -495,7 +631,19 @@ export function App({ initialToken }: Props) {
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
-  const sendMessage = (content: string) => {
+  const sendMessage = (content: string, command?: string) => {
+    if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return; }
+    // The token came from the design dialog, which collected the goal, the
+    // search and the no-sandbox consent before placing it. Sending it is a
+    // question about the sentence only, so the detour below — which is for
+    // commands typed by hand — does not apply.
+    if (command !== undefined) {
+      setSeededCommand(undefined);
+      awaitingSince.current = Date.now();
+      setAwaitingRun(true);
+      void actions.send(composeEvolveMessage(command, content));
+      return;
+    }
     const goal = evolveCommandGoal(content);
     if (goal !== undefined
         && (goal === "" || evolve.status.state !== "ready"
@@ -506,6 +654,10 @@ export function App({ initialToken }: Props) {
         goal: goal === "" ? undefined : goal,
       });
       return;
+    }
+    if (goal !== undefined) {
+      awaitingSince.current = Date.now();
+      setAwaitingRun(true);
     }
     void actions.send(content);
   };
@@ -627,6 +779,9 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(false);
     setOpenSubagentId(undefined);
     setOpenTool(undefined);
+    // A 上游文件 link is a relationship between two visible surfaces; one of
+    // them going away ends it.
+    setLinkedArtifactId(undefined);
     // The group belongs to the panel being open in the same way: a panel the
     // reader asked for again opens on 产物, not on the file tree they happened
     // to be browsing when they closed it.
@@ -644,18 +799,78 @@ export function App({ initialToken }: Props) {
     setSettingsOpen(true);
   };
 
-  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId);
-  const evolveLive = evolve.runs.some((run) => isEvolveRunActive(run.status));
+  /** The run the 任务 tab shows: the one the reader picked, else the one that
+   *  wants attention, else the newest. The tab appears for any run, so there is
+   *  always something behind it when the Session has one. */
+  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId)
+    ?? evolve.runs.find((run) => isEvolveRunActive(run.status))
+    ?? evolve.runs[0];
 
-  /** The header button goes to the search that wants attention — a running
-   *  one, else the newest — and starts one only when the session has none. */
+  /** Open a run in the panel: the card and 会话设置 both land here, and neither
+   *  should have to open the panel first. */
+  const showEvolveRun = (id: string) => {
+    setEvolveRunId(id);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  };
+
+  /** 会话设置's row goes to the search that wants attention — a running one,
+   *  else the newest — and starts one only when the session has none. */
   const openEvolve = () => {
     const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
     if (target === undefined) setEvolveCreate({});
-    else setEvolveRunId(target.id);
+    else showEvolveRun(target.id);
   };
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
+
+  /**
+   * A 上游文件 link inside the open artifact dialog.
+   *
+   * The dialog stays on the artifact the reader was reading: pressing a
+   * dependency is a question about *this* document, and swapping the document
+   * under the cursor would throw away the context the question came from. The
+   * dependency opens beside it in the panel instead.
+   *
+   * The panel needs no room to itself — it is already a column of the window,
+   * and opening it is what the link asks for. `panelOffset` is what keeps the
+   * dialog from covering it; neither surface draws any extra chrome for the
+   * link.
+   */
+  const openDependencyInPanel = (output: SessionArtifactOutput) => {
+    setWorkspaceOpen(true);
+    setPanelGroup("artifacts");
+    // The panel shows one record; a child's steps or a tool block would sit
+    // in front of the document the link asked for.
+    setOpenSubagentId(undefined);
+    setOpenTool(undefined);
+    setLinkedArtifactId(output.artifact.id);
+    // An open tab keeps its place and only its version moves: `openArtifact`
+    // focuses a tab that is already open rather than re-reading it, which
+    // would leave an older version of the dependency on screen.
+    const openTab = state.tabs.tabs.find(
+      (tab) => tab.artifactId === output.artifact.id,
+    );
+    if (openTab === undefined) {
+      void actions.openArtifact(output);
+      return;
+    }
+    actions.selectPanelTab(openTab.id);
+    if (openTab.versionId !== output.version.id) {
+      void actions.selectArtifactVersion(openTab.id, output);
+    }
+  };
+
+  // The dialog only keeps its offset while the panel is still showing the
+  // dependency: pointing the panel at another document or another group ends
+  // the gesture, and the dialog goes back to the middle of the window.
+  const activeArtifactId = state.tabs.tabs.find(
+    (tab) => tab.id === state.tabs.activeTabId,
+  )?.artifactId;
+  const linkedToPanel = linkedArtifactId !== undefined
+    && workspaceOpen
+    && panelGroup === "artifacts"
+    && activeArtifactId === linkedArtifactId;
 
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
@@ -670,10 +885,12 @@ export function App({ initialToken }: Props) {
     models: state.models,
     onApprovalMode: (mode) => void actions.setApprovalMode(mode),
     onClearAttachments: actions.clearAttachments,
+    onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
+    onEvolve: openEvolve,
     onOpenSettings: () => openSettings("models"),
     // A skill that has a setup surface opens it instead of dropping its
-    // command into the draft — the same dialog the header capsule opens.
+    // command into the draft — the same dialog 会话设置's evolve row opens.
     onPickSkill: (skill) => {
       if (!isEvolveSkill(skill)) return false;
       setEvolveCreate({});
@@ -689,13 +906,15 @@ export function App({ initialToken }: Props) {
     onUpload: (files) => void upload(files),
     // No name when the next conversation goes into no Project: the strip then
     // shows its invitation to choose one, which is what the inbox means from
-    // the welcome page — 最近会话 is the column's word for the result, not a
+    // the welcome page — 会话 is the column's word for the result, not a
     // place the user would pick.
     projectName: state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName,
     projects: state.projects,
     providers: state.providers,
     running: state.running,
+    seededCommand,
     selectedModelId: state.selectedModelId,
+    unavailableModel: Boolean(state.detail?.settingsOverrides.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
   };
@@ -731,6 +950,11 @@ export function App({ initialToken }: Props) {
         {taskSidebar ? (
           <Sidebar
             actions={actions}
+            onExportSession={session => {
+              if (session.projectId !== state.inboxProject?.id && !state.projects.some(project => project.id === session.projectId)) { actions.toast(TEXT.researchPackage.sourceUnavailable, "error"); return; }
+              setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId });
+            }}
+            onImportSession={() => setPackageRequest({ kind: "import", projectId: state.inboxProject?.id })}
             activeProjectId={state.activeProjectId}
             activeSessionId={state.sessionId}
             onToggleSidebar={() => setSidebarOpen(false)}
@@ -745,25 +969,14 @@ export function App({ initialToken }: Props) {
           <SessionBar
             actions={actions}
             detail={state.detail}
-            evolveLive={evolveLive}
-            evolveState={evolve.status.state}
-            onEvolve={openEvolve}
             onExpandSidebar={expandSidebar}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
-            // A Session outside every Project is not "in 最近会话": that is
+            // A Session outside every Project is not "in 会话": that is
             // the column's name for the list, not a place to print beside the
             // title, so the bar carries no Project at all for one.
             projectName={state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName}
             sidebarCollapsed={showExpand}
             workspaceOpen={workspaceOpen}
-          />
-          {/* A search keeps running after the turn that started it, so its
-              handle belongs to the session rather than to the transcript. The
-              shelf draws nothing at all for a session that has none. */}
-          <EvolveShelf
-            onNew={() => setEvolveCreate({})}
-            onOpen={setEvolveRunId}
-            runs={evolve.runs}
           />
           {landing ? (
             /* The page's category and its open topic row belong to one
@@ -774,18 +987,25 @@ export function App({ initialToken }: Props) {
               <Conversation
                 client={client}
                 detail={state.detail}
+                // A search keeps running after the turn that started it, so its
+                // card is the last thing the conversation produced. It draws
+                // nothing at all for a session that has no searches.
+                evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
                 loading={state.loadingSession}
-                onDecidePermission={(request, decision) => actions.decidePermission(request.id, decision)}
+                onDecidePermission={decidePermission}
                 onOpenSubagent={openSubagentDetails}
                 onOpenTool={openToolDetails}
+                onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
+                onReferenceClick={openReference}
                 pending={state.pendingMessage}
                 replays={state.replays}
                 run={state.run}
                 workspaceFiles={state.panelFiles}
               />
-              <Composer {...composerProps} />
+              {isEvidenceSessionReadOnly(state.detail) ? null : <Composer {...composerProps} />}
             </>
           )}
+          <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />
         </main>
 
         <WorkspacePanel
@@ -794,6 +1014,7 @@ export function App({ initialToken }: Props) {
           files={state.panelFiles}
           onCloseDetail={closePanelDetail}
           onCollapse={collapsePanel}
+          onReferenceClick={openReference}
           onSelectGroup={setPanelGroup}
           outputs={state.outputs}
           resize={resize}
@@ -802,6 +1023,13 @@ export function App({ initialToken }: Props) {
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
           subagentStale={subagentStale}
+          task={evolveRun === undefined ? undefined : <EvolveDetail
+            client={client}
+            key={evolveRun.id}
+            onError={(message) => actions.toast(message, "error")}
+            onRunChanged={() => void refreshEvolve()}
+            run={evolveRun}
+          />}
           tabs={state.tabs}
           tool={openTool}
         />
@@ -825,17 +1053,36 @@ export function App({ initialToken }: Props) {
         />
       ) : null}
 
-      {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
-
-      {evolveRun === undefined ? null : (
-        <EvolveOverlay
+      {artifactReference ? (
+        <ArtifactDialog
           client={client}
-          onClose={() => setEvolveRunId(undefined)}
-          onError={(message) => actions.toast(message, "error")}
-          onRunChanged={() => void refreshEvolve()}
-          run={evolveRun}
+          key={`artifact:${artifactReference.reference.id}:${artifactReference.reference.version ?? ""}`}
+          onClose={closeArtifactDialog}
+          onOpenArtifact={openDependencyInPanel}
+          onReferenceClick={openReference}
+          // Portaled dialogs sit outside the shell, so the panel's width is
+          // handed over as a number rather than read from `--panel-width`.
+          panelOffset={linkedToPanel ? resize.width : 0}
+          reference={artifactReference.reference}
+          sessionId={artifactReference.sessionId}
         />
-      )}
+      ) : null}
+
+      {memoryReference ? (
+        <MemoryCardDialog
+          client={client}
+          key={`${memoryReference.reference.kind}:${memoryReference.reference.id}:${memoryReference.reference.version ?? ""}`}
+          onClose={() => setMemoryReference(undefined)}
+          onOpenSettings={() => {
+            setMemoryReference(undefined);
+            openSettings("memory");
+          }}
+          reference={memoryReference.reference}
+          sessionId={memoryReference.sessionId}
+        />
+      ) : null}
+
+      {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
 
       {evolveCreate === undefined ? null : (
         <EvolveCreateDialog
@@ -849,7 +1096,12 @@ export function App({ initialToken }: Props) {
           onInitialize={() => void evolve.initialize()}
           onSend={(command) => {
             closeEvolveCreate();
-            void actions.send(command);
+            // The flags become a token in the composer and the goal becomes
+            // the sentence after it. The message leaves when the user says so,
+            // not when the dialog closes: the design usually needs a sentence
+            // of its own added after the goal.
+            const draft = splitEvolveCommand(command);
+            setSeededCommand({ command: draft.command, nonce: Date.now(), text: draft.goal });
           }}
           running={state.running}
           status={evolve.status}

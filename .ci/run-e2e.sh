@@ -21,9 +21,9 @@ repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 group="${1:-mocked}"
 case "$group" in
   mocked) ;;
-  real|legacy) ;;
+  real) ;;
   *)
-    printf 'Usage: .ci/run-e2e.sh [mocked|real|legacy]\n' >&2
+    printf 'Usage: .ci/run-e2e.sh [mocked|real]\n' >&2
     exit 2
     ;;
 esac
@@ -151,9 +151,6 @@ if [[ "$group" == "real" ]]; then
       exit 2
     fi
   done
-elif [[ "$group" == "legacy" && "${CI_ALLOW_LEGACY:-}" != "1" ]]; then
-  printf 'BLOCKED: set CI_ALLOW_LEGACY=1 to run unaudited legacy E2E.\n' | tee -a "$test_log" >&2
-  exit 2
 fi
 
 cd "$repository_root"
@@ -360,6 +357,12 @@ for busy_port in "${busy_ports[@]}"; do
 done
 
 # Give journey provenance checks the exact invocation used by this launcher.
+if [[ "$group" == real ]]; then
+  # Isolated real-test API only. Other Node children and normal product startup
+  # do not enable the observers; no prompt, URL or credential is collected.
+  export SD_CI_DIAGNOSTICS_DIR="$results_root/api-diagnostics"
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=\"$repository_root/.ci/api-diagnostics.mjs\""
+fi
 printf -v E2E_STARTUP_COMMAND '%q ' ./scripts/start-stack.sh "${stack_arguments[@]}"
 export E2E_STARTUP_COMMAND="${E2E_STARTUP_COMMAND% }"
 setsid ./scripts/start-stack.sh "${stack_arguments[@]}" > "$stack_log" 2>&1 &

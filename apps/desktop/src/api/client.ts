@@ -35,6 +35,15 @@ export function isAuthFailure(reason: unknown): boolean {
   return reason instanceof ApiRequestError && reason.status === 401;
 }
 
+/** The adapter's legacy proxy answers 502 `legacy_unavailable` when the legacy
+ *  API it forwards to could not be reached. It is a transient service failure,
+ *  never a user-facing explanation by itself. */
+export function isLegacyUnavailableError(reason: unknown): boolean {
+  return reason instanceof ApiRequestError
+    && reason.status === 502
+    && reason.message === "legacy_unavailable";
+}
+
 /** True for the rejection `fetch` and the body reader raise on abort. */
 export function isAbortError(reason: unknown): boolean {
   return typeof reason === "object" && reason !== null && (reason as { name?: unknown }).name === "AbortError";

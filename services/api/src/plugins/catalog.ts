@@ -6,10 +6,11 @@ import { manifest as scheduler } from "@sciencediscovery/scheduler/manifest";
 import { manifest as plan } from "@sciencediscovery/plan/manifest";
 import { builtinMcpSourceManifests } from "@sciencediscovery/mcp-sources/plugin";
 import { manifest as json } from "@sciencediscovery/artifact-json/manifest";
+import { manifest as researchPackage } from "@sciencediscovery/research-package/manifest";
 import type { PluginManifest } from "@sciencediscovery/plugin-sdk";
 
 /** Only installed trusted packages are advertised. No user-supplied entry imports. */
-export const installedPlugins: readonly PluginManifest[] = [skill, mcp, scheduler, plan, ...builtinMcpSourceManifests, json];
+export const installedPlugins: readonly PluginManifest[] = [skill, mcp, scheduler, plan, ...builtinMcpSourceManifests, json, researchPackage];
 // API installation capabilities, not evidence that a particular Run has activated them.
 export const hostServices = ["skill.catalog", "mcp.tools", "subagent.dispatch", "plan.store", "mcp.sources", "artifact.read"]
   .map((id) => ({ id, version: 1 }));

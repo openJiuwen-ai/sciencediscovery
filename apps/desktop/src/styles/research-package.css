@@ -1,0 +1,73 @@
+.side-new-split { display:flex; align-items:center; position:relative; }
+.side-new-split .side-new { flex:1; min-width:0; }
+.side-import-dropdown { position:absolute; right:24px; top:50%; transform:translateY(-50%); z-index:20; }
+.side-import-trigger { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; border-radius:7px; background:transparent; color:#8a908c; cursor:pointer; }
+.side-import-trigger:hover,.side-import-dropdown:focus-within .side-import-trigger { background:rgba(40,60,45,.06); color:#3c4a40; }
+.side-import-menu { display:none; position:absolute; right:0; top:100%; width:166px; padding:6px; background:#fff; border:1px solid #eceeea; border-radius:12px; box-shadow:0 8px 28px #16261d14; }
+.side-import-dropdown:hover .side-import-menu,.side-import-dropdown:focus-within .side-import-menu { display:block; }
+.side-import-menu .ctx-item { border-radius:7px; gap:10px; color:#414842; }
+.side-import-menu svg { flex-shrink:0; color:#788278; }
+.research-package-resume { padding:16px 28px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.research-package-source { align-self:flex-start; margin:8px 28px; border:0; background:none; color:var(--muted); font-size:12px; cursor:pointer; }
+.research-package-notice { color:var(--muted); font-size:12px; line-height:1.6; margin:8px 0; }
+.research-package-dialog { width:min(680px,calc(100vw - 32px)); max-height:85vh; overflow:hidden; display:flex; flex-direction:column; }
+.research-package-dialog .modal-body { min-height:0; overflow:auto; overflow-wrap:anywhere; }
+.research-package-dialog .modal-header,.research-package-dialog .modal-footer { flex-shrink:0; }
+.research-package-profiles { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:20px 0; }
+.research-package-profiles button { display:flex; flex-direction:column; text-align:left; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-m); padding:20px; cursor:pointer; transition:border-color .15s,box-shadow .15s,background .15s; }
+.research-package-profiles button:hover { border-color:var(--border-strong); box-shadow:var(--shadow-1); }
+.research-package-profiles button:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
+.research-package-profiles .is-selected { border-color:var(--primary); background:var(--primary-softer); box-shadow:0 0 0 1px var(--primary) inset; }
+.research-profile-heading { display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:18px; }
+.research-profile-icon { display:grid; place-items:center; width:42px; height:42px; border-radius:var(--radius-m); background:var(--surface-sunk); color:var(--text-secondary); }
+.is-selected .research-profile-icon { background:var(--primary-tint); color:var(--primary-strong); }
+.research-profile-check { display:grid; place-items:center; width:18px; height:18px; border:1px solid var(--border-strong); border-radius:50%; color:#fff; font-size:11px; }
+.is-selected .research-profile-check { background:var(--primary); border-color:var(--primary); }
+.research-package-profiles strong { font-size:15px; font-weight:600; }
+.research-profile-description { color:var(--muted); font-size:12px; line-height:1.8; margin-top:8px; min-height:44px; }
+.research-profile-contents { color:var(--text-secondary); font-size:11px; line-height:1.8; margin:14px 0 18px; }
+.research-package-size { display:flex; justify-content:space-between; flex-wrap:wrap; align-items:baseline; gap:8px; width:100%; border-top:1px solid var(--border-soft); padding-top:14px; margin-top:auto; }
+.research-package-size span { font-size:10px; color:var(--muted); }
+.research-package-size b { font-size:14px; font-weight:600; color:var(--text-strong); font-variant-numeric:tabular-nums; }
+/* The dialog's buttons deliberately keep the shared .primary-button /
+   .secondary-button styling (design.css): a bespoke green, 10px-radius primary
+   button here was the one control on this surface that did not match the rest
+   of the desktop app. */
+.research-import-project { display:block; margin-bottom:16px; color:var(--text-secondary); font-size:13px; font-weight:650; }
+/* The arrow's stroke stays a literal hex: it lives inside a data URI, which
+   cannot read a CSS custom property. `#667085` is that arrow's existing colour,
+   kept so this stays a pure token pass rather than a visual change. */
+.research-import-project select { width:100%; min-height:38px; margin-top:6px; padding:8px 12px; appearance:none; border:1px solid var(--border-strong); border-radius:var(--radius-s); background:var(--surface); color:var(--text); font-size:14px; background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23667085' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:30px; }
+.research-import-project > span { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:6px; }
+.research-package-options,.research-package-files { display:flex; flex-direction:column; gap:10px; margin:16px 0; }
+.research-package-files { max-height:180px; overflow:auto; font-size:12px; }
+/* The file picker is drawn here rather than by the platform control: a native
+   <input type="file"> renders its button in the browser/Electron locale, which
+   stays Chinese in an English UI. The input itself is kept for a11y and
+   keyboard use, visually hidden, and the label is the click target. */
+.research-package-upload { display:flex; align-items:center; gap:12px; border:1px dashed var(--border-strong); padding:14px 16px; border-radius:var(--radius-s); color:var(--text-secondary); font-size:13px; cursor:pointer; }
+.research-package-upload:focus-within { border-color:var(--primary); box-shadow:var(--shadow-glow); }
+.research-package-upload-trigger { flex-shrink:0; display:inline-flex; align-items:center; height:32px; padding:0 14px; border:1px solid var(--border-strong); border-radius:var(--radius-pill); background:var(--surface); color:var(--text); font-size:12px; }
+.research-package-upload:hover .research-package-upload-trigger { background:var(--surface-subtle); }
+.research-package-upload-filename { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+.research-package-upload-input { position:absolute; width:1px; height:1px; padding:0; margin:-1px; border:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); opacity:0; white-space:nowrap; }
+.research-package-status { font-size:12px; padding:8px 28px; display:flex; gap:12px; align-items:center; overflow-wrap:anywhere; }
+.research-package-status.is-failed { color:var(--danger); background:var(--danger-soft); }
+.research-package-error { color:var(--danger); font-size:13px; overflow-wrap:anywhere; }
+.research-import-review { border:1px solid var(--border); border-radius:var(--radius-s); padding:14px 16px; }
+.research-import-meta { color:var(--text-secondary); font-size:13px; margin-bottom:8px; }
+.research-import-omissions { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:12px; line-height:1.7; }
+@media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } }
+.research-package-progress-toggle { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; }
+.research-package-progress-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+.research-package-progress-list li { display:flex; align-items:center; gap:12px; }
+.research-package-progress-list button { border:0; background:none; color:var(--danger); cursor:pointer; font-size:11px; padding:0; }
+.research-package-flash { font-size:12px; padding:8px 28px; display:flex; gap:12px; align-items:center; overflow-wrap:anywhere; }
+.research-package-flash.is-success { color:var(--success); background:var(--success-soft); }
+.research-package-flash.is-error { color:var(--danger); background:var(--danger-soft); }
+.research-package-flash button { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
+.research-package-saved { border-top:1px solid var(--border-soft); margin-top:16px; padding-top:12px; }
+.research-package-saved h3 { font-size:12px; font-weight:600; color:var(--text-secondary); margin:0 0 8px; }
+.research-package-saved-row { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-secondary); padding:4px 0; overflow-wrap:anywhere; }
+.research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
+.research-package-saved-row .is-error { color:var(--danger); }

@@ -52,15 +52,24 @@ export function ExecutionBlockCards({ client, sessionId }: { client: ApiClient; 
   const [busy, setBusy] = useState<string>();
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let requestTimer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
     setBlocks([]); setError("");
     const poll = async () => {
-      try { const result = await client.listExecutionBlocks(sessionId); if (active) { setBlocks(result); setError(""); } }
-      catch (reason) { if (active) setError(String(reason)); }
-      finally { if (active) timer = setTimeout(poll, 2000); }
+      controller = new AbortController();
+      requestTimer = setTimeout(() => controller?.abort(), 5_000);
+      try {
+        const result = await client.listExecutionBlocks(sessionId, controller.signal);
+        if (active && !controller.signal.aborted) { setBlocks(result); setError(""); }
+      } catch (reason) { if (active) setError(String(reason)); }
+      finally {
+        clearTimeout(requestTimer);
+        if (active) timer = setTimeout(poll, 2_000);
+      }
     };
     void poll();
-    return () => { active = false; clearTimeout(timer); };
+    return () => { active = false; clearTimeout(timer); clearTimeout(requestTimer); controller?.abort(); };
   }, [client, sessionId]);
   const decide = async (id: string, decision: ExecutionBlockDecision) => {
     setBusy(id); setError("");

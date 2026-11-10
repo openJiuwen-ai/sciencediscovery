@@ -33,6 +33,7 @@ import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "../api.js";
 import { useLocale } from "../i18n/LocaleProvider.js";
+import { formatEvolveTargetReached } from "../i18n/locale.js";
 import { CloseIcon } from "../icons.js";
 
 import { isPlaceholderGoal } from "./command.js";
@@ -57,7 +58,7 @@ export interface EvolvePanelProps {
 }
 
 export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: EvolvePanelProps) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const [view, setView] = useState<EvolveRunView>(() => ({ ...emptyRunView(), status: run.status }));
   const [stopping, setStopping] = useState(false);
   // The canvas is the default and the table is a peer, not a fallback: a canvas
@@ -222,12 +223,7 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
             send the reader looking for a fault that is not there. */}
         {finishNotice?.kind === "target"
           ? <p className="evolve-notice">
-            {finishNotice.planned === null
-              ? t("evolve.panel.targetReached")
-              : t("evolve.panel.targetReachedEarly", {
-                made: finishNotice.made,
-                planned: finishNotice.planned,
-              })}
+            {formatEvolveTargetReached(locale, finishNotice.made, finishNotice.planned)}
           </p> : null}
         {finishNotice?.kind === "short"
           ? <p className="evolve-notice">

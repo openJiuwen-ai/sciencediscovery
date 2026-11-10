@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, cpSync, existsS
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonical, validatePlan, verifyResults } from '../test/support/tagged/plan.mjs';
-import { mockedShards } from '../test/support/tagged/execution.mjs';
+import { mockedBatches, mockedShards } from '../test/support/tagged/execution.mjs';
 
 export function reconcileMocked(plan, root) {
   validatePlan(plan);
@@ -21,11 +21,21 @@ export function reconcileMocked(plan, root) {
       // its cases, whereas an absent or mismatched artifact proves no run.
       results.push(...summary.results);
       if (summary.status !== 'PASS' || verifyResults(worker, summary.results).exitCode) errors.push(`${shard.name}: SHARD_FAILED`);
-      const evidence = join(directory, `mocked-${shard.fixture}`, 'e2e/jiuwenswarm-checks.json');
+      // The checks run in one batch of a shard, and shared.mjs names that
+      // batch's results directory by its mockedBatches key — `-global` only
+      // where the partition is split. Locate the file through the same
+      // projection instead of guessing a per-shard suffix.
+      const batches = mockedBatches(plan).filter(batch => batch.shard === shard.name);
+      const evidence = batch => join(directory, batch.key, 'e2e/jiuwenswarm-checks.json');
+      // A checks file outside the designated batch proves they ran on the
+      // wrong stack, or more than once.
+      if (batches.some(batch => !batch.checks.length && existsSync(evidence(batch)))) throw new Error('UNEXPECTED_SWARM_CHECKS');
       if (shard.checks.length) {
-        const checks = JSON.parse(readFileSync(evidence));
+        const checkBatches = batches.filter(batch => batch.checks.length);
+        if (checkBatches.length !== 1) throw new Error('SWARM_CHECKS_BATCH_UNDEFINED');
+        const checks = JSON.parse(readFileSync(evidence(checkBatches[0])));
         if (canonical(checks) !== canonical(shard.checks.map(name => ({ name, outcome: 'PASS' })))) throw new Error('SWARM_CHECKS_INCOMPLETE');
-      } else if (existsSync(evidence)) throw new Error('UNEXPECTED_SWARM_CHECKS');
+      }
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }
   }
   return verifyResults(plan, results, errors);

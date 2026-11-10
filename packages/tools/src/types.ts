@@ -12,6 +12,8 @@ export interface AgentToolResult {
    * the result still exceeds the hard bound.
    */
   bounded?: boolean;
+  /** Complete safe output to retain when a model projection loses information. */
+  retainedContent?: string;
   content: Array<{ text: string; type: "text" }>;
   details?: unknown;
 }

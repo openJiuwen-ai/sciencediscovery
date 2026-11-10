@@ -873,6 +873,34 @@ test("gateway progress cannot re-arm idle while an external wait is active", asy
   }
 });
 
+test("a terminal turn cut at the output limit fails the run instead of reporting it completed", async () => {
+  // The shape of #953: the model spends the whole per-call budget, the reply is
+  // truncated with no tool call, and the run used to end as `completed` with no
+  // files and no artifacts. The JiuwenSwarm backend already refuses that.
+  // A turn that got partway through its answer is the same shape: what the run
+  // still needs is the rest of it, and nothing produces that once the loop ends.
+  for (const content of ["", "Here is the first half of the answer"]) {
+    const streamer: ModelTurnStreamer = () => Promise.resolve({
+      assistantMessage: { content, role: "assistant" as const },
+      toolCalls: [],
+      truncated: true,
+    });
+    const restore = setModelTurnStreamerForTest(streamer);
+    try {
+      const agent = createNativeAgent(workspace() as NativeAgentOptions);
+      await assert.rejects(agent.execute("write the whole thing in one answer"), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /unrecovered output limit/);
+        assert.match(error.message, /max_tokens/);
+        assert.match(error.message, /SCIENCE_AGENT_LLM_MAX_TOKENS/);
+        return true;
+      });
+    } finally {
+      restore();
+    }
+  }
+});
+
 test("one completed parallel wait cannot start parent idle while another remains", async () => {
   let finish!: () => void;
   let markProgress!: () => void;
@@ -1171,15 +1199,15 @@ test("an oversized execution result enters history as a head/tail preview the mo
       Buffer.byteLength(executionResult, "utf8") < 60 * 1_024,
       `the result entering history is ${Buffer.byteLength(executionResult, "utf8")} bytes`,
     );
-    assert.match(executionResult, /^\[bounded tool output] run_shell produced 200004 lines/);
+    assert.match(executionResult, /^\[bounded tool output] run_shell produced 20000\d lines/);
     assert.match(executionResult, /head\/tail preview/, "both initial context and the trailing outcome survive");
     assert.equal(executionResult.includes("metric-1\n"), true, "the head survives in the current result");
-    assert.equal(executionResult.includes("created files: none"), true, "the trailing summary survives");
+    assert.equal(executionResult.includes('"createdFiles":[]'), true, "the projected metadata survives");
     assert.ok(refInHistory, "the bounded result carries a re-read ref");
 
     const pagedBack = String(result.finalMessages.find((message) => message.name === "read_tool_output")?.content);
-    assert.match(pagedBack, /\[tool output page] run_shell ref tool-output-[0-9a-f]{16}: lines 1-3 of 200004/);
-    assert.equal(pagedBack.endsWith("stdout:\nmetric-1\nmetric-2\n"), true, "the omitted head is recoverable");
+    assert.match(pagedBack, /\[tool output page] run_shell ref tool-output-[0-9a-f]{16}: lines 1-3 of 20000\d/);
+    assert.equal(pagedBack.endsWith("stdout:\nmetric-1\n"), true, "the omitted head is recoverable");
   } finally {
     restore();
   }

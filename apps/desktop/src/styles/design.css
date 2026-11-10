@@ -275,8 +275,12 @@ body.is-resizing {
   transform: rotate(180deg);
 }
 
-/* A Project row carries a `+` beside its toggle. The toggle keeps `width:
-   100%` everywhere else, so only here is it made shrinkable. */
+/* A Project row carries a `+` and a `⋯` beside its toggle. The toggle keeps
+   `width: 100%` everywhere else, so only here is it made shrinkable: `flex: 1`
+   shares the row with the actions, and `min-width: 0` lets it fall below the
+   name's own width. Without it a button's automatic minimum size is the whole
+   name, so a long name refused to ellipsize and pushed the actions off the row
+   — invisible, because the column clips its horizontal overflow. */
 .side-row.side-project {
   padding-right: 8px;
 }
@@ -284,6 +288,7 @@ body.is-resizing {
 .side-row.side-project .side-project-toggle {
   flex: 1;
   width: auto;
+  min-width: 0;
 }
 
 .side-row.side-project.is-active {

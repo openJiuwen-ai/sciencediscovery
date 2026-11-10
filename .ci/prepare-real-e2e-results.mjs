@@ -18,7 +18,9 @@ import { fileURLToPath } from "node:url";
 import { projectMetrics } from "./biomni-gate.mjs";
 import { executionMeasurements } from "./case-execution.mjs";
 
-const metrics = new Set(["benchmark-metrics.json", "team-metrics.json", "evolve-metrics.json"]);
+// case-metrics.json carries only plan identity and shared counts for a real
+// case without benchmark, team or evolve metrics of its own.
+const metrics = new Set(["benchmark-metrics.json", "team-metrics.json", "evolve-metrics.json", "case-metrics.json"]);
 const planFiles = new Set(["plan.json", "summary.json", "preflight.json"]);
 
 // Metrics embed prompts, delivery text and judge transcripts in the diagnostic

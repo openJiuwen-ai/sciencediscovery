@@ -120,3 +120,46 @@ test("reader errors remain failures instead of being converted to readiness", as
   await setImmediate();
   assert.equal(read.mock.callCount(), 1);
 });
+
+test("a disabled Python base fails its readiness precondition without polling", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const disabled = { state: "disabled", message: "Scientific environments are disabled" };
+  const read = context.mock.fn(async () => disabled);
+  assert.deepEqual(await waitForEnvironmentSetup(read), disabled);
+  assert.equal(read.mock.callCount(), 1);
+});
+
+test("a hung GET fails after ten seconds even if the reader ignores its timeout", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let finishRead!: (setup: typeof ready) => void;
+  const read = context.mock.fn((_timeoutMs: number) => new Promise<typeof ready>(resolve => { finishRead = resolve; }));
+  let settled = false;
+  const result = waitForEnvironmentSetup(read).finally(() => { settled = true; });
+  const rejected = assert.rejects(result, /request did not complete within 10000 ms/);
+  assert.equal(read.mock.calls[0]?.arguments[0], 10_000);
+  context.mock.timers.tick(9_999);
+  await setImmediate();
+  assert.equal(settled, false);
+  context.mock.timers.tick(1);
+  await rejected;
+  finishRead(ready);
+  await setImmediate();
+  assert.equal(read.mock.callCount(), 1);
+});
+
+test("the last GET receives only the remaining total readiness budget", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  const budgets: number[] = [];
+  const read = async (timeoutMs: number) => { budgets.push(timeoutMs); return installing; };
+  const result = waitForEnvironmentSetup(read);
+  await setImmediate();
+  for (let seconds = 5; seconds <= 175; seconds += 5) {
+    context.mock.timers.tick(5_000);
+    await setImmediate();
+  }
+  assert.equal(budgets[0], 10_000);
+  assert.equal(budgets.at(-1), 5_000);
+  context.mock.timers.tick(5_000);
+  assert.deepEqual(await result, installing);
+  assert.equal(budgets.length, 36);
+});

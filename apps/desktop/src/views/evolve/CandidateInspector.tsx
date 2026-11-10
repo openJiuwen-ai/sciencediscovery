@@ -13,47 +13,59 @@
 // limitations under the License.
 
 /**
- * One candidate, with the diff against its parent as the main thing.
+ * One node, as the drawer over the tree.
  *
- * Diff rather than the whole program: a winning program grows from a few
- * hundred characters to a few thousand, and the interesting part is the few
- * lines that are new. A failed candidate shows its error instead — there is
- * nothing to diff, and the error is the only thing that would help.
+ * The handoff orders it as a reader actually asks: which node is this and is it
+ * the winner, where did it come from, how did it score and how much did it
+ * branch, what did it change, and finally the code itself. The last block is a
+ * diff against the parent rather than the whole program — a winning program
+ * grows from a few hundred characters to a few thousand, and the interesting
+ * part is the few lines that are new.
  *
- * The scores stay apart for the same reason the chart draws them apart:
- * rollout is what the search saw, gate is what decided.
+ * Expanding the source opens the same diff in the middle of the window. Both
+ * views read one diff, so a line cannot be hidden in one and shown in the
+ * other.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../../api/client.js";
 import { getEvolveCandidate } from "../../api/evolve.js";
 import type { EvolveCandidateView } from "../../evolve/model.js";
-import { formatScore, verdictOf } from "../../evolve/model.js";
-import { collapseContext, diffLines, type DiffRow } from "../../evolve/text-diff.js";
+import { formatScore } from "../../evolve/model.js";
+import { collapseContext, diffLines } from "../../evolve/text-diff.js";
 import { TEXT } from "../../text.js";
-import { EvolveGlyph } from "./glyphs.js";
+import { claimsEscape } from "../dialog-escape.js";
+import { ChildrenGlyph, CrownGlyph, ExpandGlyph, TrophyGlyph } from "./glyphs.js";
 
 type Sources = { after: string; before: string } | "loading" | "missing";
 
 export interface CandidateInspectorProps {
-  candidate?: EvolveCandidateView;
+  /** Whether this node is the best in the run. */
+  best?: boolean;
+  candidate: EvolveCandidateView;
+  childCount: number;
   client: ApiClient;
   onClose: () => void;
   parent?: EvolveCandidateView;
   runId: string;
 }
 
-export function CandidateInspector({ candidate, client, onClose, parent, runId }: CandidateInspectorProps) {
+export function CandidateInspector({
+  best = false,
+  candidate,
+  childCount,
+  client,
+  onClose,
+  parent,
+  runId,
+}: CandidateInspectorProps) {
   const [sources, setSources] = useState<Sources>("loading");
+  const [expanded, setExpanded] = useState(false);
+  const titleId = useId();
 
   useEffect(() => {
-    if (candidate === undefined) return;
-    // A root has no parent to compare against, so there is nothing to fetch.
-    if (candidate.parentIndex === null) {
-      setSources("missing");
-      return;
-    }
     const own = candidate.codeHash;
     if (own === undefined) {
       setSources("missing");
@@ -65,8 +77,8 @@ export function CandidateInspector({ candidate, client, onClose, parent, runId }
       try {
         const [after, before] = await Promise.all([
           getEvolveCandidate(client, runId, own),
-          // The baseline has no parent hash; an empty "before" makes the diff
-          // read as "all of this is new", which for the first expansion is true.
+          // The root has no parent to compare against; an empty "before" makes
+          // the diff read as "all of this is the starting point", which is true.
           parent?.codeHash === undefined
             ? Promise.resolve({ hash: "", source: "" })
             : getEvolveCandidate(client, runId, parent.codeHash),
@@ -80,87 +92,163 @@ export function CandidateInspector({ candidate, client, onClose, parent, runId }
     return () => {
       cancelled = true;
     };
-  }, [candidate, client, parent?.codeHash, runId]);
+  }, [candidate.codeHash, client, parent?.codeHash, runId]);
 
-  if (candidate === undefined) {
-    return <div className="evolve-inspector-empty">
-      <span aria-hidden="true" className="evolve-inspector-mark"><EvolveGlyph size={22} /></span>
-      <strong>{TEXT.evolve.inspector.emptyTitle}</strong>
-      <p>{TEXT.evolve.inspector.emptyBody}</p>
-    </div>;
-  }
+  // A new selection is a new node: the full-window source view of the old one
+  // has nothing to do with it.
+  useEffect(() => {
+    setExpanded(false);
+  }, [candidate.nodeIndex]);
 
-  const root = candidate.parentIndex === null;
-  const verdict = verdictOf(candidate);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!claimsEscape(event)) return;
+      event.preventDefault();
+      setExpanded(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
   const rows = typeof sources === "object"
     ? collapseContext(diffLines(sources.before, sources.after))
-    : { hidden: 0, rows: [] as DiffRow[] };
+    : { hidden: 0, rows: [] };
+  const score = candidate.gateScore ?? candidate.score;
+  const root = candidate.parentIndex === null;
 
-  return <div className="evolve-inspector-body">
-    <header className="evolve-inspector-head">
-      <div>
-        <p className="evolve-inspector-eyebrow">
-          {TEXT.evolve.inspector.title} #{candidate.nodeIndex}
-          {root
-            ? ` · ${TEXT.evolve.inspector.depth} 0`
-            : ` · ${TEXT.evolve.inspector.parent} #${candidate.parentIndex} · ${TEXT.evolve.inspector.depth} ${candidate.depth}`}
-        </p>
-        <h3>{candidate.changeSummary || (root ? TEXT.evolve.table.root : "—")}</h3>
-      </div>
-      <button aria-label={TEXT.evolve.inspector.close} className="evolve-inspector-close" onClick={onClose} type="button">
+  return <div className="evolve-drawer">
+    <header className="evolve-drawer-head">
+      <h2>
+        {TEXT.evolve.detail.nodeTitle(candidate.nodeIndex)}
+        {best ? <span className="evolve-node-best">
+          <CrownGlyph size={12} />
+          {TEXT.evolve.detail.bestTag}
+        </span> : null}
+      </h2>
+      <button
+        aria-label={TEXT.evolve.detail.closeInspector}
+        className="evolve-drawer-close"
+        onClick={onClose}
+        title={TEXT.evolve.detail.closeInspector}
+        type="button"
+      >
         ×
       </button>
     </header>
 
-    <span className={`evolve-verdict is-${root ? "root" : verdict}`}>
+    <p className="evolve-drawer-meta">
       {root
-        ? TEXT.evolve.table.root
-        : verdict === "accepted" ? TEXT.evolve.table.accepted
-          : verdict === "failed" ? TEXT.evolve.table.failed
-            : verdict === "violated" ? candidate.rejectedBy ?? TEXT.evolve.table.violated
-              : TEXT.evolve.table.rejected}
-    </span>
+        ? TEXT.evolve.detail.root
+        : `${TEXT.evolve.inspector.parent} #${candidate.parentIndex} · ${TEXT.evolve.detail.generation(candidate.depth)}`}
+    </p>
 
-    <dl className="evolve-inspector-scores">
-      <div><dt>{TEXT.evolve.inspector.gate}</dt><dd>{formatScore(candidate.gateScore)}</dd></div>
-      <div><dt>{TEXT.evolve.inspector.rollout}</dt><dd>{formatScore(candidate.rolloutScore ?? candidate.score)}</dd></div>
-      {/* Only when a judged prior actually rated this one. A dash for every
-          run without the factor would put an empty column in front of
-          everybody to serve the few runs that use it. */}
-      {candidate.promise === undefined ? null : <div>
-        <dt>{TEXT.evolve.inspector.prior}</dt>
-        <dd>{candidate.promise.toFixed(1)}</dd>
-      </div>}
-      <div><dt>{TEXT.evolve.inspector.visits}</dt><dd>{candidate.visits}</dd></div>
-    </dl>
+    <div className="evolve-drawer-tiles">
+      <div className="evolve-drawer-tile is-score">
+        <span aria-hidden="true" className="evolve-drawer-tile-icon"><TrophyGlyph size={20} /></span>
+        <span className="evolve-drawer-tile-value">{candidate.valid ? formatScore(score) : "-"}</span>
+        <span className="evolve-drawer-tile-label">{TEXT.evolve.detail.score}</span>
+      </div>
+      <div className="evolve-drawer-tile is-children">
+        <span aria-hidden="true" className="evolve-drawer-tile-icon"><ChildrenGlyph size={20} /></span>
+        <span className="evolve-drawer-tile-value">{childCount}</span>
+        <span className="evolve-drawer-tile-label">{TEXT.evolve.detail.children}</span>
+      </div>
+    </div>
 
-    {candidate.valid ? null : <section className="evolve-inspector-error">
-      <h4>{TEXT.evolve.inspector.error}</h4>
+    <p className="evolve-drawer-note">
+      {candidate.changeSummary
+        || candidate.reason
+        || candidate.error
+        || (root ? TEXT.evolve.inspector.noParent : "—")}
+    </p>
+
+    {candidate.valid ? null : <section className="evolve-drawer-error">
+      <h3>{TEXT.evolve.inspector.error}</h3>
       {/* The full text, not a truncation: the tail of a traceback is usually
           the half that says what to change. */}
       <pre>{candidate.error || candidate.reason || "—"}</pre>
     </section>}
 
-    {root ? <p className="evolve-inspector-note">{TEXT.evolve.inspector.noParent}</p> : <section className="evolve-diff-block">
-      <h4>{TEXT.evolve.inspector.diff}</h4>
-      {sources === "loading" ? <p className="evolve-inspector-note">{TEXT.evolve.inspector.loading}</p> : null}
-      {sources === "missing" ? <p className="evolve-inspector-note">{TEXT.evolve.inspector.unavailable}</p> : null}
-      {typeof sources === "object" && rows.rows.length === 0
-        ? <p className="evolve-inspector-note">{TEXT.evolve.inspector.unchanged}</p>
-        : null}
-      {rows.rows.length === 0 ? null : <div className="evolve-diff">
-        {rows.rows.map((row, at) => <div className={`evolve-diff-row is-${row.kind}`} key={at}>
-          <span aria-hidden="true" className="evolve-diff-num">{row.leftLine ?? ""}</span>
-          <span aria-hidden="true" className="evolve-diff-num">{row.rightLine ?? ""}</span>
-          <span aria-hidden="true" className="evolve-diff-mark">
-            {row.kind === "added" ? "+" : row.kind === "removed" ? "−" : " "}
-          </span>
-          <code className="evolve-diff-text">{row.text || " "}</code>
-        </div>)}
-      </div>}
-      {rows.hidden > 0 ? <p className="evolve-inspector-note">
+    <section className="evolve-drawer-source">
+      <header>
+        <h3>{TEXT.evolve.detail.source}</h3>
+        <button
+          aria-label={TEXT.evolve.detail.expandSource}
+          className="evolve-drawer-expand"
+          disabled={typeof sources !== "object"}
+          onClick={() => setExpanded(true)}
+          title={TEXT.evolve.detail.expandSource}
+          type="button"
+        >
+          <ExpandGlyph />
+        </button>
+      </header>
+      <SourceBody rows={rows.rows} sources={sources} />
+      {rows.hidden > 0 ? <p className="evolve-source-hidden">
         {TEXT.evolve.inspector.hidden(rows.hidden)}
       </p> : null}
-    </section>}
+    </section>
+
+    {!expanded ? null : createPortal(
+      <div
+        className="evolve-source-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setExpanded(false);
+        }}
+      >
+        <section
+          aria-labelledby={titleId}
+          aria-modal="true"
+          className="evolve-source-modal"
+          role="dialog"
+        >
+          <header className="evolve-source-head">
+            <h2 id={titleId}>{TEXT.evolve.detail.source}</h2>
+            <button
+              aria-label={TEXT.evolve.detail.closeSource}
+              className="evolve-drawer-close"
+              onClick={() => setExpanded(false)}
+              title={TEXT.evolve.detail.closeSource}
+              type="button"
+            >
+              ×
+            </button>
+          </header>
+          <div className="evolve-source-scroll">
+            <SourceBody rows={rows.rows} sources={sources} />
+            {rows.hidden > 0 ? <p className="evolve-source-hidden">
+              {TEXT.evolve.inspector.hidden(rows.hidden)}
+            </p> : null}
+          </div>
+        </section>
+      </div>,
+      document.body,
+    )}
+  </div>;
+}
+
+function SourceBody({ rows, sources }: {
+  rows: ReturnType<typeof collapseContext>["rows"];
+  sources: Sources;
+}) {
+  if (sources === "loading") {
+    return <p className="evolve-inspector-note">{TEXT.evolve.inspector.loading}</p>;
+  }
+  if (sources === "missing") {
+    return <p className="evolve-inspector-note">{TEXT.evolve.inspector.unavailable}</p>;
+  }
+  if (rows.length === 0) {
+    return <p className="evolve-inspector-note">{TEXT.evolve.inspector.unchanged}</p>;
+  }
+  return <div className="evolve-diff">
+    {rows.map((row, at) => <div className={`evolve-diff-row is-${row.kind}`} key={at}>
+      <span aria-hidden="true" className="evolve-diff-num">{row.leftLine ?? ""}</span>
+      <span aria-hidden="true" className="evolve-diff-num">{row.rightLine ?? ""}</span>
+      <span aria-hidden="true" className="evolve-diff-mark">
+        {row.kind === "added" ? "+" : row.kind === "removed" ? "−" : " "}
+      </span>
+      <code className="evolve-diff-text">{row.text || " "}</code>
+    </div>)}
   </div>;
 }

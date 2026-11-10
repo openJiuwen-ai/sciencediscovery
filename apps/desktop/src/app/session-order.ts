@@ -56,7 +56,7 @@ export function untitled(title: string): boolean {
 }
 
 /**
- * The Sessions the sidebar lists per Project, and the ones 最近会话 counts.
+ * The Sessions the sidebar lists per Project, and the ones 会话 counts.
  *
  * An untitled Session is one nothing has been written in yet, because the
  * service names a Session from its first message wherever that message is

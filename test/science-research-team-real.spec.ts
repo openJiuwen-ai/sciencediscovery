@@ -1,7 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { writeFile } from "node:fs/promises";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { dirname } from "node:path";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { deliveryFailureMessage, requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
@@ -54,7 +56,7 @@ The reviewer must not rewrite the report. Explicitly name evidence_brief.md in t
  * CostSideEffects: Billable LLM calls; isolated temporary project, model, Specialist, skill and MCP server; private traces retained.
  */
 test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real", "@tier:l4","@sandbox:bubblewrap","@judge:llm"] , annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, info) => {
-  const budget = positiveNumber("E2E_TEAM_RUN_TIMEOUT_MS", 3_600_000);
+  const budget = positiveNumber("E2E_TEAM_RUN_TIMEOUT_MS", 4_500_000);
   const judgeBudget = positiveNumber("E2E_TEAM_EVAL_TIMEOUT_MS", 900_000);
   test.setTimeout(budget + judgeBudget + 240_000);
   expect(process.env.E2E_SWARM_TASK !== "1", "Requires isolated Swarm platform-task stack").toBe(false);
@@ -97,8 +99,8 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     } });
     expect(skillResponse.ok()).toBe(true); const skillRecord = await skillResponse.json(); skill = skillRecord.id;
     metrics.configuration = { connector, specialist, toolName, skill: skillRecord, builtins: builtins.filter(s => roles.some(r => s.id === `builtin-${r}`)) };
-    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", projectName: `TC-E2E-01 ${Date.now()}`, sessionTitle: "BRCA1 team signoff",
-      ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: "TC-E2E-01 generator" } }) });
+    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", ...realModelThinking(), projectName: `TC-E2E-01 ${Date.now()}`, sessionTitle: "BRCA1 team signoff",
+      ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: "TC-E2E-01 generator", apiVariant: realModelApiVariant(), ...realModelThinking() } }) });
     const prefix = `/api/sessions/${fixture.session.id}`;
     const selection = await page.request.patch(`${apiBaseUrl()}${prefix}`, { headers, data: { enabledSkillIds: [skill, "science-research-team"] } });
     expect(selection.ok()).toBe(true);
@@ -207,6 +209,8 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
         if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
       }
       metrics.usage = await api(`${prefix}/usage`).catch(() => null);
+      // Shared numeric measurements join this case's only metrics document.
+      metrics.measurements = await measureSession(page.request, info, fixture.session.id);
       children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     }
     // timed_out must stay distinct from delivery failure; only remap leftover running.

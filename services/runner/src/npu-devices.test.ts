@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
 
@@ -748,6 +748,115 @@ describe("an execution request drives the sandbox's cards", () => {
     );
     assert.deepEqual(asked, [[4]], "the execution probes the card it asked for");
     assert.equal(cached.devices[0]?.sandboxUsable, true, "the cached verdict is what it contradicts");
+  });
+
+  test("an immediate bubblewrap failure is reported instead of leaving the execution pending", { timeout: 5_000 }, async (context) => {
+    // Hold the seccomp fd close while the shim exits. Observing the child must
+    // not wait for that close: awaiting it delivers the exit first, and the
+    // execution then stays pending until execTimeoutMs.
+    const { config, request } = await fixture(context, inventory([
+      { chipName: "910B3", health: "OK", hostIndex: 1_000_000, sandboxUsable: true },
+    ]));
+    const shim = resolve(config.dataDir, "bwrap");
+    await writeFile(shim, "#!/bin/sh\necho \"bwrap: Can't find source path /dev/davinci1000000: No such file or directory\" >&2\nexit 1\n");
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 1_500;
+    config.closeSeccompFilter = async (handle) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await handle.close();
+    };
+    const started = Date.now();
+    const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [1_000_000] });
+    assert.ok(Date.now() - started < 250, `exit was reported only after ${Date.now() - started}ms; the seccomp close must not be awaited`);
+    assert.notEqual(python.exitCode, 0);
+    assert.match(python.stderr, /\/dev\/davinci1000000/u);
+  });
+
+  test("a signalled child whose close was missed keeps the stop reason", { timeout: 5_000 }, async (context) => {
+    // Die by SIGKILL after listeners are attached, and leave a grandchild on
+    // the same pipes so Node records signalCode without emitting close. The
+    // timeout settle path must reject with that reason: exitCode is null.
+    const { config, request } = await fixture(context);
+    const shim = resolve(config.dataDir, "bwrap");
+    await writeFile(shim, [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"--unshare-all\" ]; then exit 0; fi",
+      "sleep 0.15",
+      "sleep 30 &",
+      "kill -9 $$",
+      "",
+    ].join("\n"));
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 800;
+    await assert.rejects(
+      executePython(config, { ...request, code: "print('unreached')" }),
+      /Python execution timed out after 800 ms/u,
+    );
+  });
+
+  test("a managed execution settles when its process exits but close is missed", { timeout: 5_000 }, async (context) => {
+    // The command completes, then leaves a descendant holding the inherited
+    // stdout pipes, so Node records `exit` but never emits `close`. Managed
+    // executions carry no execution timeout, so their exit alone must end them.
+    const { config, request } = await fixture(context);
+    const shim = resolve(config.dataDir, "bwrap");
+    await writeFile(shim, [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"--unshare-all\" ]; then exit 0; fi",
+      "printf 'result\\n'",
+      "sleep 5 &",
+      "exit 0",
+      "",
+    ].join("\n"));
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 0;
+    config.terminationGraceMs = 150;
+    const started = Date.now();
+    const shell = await executeShell(config, { ...request, code: "printf 'unreached\\n'", executionId: "close-missed-managed" });
+    assert.equal(shell.exitCode, 0, shell.stderr);
+    assert.match(shell.stdout, /^result$/mu);
+    assert.ok(Date.now() - started < 2_000,
+      `the execution stayed pending for ${Date.now() - started} ms after its command exited`);
+  });
+
+  test("a kill whose exit is never observed settles as unverified instead of pending", { timeout: 5_000 }, async (context) => {
+    // Model a process the Runner cannot reap: the signal never lands, so `exit`
+    // never arrives and no timeout would ever fire for a managed execution.
+    const { config, request } = await fixture(context);
+    const shim = resolve(config.dataDir, "bwrap");
+    const pidFile = resolve(config.dataDir, "shim.pid");
+    await writeFile(shim, [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"--unshare-all\" ]; then exit 0; fi",
+      `echo $$ > '${pidFile}'`,
+      "exec sleep 30",
+      "",
+    ].join("\n"));
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 0;
+    config.terminationGraceMs = 150;
+    const kill = process.kill.bind(process);
+    context.mock.method(process, "kill", () => true);
+    const controller = new AbortController();
+    const started = Date.now();
+    const run = executeShell(config, { ...request, code: "printf 'unreached\\n'", executionId: "kill-unverified" }, controller.signal);
+    setTimeout(() => controller.abort(), 100);
+    await assert.rejects(run, (error: Error & { code?: string }) => {
+      assert.equal(error.code, "PROCESS_TERMINATION_UNVERIFIED");
+      return true;
+    });
+    assert.ok(Date.now() - started < 2_000, `the cancelled execution stayed pending for ${Date.now() - started} ms`);
+    // The mock kept the signal from ever reaching the process; clean it up with
+    // the real kill so this test does not leave the command running.
+    context.mock.restoreAll();
+    const pid = Number((await readFile(pidFile, "utf8")).trim());
+    try { kill(pid, "SIGKILL"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
   });
 
   test("an execution without cards never reaches the probe", async (context) => {

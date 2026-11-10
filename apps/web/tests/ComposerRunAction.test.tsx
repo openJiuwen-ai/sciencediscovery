@@ -106,14 +106,14 @@ test("the configuration card appears only after a draft is submitted for this Se
   assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", false, true), false);
 });
 
-test("a missing-model notice keeps the manual configuration entry available", () => {
+test("a missing-model notice offers direct selection or model settings", () => {
   for (const reason of ["no-session-model", "no-system-models"] as const) {
     const notice = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
       onOpenConfiguration: () => undefined,
       reason,
     }));
-    assert.match(notice, /Configure in conversation<\/button>/);
-    assert.match(notice, /Ask a question or configure one here\./);
+    assert.match(notice, reason === "no-system-models" ? /Open model settings<\/button>/ : /Choose a model<\/button>/);
+    assert.match(notice, reason === "no-system-models" ? /No models are configured/ : /Choose a task model below to continue/);
   }
 });
 

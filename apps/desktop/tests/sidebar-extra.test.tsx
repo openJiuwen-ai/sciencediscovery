@@ -110,7 +110,7 @@ describe("the running Session", () => {
     assert.ok(!markup.includes("side-spinner"));
   });
 
-  it("says 暂无会话 for an empty Project and 还没有最近会话 for no inbox", () => {
+  it("says 暂无会话 for an empty Project and 还没有会话 for no inbox", () => {
     const markup = render({ projects: [project("p1", "材料项目")] });
 
     assert.ok(markup.includes(TEXT.sidebar.noTasks));

@@ -119,6 +119,8 @@ SUBAGENT PROMPTS:
 }
 
 export interface RuntimeSkill {
+  /** Library references can be imported on first use even with Desktop's explicit catalog switches. */
+  importOnRun?: boolean;
   content: string;
   description: string;
   hash: string;
@@ -354,6 +356,8 @@ export interface WorkspaceAgentOptions {
   npuBroker?: WorkspaceToolOptions["npuBroker"];
   observeNpuJob?: WorkspaceToolOptions["observeNpuJob"];
   history?: AgentHistoryMessage[];
+  /** Seed the restored conversation into the executor's model context on every run of an imported/research-copy session (#984). */
+  seedModelContext?: boolean;
   artifactDownload?: WorkspaceToolOptions["artifactDownload"];
   materializeArtifact?: WorkspaceToolOptions["materializeArtifact"];
   declareArtifact?: WorkspaceToolOptions["declareArtifact"];

@@ -29,7 +29,7 @@ interface Props {
   label: string;
   onCreateProject: (name: string) => void;
   /** `undefined` means no Project at all: the inbox, whose Sessions the column
-   *  lists under 最近会话. */
+   *  lists under 会话. */
   onSelectProject: (projectId?: string) => void;
   projects: Project[];
 }
@@ -79,7 +79,7 @@ export function projectChoices(
  *
  * It reads like a label and behaves like a choice: the next conversation can
  * go into any Project the user made, into a new one, or into none at all. The
- * last is not an absence of an answer — those Sessions land in 最近会话, the
+ * last is not an absence of an answer — those Sessions land in 会话, the
  * section the column keeps for conversations that belong to no Project.
  *
  * Nothing is written until the first message, so trying a Project and coming
@@ -98,7 +98,7 @@ export function ProjectPicker({
 
   // No Project chosen: the chip stops being a name and becomes the invitation
   // to pick one. The inbox is a Project, but it is not one the user chose —
-  // 最近会话 names where the Session ends up, not where it is going.
+  // 会话 names where the Session ends up, not where it is going.
   const standalone = !projects.some((project) => project.id === activeProjectId);
 
   const open = () => {

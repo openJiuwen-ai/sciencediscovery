@@ -1082,7 +1082,7 @@ def _judge_spec(spec: RunSpec) -> RunSpec:
 
     if not spec.judge_url or not spec.judge_token:
         raise _Refusal("this scorecard is graded by a model, but this search was given no access to one")
-    return replace(spec, llm_url=spec.judge_url, llm_token=spec.judge_token)
+    return replace(spec, llm_url=spec.judge_url, llm_token=spec.judge_token, thinking="", thinking_effort="")
 
 
 def _mode(spec: RunSpec) -> str:
@@ -1165,17 +1165,14 @@ def _default_completion(
 ) -> Callable[..., str]:
     """The mutation call, built once per run.
 
-    Not wrapped in `agentdescent.agents.with_retries`: that helper retries a
-    `prompt -> str` callable, and this one takes a per-call usage sink as a
-    second argument. Retrying here would also fight the stop path — a run being
-    wound down would sit through three attempts of a call whose answer is
-    already being discarded. The engine's own handling is the retry: a failed
-    call is a failed candidate, the node is appended, and the search continues.
+    The shared completion client retries transient HTTP failures under the
+    stop gate. It never retries a completed empty or capped reply.
     """
     return completion_for(
         spec.llm_url, spec.llm_token,
         max_tokens=spec.max_tokens_per_call,
         thinking=spec.thinking or None,
+        thinking_effort=spec.thinking_effort or None,
         timeout=float(spec.options.get("completion_timeout", 900.0)),
         on_usage=on_usage,
         should_stop=should_stop,

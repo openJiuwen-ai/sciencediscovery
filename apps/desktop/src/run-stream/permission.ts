@@ -52,6 +52,39 @@ export function mergePermission(entries: PermissionEntry[], incoming: Permission
   ));
 }
 
+/**
+ * Correct replayed snapshots with the server's own answer.
+ *
+ * A request can be answered without its `permission.resolved` ever reaching
+ * the event stream — artifact downloads and remote jobs decided outside a
+ * run's own wait were recorded only in the catalog. Replaying such a run ends
+ * on the pending snapshot, and the transcript shows an authorization card
+ * whose buttons can never work. The catalog is authoritative, so its terminal
+ * answer replaces the replayed one.
+ *
+ * Only entries the replay already holds are touched: a Session-wide answer
+ * list must not grow a card in a run that never asked. An entry the catalog
+ * still calls pending is left alone, and the list keeps its identity when
+ * nothing changed so a settle does not redraw the transcript for it.
+ */
+export function reconcilePermissions(
+  entries: PermissionEntry[],
+  authoritative: readonly PermissionRequest[],
+): PermissionEntry[] {
+  if (entries.length === 0 || authoritative.length === 0) return entries;
+  const byId = new Map(authoritative.map((request) => [request.id, request]));
+  let changed = false;
+  const reconciled = entries.map((entry) => {
+    const truth = byId.get(entry.request.id);
+    if (!truth || truth.state === "pending") return entry;
+    const merged = mergePermissionSnapshot(entry.request, truth);
+    if (merged === entry.request) return entry;
+    changed = true;
+    return { request: merged };
+  });
+  return changed ? reconciled : entries;
+}
+
 /** The requests still waiting for an answer — the only ones that may show
  *  buttons. Everything else is history. */
 export function pendingPermissions(entries: PermissionEntry[]): PermissionRequest[] {

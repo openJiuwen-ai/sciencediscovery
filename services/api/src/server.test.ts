@@ -124,11 +124,43 @@ import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
 import { SessionStore } from "./store.js";
+import { EvolutionStore } from "./evolution/store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
+
+test("closing an API during startup waits for evolution initialization", async () => {
+  const root = resolve(process.cwd(), ".tmp", `startup-close-${randomUUID()}`);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const initializeStarted = new Promise<void>((resolveStarted) => { started = resolveStarted; });
+  const originalInitialize = EvolutionStore.prototype.initialize;
+  let server: ReturnType<typeof createProductionApiServer> | undefined;
+  let closing: Promise<void> | undefined;
+  EvolutionStore.prototype.initialize = async function (): Promise<void> {
+    started();
+    await gate;
+    await originalInitialize.call(this);
+  };
+  try {
+    server = createProductionApiServer(testConfig(root));
+    await initializeStarted;
+    let closed = false;
+    closing = closeApiServer(server).then(() => { closed = true; });
+    await new Promise((done) => setTimeout(done, 20));
+    assert.equal(closed, false);
+    release();
+    await closing;
+  } finally {
+    release();
+    EvolutionStore.prototype.initialize = originalInitialize;
+    if (server) await (closing ?? closeApiServer(server));
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 /**
  * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
@@ -526,6 +558,56 @@ async function startTestApi(
   return { origin };
 }
 
+test("desktop skill switches import a new package and preserve global state on repeat writes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-switch-${randomUUID()}`);
+  const token = randomUUID();
+  const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
+  const importedPaths: string[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      response.end(JSON.stringify({ skills: installed }));
+    } else if (request.url === "/agent/skills" && request.method === "POST") {
+      const skill = body.skills[0];
+      importedPaths.push(skill.path);
+      assert.match(await readFile(resolve(skill.path, "SKILL.md"), "utf8"), /literature-searcher/);
+      installed.push({ name: skill.id, skillId: skill.id, enabled: true, source: "sciencediscovery" });
+      response.end(JSON.stringify({ skills: { [skill.id]: { name: skill.id } } }));
+    } else if (request.url?.endsWith("/enabled")) {
+      installed[0]!.enabled = body.enabled;
+      response.end("{}");
+    } else response.end("{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const enabled of [true, false, true]) {
+    const result = await fetch(`${origin}/api/jiuwenswarm/skills-by-id/literature-searcher`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    assert.equal(result.status, 200, await result.text());
+    assert.equal(installed[0]?.enabled, enabled);
+  }
+  assert.equal(importedPaths.length, 1, "subsequent toggles reuse JiuwenSwarm's installed package");
+});
+
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -607,6 +689,12 @@ test("request errors after headers terminate the response without rejecting the 
     headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
   });
   assert.equal(project.response.status, 201);
+  const model = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    headers: authorization, method: "POST", body: JSON.stringify({
+      apiToken: randomUUID(), baseUrl: "http://127.0.0.1:1/v1", model: "stream-fixture", name: "Stream fixture",
+    }),
+  });
+  assert.equal(model.response.status, 201);
   testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
   for (const code of [undefined, "ENOENT"]) {
     let writes = 0;
@@ -928,13 +1016,29 @@ test("global Runner management routes remotely, requires authentication and neve
     if (!connected) throw new Error("Runner disconnected");
     return { listEnvironments: async () => [{ id: "remote-only" }], deleteRemoteWorkspace: async (key: string) => { deleted.push(key); } } as unknown as RunnerClient;
   });
+  let transportClosed = false;
   const emptyCatalog: McpCatalog = { loadedAt: new Date().toISOString(), revision: "runner-management", servers: [] };
   const server = createApiServer({ ...testConfig(root), memoryGraph: { url: "", internalToken: "" } }, {
     remoteCompute: remote,
-    mcpTransport: { catalog: async () => emptyCatalog, reload: async () => emptyCatalog, invoke: async () => { throw new Error("No MCP in Runner settings test"); } },
+    mcpTransport: {
+      // Make dependency disposal outlive the HTTP close callback so the
+      // fixture cannot race its own data-directory removal.
+      close: async () => {
+        await new Promise<void>((done) => setTimeout(done, 20));
+        transportClosed = true;
+      },
+      catalog: async () => emptyCatalog,
+      reload: async () => emptyCatalog,
+      invoke: async () => { throw new Error("No MCP in Runner settings test"); },
+    },
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(async () => { await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => {
+    await closeApiServer(server);
+    store.close();
+    assert.equal(transportClosed, true, "API dependencies must finish closing before removing their data directory");
+    await rm(root, { recursive: true, force: true });
+  });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const prefix = `${origin}/api/remote-hosts/${host.id}`;
   assert.equal((await fetch(`${prefix}/environments`)).status, 401);
@@ -982,10 +1086,8 @@ test("updating SSH credentials immediately probes with the newly stored username
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(async () => {
-    await new Promise<void>((resolveClose) => {
-      server.close(() => resolveClose());
-      server.closeAllConnections();
-    });
+    // Drain asynchronous API cleanup before removing the stores it still owns.
+    await closeApiServer(server);
     await rm(tempRoot, { force: true, recursive: true });
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -4150,8 +4252,42 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   const stream = await run.text();
   const streamEvents = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
-    return data ? [JSON.parse(data) as { type: string }] : [];
+    return data ? [JSON.parse(data) as TestSseEvent] : [];
   });
+  // Keep the failing bridge evidence before teardown removes its workspace/CAS.
+  // A completed run and a tool.completed event do not imply a successful tool.
+  const checkWithToolEvidence = async (check: () => void): Promise<void> => {
+    try { check(); }
+    catch (error) {
+      try {
+        const executions = await jsonRequest<ExecutionRun[]>(
+          `${origin}/api/sessions/${sessionResult.body.id}/execution-runs`,
+          { headers: authorization, signal: AbortSignal.timeout(5_000) },
+        ).catch(() => ({ body: [], response: { status: null } }));
+        const output = await Promise.all(executions.body.map(async (execution) => {
+          const readOutput = async (hash: string) => {
+            try {
+              const response = await fetch(`${origin}/api/cas/${hash}`, { headers: authorization, signal: AbortSignal.timeout(5_000) });
+              return { status: response.status, text: (await response.text()).slice(0, 16_384) };
+            } catch { return { unavailable: true }; }
+          };
+          const [stdout, stderr] = await Promise.all([readOutput(execution.stdout.hash), readOutput(execution.stderr.hash)]);
+          return { id: execution.id, status: execution.status, exitCode: execution.exitCode, createdFiles: execution.createdFiles, modifiedFiles: execution.modifiedFiles, stdout, stderr };
+        }));
+        const toolEvents = streamEvents.filter(event => ["tool.started", "tool.output", "tool.completed", "run.failed", "run.completed"].includes(event.type));
+        const destination = resolve(process.env.CI_RESULTS_DIR || resolve(process.cwd(), ".tmp"), "gateway-python-tool-failure.json");
+        await mkdir(resolve(destination, ".."), { recursive: true });
+        const evidence = JSON.stringify({ backend: onJiuwenSwarm ? "jiuwenswarm" : "native", toolEvents, executionResponseStatus: executions.response.status, executions: output }, null, 2)
+          .replaceAll("ephemeral-test-token", "[redacted]")
+          .replaceAll("runner-test-token", "[redacted]")
+          .replaceAll("test-token", "[redacted]");
+        await writeFile(destination, evidence);
+        context.diagnostic(`Gateway/Python failure evidence: ${destination}`);
+      } catch { context.diagnostic("Could not collect Gateway/Python failure evidence"); }
+      throw error;
+    }
+  };
+
   const eventTypes = streamEvents.map((event) => event.type);
   assert.match(stream, /"type":"run.started"/);
   assert.match(stream, new RegExp(`"id":"${configuredModel.id}"`));
@@ -4165,6 +4301,16 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   assert.match(stream, /"type":"assistant.delta"/);
   assert.doesNotMatch(stream, /"type":"review.completed"/);
   assert.match(stream, /"type":"run.completed"/);
+  await checkWithToolEvidence(() => {
+    for (const name of ["run_shell", "declare_artifact"]) {
+      const completed = streamEvents.filter(event => event.type === "tool.completed" && (event.trace as { name?: string } | undefined)?.name === name);
+      assert.ok(completed.length > 0, `Missing completed ${name} call`);
+      for (const event of completed) {
+        const trace = event.trace as { status?: string; output?: string };
+        assert.equal(trace.status, "completed", `${name} failed: ${trace.output ?? "see saved tool output"}`);
+      }
+    }
+  });
   // At least the run's own 3 calls (initial, after the tool result, and after Python's second tool
   // call); the session's first-run title refinement (see "Session title refinement persists when the
   // naming model finishes after the run stream closes") shares this same model and can add a 4th,
@@ -4177,10 +4323,10 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
     `${origin}/api/sessions/${sessionResult.body.id}/files`,
     { headers: authorization },
   );
-  assert.deepEqual(
+  await checkWithToolEvidence(() => assert.deepEqual(
     filesResult.body.map((file) => file.path).toSorted(),
     ["a/out.csv", "analysis_chart.svg", "analysis_summary.csv", "b/out.csv", "input.csv"],
-  );
+  ));
   // The execution-run record lands after the tool's own "completed" round trip settles; under
   // JiuwenSwarm that trip goes through the bridge and can trail the stream's own run.completed by a
   // beat, so poll instead of assuming it is already there the instant the stream closes.
@@ -4192,9 +4338,11 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
       { headers: authorization },
     );
   }
-  assert.equal(runsResult.body.length, 1);
+  await checkWithToolEvidence(() => {
+    assert.equal(runsResult.body.length, 1);
+    assert.equal(runsResult.body[0]!.status, "succeeded");
+  });
   const execution = runsResult.body[0]!;
-  assert.equal(execution.status, "succeeded");
   assert.equal(execution.permissionEpochId, permissionDecision.body.permissionEpoch.id);
   assert.equal(execution.networkPolicy, "none");
   assert.equal(execution.cgroupMode, "none");
@@ -4293,6 +4441,23 @@ test("API runs one observable subagent through task and keeps nested task denied
       enabled: true,
       id: "biomed",
       tools: [{
+        description: "get paper",
+        inputSchema: {
+          additionalProperties: false,
+          properties: {
+            identifier: {
+              maxLength: 80,
+              minLength: 1,
+              pattern: "^(?:\\d{4}\\.\\d{4,5}|[A-Za-z.-]+/\\d{7})(?:v\\d+)?$",
+              type: "string",
+            },
+          },
+          required: ["identifier"],
+          type: "object",
+        },
+        name: "arxiv_get_paper",
+        schemaHash: "get_paper",
+      }, {
         description: "prepare",
         inputSchema: {
           additionalProperties: false,
@@ -4315,6 +4480,7 @@ test("API runs one observable subagent through task and keeps nested task denied
           additionalProperties: false,
           properties: {
             limit: { default: 5, maximum: 25, minimum: 1, type: "integer" },
+            offset: { default: 0, maximum: 10000, minimum: 0, type: "integer" },
             query: { maxLength: 500, minLength: 1, type: "string" },
           },
           required: ["query"],
@@ -4365,7 +4531,7 @@ test("API runs one observable subagent through task and keeps nested task denied
     { headers: authorization },
   );
   assert.equal(arxivStatus.body.status, "ready");
-  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["prepare_paper_download", "search"]);
+  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["get_paper", "prepare_paper_download", "search"]);
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
     body: JSON.stringify({ content: "Delegate workspace inspection." }),
@@ -5337,6 +5503,13 @@ test("switching an active run to always-allow resolves its pending subagent acti
   }
   stream += decoder.decode();
   assert.match(stream, /"type":"run.completed"/);
+  // The switch and the run's own poll both resolve this request; the stream
+  // carries the resolution once.
+  assert.equal(
+    stream.match(/"type":"permission\.resolved"/g)?.length,
+    1,
+    "the decision is published once even though two paths record it",
+  );
   const requests = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
     { headers: authorization },
@@ -5352,6 +5525,72 @@ test("switching an active run to always-allow resolves its pending subagent acti
   );
   assert.equal(authorizations.body.length, 1);
   assert.equal(authorizations.body[0]?.source, "always_allow");
+});
+
+test("a decision recorded outside a run's wait reaches the replay it is reloaded from", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-permission-replay-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const modelServer = await startTextModel(context);
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Permission replay" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Permission replay" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const answer = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Summarize the paper" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(answer.status, 200);
+  await answer.text();
+  const runs = await jsonRequest<SessionRun[]>(`${origin}/api/sessions/${session.body.id}/runs`, {
+    headers: authorization,
+  });
+  const runId = runs.body.at(-1)!.id;
+
+  // The shape of an artifact download: raised inside the run, decided later
+  // from the Session's authorization card, with no poll inside the run that
+  // would notice the answer and publish it.
+  const created = await jsonRequest<{ allowed: boolean; request?: PermissionRequest }>(
+    `${origin}/api/sessions/${session.body.id}/permission-requests`,
+    {
+      body: JSON.stringify({
+        action: "artifact_download",
+        executionId: runId,
+        resource: "artifact:biorxiv:10.1101/2025.04.16.649149:v2:pdf",
+        summary: "Download biorxiv-2025.04.16.649149-v2.pdf",
+      }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    },
+  );
+  assert.equal(created.response.status, 201);
+  const requestId = created.body.request?.id;
+  assert.ok(requestId);
+  const before = await listRunEvents(origin, session.body.id, runId);
+  assert.ok(!before.some((record) => record.event.type === "permission.resolved"
+    && record.event.request.id === requestId), "the fixture starts with no resolution on the stream");
+
+  const decision = await jsonRequest(`${origin}/api/permission-requests/${requestId}/decision`, {
+    body: JSON.stringify({ decision: "allow_once" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(decision.response.status, 200);
+
+  const replay = await listRunEvents(origin, session.body.id, runId);
+  const resolutions = replay.filter((record) => record.event.type === "permission.resolved"
+    && record.event.request.id === requestId);
+  assert.equal(resolutions.length, 1, "the resolution reaches the replay exactly once");
+  assert.equal(resolutions[0]!.event.type === "permission.resolved" && resolutions[0]!.event.request.state, "allowed");
 });
 
 test("concurrent permission decisions serialize and return an authoritative conflict", async (context) => {
@@ -6065,9 +6304,9 @@ test("failed subagent tool steps retain raw input and the full error result", { 
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
-  const execution = JSON.parse(toolStep?.content ?? "{}");
-  assert.equal(execution.state, "failed");
-  assert.equal(execution.result?.exitCode, 1);
+  const execution = toolStep?.details as { state?: string; exitCode?: number } | undefined;
+  assert.equal(execution?.state, "failed");
+  assert.equal(execution?.exitCode, 1);
   assert.equal(toolStep?.status, "failed", "Failed Shell result must remain failed in the subagent timeline");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
@@ -7097,7 +7336,12 @@ test("model registry persists multiple profiles and assigns them per session", a
     headers: authorization,
     method: "DELETE",
   });
-  assert.equal(assignedDelete.status, 400);
+  assert.equal(assignedDelete.status, 200);
+  const reopenedAnalysis = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${analysis.body.id}`, { headers: authorization });
+  assert.equal(reopenedAnalysis.body.modelId, fast.body.id);
+  const reopenedReview = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${review.body.id}`, { headers: authorization });
+  assert.equal(reopenedReview.body.modelId, undefined);
+  assert.equal(reopenedReview.body.settingsOverrides.modelId, reviewer.body.id);
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
   database.close();
@@ -7108,7 +7352,15 @@ test("model registry persists multiple profiles and assigns them per session", a
 test("Workspace HTTP writes wait for the active writer and publish refs before returning", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `workspace-admission-${randomUUID()}`);
   await mkdir(dataDir, { recursive: true });
-  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  let closeApi = async () => {};
+  let closeGraph = async () => {};
+  let closeStore = () => {};
+  context.after(async () => {
+    await closeApi();
+    await closeGraph();
+    closeStore();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const uploads: Record<string, unknown>[] = [];
   const graph = createHttpServer((request, response) => {
     let body = "";
@@ -7119,13 +7371,13 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
       response.end(JSON.stringify({ status: "healthy" }));
     });
   });
+  closeGraph = () => new Promise<void>((done) => { graph.close(() => done()); graph.closeAllConnections(); });
   await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
-  context.after(() => new Promise<void>((done) => graph.close(() => done())));
   const server = createApiServer({ ...testConfig(dataDir, "http://127.0.0.1:1"), memoryGraph: {
     url: `http://127.0.0.1:${(graph.address() as AddressInfo).port}`, internalToken: "test",
   } });
+  closeApi = () => closeApiServer(server);
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(() => new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const enabled = await fetch(`${origin}/api/memory/settings`, {
     method: "PUT", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
@@ -7138,7 +7390,7 @@ test("Workspace HTTP writes wait for the active writer and publish refs before r
   const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
     method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ modelId: model.id, title: "Admission" }),
   });
-  const store = new SessionStore(dataDir); await store.load();
+  const store = new SessionStore(dataDir); closeStore = () => store.close(); await store.load();
   const workspace = store.workspacePath(session.body.id);
   const versions = new VersionStore(dataDir);
   for (const multipart of [false, true]) {
@@ -8011,13 +8263,7 @@ test("closing the server closes the MCP transport it connected at startup", asyn
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 
   assert.equal(closed, 0, "the transport must stay open while the server is serving");
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-    server.closeAllConnections();
-  });
-  // The listener's close callback and the teardown both run on `close`; give
-  // the asynchronous one a turn before reading the count.
-  await new Promise((settled) => setImmediate(settled));
+  await closeApiServer(server);
 
   assert.equal(closed, 1);
 });
@@ -8605,4 +8851,42 @@ test("the recent-sessions Project is reachable by name, absent from the project 
     headers: authorization,
     method: "DELETE",
   })).status, 409);
+});
+
+test("model deletion HTTP validates replacement options and preserves explicit unavailable choices", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-deletion-http-${randomUUID()}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const create = async (name: string) => (await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    method: "POST", headers,
+    body: JSON.stringify({ name, model: name, baseUrl: "https://models.example.test/v1", apiToken: randomUUID() }),
+  })).body;
+  const a = await create("A"), b = await create("B");
+  const project = await jsonRequest<{ project: Project; firstSession: Session }>(`${origin}/api/projects`, {
+    method: "POST", headers, body: JSON.stringify({ name: "Deletion HTTP" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.project.id}/sessions`, {
+    method: "POST", headers, body: JSON.stringify({ modelId: a.id }),
+  });
+  for (const body of [null, [], "bad", { replacementModelId: false }, { replacementModelId: a.id }, { replacementModelId: randomUUID() }]) {
+    const response = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 400);
+    const settings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers });
+    assert.equal(settings.body.overrides.modelId, a.id);
+    assert.equal((await jsonRequest<ModelProfile[]>(`${origin}/api/models`, { headers })).body.length, 2);
+  }
+  const deletion = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify({ replacementModelId: b.id }) });
+  assert.equal(deletion.status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, b.id);
+  const fresh = (await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers })).body;
+  assert.equal(fresh.modelId, undefined);
+  assert.equal(fresh.settingsOverrides.modelId, a.id);
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "Do not silently switch models" }) });
+  assert.equal(run.status, 400);
+  assert.equal(((await run.json()) as { code: string }).code, "SESSION_MODEL_UNAVAILABLE");
+  // Legacy DELETE callers can omit a body and leave the removed default unset.
+  assert.equal((await fetch(`${origin}/api/models/${b.id}`, { method: "DELETE", headers })).status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, undefined);
 });

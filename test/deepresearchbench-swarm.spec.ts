@@ -1,15 +1,18 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License").
 import { writeFile } from "node:fs/promises";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { deliveryFailureMessage, finalReportArtifact } from "./helpers/real-delivery.mjs";
 import { drbSamples } from "./benchmarks/deepresearchbench/samples.ts";
+import { runTestCleanup } from "./helpers/test-failure.ts";
 
 for (const sample of drbSamples) {
   const drbQuestion = sample.question;
@@ -56,6 +59,7 @@ for (const sample of drbSamples) {
     let runId: string | undefined;
     let terminal: string | undefined;
     let started: number | undefined;
+    let primaryFailure: { error: unknown } | undefined;
     try {
       let config: ReturnType<typeof evaluationConfig> | undefined;
       try {
@@ -72,8 +76,9 @@ for (const sample of drbSamples) {
       await requireRealStack(testInfo);
       fixture = await createProjectAndSession(page, {
         approvalMode: "always_allow",
+        ...realModelThinking(),
         ...(existingModelId ? { modelId: existingModelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!,
-          baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: `DRB-${sample.id} ${Date.now()}` } }),
+          baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: `DRB-${sample.id} ${Date.now()}`, apiVariant: realModelApiVariant(), ...realModelThinking() } }),
         projectName: `DRB-${sample.id} Swarm ${Date.now()}`, sessionTitle: `DRB-${sample.id} autonomous research`,
       });
       metrics.generator_model_id = fixture.session.modelId ?? existingModelId;
@@ -120,41 +125,46 @@ for (const sample of drbSamples) {
       await testInfo.attach("quality-scorecard", { contentType: "application/json", body: JSON.stringify(metrics.evaluation, null, 2) });
 
     } catch (error) {
+      primaryFailure = { error };
       metrics.error = error instanceof Error ? error.message : String(error);
       if (!["passed", "partial"].includes(metrics.integration_status)) metrics.integration_status = "failed";
       throw error;
     } finally {
-      const visibleAnswers = await page.locator(".message.assistant").allTextContents().catch(() => []);
-      await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(visibleAnswers, null, 2));
-      if (fixture) {
-        if (runId && !terminal) {
-          metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
-          if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
+      await runTestCleanup(primaryFailure, async () => {
+        const visibleAnswers = await page.locator(".message.assistant").allTextContents().catch(() => []);
+        await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(visibleAnswers, null, 2));
+        if (fixture) {
+          if (runId && !terminal) {
+            metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
+            if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
+          }
+          metrics.generation_usage = await drbApi(page, `/api/sessions/${fixture.session.id}/usage`).catch(() => null);
+          // Shared numeric measurements join this case's only metrics document.
+          metrics.measurements = await measureSession(page.request, testInfo, fixture.session.id);
+          const details = await drbApi<Array<any>>(page, `/api/sessions/${fixture.session.id}/subagents`).catch(() => []);
+          await writeFile(testInfo.outputPath("child-trajectories.json"), JSON.stringify(details, null, 2));
+          metrics.tool_errors = details.flatMap(c => (c.steps ?? []).filter((s: any) => s.kind === "tool" && s.status === "failed")
+            .map((s: any) => ({ agent_id: c.id, tool: s.toolName, content: s.content })));
+          metrics.artifacts = await drbApi(page, `/api/sessions/${fixture.session.id}/artifacts`).catch(() => []);
+          // Preserve delivery evidence even if an earlier lifecycle/UI assertion failed.
+          const retainedReport = await drbArticle(page, fixture.session.id, drbOutput).catch(() => null);
+          if (retainedReport && !metrics.report_version_id) {
+            await writeFile(testInfo.outputPath(`deepresearchbench-${sample.id}.json`),
+              JSON.stringify({ id: sample.id, prompt: drbQuestion, article: retainedReport.article }, null, 2));
+            metrics.report_words ??= retainedReport.article.trim().split(/\s+/u).length;
+          }
+          metrics.generation_duration_ms ??= started ? Date.now() - started : null;
+          // Capture reliability metrics on early assertion failures too.
+          if (!metrics.children.length) metrics.children = await drbApi<Array<{ id: string; status: string }>>(
+            page, `/api/sessions/${fixture.session.id}/subagents`).then(cs => cs.map(c => ({ id: c.id, status: c.status }))).catch(() => []);
         }
-        metrics.generation_usage = await drbApi(page, `/api/sessions/${fixture.session.id}/usage`).catch(() => null);
-        const details = await drbApi<Array<any>>(page, `/api/sessions/${fixture.session.id}/subagents`).catch(() => []);
-        await writeFile(testInfo.outputPath("child-trajectories.json"), JSON.stringify(details, null, 2));
-        metrics.tool_errors = details.flatMap(c => (c.steps ?? []).filter((s: any) => s.kind === "tool" && s.status === "failed")
-          .map((s: any) => ({ agent_id: c.id, tool: s.toolName, content: s.content })));
-        metrics.artifacts = await drbApi(page, `/api/sessions/${fixture.session.id}/artifacts`).catch(() => []);
-        // Preserve delivery evidence even if an earlier lifecycle/UI assertion failed.
-        const retainedReport = await drbArticle(page, fixture.session.id, drbOutput).catch(() => null);
-        if (retainedReport && !metrics.report_version_id) {
-          await writeFile(testInfo.outputPath(`deepresearchbench-${sample.id}.json`),
-            JSON.stringify({ id: sample.id, prompt: drbQuestion, article: retainedReport.article }, null, 2));
-          metrics.report_words ??= retainedReport.article.trim().split(/\s+/u).length;
-        }
-        metrics.generation_duration_ms ??= started ? Date.now() - started : null;
-        // Capture reliability metrics on early assertion failures too.
-        if (!metrics.children.length) metrics.children = await drbApi<Array<{ id: string; status: string }>>(
-          page, `/api/sessions/${fixture.session.id}/subagents`).then(cs => cs.map(c => ({ id: c.id, status: c.status }))).catch(() => []);
-      }
-      metrics.finished_at = new Date().toISOString();
-      const path = testInfo.outputPath("benchmark-metrics.json");
-      await writeFile(path, JSON.stringify(metrics, null, 2));
-      await testInfo.attach("benchmark-metrics", { path, contentType: "application/json" });
-      if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
-      if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
+        metrics.finished_at = new Date().toISOString();
+        const path = testInfo.outputPath("benchmark-metrics.json");
+        await writeFile(path, JSON.stringify(metrics, null, 2));
+        await testInfo.attach("benchmark-metrics", { path, contentType: "application/json" });
+        if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+        if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
+      });
     }
   });
 }

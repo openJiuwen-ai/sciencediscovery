@@ -14,6 +14,7 @@
 
 import { lazy, Suspense, useMemo, useState } from "react";
 
+import type { ComposerReference } from "../api/types.js";
 import { bytesOfDataUrl } from "../app/document-payload.js";
 import type { PreviewSlot } from "../app/use-workspace.js";
 import { detectStructureFormat } from "../molecular.js";
@@ -31,11 +32,45 @@ const StructureViewer = lazy(() => import("./StructureViewer.js"));
 interface Props {
   expanded: boolean;
   onExpand: (next: boolean) => void;
+  /** Opens the memory card behind a citation chip. Reports without a chip
+   *  surface simply omit it, and their aliases stay plain text. */
+  onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
   slot: PreviewSlot;
 }
 
 function previewName(label: string, path: string): string {
   return path === "" ? label : path;
+}
+
+/**
+ * A JSON document, pretty-printed once.
+ *
+ * `JSON.parse` of a 95 KB file followed by `JSON.stringify` of the indented
+ * result is the most expensive thing a JSON preview does — and it used to be
+ * done inline, so every re-render of the dialog paid for it again (the version
+ * list's Session titles landing, a tab switch, the download button's ready
+ * state). The parse belongs to the bytes, not to the render.
+ */
+function JsonDocument({ content }: { content: string }) {
+  const pretty = useMemo(() => {
+    try {
+      return JSON.stringify(JSON.parse(content), null, 2);
+    } catch {
+      // Not JSON after all; the raw text is what the user should see.
+      return content;
+    }
+  }, [content]);
+  return <pre className="tab-content-source">{pretty}</pre>;
+}
+
+/** A delimited table, parsed once for the same reason. */
+function CsvDocument({ content, name }: { content: string; name: string }) {
+  const table = useMemo(
+    () => parseDelimited(content, { separator: delimitedSeparator(name) }),
+    [content, name],
+  );
+  if (table !== undefined) return <DataTable table={table} />;
+  return <pre className="tab-content-source">{content}</pre>;
 }
 
 /* ── source ─────────────────────────────────────────────────────────────── */
@@ -193,11 +228,24 @@ function PdfView({ name, src }: { name: string; src: string }) {
  * that is drawn. A document this build cannot draw says so rather than showing
  * the bytes it was given as if they were text.
  */
-export function DocumentPreview({ expanded, onExpand, slot }: Props) {
+export function DocumentPreview({ expanded, onExpand, onReferenceClick, slot }: Props) {
+  const name = previewName(slot.label, slot.path);
+  const content = slot.content ?? "";
+  // The callbacks below are created before the early returns so their identity
+  // is stable across a re-render: `Markdown` is memoised on its props, and an
+  // inline arrow here made every dialog re-render — a Session list arriving, a
+  // tab switch — re-parse the whole report.
+  const markdownClick = useMemo(
+    () => onReferenceClick === undefined
+      ? undefined
+      : (reference: ComposerReference) => onReferenceClick(reference, slot.sessionId),
+    [onReferenceClick, slot.sessionId],
+  );
+  const format = useMemo(() => detectStructureFormat({ content, name }), [content, name]);
+
   if (slot.loading) return <div className="doc-placeholder"><span className="spinner" /></div>;
   if (slot.error !== undefined) return <div className="panel-empty">{slot.error}</div>;
 
-  const name = previewName(slot.label, slot.path);
   if (slot.tooLarge === true) return <div className="doc-placeholder">{TEXT.workspace.tooLarge}</div>;
   const kind = documentKind(name, slot.mediaType);
   // A container or a legacy office file this build cannot draw is not shown as
@@ -210,8 +258,6 @@ export function DocumentPreview({ expanded, onExpand, slot }: Props) {
     return <ImageView name={name} src={dataUrl} />;
   }
 
-  const content = slot.content ?? "";
-  const format = detectStructureFormat({ content, name });
   if (format !== undefined) {
     return (
       <Suspense fallback={<div className="doc-placeholder"><span className="spinner" /></div>}>
@@ -220,21 +266,18 @@ export function DocumentPreview({ expanded, onExpand, slot }: Props) {
     );
   }
   if (kind === "html") return <iframe className="artifact-html-frame" sandbox="allow-scripts" srcDoc={content} title={name} />;
-  if (kind === "markdown") return <div className="text"><Markdown>{content}</Markdown></div>;
-  if (kind === "json") {
-    let pretty = content;
-    try {
-      pretty = JSON.stringify(JSON.parse(content), null, 2);
-    } catch {
-      // Not JSON after all; the raw text is what the user should see.
-    }
-    return <pre className="tab-content-source">{pretty}</pre>;
+  if (kind === "markdown") {
+    return (
+      <div className="text">
+        <Markdown onReferenceClick={markdownClick} references={slot.references}>
+          {content}
+        </Markdown>
+      </div>
+    );
   }
+  if (kind === "json") return <JsonDocument content={content} />;
   if (content === "") return <div className="doc-placeholder">{TEXT.workspace.unsupported}</div>;
-  if (kind === "csv") {
-    const table = parseDelimited(content, { separator: delimitedSeparator(name) });
-    if (table !== undefined) return <DataTable table={table} />;
-  }
+  if (kind === "csv") return <CsvDocument content={content} name={name} />;
   if (kind === "python") return <PythonSource name={name} source={content} />;
   // Logs, tables and other source stay monospaced, where columns line up.
   return <pre className={`tab-content-source${kind === "prose" ? " is-prose" : ""}`}>{content}</pre>;

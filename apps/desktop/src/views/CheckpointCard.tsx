@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useId, useState } from "react";
 
 import type { EvolveCheckpoint } from "../evolve/checkpoint.js";
 import { MarkdownProse } from "../MarkdownProse.js";
@@ -91,12 +91,24 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   const final = checkpoint.total !== undefined && checkpoint.step === checkpoint.total;
   const record = auto || final;
   const shade = record ? "auto" : checkpoint.pace;
-  // A record is not a checkpoint: nobody is being asked to approve it, so it
-  // says "step" and drops the pace badge instead of advertising that it did
-  // not wait.
+  // The band names the state, the counter names the step: a record is not a
+  // checkpoint — nobody is being asked to approve it — so it says "step", and
+  // the number sits at the right of the band as the handoff draws it.
+  const headline = record ? text.headerStep : text.headerWaiting;
+  // A folded card is past tense: it says the answer arrived. A record has
+  // nothing to be answered, so it keeps calling itself a step.
+  const folded = record ? text.headerStep : text.headerAnswered;
+  /** The last step is written after the run started and never asks; it is a
+   *  record, not one of the checkpoints the reader answers. So the counter
+   *  counts only the ones that do — four steps, three checkpoints. */
+  const asked = checkpoint.total === undefined ? undefined : Math.max(1, checkpoint.total - 1);
+  /** A record prints no counter at all: nobody is being asked which question
+   *  of how many it is. */
+  const count = record ? undefined : text.count(checkpoint.step, asked);
   const label = record
-    ? text.stepEyebrow(checkpoint.step, checkpoint.total)
-    : text.eyebrow(checkpoint.step, checkpoint.total);
+    ? text.stepEyebrow(checkpoint.step)
+    : text.eyebrow(checkpoint.step, asked);
+  const noteId = useId();
   /** 需要调整 opens the note in the card instead of handing the composer a
    *  sentence: the change is described where the step is, and sending it does
    *  not take the reader's eyes or the caret down to the bottom of the window. */
@@ -121,21 +133,27 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   );
   // A card the conversation has moved past folds to its header; opening it
   // shows what the step said, never the buttons — that step already has an
-  // answer below it, and a second press would send it twice.
-  if (answered) {
+  // answer below it, and a second press would send it twice. A record folds
+  // the same way: it is written after the search started, nobody is asked to
+  // act on it, and its body is the longest thing the transcript holds. The
+  // newest one is still one click away under its own headline.
+  if (answered || record) {
     return (
       <details
         aria-label={label}
-        className={`evolve-checkpoint is-${shade} is-answered`}
+        className={`evolve-checkpoint is-${shade} is-folded${answered ? " is-answered" : " is-record"}`}
         data-pace={checkpoint.pace}
         data-step={checkpoint.step}
       >
         <summary className="evolve-checkpoint-head">
-          <span className="evolve-checkpoint-step">{label}</span>
+          <CheckpointGlyph />
+          <span className="evolve-checkpoint-step">{folded}</span>
           {checkpoint.title === undefined ? null : (
             <span className="evolve-checkpoint-title">{checkpoint.title}</span>
           )}
-          {record ? null : <span className="evolve-checkpoint-pace">{text.answered}</span>}
+          {count === undefined ? null : (
+            <span className="evolve-checkpoint-count">{count}</span>
+          )}
           <span aria-hidden="true" className="collapse-chev">›</span>
         </summary>
         {body}
@@ -145,19 +163,24 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   return (
     <section
       aria-label={label}
-      className={`evolve-checkpoint is-${shade}`}
+      className={`evolve-checkpoint is-${shade}${adjusting ? " is-adjusting" : ""}`}
       data-pace={checkpoint.pace}
       data-step={checkpoint.step}
     >
       <header className="evolve-checkpoint-head">
-        <span className="evolve-checkpoint-step">{label}</span>
-        {record ? null : <span className="evolve-checkpoint-pace">{text.waiting}</span>}
+        <CheckpointGlyph />
+        <span className="evolve-checkpoint-step">{headline}</span>
+        {count === undefined ? null : (
+          <span className="evolve-checkpoint-count">{count}</span>
+        )}
       </header>
-      {checkpoint.title === undefined ? null : (
-        <h4 className="evolve-checkpoint-title">{checkpoint.title}</h4>
-      )}
-      {body}
-      {record || reply === undefined ? null : adjusting ? (
+      <div className="evolve-checkpoint-main">
+        {checkpoint.title === undefined ? null : (
+          <h4 className="evolve-checkpoint-title">{checkpoint.title}</h4>
+        )}
+        {body}
+      </div>
+      {reply === undefined ? null : adjusting ? (
         <form
           className="evolve-checkpoint-adjust-form"
           onSubmit={(event) => {
@@ -165,56 +188,45 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
             sendAdjustment();
           }}
         >
-          <textarea
-            aria-label={text.adjustDraft}
-            autoFocus
-            className="evolve-checkpoint-note"
-            onChange={(event) => setNote(event.target.value)}
-            onKeyDown={(event) => {
-              // Enter writes a second line; the shortcut sends, the way it does
-              // in the composer. A bare Enter here would make a half-written
-              // change impossible to check before it went.
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                sendAdjustment();
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                closeAdjust();
-              }
-            }}
-            placeholder={text.adjustDraft}
-            rows={2}
-            value={note}
-          />
+          <div className="evolve-checkpoint-adjust-body">
+            <label className="evolve-checkpoint-adjust-label" htmlFor={noteId}>{text.adjustLabel}</label>
+            <textarea
+              autoFocus
+              className="evolve-checkpoint-note"
+              id={noteId}
+              onChange={(event) => setNote(event.target.value)}
+              onKeyDown={(event) => {
+                // Enter writes a second line; the shortcut sends, the way it does
+                // in the composer. A bare Enter here would make a half-written
+                // change impossible to check before it went.
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  sendAdjustment();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeAdjust();
+                }
+              }}
+              placeholder={text.adjustPlaceholder}
+              rows={2}
+              value={note}
+            />
+          </div>
           <div className="evolve-checkpoint-actions">
+            {/* One answer, as the handoff draws it: the note is the change, and
+                confirming it is what sends it. Escape closes the form. */}
             <button
               className="evolve-checkpoint-confirm"
               disabled={reply.busy || note.trim() === ""}
               title={reply.busy ? text.busy : undefined}
               type="submit"
             >
-              {text.send}
-            </button>
-            <button
-              className="evolve-checkpoint-adjust"
-              onClick={closeAdjust}
-              type="button"
-            >
-              {text.cancel}
+              {text.confirm}
             </button>
           </div>
         </form>
       ) : (
         <div className="evolve-checkpoint-actions">
-          <button
-            className="evolve-checkpoint-confirm"
-            disabled={reply.busy}
-            onClick={() => reply.reply(text.confirmReply(checkpoint.step, checkpoint.total))}
-            title={reply.busy ? text.busy : undefined}
-            type="button"
-          >
-            {text.confirm}
-          </button>
           <button
             className="evolve-checkpoint-adjust"
             disabled={reply.busy}
@@ -224,8 +236,41 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           >
             {text.adjust}
           </button>
+          <button
+            className="evolve-checkpoint-confirm"
+            disabled={reply.busy}
+            onClick={() => reply.reply(text.confirmReply(checkpoint.step, checkpoint.total))}
+            title={reply.busy ? text.busy : undefined}
+            type="button"
+          >
+            {text.confirm}
+          </button>
         </div>
       )}
     </section>
   );
+}
+
+/** The card's mark: a sheet of paper with a folded corner and two lines. It is
+ *  drawn here rather than imported because it is the card's own chrome and
+ *  takes its colour from the band; at 10×12 it is a stroke and nothing else. */
+function CheckpointGlyph() {
+  return <svg
+    aria-hidden="true"
+    className="evolve-checkpoint-icon"
+    fill="none"
+    height="12"
+    viewBox="0 0 10 12"
+    width="10"
+  >
+    <path
+      d="M.5 1.5a1 1 0 0 1 1-1h5.1l2.9 2.9v7.1a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1z"
+      stroke="currentColor"
+      strokeLinejoin="round"
+      strokeWidth="1"
+    />
+    {/* The dog-ear: the fold's inner corner, and the two lines the page holds. */}
+    <path d="M6.6.9v1.7a.6.6 0 0 0 .6.6h2.3" stroke="currentColor" strokeLinejoin="round" strokeWidth="1" />
+    <path d="M2.5 5.6h2.8M2.5 8.1h4" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
+  </svg>;
 }

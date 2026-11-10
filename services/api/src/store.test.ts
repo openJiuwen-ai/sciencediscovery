@@ -84,6 +84,96 @@ test("CFG connector proposals require a user decision and preserve inherited con
   } finally { db.close(); }
 });
 
+test("shutdown drains an in-flight array write before the data directory goes away", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Drain test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  // Gate the window that actually races teardown - inside the write, between
+  // writing the temp file and renaming it - and drive it through a DIRECT
+  // writeArray caller (`appendMessage`), not a mutateArray one: the direct
+  // callers are the majority of array writers and a queue keyed on the mutating
+  // caller would miss every one of them.
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+    arrayMutationQueues: Map<string, Promise<void>>;
+  };
+  const writeArrayFile = store$.writeArrayFile.bind(store);
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  store$.writeArrayFile = async (path, values) => { entered(); await gate; return writeArrayFile(path, values); };
+  const pending = store.appendMessage(session.id, "user", "hello");
+  await inWrite;
+  assert.equal(store$.arrayMutationQueues.size, 0, "a direct caller registers nothing in the mutating-caller queue");
+  let settled = false;
+  const waiting = store$.whenWritesSettle().then((drained) => { settled = true; return drained; });
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(settled, false, "the drain must not resolve while a write is between its two steps");
+  release();
+  await pending;
+  assert.equal(await waiting, true, "the drain reports a clean wait once the write lands");
+  assert.equal(settled, true);
+  const leftovers = (await readdir(dirname(resolve(tempRoot, "messages", `${session.id}.json`))))
+    .filter((name) => name.endsWith(".tmp"));
+  assert.deepEqual(leftovers, [], "the write-temp-then-rename step leaves no temp behind");
+});
+
+test("a write that never finishes is reported rather than hanging shutdown", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-bound-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Bound test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  const writeArrayFile = store$.writeArrayFile.bind(store);
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  store$.writeArrayFile = async (path, values) => { entered(); await gate; return writeArrayFile(path, values); };
+  const pending = store.appendMessage(session.id, "user", "hello");
+  await inWrite;
+  assert.equal(await store$.whenWritesSettle(20), false, "an unbounded writer must not hold shutdown open");
+  release();
+  await pending;
+});
+
+test("a write that fails during the drain is reported, not rethrown, and leaves no timer armed", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-failing-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Failing write test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  store$.writeArrayFile = async () => {
+    entered();
+    await new Promise((done) => setTimeout(done, 50));
+    throw Object.assign(new Error("injected write failure"), { code: "ENOENT" });
+  };
+  const pending = store.appendMessage(session.id, "user", "boom").catch((error: Error) => error.message);
+  await inWrite;
+  const startedAt = Date.now();
+  // A rejection inside the race would skip the timer cleanup, and the timer is
+  // deliberately not unref'd, so a leaked one would hold the process for the
+  // whole bound. Resolving well before it is the observable half of that.
+  assert.equal(await store$.whenWritesSettle(5_000), true, "the drain reports on a failed write instead of rejecting");
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed < 2_000, `the drain returned when the write settled (${elapsed}ms), not at the bound`);
+  assert.equal(await pending, "injected write failure", "the failure still reaches the write's own caller");
+});
+
 test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
@@ -664,9 +754,14 @@ test("truncated Workspace scans preserve provenance beyond the 500-file list lim
     size: overflowMetadata.size,
   });
 
-  const listed = await listWorkspaceFiles(store, session.id);
+  const [listed, complete] = await Promise.all([
+    listWorkspaceFiles(store, session.id),
+    listWorkspaceFiles(store, session.id, true),
+  ]);
   assert.equal(listed.length, 500);
   assert.equal(listed.some((file) => file.path === overflowPath), false);
+  assert.equal(complete.length, 501);
+  assert.ok(complete.some((file) => file.path === overflowPath), "complete export cannot reuse a truncated UI scan");
   const afterList = store.getWorkspaceFileProvenance(session.id, overflowPath);
   assert.equal(afterList?.file.id, recorded.fileId);
   assert.equal(afterList?.currentRevision.id, recorded.id);
@@ -1862,7 +1957,7 @@ test("SessionStore preserves provider model context across user turns", async (c
   assert.deepEqual((await reopened.readMessages(session.id))[0]!.modelContext, modelContext);
 });
 
-test("SessionStore removes the legacy demo profile and reassigns sessions to a configured model", async (context) => {
+test("SessionStore removes the legacy demo profile and preserves unavailable session choices", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-demo-migration-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "messages"), { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -1920,8 +2015,9 @@ test("SessionStore removes the legacy demo profile and reassigns sessions to a c
   await store.load();
 
   assert.deepEqual(store.listModels().map((model) => model.id), ["configured-model"]);
-  assert.equal(store.getSession("session-1")?.modelId, "configured-model");
-  assert.equal(store.getSession("session-1")?.reviewModelId, "configured-model");
+  // The deleted choice survives in overrides; compatibility mirrors show availability.
+  assert.equal(store.getSession("session-1")?.modelId, undefined);
+  assert.equal(store.getSession("session-1")?.reviewModelId, undefined);
   assert.equal(store.getSession("session-1")?.approvalMode, "always_allow");
   assert.equal(store.getSession("session-2")?.approvalMode, "always_allow");
   assert.ok(store.getSession("session-1")?.permissionEpochId);
@@ -1930,15 +2026,15 @@ test("SessionStore removes the legacy demo profile and reassigns sessions to a c
   assert.equal(migrated.models[0]?.id, "configured-model");
   assert.equal("builtin" in migrated.models[0]!, false);
   assert.equal("demoMode" in migrated.models[0]!, false);
-  assert.equal(migrated.sessions[0]?.modelId, "configured-model");
-  assert.equal(migrated.sessions[0]?.reviewModelId, "configured-model");
+  assert.equal(migrated.sessions[0]?.modelId, undefined);
+  assert.equal(migrated.sessions[0]?.reviewModelId, undefined);
   assert.equal(migrated.sessions[0]?.approvalMode, "always_allow");
   const migratedNeverAsk = migrated.sessions.find((session) => session.id === "session-2");
   assert.equal(migratedNeverAsk?.approvalMode, "always_allow");
   assert.deepEqual(migrated.sessions[0]?.settingsOverrides, {
     enabledConnectorIds: [],
-    modelId: "configured-model",
-    reviewModelId: "configured-model",
+    modelId: "builtin-demo",
+    reviewModelId: "builtin-demo",
     semanticReviewEnabled: true,
   });
   assert.deepEqual(migrated.projects[0]?.settingsOverrides, {});
@@ -2054,14 +2150,12 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledSkillLibraries: [],
       enabledSkillIds: ["life-science-evidence-brief", "managed-skill"],
       modelId: "configured-model",
-      reviewModelId: "configured-model",
       semanticReviewEnabled: false,
       skillSelectionMode: "all",
     },
     overrides: {
       enabledConnectorIds: ["pubmed", "uniprot"],
       modelId: "configured-model",
-      reviewModelId: "configured-model",
       semanticReviewEnabled: false,
     },
     sources: {
@@ -2071,7 +2165,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
       modelId: "session",
-      reviewModelId: "session",
+      reviewModelId: "unset",
       reviewThinkingEffort: "unset",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
@@ -2557,7 +2651,7 @@ test("skill selection defaults to all, is configured from Project down, and igno
   assert.deepEqual(store.getSession(session.id)?.enabledSkillIds, [...availableSkills, "late-skill"]);
 });
 
-test("SessionStore rejects invalid settings atomically and protects referenced models", async (context) => {
+test("SessionStore rejects invalid settings atomically and retains deleted session choices", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-settings-validation-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2584,16 +2678,34 @@ test("SessionStore rejects invalid settings atomically and protects referenced m
   await assert.rejects(store.replaceGlobalSettings({ semanticReviewEnabled: "yes" }), /must be a boolean/);
   assert.deepEqual(store.getGlobalSettings(), before);
 
-  await assert.rejects(store.deleteModel(model.id), /referenced by runtime settings/);
-  await store.replaceGlobalSettings({});
-  await store.replaceProjectSettings(project.id, { reviewModelId: model.id });
-  await assert.rejects(store.deleteModel(model.id), /referenced by runtime settings/);
-  await store.replaceProjectSettings(project.id, {});
-  const session = await store.createSession(project.id, "Explicit model", { modelId: model.id });
-  await assert.rejects(store.deleteModel(model.id), /referenced by runtime settings/);
-  await store.replaceSessionSettings(session.id, {});
+  // Deleting a model clears global and project overrides, but preserves the
+  // historical reference on sessions.
   await store.deleteModel(model.id);
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
   assert.equal(store.getModel(model.id), undefined);
+
+  const model2 = await store.createModel({
+    apiToken: "token-2",
+    baseUrl: "https://models.example.test/v1",
+    model: "model-2",
+    name: "Model 2",
+  });
+  await store.replaceProjectSettings(project.id, { reviewModelId: model2.id });
+  await store.deleteModel(model2.id);
+  assert.equal(store.getProjectSettings(project.id).overrides.reviewModelId, undefined);
+  assert.equal(store.getModel(model2.id), undefined);
+
+  const model3 = await store.createModel({
+    apiToken: "token-3",
+    baseUrl: "https://models.example.test/v1",
+    model: "model-3",
+    name: "Model 3",
+  });
+  const session = await store.createSession(project.id, "Explicit model", { modelId: model3.id });
+  await store.deleteModel(model3.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model3.id);
+  assert.equal(store.getModel(model3.id), undefined);
 });
 
 test("SessionStore validates the effective task model before creating Session data", async (context) => {
@@ -2617,6 +2729,93 @@ test("SessionStore validates the effective task model before creating Session da
     /must have a saved API token/,
   );
   assert.deepEqual(store.listSessions(project.id), []);
+});
+
+test("SessionStore reports an unavailable model with a structured code", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-session-model-code-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("No model project");
+  try {
+    await store.createSession(project.id, "Missing model");
+    assert.fail("expected rejection");
+  } catch (error) {
+    assert.ok(error instanceof SessionStoreHttpError);
+    assert.equal(error.code, "SESSION_MODEL_UNAVAILABLE");
+  }
+});
+
+test("SessionStore deletes a referenced model and preserves its explicit session choice", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-referenced-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const other = await store.createModel({
+    apiToken: "token-other",
+    baseUrl: "https://models.example.test/v1",
+    model: "model-other",
+    name: "Other model",
+  });
+
+  await store.replaceGlobalSettings({ modelId: model.id });
+  const project = await store.createProject("Project");
+  const session = await store.createSession(project.id, "Session", { modelId: model.id });
+
+  await store.deleteModel(model.id);
+
+  // Defaults are cleared; the explicit session choice remains unavailable.
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
+  assert.equal(store.getProjectSettings(project.id).overrides.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model.id);
+  assert.equal(store.getModel(model.id), undefined);
+
+  // The session can no longer resolve an effective model because the saved
+  // reference points at a deleted profile.
+  assert.equal(store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+
+  // A newly created session, with no historical reference, can inherit the
+  // remaining valid global/project default.
+  await store.replaceGlobalSettings({ modelId: other.id });
+  const newSession = await store.createSession(project.id, "New session", { modelId: other.id });
+  assert.equal(store.resolveRuntimeSettings(newSession.id).effective.modelId, other.id);
+});
+
+test("SessionStore deletes a provider and clears references to its child models", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-provider-references-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "token", presetId: "openai" });
+  const first = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const second = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  await store.replaceGlobalSettings({ modelId: first.id, reviewModelId: second.id });
+  const project = await store.createProject("Project");
+  await store.replaceProjectSettings(project.id, { modelId: second.id });
+  const session = await store.createSession(project.id, "Session", { modelId: first.id });
+
+  await store.deleteProvider(provider.id);
+
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
+  assert.equal(store.getGlobalSettings().overrides.reviewModelId, undefined);
+  assert.equal(store.getProjectSettings(project.id).overrides.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, first.id);
+  assert.equal(store.listModels().length, 0);
+  assert.equal(store.listProviders().length, 0);
 });
 
 test("SessionStore defaults the global task model to the first configured model", async (context) => {
@@ -2649,8 +2848,7 @@ test("SessionStore defaults the global task model to the first configured model"
   });
   assert.equal(store.getGlobalSettings().overrides.modelId, first.id);
 
-  // Legacy catalogs (models configured before auto-defaulting) heal when a
-  // usable model is re-saved.
+  // Editing a profile must not undo an explicitly cleared default.
   await store.replaceGlobalSettings({});
   assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
   await store.updateModel(second.id, {
@@ -2659,7 +2857,7 @@ test("SessionStore defaults the global task model to the first configured model"
     model: "model-2",
     name: "Second model",
   });
-  assert.equal(store.getGlobalSettings().overrides.modelId, second.id);
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
 });
 
 test("SessionStore clears an auto-default only while the attempted model still owns it", async (context) => {
@@ -4041,9 +4239,7 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getModelApiToken(profile.id), undefined);
   assert.equal(store.getModel(profile.id)!.hasApiToken, false);
 
-  // Deletion is guarded while any child profile is referenced by settings.
-  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
-  await store.replaceGlobalSettings({});
+  // Deleting a provider clears settings references but removes the provider.
   await store.deleteProvider(provider.id);
   assert.equal(store.listProviders().length, 0);
   assert.equal(store.getModel(profile.id), undefined);
@@ -4062,11 +4258,12 @@ test("rolling back the first provider model restores the previous global setting
   const provider = await store.createProvider({ apiToken: "sk-rollback", presetId: "deepseek" });
   const profile = await store.materializeProviderModel(provider.id, "deepseek-chat");
   assert.equal(store.getGlobalSettings().overrides.modelId, profile.id);
-  await assert.rejects(store.deleteModel(profile.id), /referenced by runtime settings/);
-  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
-
-  await store.replaceGlobalSettings(before);
   await store.deleteModel(profile.id);
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
+
+  const profile2 = await store.materializeProviderModel(provider.id, "deepseek-chat");
+  await store.replaceGlobalSettings({ ...before, modelId: profile2.id });
+  await store.deleteModel(profile2.id);
   await store.deleteProvider(provider.id);
 
   assert.deepEqual(store.getGlobalSettings().overrides, before);

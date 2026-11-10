@@ -13,10 +13,12 @@
 // limitations under the License.
 
 import { expect, type Page } from "@playwright/test";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { writeCaseMetrics } from "./helpers/case-measurements.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage } from "./helpers/journeys.ts";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
@@ -93,6 +95,15 @@ async function showWorkspacePlans(page: Page) {
   return plans;
 }
 
+// The real journeys keep their records, so measure the Session after the test
+// body, whether it passed or failed. Mocked journeys never set this.
+let measuredSessionId: string | undefined;
+test.afterEach(async ({ page }, testInfo) => {
+  const sessionId = measuredSessionId;
+  measuredSessionId = undefined;
+  if (sessionId) await writeCaseMetrics(page.request, testInfo, sessionId);
+});
+
 async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {}) {
   const model = await api("/api/models", {
     method: "POST",
@@ -102,11 +113,13 @@ async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {})
       model: process.env.E2E_LLM_MODEL,
       name: `E2E inline-cards ${Date.now()}`,
       vision: false,
+      apiVariant: realModelApiVariant(), ...realModelThinking(),
     }),
   });
   const project = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: `E2E inline cards ${Date.now()}` }) });
   const session = await api(`/api/projects/${project.id}/sessions`, { method: "POST", body: JSON.stringify({ title: "Inline cards" }) });
-  await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ modelId: model.id }) });
+  measuredSessionId = session.id;
+  await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ modelId: model.id, ...realModelThinking() }) });
   if (options.alwaysAllow) {
     // Approval mode moves in a dedicated request; it cannot ride the model PATCH.
     await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ approvalMode: "always_allow" }) });

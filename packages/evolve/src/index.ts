@@ -36,9 +36,22 @@
 import { Type } from "typebox";
 
 import type {
-  EvolveBudgetPlan, EvolveRunProposal, EvolveRunProposalResult, EvolveRunSummary,
+  EvolveBudgetPlan,
+  EvolveRunProposal,
+  EvolveRunProposalResult,
+  EvolveRunSummary,
+  ModelThinkingEffort,
+  ModelThinkingMode,
 } from "@sciencediscovery/schema";
 import type { AgentTool } from "@sciencediscovery/tools";
+
+/** Outcome of asking to stop a search. `stopping` is true only when the run was
+ *  still active; an already-finished run comes back with its final status. */
+export interface EvolveRunStopResult {
+  runId: string;
+  status: string;
+  stopping: boolean;
+}
 
 export {
   evolveCommandApprovesUnisolated,
@@ -56,9 +69,12 @@ export interface EvolveToolRuntime {
   /** The numbers `createEvolveRun` will apply for this session's model. Read
    *  before the spend checkpoint, not after: a ceiling the user was never told
    *  about is the difference between an approved budget and an accident. */
-  getEvolveBudget(input: { thinking?: "enabled" | "disabled" }): Promise<EvolveBudgetPlan>;
+  getEvolveBudget(input: { thinking?: ModelThinkingMode; thinkingEffort?: ModelThinkingEffort }): Promise<EvolveBudgetPlan>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
+  /** Ask the orchestrator to stop a running search. Optional so a deployment
+   *  that cannot stop a run simply does not offer the tool. */
+  stopEvolveRun?(runId: string): Promise<EvolveRunStopResult>;
   getIdeaResearch?(researchId?: string): Promise<unknown>;
   createIdeaResearch?(input: {objective: string; materials: string}): Promise<unknown>;
 }
@@ -72,6 +88,9 @@ export interface EvolveToolRuntime {
 export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
   if (!runtime) return [];
   const tools: AgentTool[] = [];
+  const effortParameter = Type.Optional(Type.Union([
+    Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+  ], { description: "Inherits the parent Run's thinking effort; defaults to high when absent. Explicit values override inheritance." }));
   const getEvolveParameters = Type.Object({
     runId: Type.Optional(Type.String({
       description: "The id create_evolve_run returned (a UUID). Omit it to read this "
@@ -116,9 +135,10 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
   };
   tools.push(getEvolveRun);
   const budgetParameters = Type.Object({
-    thinking: Type.Optional(Type.Union([Type.Literal("enabled"), Type.Literal("disabled")], {
-      description: "The thinking setting you plan to propose. Default disabled, which is the proposal "
-        + "default. On an endpoint that cannot stop thinking both answers give the same ceiling, and "
+    thinkingEffort: effortParameter,
+    thinking: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("enabled"), Type.Literal("disabled")], {
+      description: "The thinking setting you plan to propose. Omit to inherit the parent Run. "
+        + "On an endpoint that cannot stop thinking both answers give the same ceiling, and "
         + "the reply says why.",
     })),
   });
@@ -131,13 +151,14 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       + "expansion count is what decides whether the search can finish. Do not estimate these from the "
       + "model name, and do not carry over numbers from a previous run on a different model.",
     execute: async (_toolCallId, params) => {
-      const plan = await runtime.getEvolveBudget({ thinking: params.thinking });
+      const plan = await runtime.getEvolveBudget({ thinking: params.thinking, thinkingEffort: params.thinkingEffort });
       const ceilings = Object.entries(plan.perCallCeiling).sort(([a], [b]) => a.localeCompare(b))
         .map(([algorithm, ceiling]) => `${algorithm} ${ceiling}`).join(", ");
       const text = [
         `Model: ${plan.model ?? "(none on this session)"}`,
         `Thinking the run will record: ${plan.thinking.effective}${
           plan.thinking.note ? ` — ${plan.thinking.note}` : ""}`,
+        `Thinking effort: ${plan.thinking.effort ?? "provider default"}`,
         `Per-call ceiling: ${ceilings} tokens`,
         `Run total: ${plan.totalTokenCap} tokens, ${plan.maxSeconds}s`,
         // The checkpoint is the money gate. These numbers exist to be said out
@@ -296,12 +317,11 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     statement: Type.String({ maxLength: 2_000, minLength: 1 }),
     targetColumn: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
     testCmd: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
-    thinking: Type.Optional(Type.Union([Type.Literal("disabled"), Type.Literal("enabled")], {
-      description: "Default \"disabled\", and leave it there unless the user asks. Enabling it "
-        + "raises the per-call ceiling to 96k and has been measured turning a 20-second "
-        + "mutation into one that never returns: the model spends the whole budget reasoning "
-        + "and the search makes no progress at all.",
+    thinking: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("disabled"), Type.Literal("enabled")], {
+      description: "Omit to inherit the parent Run's thinking mode. Explicit values override inheritance. "
+        + "The budget follows the effective mode; read get_evolve_budget before proposing the search.",
     })),
+    thinkingEffort: effortParameter,
     workers: Type.Integer({ maximum: 8, minimum: 1 }),
   });
   const createEvolveRun: AgentTool<typeof evolveParameters> = {
@@ -360,6 +380,44 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: evolveParameters,
   };
   tools.push(createEvolveRun);
+  // Captured once so the tool body calls a local binding: reading the optional
+  // member inside the closure would need a non-null assertion that the compiler
+  // already considers redundant.
+  const stopRuntime = runtime.stopEvolveRun;
+  if (stopRuntime) {
+    const stopParameters = Type.Object({
+      runId: Type.String({
+        description: "The id create_evolve_run returned for the search to stop (a UUID). "
+          + "Required: stopping is destructive, so there is no \"most recent\" default.",
+        maxLength: 200, minLength: 1,
+      }),
+    });
+    const stopEvolveRun: AgentTool<typeof stopParameters> = {
+      description:
+        "Stop a running evolution search. The search keeps spending the run's budget and keeps "
+        + "its frozen scoring until it is stopped, so call this whenever the user changes the "
+        + "target — a different scoring formula, a corrected evaluator, a different starting "
+        + "point — **before** proposing the replacement. Never start a second search alongside "
+        + "a running one: two searches on the same session split the budget, score against "
+        + "different formulas and leave the user with two live panels and no way to say which "
+        + "result counts. Stop first, report that it stopped, then create the new one. Ending "
+        + "an already-finished search is harmless and returns its final status. Do not call "
+        + "this to make a search you just started finish faster: it discards the work done "
+        + "so far.",
+      execute: async (_toolCallId, params) => {
+        const result = await stopRuntime(params.runId);
+        const text = result.stopping
+          ? [`Stopping search ${result.runId}.`, "Report that to the user, then propose the replacement search if that is what they asked for."]
+          : [`Search ${result.runId} is not running any more (status: ${result.status}).`, "Nothing was stopped; read it with get_evolve_run if the outcome matters."];
+        return { content: [{ type: "text", text: text.join("\n") }], details: result };
+      },
+      label: "Stop evolution run",
+      name: "stop_evolve_run",
+      parameters: stopParameters,
+      requiredArguments: ["runId"],
+    };
+    tools.push(stopEvolveRun);
+  }
   if (runtime.createIdeaResearch) {
     const parameters = Type.Object({
       objective: Type.String({minLength: 1, maxLength: 16000, description: "Research task and all user constraints."}),

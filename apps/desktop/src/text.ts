@@ -102,4 +102,15 @@ export const TEXT: Text = new Proxy({} as Text, {
   },
 });
 
+export function formatEvolveTargetReached(made: number, planned: number | null): string {
+  if (getLanguage() === "zh-CN") {
+    return planned === null
+      ? "最优候选已达到目标，搜索因此停止。"
+      : `最优候选在 ${made}/${planned} 次扩展时达到目标，搜索因此停止。`;
+  }
+  return planned === null
+    ? "The best candidate reached the goal, so the search stopped."
+    : `The best candidate reached the goal after ${made} of ${planned} expansions, so the search stopped.`;
+}
+
 export type { Text };

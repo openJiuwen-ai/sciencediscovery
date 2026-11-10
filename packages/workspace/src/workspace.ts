@@ -33,6 +33,7 @@ import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
+  AgentShellExecution,
   ConnectorId,
   CreateSkillPackageRequest,
   CreateEnvironmentRequest,
@@ -83,6 +84,7 @@ import {
   MAX_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
+import { mcpModelResultView } from "./mcp-result-view.js";
 
 export interface WorkspaceFileInfo {
   modifiedAt: string;
@@ -113,6 +115,127 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
 
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
+
+/** Keep the model-facing Shell result focused on facts it can act on.
+ * The execution ledger and provenance store retain the complete record. */
+function shellExecutionModelView(execution: Pick<AgentShellExecution,
+  "error" | "finalization" | "id" | "recovery" | "result" | "state">): Record<string, unknown> {
+  const result = execution.result;
+  const pending = execution.state === "queued" || execution.state === "running";
+  const instruction = execution.state === "unknown"
+    ? "Original execution outcome is unconfirmed. Use execution_status to re-synchronize the same ID and execution_logs for retained output. Do not create a replacement or resume from a checkpoint while its process state is unknown."
+    : pending
+      ? "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it."
+      : undefined;
+  const networkPermission = result?.networkPermission;
+  return {
+    executionId: execution.id,
+    state: execution.state,
+    ...(result ? {
+      exitCode: result.exitCode,
+      ...(result.stdout !== undefined ? { stdout: result.stdout } : {}),
+      ...(result.stderr !== undefined ? { stderr: result.stderr } : {}),
+      ...(result.createdFiles !== undefined ? { createdFiles: result.createdFiles } : {}),
+      ...(result.modifiedFiles !== undefined ? { modifiedFiles: result.modifiedFiles } : {}),
+      ...(result.networkDeniedHosts?.length ? { networkDeniedHosts: result.networkDeniedHosts } : {}),
+      ...(networkPermission ? { networkPermission: {
+        state: networkPermission.state,
+        hosts: networkPermission.hosts,
+        ...(networkPermission.blockedHosts?.length ? { blockedHosts: networkPermission.blockedHosts } : {}),
+        instruction: networkPermission.instruction,
+      } } : {}),
+      ...(result.memoryStateLost ? { memoryStateLost: result.memoryStateLost } : {}),
+      ...(result.producedArtifacts?.length ? { producedArtifacts: result.producedArtifacts } : {}),
+    } : {}),
+    ...(execution.error ? { error: execution.error } : {}),
+    ...(execution.recovery ? { recovery: execution.recovery } : {}),
+    ...(execution.finalization && execution.finalization !== "committed"
+      ? { finalization: execution.finalization } : {}),
+    ...(instruction ? { instruction } : {}),
+  };
+}
+
+/** Keep streams as real lines so the shared output bounder can count, preview,
+ * retain and page them accurately instead of seeing one JSON-escaped line. */
+function shellExecutionModelText(view: Record<string, unknown>): string {
+  const { stdout, stderr, ...metadata } = view;
+  return [
+    JSON.stringify(metadata),
+    ...(stdout !== undefined ? ["stdout:", String(stdout)] : []),
+    ...(stderr !== undefined ? ["stderr:", String(stderr)] : []),
+  ].join("\n");
+}
+
+/** Preserve complete actionable output for audit without copying credentials,
+ * authorization receipts or Runner-internal snapshots into the trajectory. */
+function shellExecutionAuditView(execution: AgentShellExecution, modelView: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...modelView,
+    id: execution.id,
+    ...(execution.agentId ? { agentId: execution.agentId } : {}),
+    ...(execution.runnerId ? { runnerId: execution.runnerId } : {}),
+    ...(execution.workspaceId ? { workspaceId: execution.workspaceId } : {}),
+    ...(execution.startedAt ? { startedAt: execution.startedAt } : {}),
+    ...(execution.finishedAt ? { finishedAt: execution.finishedAt } : {}),
+  };
+}
+
+/** Status and cancellation responses point callers at execution_logs instead
+ * of repeatedly copying retained stdout/stderr and the complete Runner record. */
+function shellExecutionStatusView(execution: AgentShellExecution): Record<string, unknown> {
+  const view = shellExecutionModelView(execution);
+  const { stdout: _stdout, stderr: _stderr, ...status } = view;
+  return status;
+}
+
+function workspaceTransferView(transfer: WorkspaceTransfer): Record<string, unknown> {
+  return {
+    transferId: transfer.id, state: transfer.state,
+    sourceWorkspaceId: transfer.sourceWorkspaceId, targetWorkspaceId: transfer.targetWorkspaceId,
+    createdAt: transfer.createdAt,
+    ...(transfer.finishedAt ? { finishedAt: transfer.finishedAt } : {}),
+    ...(transfer.error ? { error: transfer.error } : {}),
+    ...(transfer.errorCode ? { errorCode: transfer.errorCode } : {}),
+    progress: (transfer.progress ?? []).map(({ bytes, error, size, sourcePath, state, targetPath }) => ({
+      sourcePath, targetPath, size, bytes, state, ...(error ? { error } : {}),
+    })),
+  };
+}
+
+function npuJobView(job: NpuJob): Record<string, unknown> {
+  return {
+    jobId: job.id, workloadId: job.workloadId, state: job.state, createdAt: job.createdAt,
+    ...(job.startedAt ? { startedAt: job.startedAt } : {}),
+    ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+    ...(job.environmentRevisionId ? { environmentRevisionId: job.environmentRevisionId } : {}),
+    ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+    ...(job.error ? { error: job.error } : {}),
+    ...(job.createdFiles?.length ? { createdFiles: job.createdFiles } : {}),
+  };
+}
+
+function environmentRevisionView(revision: EnvironmentRevision): Record<string, unknown> {
+  return {
+    revisionId: revision.id, environmentId: revision.environmentId,
+    language: revision.language, languageVersion: revision.languageVersion,
+    platform: revision.platform, packages: revision.packages, channels: revision.channels,
+    createdAt: revision.createdAt,
+    ...(revision.localWheels?.length ? {
+      localWheels: revision.localWheels.map(({ distribution, filename, manager, version }) => ({
+        filename, manager, ...(distribution ? { distribution } : {}), ...(version ? { version } : {}),
+      })),
+    } : {}),
+  };
+}
+
+function skillReviewDraftView(draft: SkillReviewDraftSummary): SkillReviewDraftSummary {
+  return {
+    ...(draft.baseRevision !== undefined ? { baseRevision: draft.baseRevision } : {}),
+    ...(draft.comparisonSource ? { comparisonSource: draft.comparisonSource } : {}),
+    createdAt: draft.createdAt, draftId: draft.draftId, fileCount: draft.fileCount, name: draft.name,
+    ...(draft.provenance ? { provenance: draft.provenance } : {}), updatedAt: draft.updatedAt,
+  };
+}
 
 type SubagentContractStopReason = "loop_capped" | "token_capped" | "turn_capped";
 type SubagentStopReason =
@@ -619,15 +742,15 @@ const IGNORED_WORKSPACE_DIRECTORIES = new Set([
   "venv",
 ]);
 
-export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<WorkspaceScanResult> {
+export async function scanWorkspaceWithStatus(workspaceRoot: string, limit = MAX_WORKSPACE_SCAN_FILES): Promise<WorkspaceScanResult> {
   await mkdir(workspaceRoot, { recursive: true });
   const files: WorkspaceFileInfo[] = [];
 
   async function visit(directory: string): Promise<void> {
-    if (files.length > MAX_WORKSPACE_SCAN_FILES) return;
+    if (files.length > limit) return;
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (files.length > MAX_WORKSPACE_SCAN_FILES) break;
+      if (files.length > limit) break;
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -646,8 +769,8 @@ export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<Wo
 
   await visit(resolve(workspaceRoot));
   return {
-    files: files.slice(0, MAX_WORKSPACE_SCAN_FILES),
-    truncated: files.length > MAX_WORKSPACE_SCAN_FILES,
+    files: files.slice(0, limit),
+    truncated: files.length > limit,
   };
 }
 
@@ -1030,7 +1153,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           if (!params.transfer_id) throw new Error("transfer_id is required");
           result = params.operation === "cancel" ? await transfers.cancel(params.transfer_id) : transfers.get(params.transfer_id);
         }
-        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        const projected = params.operation === "workspaces"
+          ? result
+          : Array.isArray(result)
+            ? result.map((transfer) => workspaceTransferView(transfer as WorkspaceTransfer))
+            : workspaceTransferView(result as WorkspaceTransfer);
+        return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
       },
     };
     tools.push(transferTool);
@@ -1174,13 +1302,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             inputs,
             workloadId,
           }, signal);
-          return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+          const projected = { job: npuJobView(job) };
+          return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
         }
         const jobId = params.job_id?.trim();
         if (!jobId) throw new Error(`job_id is required for ${params.operation}`);
         if (params.operation === "status") {
           const job = await broker.get(jobId, signal);
-          return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+          const projected = { job: npuJobView(job) };
+          return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
         }
         if (params.operation === "logs") {
           const logs = await broker.logs(jobId, signal);
@@ -1189,7 +1319,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (params.operation === "result") {
           const result = await broker.result(jobId, signal);
           const artifacts = await declareNpuJobArtifacts(result.job.createdFiles ?? []);
-          const details = artifacts.length > 0 ? { ...result, artifacts } : result;
+          const details = artifacts.length > 0
+            ? { job: npuJobView(result.job), artifacts }
+            : { job: npuJobView(result.job) };
           // Mirror the terminal job to the memory graph (fire-and-forget — the
           // recorder swallows its own failures). Only successfully declared
           // artifacts carry an artifact_id; failed declarations are skipped so
@@ -1202,7 +1334,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           return { content: [{ type: "text", text: JSON.stringify(details) }], details };
         }
         const job = await broker.cancel(jobId, signal);
-        return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+        const projected = { job: npuJobView(job) };
+        return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
       },
       label: "Run NPU broker job",
       name: "run_npu_job",
@@ -1465,7 +1598,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const checkParameters = Type.Object({ runner_id: Type.Optional(Type.String({ minLength: 1 })) });
     const check: AgentTool<typeof checkParameters> = {
       name: "check_runner", label: "Check Runner", parameters: checkParameters,
-      description: "Refresh execution readiness on an authorized Runner (default local) and update its capability report. Works without a usable sandbox. Reports connection, sandbox diagnostics and repair suggestions. Does not execute scientific code, repair the host, grant permission, or wait for user input.",
+      description: "Refresh execution readiness on an authorized Runner (default local) and update its capability report. Works without a usable sandbox. Reports the platform, Shell, guaranteed utilities, sandbox diagnostics and repair suggestions. Does not execute scientific code, repair the host, grant permission, or wait for user input.",
       execute: async (_id, params, signal) => {
         const value = await options.runnerReadiness!.check(params.runner_id, signal);
         return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
@@ -1501,7 +1634,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Before sandbox egress beyond the configured policy, call request_sandbox_network with hosts and purpose, then pass network_authorization_id. If a script fails offline, report the blocker and explicitly request known hosts; never claim complete retrieval through silent web_search fallback. Large output is bounded; use read_tool_output for retained output."
+      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner execution Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only when isolation is available. cwd is relative to this Agent's workspace. The target's check_runner capability is authoritative for platform, sandbox, Shell and utilities. Windows direct-execution Runners use managed Bash without profiles and guarantee cat, grep, head, sed, tail and wc; do not assume other host tools. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized execution policy. Before sandbox egress beyond the configured policy, call request_sandbox_network with hosts and purpose, then pass network_authorization_id. If a script fails offline, report the blocker and explicitly request known hosts; never claim complete retrieval through silent web_search fallback. Large output is bounded; use read_tool_output for retained output."
         + (options.shellExecutions ? " Foreground execution waits up to wait_ms (default 10000); background=true returns after acceptance. A wait deadline does not stop the command. Retain the returned Execution ID and use execution_status/logs/cancel; do not resubmit a running or unknown command." : ""),
       execute: async (toolCallId, params, signal, onProgress) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
@@ -1552,32 +1685,26 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
               }
             } while (onProgress && (execution.state === "queued" || execution.state === "running") && Date.now() < deadline);
           }
-          const pending = execution.state === "queued" || execution.state === "running";
+          const modelView = shellExecutionModelView(execution);
           return {
             isError: ["failed", "cancelled", "unknown"].includes(execution.state) || Boolean(execution.result?.networkDeniedHosts?.length),
-            content: [{ type: "text", text: JSON.stringify({
-              ...execution,
-              ...(pending ? { instruction: "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it." } : {}),
-              ...(execution.state === "unknown" ? { instruction: "Original execution outcome is unconfirmed. Use execution_status to re-synchronize the same ID and execution_logs for retained output. Do not create a replacement or resume from a checkpoint while its process state is unknown." } : {}),
-            }) }],
-            details: execution,
+            content: [{ type: "text", text: shellExecutionModelText(modelView) }],
+            details: shellExecutionAuditView(execution, modelView),
           };
         }
         if (params.background || params.wait_ms !== undefined || params.recovery_context || params.recovery_metadata_path) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
           environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
         });
+        const modelView = shellExecutionModelView({
+          id: result.executionId,
+          result,
+          state: result.exitCode === 0 && !result.networkDeniedHosts?.length ? "completed" : "failed",
+        });
         return {
           isError: result.exitCode !== 0 || Boolean(result.networkDeniedHosts?.length),
-          content: [{ type: "text", text: [
-            result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-            result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-            `created files: ${result.createdFiles.join(", ") || "none"}`,
-            `kernel mode: ${result.kernelMode}`,
-            ...(result.networkPermission ? [JSON.stringify(result.networkPermission)] : []),
-            ...(result.memoryStateLost ? [`persistent shell state lost: ${result.memoryStateLost}`] : []),
-          ].join("\n") }],
-          details: result,
+          content: [{ type: "text", text: shellExecutionModelText(modelView) }],
+          details: modelView,
         };
       },
       label: "Run shell",
@@ -1631,7 +1758,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const value = params.execution_id
           ? await manager.wait(params.execution_id, params.wait_ms ?? 0, signal)
           : manager.list();
-        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        if (Array.isArray(value)) {
+          const executions = value.map((execution) => shellExecutionStatusView(execution));
+          return { content: [{ type: "text", text: JSON.stringify({ executions }) }], details: { executions } };
+        }
+        const modelView = shellExecutionStatusView(value);
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionAuditView(value, modelView) };
       },
     };
     tools.push(statusTool);
@@ -1653,7 +1785,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: cancelParameters,
       execute: async (_id, params) => {
         const value = await manager.cancel(params.execution_id);
-        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        const modelView = shellExecutionStatusView(value);
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionAuditView(value, modelView) };
       },
     };
     tools.push(cancelTool);
@@ -1762,10 +1895,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             manager: params.manager ?? "conda",
             packages: params.packages,
           }, signal, params.runner_id);
-          return {
-            content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
-            details: { revision },
-          };
+          const projected = environmentRevisionView(revision);
+          return { content: [{ type: "text", text: JSON.stringify(projected, null, 2) }], details: { revision: projected } };
         },
         label: "Install environment packages",
         name: ENVIRONMENT_TOOL_NAMES.install,
@@ -1782,10 +1913,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         description: "Remove conda package specifications from a named environment. Success creates a new immutable revision; base environments are read-only.",
         execute: async (_toolCallId, params, signal) => {
           const revision = await options.environmentManagement!.uninstall(params.environmentId, { packages: params.packages }, signal, params.runner_id);
-          return {
-            content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
-            details: { revision },
-          };
+          const projected = environmentRevisionView(revision);
+          return { content: [{ type: "text", text: JSON.stringify(projected, null, 2) }], details: { revision: projected } };
         },
         label: "Uninstall environment packages",
         name: ENVIRONMENT_TOOL_NAMES.uninstall,
@@ -2067,12 +2196,13 @@ export function createSkillTools(options: Pick<WorkspaceToolOptions, "skills" | 
           name: params.name,
           ...(params.resources ? { resources: params.resources } : {}),
         }, signal);
+        const projected = skillReviewDraftView(created);
         return {
           content: [{
             type: "text",
-            text: `${JSON.stringify(created, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
+            text: `${JSON.stringify(projected, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
           }],
-          details: created,
+          details: projected,
         };
       },
       label: "Create Skill draft",
@@ -2092,8 +2222,11 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
       description: mcpTool.description,
       execute: async (toolCallId, params, signal, onProgress) => {
         const result = await mcpTool.execute(toolCallId, params as JsonValue, signal, onProgress);
+        const projection = mcpModelResultView(result, mcpTool.sourceId, mcpTool.toolId);
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
+          bounded: true,
+          content: [{ type: "text", text: JSON.stringify(projection.view) }],
+          ...(projection.retainedContent !== undefined ? { retainedContent: projection.retainedContent } : {}),
           details: result,
         };
       },

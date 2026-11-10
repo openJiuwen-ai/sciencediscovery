@@ -29,6 +29,7 @@ import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
   EvolveGoal, EvolveRunProposal, ModelsDevPayload, ResolvedProxy,
 } from "@sciencediscovery/schema";
+import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -51,6 +52,7 @@ import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { stopEvolveRunForSession } from "../evolution/stop-run.js";
 import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
@@ -219,7 +221,7 @@ export function createPlatformServices(
   const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
-    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog, { dataDir: config.dataDir });
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
@@ -438,7 +440,9 @@ export function createPlatformServices(
     // Read before the spend checkpoint. The same function that prices the run
     // answers here, so the number the agent shows the user is the number the
     // run gets — including the thinking setting an endpoint cannot honor.
-    getEvolveBudget: async ({ thinking }) => describeEvolveBudget(store.getModel(turn.modelId), thinking),
+    getEvolveBudget: async ({ thinking, thinkingEffort }) => describeEvolveBudget(
+      store.getModel(turn.modelId), thinking ?? turn.thinkingMode ?? "auto", thinkingEffort ?? turn.thinkingEffort,
+    ),
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
@@ -462,11 +466,19 @@ export function createPlatformServices(
       try {
         const result = await startProposedRun(input, {
           approvedUnisolated,
+          // The create path refuses a second search while one is live. The
+          // tool's description asks the agent to stop the running one first;
+          // this is what holds when it does not.
+          activeRuns: async () => (await evolutionStore.listRuns(turn.sessionId))
+            .filter((run) => isEvolveRunActive(run.status))
+            .map((run) => ({ id: run.id, status: run.status })),
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
           orchestrator: evolveOrchestrator,
           sessionId: turn.sessionId,
+          thinking: turn.thinkingMode ?? "auto",
+          thinkingEffort: turn.thinkingEffort,
           store: storeEvolveInput(turn.sessionId),
           // A custom gateway is configured as the plain OpenAI dialect unless
           // its operator names another, and that dialect has no thinking
@@ -522,6 +534,18 @@ export function createPlatformServices(
         ? { ...summary, bestSource: source.slice(0, BEST_SOURCE_LIMIT), bestSourceTruncated: { chars: source.length }, resultArtifact }
         : { ...summary, bestSource: source, resultArtifact };
     },
+    // Stopping is the one evolve action the agent could not take, so changing a
+    // scoring formula mid-search meant starting a second run beside the first:
+    // two searches, two frozen formulas, one budget. The route the desktop uses
+    // already existed; this is the same capability behind a tool, scoped to the
+    // session that is asking so a run id from elsewhere cannot be stopped.
+    stopEvolveRun: (runId: string) => stopEvolveRunForSession(runId, {
+      sessionId: turn.sessionId,
+      readRun: (id) => evolutionStore.readRun(id),
+      listRuns: (sessionId) => evolutionStore.listRuns(sessionId),
+      stop: (id) => evolveOrchestrator.stop(id),
+      isActive: isEvolveRunActive,
+    }),
   });
 
   return {
@@ -683,7 +707,10 @@ export async function initializePlatformServices(
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.
-  void evolutionStore.initialize()
+  // Evolution recovery touches the data directory. Keep it in the startup
+  // lifecycle so closing an API during boot cannot race a test/fixture that
+  // removes its temporary data directory.
+  await evolutionStore.initialize()
     .then(() => evolveOrchestrator.adoptOrphanedRuns())
     .catch((error: unknown) => {
       apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });

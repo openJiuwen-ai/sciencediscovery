@@ -12,9 +12,11 @@ import type { TestContext } from "node:test";
 
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import { RunnerClient } from "@sciencediscovery/executor";
-import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
+import type { AgentShellExecution, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
+import { ResearchPackageIds, remapRunEvent } from "./research-package-history.js";
+import { verifyResearchCopy } from "./research-snapshot-integrity.js";
 
 const owner = { sessionId: "session", agentId: "main" };
 const identity = { runnerId: "remote", workspaceId: "workspace", turnId: "original-turn" };
@@ -35,6 +37,43 @@ async function fixture(context: TestContext) {
   const result = { exitCode: 0, stdout: "done", stderr: "", workspaceSnapshot: ref } as ShellExecutionResult;
   return { db, versions, notices, service, ref, result };
 }
+
+test("historical shell restore round-trips output evidence and passes research copy verification", async (context) => {
+  const f = await fixture(context);
+  const source: AgentShellExecution = { id: "shell-source", sessionId: "session-source", agentId: "main",
+    runnerId: "remote", workspaceId: "workspace-source", turnId: "turn-source", state: "completed",
+    queuedAt: "2026-10-20T10:00:00.000Z", finishedAt: "2026-10-20T10:01:00.000Z", accepted: true, provenance: "committed",
+    result: { ...f.result, workspaceVersion: f.ref } };
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id(source.sessionId);
+  const mapped = { ...remapRunEvent(source, ids), id: ids.id(source.id) };
+  await f.service.restoreHistorical(mapped);
+  const restored = await f.service.get(mapped.id, { sessionId: targetId, agentId: "main" });
+  assert.equal(restored.result?.stdout, "done");
+  assert.equal(restored.result?.workspaceSnapshot, undefined);
+  assert.equal(restored.result?.workspaceVersion, undefined);
+  const records = (id: string, execution: AgentShellExecution) => ({ sessions: [{ session: { id }, shellExecutions: [execution] }] });
+  assert.doesNotThrow(() => verifyResearchCopy(records(source.sessionId, source), records(targetId, restored), ids, new Map([[source.sessionId, targetId]]), "project"));
+  assert.deepEqual(f.notices.unread({ sessionId: targetId, agentId: "main" }), [], "restoring evidence does not execute or notify");
+});
+
+test("historical shell executions are never reconciled after restoration", async (context) => {
+  const f = await fixture(context);
+  const source: AgentShellExecution = { ...owner, ...identity, id: "historical", state: "unknown",
+    queuedAt: "2026-10-20T10:00:00.000Z", accepted: true, provenance: "unconfirmed" };
+  await f.service.restoreHistorical(source);
+  const restarted = new ShellExecutions(f.db, f.versions, f.notices);
+  context.after(() => restarted.close());
+  let calls = 0;
+  const handlers = { runner: () => { calls++; throw new Error("historical execution must not contact Runner"); },
+    finalize: async (_context: unknown, result: ShellExecutionResult) => result };
+  restarted.configureRecovery(handlers);
+  await restarted.reconcilePending(undefined, true);
+  const record = await restarted.reconcile(source.id, owner, handlers);
+  assert.equal(record.state, "cancelled");
+  assert.equal(calls, 0);
+  assert.equal("historical" in record, false);
+});
 
 test("accepted background work outlives waiting and publishes a notice only after provenance", async (context) => {
   const f = await fixture(context);
@@ -96,6 +135,155 @@ test("four consecutive Runner status transport failures do not turn accepted wor
   assert.equal(result.result?.stdout, "done");
   assert.equal(submitted, 1);
   assert.equal(observations, 5);
+});
+
+test("a Runner accepted request whose pre-admission failure is deterministic settles failed, not unknown", async (context) => {
+  // The Runner accepted the managed request and refused it before launching a
+  // process: a terminal `failed` record with `not_started` evidence and no
+  // result or workspace version. The API must settle that as committed,
+  // because a 503 for the same condition would be indistinguishable from a
+  // lost submission and would block the workspace.
+  const f = await fixture(context); let submitted = 0;
+  const failed = (id: string): ManagedExecution => ({ ...owner, id, state: "failed",
+    queuedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z",
+    error: "Managed Bash is unavailable: ENOENT", receipt: receipt(),
+    evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot-one", revision: 1,
+      processTerminated: true, terminationReason: "not_started" } });
+  const runner = {
+    startShellExecution: async (input: ShellExecutionRequest) => { submitted++; return failed(input.executionId); },
+    getShellExecution: async () => { throw new Error("a terminal submit response must not be observed again"); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "failed");
+  assert.equal(record.provenance, "committed", "a pre-admission failure is recorded, not left unconfirmed");
+  assert.equal(record.error, "Managed Bash is unavailable: ENOENT");
+  assert.equal(record.result, undefined, "no execution result is fabricated");
+  assert.equal(record.evidence?.terminationReason, "not_started");
+  assert.equal(record.startedAt, undefined, "the API must not file a start time for a process that never ran");
+  assert.equal(record.observation?.status, "fresh");
+  assert.equal(submitted, 1);
+  assert.equal(f.notices.unread(owner).length, 1);
+});
+
+test("a true submit-outcome-unknown still stays unconfirmed and blocks the workspace", async (context) => {
+  // Network failure on the submit call proves nothing about whether the
+  // Runner ran the command, so it must not reuse the deterministic-failure
+  // path added for a Runner's own pre-admission rejection.
+  const f = await fixture(context); let submissions = 0;
+  const runner = {
+    startShellExecution: async () => { submissions++; throw new TypeError("fetch failed"); },
+    getShellExecution: async () => { throw Object.assign(new Error("not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "unknown");
+  assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.observation?.lastError?.code, "SUBMIT_OUTCOME_UNKNOWN");
+  // The same workspace stays blocked; the unknown work is never resubmitted.
+  await assert.rejects(f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext),
+    { code: "ORIGINAL_EXECUTION_UNCONFIRMED" });
+  assert.equal(submissions, 1);
+});
+
+test("an accepted execution the Runner refuses to hand over before any result settles failed, not unknown", async (context) => {
+  // #998: the 4th #978 reproduction is accepted=true, where the Runner answers
+  // the hand-over read with 401 "Execution not found for this Agent" before any
+  // result reaches the API. Nothing there is retryable and there is no result to
+  // wait for: leaving it unknown kept the tool call silent and the run in
+  // "running" until the idle watchdog.
+  for (const status of [401, 403, 404] as const) {
+    const f = await fixture(context);
+    let id = "";
+    const runner = {
+      startShellExecution: async (r: ShellExecutionRequest) => {
+        id = r.executionId;
+        return { ...owner, id, state: "running", queuedAt: "now" };
+      },
+      // The Runner never hands the finished execution over: the follow poll
+      // answers 401/403/404 and no result is captured.
+      getShellExecution: async () => {
+        throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
+      },
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, (executionId, dispatch) => dispatch(request(executionId)));
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.accepted, true, `${status}: the Runner had accepted the command`);
+    assert.equal(record.state, "failed", `${status}: it must reach a terminal state`);
+    assert.equal(record.provenance, "committed", `${status}: the outcome is recorded, not left unconfirmed`);
+    assert.equal(record.finalization, "committed", `${status}: finalization is not left pending`);
+    assert.equal(record.finishedAt !== undefined, true, `${status}: a terminal record`);
+    assert.match(record.error ?? "", /would not return its result/, `${status}: the error says the result was unreadable`);
+    assert.match(record.error ?? "", /inspect the workspace/, `${status}: the error says what to do instead of retrying`);
+    assert.equal(record.observation?.lastError?.retryable, false, `${status}: not retried`);
+    assert.equal(f.notices.unread(owner).length, 1, `${status}: the failure is visible to the caller`);
+  }
+});
+
+test("a Runner refusal after the result was captured keeps the captured result, not an unreadable failure", async (context) => {
+  // Once existingResult has pinned the bytes, a later 401/403/404 is a failed
+  // provenance finalization, not an unreadable result: the completed command
+  // must stay recoverable and the captured bytes must survive reconciliation.
+  for (const status of [401, 403, 404] as const) {
+    const f = await fixture(context);
+    let id = "";
+    const runner = {
+      health: async () => ({ runnerInstanceId: "original-ledger", runnerBootId: "boot-one", capabilities: { executionRecoveryVersion: 1 } }),
+      startShellExecution: async (r: ShellExecutionRequest) => {
+        id = r.executionId;
+        return { ...owner, id, state: "running", queuedAt: "now", receipt: receipt(1) };
+      },
+      getShellExecution: async () => recoveredTerminal(id, f),
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, async (executionId, dispatch) => {
+      await dispatch(request(executionId)); // pins the result via existingResult
+      throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: status });
+    }, recoveryContext);
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.state, "unknown", `${status}: a captured result is not an unreadable failure`);
+    assert.equal(record.provenance, "unconfirmed", `${status}: the captured result is not committed as a loss`);
+    assert.equal(record.finalization, "failed", `${status}: finalization failed and stays recoverable`);
+    assert.doesNotMatch(record.error ?? "", /would not return its result/, `${status}: a completed command is not reported unreadable`);
+
+    // reconcile re-runs the finalizer on the same pinned bytes.
+    let finalized: ShellExecutionResult | undefined;
+    const recovered = await f.service.reconcile(job.id, owner, {
+      runner: () => runner,
+      finalize: async (_context: unknown, result: ShellExecutionResult) => { finalized = result; return result; },
+    });
+    assert.equal(recovered.state, "completed", `${status}: reconciliation completes with the captured result`);
+    assert.equal(finalized?.stdout, "done", `${status}: the pinned result bytes are re-used`);
+  }
+});
+
+test("a Runner 4xx rejection on submission settles failed, not unknown, and the error is visible", async (context) => {
+  // #978: the Runner answered the submit call with a definite 4xx (e.g. 401
+  // "Execution not found for this Agent"). The command never ran, so this is a
+  // terminal failure with a visible error, not an unknown outcome that leaves
+  // the tool call and the run stuck in "running".
+  for (const [message, status] of [["Runner request failed (401)", 401], ["Execution not found for this Agent", 404]] as const) {
+    const f = await fixture(context);
+    let submissions = 0;
+    const runner = {
+      startShellExecution: async () => { submissions++; throw Object.assign(new Error(message), { statusCode: status }); },
+      getShellExecution: async () => { throw new Error("a rejected submission must not be observed again"); },
+    } as unknown as RunnerClient;
+    const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+    const record = await f.service.wait(job.id, owner, 1_000);
+    assert.equal(record.state, "failed", `${status}: a rejected submission is a failure`);
+    assert.equal(record.provenance, "committed", `${status}: the rejection is recorded, not left unconfirmed`);
+    assert.equal(record.accepted, false, `${status}: never accepted`);
+    assert.equal(record.result, undefined, `${status}: no execution result is fabricated`);
+    assert.equal(record.startedAt, undefined, `${status}: no start time for a command that never ran`);
+    assert.equal(record.finishedAt !== undefined, true, `${status}: a terminal record`);
+    assert.match(record.error ?? "", /command was not run/, `${status}: the error says the command did not run`);
+    assert.equal(record.observation?.lastError?.retryable, false, `${status}: a 4xx rejection is not retried`);
+    assert.equal(submissions, 1);
+    assert.equal(f.notices.unread(owner).length, 1, `${status}: a completion notice makes the failure visible`);
+    // The workspace is no longer blocked: the outcome is settled, not unknown.
+    await assert.doesNotReject(f.service.start(owner, identity, () => runner,
+      (id, dispatch) => dispatch(request(id)), recoveryContext));
+  }
 });
 
 test("a successful Runner observation clears the consecutive transport failure count", async (context) => {
@@ -224,6 +412,151 @@ test("explicit cancellation retains committed result and stopped Agent inbox wit
   assert.equal(f.notices.prepareDelivery(owner), undefined);
   assert.equal(f.notices.unread(owner).length, 1);
   assert.equal(f.notices.timers(owner)[0]!.state, "cancelled");
+});
+
+test("cancelling an unconfirmed execution settles it instead of blocking the workspace forever", async (context) => {
+  // #1012: the record was left `unknown` by a failed commit, the workspace guard
+  // then refused every new command in it, and `cancel` only forwarded to the
+  // Runner — which no longer held the execution, so the request never answered
+  // and the project delete waited behind it until the adapter deadline.
+  const f = await fixture(context);
+  let cancelled = 0;
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    cancelShellExecution: async () => { cancelled++; throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  assert.equal(job.state, "unknown", "the lost submission is still unconfirmed");
+
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.equal(cancelled, 1, "the Runner is still asked to cancel");
+  assert.equal(settled.state, "cancelled", "the local record reaches a terminal state anyway");
+  assert.equal(settled.provenance, "unconfirmed", "the outcome was never confirmed and the record says so");
+  assert.equal(settled.finalization, "committed");
+  assert.equal(settled.finishedAt !== undefined, true);
+  assert.match(settled.error ?? "", /Cancelled before the Runner confirmed the outcome/);
+
+  // The workspace is usable again: the guard no longer finds an unknown record.
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id))));
+  assert.equal(submissions, 1, "a cancelled unknown no longer blocks new work");
+});
+
+test("a cancelled unconfirmed execution is not reopened by the recovery scan", async (context) => {
+  // The settlement only holds if the scan leaves it alone: `scanPending` used to
+  // select anything whose provenance was not `committed`, so the next tick
+  // reopened a cancelled record as `unknown` and the workspace blocked again.
+  const f = await fixture(context);
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    cancelShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.equal(settled.state, "cancelled");
+
+  f.service.configureRecovery({ runner: () => runner, finalize: async (_context: unknown, result: ShellExecutionResult) => result });
+  await f.service.reconcilePending(undefined, true);
+  const after = await f.service.get(job.id, owner);
+  assert.equal(after.state, "cancelled", "a settled record is not reopened");
+  assert.equal(after.provenance, "unconfirmed");
+  assert.equal(after.finalization, "committed");
+  assert.equal(after.finishedAt, settled.finishedAt);
+  assert.equal(after.observation?.lastError?.code, settled.observation?.lastError?.code);
+
+  // A context-carrying submission is the shape the workspace guard checks.
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id)), recoveryContext));
+  assert.equal(submissions, 1, "the workspace accepts work after the cancel and a full scan");
+});
+
+test("an explicit status read does not reopen a cancelled record", async (context) => {
+  // `agent-run/workspace-bindings.ts` reconciles before every `get`/`wait`, and a
+  // settled cancel is deliberately `provenance: "unconfirmed"`, so reading the status
+  // the guard recommends used to push the record back to `unknown` — #1012 again, this
+  // time through the one action the guard's own message asks for.
+  const f = await fixture(context);
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    cancelShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+    getShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.equal(settled.state, "cancelled");
+
+  const after = await f.service.reconcile(job.id, owner,
+    { runner: () => runner, finalize: async (_context: unknown, result: ShellExecutionResult) => result });
+  assert.equal(after.state, "cancelled", "a status read leaves the settlement alone");
+  assert.equal(after.provenance, "unconfirmed");
+  assert.equal(after.finalization, "committed");
+  assert.equal(after.finishedAt, settled.finishedAt);
+  assert.equal(after.observation?.lastError?.code, settled.observation?.lastError?.code);
+
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id)), recoveryContext));
+  assert.equal(submissions, 1, "the workspace accepts work after the status read");
+});
+
+test("a concurrent observer write during cancel does not fail the settlement", async (context) => {
+  // `reconcile` runs before every `execution_status` / `wait`, and each of those
+  // rewrites an `unknown` record, so the settlement's revision CAS can lose. The
+  // cancel is idempotent, so it must re-read and settle rather than answering 500
+  // with nothing settled — the guard's own message tells the agent to poll the
+  // status, so this overlap is the normal shape of the #1012 flow.
+  const f = await fixture(context);
+  const started: { id: string }[] = [];
+  const runner = {
+    startShellExecution: async () => { throw new TypeError("fetch failed"); },
+    getShellExecution: async () => { throw Object.assign(new Error("Execution not found"), { statusCode: 404 }); },
+    cancelShellExecution: async () => {
+      // An observer write lands while the cancel request is in flight.
+      await f.service.reconcile(started[0]!.id, owner,
+        { runner: () => runner, finalize: async (_context: unknown, result: ShellExecutionResult) => result });
+      throw Object.assign(new Error("Execution not found"), { statusCode: 404 });
+    },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  started.push(job);
+  assert.equal(job.state, "unknown");
+  const before = await f.service.get(job.id, owner);
+
+  const settled = await f.service.cancel(job.id, owner, () => runner);
+  assert.ok((settled.observation?.failureCount ?? 0) > (before.observation?.failureCount ?? 0),
+    "the observer really rewrote the record mid-cancel");
+  assert.equal(settled.state, "cancelled", "the cancel still settles instead of rejecting");
+  assert.equal(settled.provenance, "unconfirmed");
+  assert.equal(settled.finalization, "committed");
+  assert.equal(settled.finishedAt !== undefined, true);
+
+  let submissions = 0;
+  const healthy = {
+    startShellExecution: async (r: ShellExecutionRequest) => { submissions++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+  } as unknown as RunnerClient;
+  await assert.doesNotReject(f.service.start(owner, identity, () => healthy, (id, dispatch) => dispatch(request(id)), recoveryContext));
+  assert.equal(submissions, 1, "the workspace accepts work after the racing cancel");
+});
+
+test("a confirmed-running execution still reports a failed cancel", async (context) => {
+  // The best-effort path is only for an outcome nobody can read. A Runner that
+  // refuses to cancel work it knows about must keep failing loudly.
+  const f = await fixture(context);
+  const runner = {
+    cancelShellExecution: async () => { throw Object.assign(new Error("Runner refused"), { statusCode: 500 }); },
+    getShellExecution: async () => new Promise(() => undefined),
+    startShellExecution: async (r: ShellExecutionRequest) => ({ ...owner, id: r.executionId, state: "running", queuedAt: "now" }),
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, async (id, dispatch) => dispatch(request(id)));
+  await assert.rejects(f.service.cancel(job.id, owner, () => runner), /Runner refused/);
 });
 
 test("lost submission and API restart are unknown, never command replay", async (context) => {

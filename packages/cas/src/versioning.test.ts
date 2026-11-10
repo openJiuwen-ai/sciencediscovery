@@ -102,6 +102,28 @@ test("Linux tree preserves raw names, case, symlinks, empty directories and exec
   await assert.rejects(snapshotWorkspace(store, workspace), /rejects FIFO/);
 }));
 
+test("snapshot records excluded directories as excluded entries and skips their contents", async () => fixture(async (store, root) => {
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  await writeFile(resolve(workspace, "readme"), "hello");
+  await mkdir(resolve(workspace, "deps"), { recursive: true });
+  await writeFile(resolve(workspace, "deps", "pkg.py"), "big");
+  const tree = (await store.readRecord<WorkspaceTree>(await snapshotWorkspace(store, workspace))).value;
+  assert.deepEqual(tree.entries.map((entry) => Buffer.from(entry.name, "base64url").toString()).sort(), ["deps", "readme"]);
+  const deps = tree.entries.find((entry) => entry.type === "excluded");
+  assert.ok(deps);
+  assert.equal(Buffer.from(deps!.name, "base64url").toString(), "deps");
+}));
+
+test("snapshot exclude is configurable and an empty list disables exclusion", async () => fixture(async (store, root) => {
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  await mkdir(resolve(workspace, "vendor"), { recursive: true });
+  await writeFile(resolve(workspace, "vendor", "x"), "data");
+  const excluded = (await store.readRecord<WorkspaceTree>(await snapshotWorkspace(store, workspace, { exclude: ["vendor"] }))).value;
+  assert.ok(excluded.entries.some((entry) => entry.type === "excluded"));
+  const included = (await store.readRecord<WorkspaceTree>(await snapshotWorkspace(store, workspace, { exclude: [] }))).value;
+  assert.ok(included.entries.every((entry) => entry.type !== "excluded"));
+}));
+
 test("refs validate closure, rollback injected faults and retain every committed history root", async () => fixture(async (store) => {
   const refs = await RefStore.open(store);
   try {

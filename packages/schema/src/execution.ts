@@ -32,7 +32,11 @@ export interface ExecutionObservation {
   lastRunnerState?: ManagedExecution["state"];
   failureCount: number;
   nextRetryAt?: string;
-  lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number };
+  lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number;
+    /** An allowlisted identifier for the underlying failure — a transport code or a
+     *  `RecoveryError` code — never free text, so the record stays diagnosable without
+     *  carrying an HTTP body, command arguments or a credential. */
+    cause?: string };
 }
 
 export interface ManagedExecution extends ExecutionOwner {

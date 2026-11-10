@@ -4,19 +4,27 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, rm, symlink } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { assertRef, type AgentStateRef, type DataRef, type VersionStore, type WorkspaceTree } from "./versioning.js";
 import { withWorkspaceMutation } from "./workspace-lease.js";
 
 export interface SnapshotFile { path: string; content: DataRef; executable: number }
+export interface WorkspaceSnapshotManifest { files: SnapshotFile[]; excludedPaths: string[] }
 
 /** An immutable manifest, never a scan of the live Workspace. Symlinks are not
  * traversed; paths must be representable by the public UTF-8 path contract. */
 export async function workspaceSnapshotFiles(store: VersionStore, tree: AgentStateRef, paths?: string[]): Promise<SnapshotFile[]> {
+  return (await workspaceSnapshotManifest(store, tree, paths)).files;
+}
+
+/** Read exclusions from this committed tree, including custom snapshot policies;
+ * never infer them from current defaults or mutable Workspace contents. */
+export async function workspaceSnapshotManifest(store: VersionStore, tree: AgentStateRef, paths?: string[]): Promise<WorkspaceSnapshotManifest> {
   if (paths?.some((path) => !path || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === ".."))) {
     throw new Error("Snapshot paths must be relative Workspace paths");
   }
   const files: SnapshotFile[] = [];
+  const excludedPaths: string[] = [];
   const walk = async (ref: AgentStateRef, prefix: string): Promise<void> => {
     const record = await store.readRecord<WorkspaceTree>(ref, "WorkspaceTree");
     for (const entry of record.value.entries) {
@@ -28,11 +36,12 @@ export async function workspaceSnapshotFiles(store: VersionStore, tree: AgentSta
       const path = prefix ? `${prefix}/${name}` : name;
       if (paths?.length && !paths.some((selected) => path === selected || path.startsWith(`${selected}/`) || selected.startsWith(`${path}/`))) continue;
       if (entry.type === "directory") await walk(entry.tree, path);
+      else if (entry.type === "excluded") excludedPaths.push(path);
       else if (entry.type === "file") { assertRef(entry.content, "data"); files.push({ path, content: entry.content, executable: entry.executable }); }
     }
   };
   await walk(tree, "");
-  return files;
+  return { files, excludedPaths };
 }
 
 /** Verify the streamed bytes too: a corrupt store must never publish a target file. */
@@ -49,10 +58,16 @@ export async function* streamSnapshotFile(store: VersionStore, content: DataRef)
  * The caller may hand the directory to a consumer only after this resolves.
  * Preserve raw Linux names, empty directories and link targets without following
  * links or consulting the original live tree. No hardlinks to mutable files/CAS. */
-export async function materializeWorkspaceSnapshot(store: VersionStore, tree: AgentStateRef, destination: string): Promise<void> {
+export interface MaterializeWorkspaceResult {
+  /** Workspace-relative paths of excluded directories that were not materialized. */
+  excludedPaths: string[];
+}
+
+export async function materializeWorkspaceSnapshot(store: VersionStore, tree: AgentStateRef, destination: string): Promise<MaterializeWorkspaceResult> {
   const root = resolve(destination);
   await mkdir(dirname(root), { recursive: true });
   await mkdir(root, { mode: 0o700 }); // Exclusive: failure must not remove someone else's directory.
+  const excludedPaths: string[] = [];
   try {
     await withWorkspaceMutation(store, root, async () => {
       const walk = async (ref: AgentStateRef, directory: Buffer): Promise<void> => {
@@ -66,6 +81,10 @@ export async function materializeWorkspaceSnapshot(store: VersionStore, tree: Ag
           }
           names.add(entry.name);
           const path = Buffer.concat([directory, Buffer.from("/"), name]);
+          if (entry.type === "excluded") {
+            excludedPaths.push(relative(root, path.toString("utf8")));
+            continue;
+          }
           if (entry.type === "directory") {
             await mkdir(path); await walk(entry.tree, path);
           } else if (entry.type === "file") {
@@ -82,6 +101,7 @@ export async function materializeWorkspaceSnapshot(store: VersionStore, tree: Ag
       };
       await walk(tree, Buffer.from(root));
     }, { kind: "snapshot-export", id: tree.digest });
+    return { excludedPaths };
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;

@@ -46,6 +46,19 @@ A Skill being installed or available does not mean the model used it in a partic
 
 Preset role names do not imply professional qualifications or independent scientific validation.
 
+## The four review outcomes
+
+Citation and computation review reach one of four conclusions for each claim, and reports and review records must keep them apart:
+
+| State | What it means | What it does not mean |
+| --- | --- | --- |
+| Supported (`SUPPORTED`) | Evidence in the locked snapshot clearly supports the claim, with a usable locator (for example PMID/DOI plus abstract, page or paragraph) | Not that the report or the delivery was reviewed as a whole |
+| Unsupported (`CONTRADICTED`) | The evidence clearly conflicts with the claim, or the claim is over-broad | Not that the author fabricated it, and it says nothing about claims nobody checked |
+| Unverifiable (`INCONCLUSIVE`) | Full text or more context is needed, or the source was unavailable (identity unresolved, provider down, timeout, access denied) | **Not** that the claim is false. A provider failure is a limit on verification, not evidence of fabrication |
+| Not checked (`notChecked`) | This review did not run that check, and the record names the reason | It must never be read as a pass. A Quick review checks citation format and provenance only; it never reads a source to decide support |
+
+`INCONCLUSIVE` keeps its reason and the affected claim or citation; `notChecked` keeps the check's name and its reason. Both appear in the saved review record and in the main Agent's feedback; neither is collapsed into "passed".
+
 ## Extension paths
 
 - [Connect custom MCP servers](../advanced-setup/configure-custom-mcp.md)

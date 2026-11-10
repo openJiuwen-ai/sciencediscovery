@@ -440,11 +440,24 @@ export class VersionStore {
 export type TreeEntry =
   | { name: string; type: "file"; executable: number; content: DataRef }
   | { name: string; type: "directory"; tree: AgentStateRef }
-  | { name: string; type: "symlink"; target: string };
+  | { name: string; type: "symlink"; target: string }
+  /** A directory excluded from the snapshot by name; restore/fork report it. */
+  | { name: string; type: "excluded" };
 export interface WorkspaceTree { entries: TreeEntry[] }
 
+/** Generated/tooling directories that would otherwise make every snapshot re-hash
+ *  hundreds of MB (e.g. a 470 MB `deps/`). Matched by basename at any depth and
+ *  recorded in the tree as `excluded`, never silently dropped. */
+export const DEFAULT_WORKSPACE_SNAPSHOT_EXCLUDE: readonly string[] = ["deps", "node_modules", ".venv", "__pycache__"];
+
+export interface SnapshotWorkspaceOptions {
+  /** Directory basenames to skip at any depth and record as `excluded` entries. */
+  exclude?: readonly string[];
+}
+
 /** Caller must settle workspace writers first. Never follow symlinks, including raw-byte names. */
-export async function snapshotWorkspace(store: VersionStore, root: string): Promise<AgentStateRef> {
+export async function snapshotWorkspace(store: VersionStore, root: string, options: SnapshotWorkspaceOptions = {}): Promise<AgentStateRef> {
+  const exclude = new Set(options.exclude ?? DEFAULT_WORKSPACE_SNAPSHOT_EXCLUDE);
   const scan = async (path: Buffer): Promise<AgentStateRef> => {
     const before = await lstat(path, { bigint: true });
     if (!before.isDirectory()) throw new Error("Workspace root must be a directory, not a symlink");
@@ -454,6 +467,12 @@ export async function snapshotWorkspace(store: VersionStore, root: string): Prom
       const child = Buffer.concat([path, Buffer.from("/"), name]);
       const info = await lstat(child, { bigint: true });
       const encoded = name.toString("base64url");
+      if (info.isDirectory() && exclude.has(name.toString("utf8"))) {
+        // Excluded directories are neither traversed nor stability-checked:
+        // the whole point is to stop paying their per-file cost.
+        entries.push({ name: encoded, type: "excluded" });
+        continue;
+      }
       if (info.isSymbolicLink()) {
         entries.push({ name: encoded, type: "symlink", target: (await readlink(child, { encoding: "buffer" })).toString("base64url") });
       } else if (info.isDirectory()) {

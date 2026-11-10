@@ -1,15 +1,26 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { execFile } from "node:child_process";
+import { realModelThinking } from "./helpers/real-model-thinking.ts";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { test, requireRealEnv, requireRealStack, allowRealEnvException } from "./helpers/e2e.ts";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { runTestCleanup } from "./helpers/test-failure.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { evolutionScorecard } from "./helpers/evolve-result.mjs";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import type { ModelApiVariant } from "@sciencediscovery/schema";
+import { THINKING_CONTROL_VARIANTS, THINKING_EFFORT_VARIANTS } from "../packages/schema/src/model-usage.ts";
+
+function optionalModelSetting<T extends string>(value: string | undefined, name: string, allowed: readonly T[]): T | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!allowed.includes(value as T)) throw new Error(`${name} must be one of: ${allowed.join(", ")}`);
+  return value as T;
+}
 
 /**
  * E2E-META
@@ -40,6 +51,9 @@ test("PUCT-COMPRESS documented text compression search", {
   const modelId = process.env.E2E_LLM_MODEL_ID;
   if (modelId) allowRealEnvException(info, "Use the configured real server-side model.");
   const env = modelId ? undefined : requireRealEnv(info, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+  const apiVariant = optionalModelSetting(process.env.E2E_LLM_API_VARIANT, "E2E_LLM_API_VARIANT",
+    ["openai", "deepseek"] as const) as ModelApiVariant | undefined;
+  const thinking = realModelThinking();
   const headers = authorizationHeader();
   const api = <T = any>(path: string) => drbApi<T>(page, path);
   const save = (name: string, data: unknown) => writeFile(info.outputPath(name), JSON.stringify(data, null, 2));
@@ -47,6 +61,7 @@ test("PUCT-COMPRESS documented text compression search", {
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   let runId: string | undefined;
   let searches: any[] = [];
+  let primaryFailure: { error: unknown } | undefined;
   journey.scenario({ goal: "Complete the documented PUCT compression task and report its own final score",
     preconditions: ["Real model", "Working sandbox, Python environment and evolve sidecar"] });
   try {
@@ -55,9 +70,11 @@ test("PUCT-COMPRESS documented text compression search", {
     if (!prompt?.startsWith("/evolve-design ")) throw new Error("Tutorial task prompt is missing");
     metrics.document = "docs/zh/domains/evolve-a-solution.md";
     metrics.prompt = prompt;
-    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", projectName: `PUCT compression ${Date.now()}`,
+    metrics.thinking = thinking;
+    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", ...thinking, projectName: `PUCT compression ${Date.now()}`,
       sessionTitle: "PUCT text compression", ...(modelId ? { modelId } : { model: {
         apiToken: env!.E2E_LLM_TOKEN!, baseUrl: env!.E2E_LLM_BASE_URL!, model: env!.E2E_LLM_MODEL!, name: "PUCT tutorial generator",
+        ...(apiVariant ? { apiVariant } : {}), ...thinking,
       } }) });
     const prefix = `/api/sessions/${fixture.session.id}`;
     metrics.session_id = fixture.session.id;
@@ -67,7 +84,8 @@ test("PUCT-COMPRESS documented text compression search", {
     await page.getByRole("option").filter({ hasText: "PUCT" }).click();
     const selectedCommand = await box.inputValue();
     expect(selectedCommand).toContain("--algorithm puct");
-    await box.fill(selectedCommand.trimEnd() + " " + prompt.slice("/evolve-design ".length));
+    await box.fill(selectedCommand.trimEnd() + " " + prompt.slice("/evolve-design ".length)
+      + `\nBackground candidate generation must inherit this Run's thinking mode (${thinking.thinkingMode}) and effort (${thinking.thinkingEffort}); do not override them in the proposal.`);
     await page.screenshot({ path: info.outputPath("selected-puct.png") });
 
     const send = async (text: string) => {
@@ -114,6 +132,12 @@ test("PUCT-COMPRESS documented text compression search", {
     await save("quality-scorecard.json", metrics.evaluation);
     await info.attach("quality-scorecard", { path: info.outputPath("quality-scorecard.json"), contentType: "application/json" });
     expect(search.algorithm).toBe("puct");
+    const supportsThinking = apiVariant !== undefined && THINKING_CONTROL_VARIANTS.includes(apiVariant);
+    const expectedGoalThinking = thinking.thinkingMode === "disabled" && !supportsThinking ? "enabled" : thinking.thinkingMode;
+    expect(search.goal.thinking, "Background mutations inherit the Run's thinking mode").toBe(expectedGoalThinking);
+    if (apiVariant !== undefined && THINKING_EFFORT_VARIANTS.includes(apiVariant) && thinking.thinkingMode === "enabled") {
+      expect(search.goal.thinkingEffort, "Background mutations inherit the Run's thinking effort").toBe(thinking.thinkingEffort);
+    }
     expect(["succeeded", "budget_exhausted"], "Background search must complete normally").toContain(search.status);
     const finished = events.findLast(record => record.event.type === "search_finished");
     expect(finished?.event.status, "Completion event must agree with persisted search state").toBe(search.status);
@@ -161,24 +185,30 @@ test("PUCT-COMPRESS documented text compression search", {
     }
     await page.screenshot({ path: info.outputPath("completed.png"), fullPage: true });
   } catch (error) {
+    primaryFailure = { error };
     metrics.integration_status = "failed";
     metrics.error = error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
-    metrics.finished_at = new Date().toISOString();
-    if (fixture) {
-      const prefix = `/api/sessions/${fixture.session.id}`;
-      await save("session.json", await api(prefix).catch(() => null));
-      await save("children.json", await api(`${prefix}/subagents`).catch(() => []));
-      await save("artifacts.json", await api(`${prefix}/artifacts`).catch(() => []));
-      searches = await api<any[]>(`/api/evolve/runs?sessionId=${fixture.session.id}`).catch(() => searches);
-      for (const search of searches) {
-        await save(`evolve-${search.id}.json`, { search, events: await api(`/api/evolve/runs/${search.id}/events`).catch(() => []) });
-        if (["pending", "running"].includes(search.status)) await page.request.post(`${apiBaseUrl()}/api/evolve/runs/${search.id}/stop`, { headers }).catch(() => {});
+    await runTestCleanup(primaryFailure, async () => {
+      metrics.finished_at = new Date().toISOString();
+      if (fixture) {
+        const prefix = `/api/sessions/${fixture.session.id}`;
+        await save("session.json", await api(prefix).catch(() => null));
+        await save("children.json", await api(`${prefix}/subagents`).catch(() => []));
+        await save("artifacts.json", await api(`${prefix}/artifacts`).catch(() => []));
+        searches = await api<any[]>(`/api/evolve/runs?sessionId=${fixture.session.id}`).catch(() => searches);
+        for (const search of searches) {
+          await save(`evolve-${search.id}.json`, { search, events: await api(`/api/evolve/runs/${search.id}/events`).catch(() => []) });
+          if (["pending", "running"].includes(search.status)) await page.request.post(`${apiBaseUrl()}/api/evolve/runs/${search.id}/stop`, { headers }).catch(() => {});
+        }
+        if (runId) await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => {});
+        // Shared numeric measurements join this case's only metrics document.
+        metrics.measurements = await measureSession(page.request, info, fixture.session.id,
+          { evolveRunIds: searches.map(search => search.id) });
       }
-      if (runId) await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => {});
-    }
-    await save("evolve-metrics.json", metrics);
-    if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+      await save("evolve-metrics.json", metrics);
+      if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+    });
   }
 });

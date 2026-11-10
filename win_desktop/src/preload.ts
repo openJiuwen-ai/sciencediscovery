@@ -72,6 +72,20 @@ const wizard = {
   finish: (): Promise<void> => ipcRenderer.invoke("sd-shell:wizard-finish"),
 };
 
+/** Study-package export helpers: native save dialog, destination-bound write,
+ *  "open file location" and the OS downloads directory. The main process keeps
+ *  the chosen path and hands the renderer an opaque token, so the renderer can
+ *  never name a file of its own choosing. */
+const exportFile = {
+  saveDialog: (suggestedName: string): Promise<{ canceled: boolean; token: string | null }> =>
+    ipcRenderer.invoke("sd-shell:export-save-dialog", { suggestedName }),
+  write: (token: string, data: ArrayBuffer): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-write", { token, data }),
+  showInFolder: (token: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-show-in-folder", token),
+  downloadsDir: (): Promise<string> => ipcRenderer.invoke("sd-shell:export-downloads-dir"),
+};
+
 contextBridge.exposeInMainWorld("sdShell", {
   tokenInjected: injected,
   /** Takeover: the shell wizard (data directory) and the startup flow
@@ -128,4 +142,6 @@ contextBridge.exposeInMainWorld("sdShell", {
   } | null> => ipcRenderer.invoke("sd-shell:jiuwenswarm-get-state"),
   /** First-run wizard. */
   wizard,
+  /** Study-package export helpers (undefined outside the shell). */
+  exportFile,
 });

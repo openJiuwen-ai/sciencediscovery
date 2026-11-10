@@ -12,26 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { PendingMessage } from "../app/use-workspace.js";
 import type { ToolDetail } from "../app/tool-io.js";
 import type { ApiClient } from "../api/client.js";
 import type {
   ChatMessage,
+  ComposerReference,
   PermissionDecision,
   PermissionRequest,
   SessionDetail,
   WorkspaceFile,
 } from "../api/types.js";
 import type { RunStreamState } from "../run-stream/model.js";
-import { placeReplays, type RunReplay } from "../run-stream/replay.js";
+import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
+import { coalesceTimeoutNotices } from "../run-failure.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
 
 interface Props {
+  onBranch?: (messageId: string) => void;
   client: ApiClient;
   detail?: SessionDetail;
   loading: boolean;
@@ -42,6 +46,9 @@ interface Props {
   /** Open one tool's input or result in the workspace panel. The card shows a
    *  clipped preview of both. */
   onOpenTool?: (detail: ToolDetail) => void;
+  /** Opens the memory card behind a `[alias]` chip in an answer. The report
+   *  preview and the conversation point at the same card. */
+  onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
   /** The session's workspace: the files whose provenance says they arrived by
    *  upload are drawn above the question they were sent with. */
   workspaceFiles: readonly WorkspaceFile[];
@@ -51,6 +58,9 @@ interface Props {
   replays: readonly RunReplay[];
   /** The run streaming right now, which has no persisted answer to take. */
   run: RunStreamState;
+  /** What the conversation produced that outlives it: the session's searches,
+   *  drawn after the last turn. */
+  evolve?: ReactNode;
 }
 
 /**
@@ -73,6 +83,9 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
  */
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
+  if (message.kind === "timeout_notice") {
+    return <RunFailureCard code="timeout" scope="notice" message={message.content} timeout={message.timeout} />;
+  }
   return (
     <div className="message assistant is-notice">
       <div aria-hidden="true" className="avatar-mini">
@@ -117,9 +130,17 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
   );
 }
 
-function MessageRow({ answered, message, uploads }: {
+function MessageRow({
+  answered,
+  message,
+  onBranch,
+  onReferenceClick,
+  uploads,
+}: {
   answered?: boolean;
   message: ChatMessage;
+  onBranch?: () => void;
+  onReferenceClick?: (reference: ComposerReference) => void;
   uploads?: readonly UploadedFile[];
 }) {
   // An automatic wake carries no user-authored body — the schema keeps the
@@ -151,7 +172,14 @@ function MessageRow({ answered, message, uploads }: {
       <div className="body">
         {/* The same element a replayed run renders its answer with, so a stored
             answer and a reconstructed one cannot drift apart. */}
-        <AnswerBlock actions answered={answered} content={message.content} />
+        <AnswerBlock
+          actions
+          answered={answered}
+          content={message.content}
+          onBranch={onBranch}
+          onReferenceClick={onReferenceClick}
+          references={message.references}
+        />
       </div>
     </div>
   );
@@ -193,18 +221,23 @@ function useAfter(flag: boolean, delayMs: number): boolean {
  * per turn, and the run still streaming has none yet, so it goes at the end.
  */
 export function Conversation({
+  onBranch,
   client,
   detail,
   loading,
   onDecidePermission,
   onOpenSubagent,
   onOpenTool,
+  onReferenceClick,
   pending,
   replays,
   run,
+  evolve,
   workspaceFiles,
 }: Props) {
   const scroller = useRef<HTMLElement>(null);
+  /** The transcript itself, watched for growth after the pin. */
+  const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   /** How tall the transcript was at the last pin. Growth after it is the
    *  transcript getting longer, not the reader leaving the bottom — the scroll
@@ -214,7 +247,19 @@ export function Conversation({
   const pinned = useRef({ height: 0 });
 
   const messages = detail?.messages ?? [];
-  const { following, replacing, trailing } = placeReplays(replays, messages);
+  const failures = coalesceTimeoutNotices(messages, replays, run);
+  const { following, replacing, trailing } = placeReplays(failures.replays, messages);
+  const visibleRun = failures.run;
+  /** A chip opens the card for this session; the transcript is the session's
+   *  own, so the id is not a per-row value. Stable so the memoised turns under
+   *  it are not re-rendered — and their Markdown re-parsed — by a press that
+   *  merely opens the dialog. */
+  const referenceClick = useMemo(
+    () => onReferenceClick === undefined
+      ? undefined
+      : (reference: ComposerReference) => onReferenceClick(reference, detail?.id),
+    [onReferenceClick, detail?.id],
+  );
   /** The files each question was sent with, and the ones still waiting for a
    *  question. Uploads are workspace files rather than message fields, so they
    *  are matched to turns by time — see `placeUploads`. */
@@ -233,7 +278,7 @@ export function Conversation({
     }
     return flags;
   }, [messages, pending]);
-  const reconstructed = run.turns.length > 0 || run.finalContent !== undefined;
+  const reconstructed = hasReplayContent(visibleRun);
   /** A message just sent has no run events yet — the request is still in
    *  flight — but the run exists from the press, and its line is what says so.
    *  Waiting for the first event would leave the user's message alone in the
@@ -242,7 +287,7 @@ export function Conversation({
    *  has said anything. So the placeholder is drawn a beat late, and anything
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
-  const liveRun = reconstructed || placeholder;
+  const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -253,6 +298,26 @@ export function Conversation({
     node.scrollTop = node.scrollHeight;
     pinned.current = { height: node.scrollHeight };
   }, [liveRun, messages, pending, replays, run]);
+
+  // Content that arrives after the pin makes the transcript taller below the
+  // reader instead of moving it, and nothing above re-pins for it: the search
+  // cards are fetched a beat after the messages they sit under, so a session
+  // opened with runs left its card half hidden under the composer. A reader at
+  // the bottom wants the newest thing in view however it arrived, so follow
+  // growth the same way an appended answer is followed — and leave someone
+  // reading further up alone.
+  useEffect(() => {
+    const node = scroller.current;
+    const inner = content.current;
+    if (node === null || inner === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stick.current) return;
+      node.scrollTop = node.scrollHeight;
+      pinned.current = { height: node.scrollHeight };
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
 
   const onScroll = () => {
     const node = scroller.current;
@@ -267,8 +332,9 @@ export function Conversation({
 
   return (
     <section className="conversation" onScroll={onScroll} ref={scroller}>
-      <div className="messages">
+      <div className="messages" ref={content}>
         {messages.map((message, index) => {
+          if (failures.hiddenNoticeIds.has(message.id)) return null;
           const replacement = replacing.get(message.id);
           return (
             <Fragment key={message.id}>
@@ -276,6 +342,8 @@ export function Conversation({
                 <MessageRow
                   answered={answeredAfter[index]}
                   message={message}
+                  onBranch={onBranch && message.role === "assistant" ? () => onBranch(message.id) : undefined}
+                  onReferenceClick={referenceClick}
                   uploads={uploads.byMessage.get(message.id)}
                 />
               ) : (
@@ -285,7 +353,13 @@ export function Conversation({
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
+                  onReferenceClick={referenceClick}
+                  // The answer being replaced is the message whose chips the
+                  // replay is drawing: its references are what make the
+                  // `[alias]` tokens in the reconstructed text links.
+                  references={message.references}
                   run={replacement}
+                  onBranch={onBranch ? () => onBranch(message.id) : undefined}
                   sessionId={detail?.id}
                 />
               )}
@@ -300,6 +374,7 @@ export function Conversation({
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
+                  onReferenceClick={referenceClick}
                   run={replay.state}
                   sessionId={detail?.id}
                 />
@@ -315,6 +390,7 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
+            onReferenceClick={referenceClick}
             run={replay.state}
             sessionId={detail?.id}
           />
@@ -329,10 +405,12 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
-            run={run}
+            onReferenceClick={referenceClick}
+            run={visibleRun}
             sessionId={detail?.id}
           />
         ) : null}
+        {evolve}
         {loading ? <div className="status-strip">{TEXT.boot.checking}</div> : null}
       </div>
     </section>

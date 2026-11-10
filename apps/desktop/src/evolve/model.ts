@@ -31,6 +31,7 @@ import {
   type EvolveEvent,
   type EvolveEventRecord,
   type EvolveRejectionCategory,
+  type EvolveRun,
   type EvolveRunStatus,
 } from "@sciencediscovery/schema";
 
@@ -93,34 +94,9 @@ export interface EvolveRunView {
   tokens: number;
 }
 
-export type EvolveFinishNotice =
-  | { kind: "target"; made: number; planned: number | null }
-  | { kind: "short"; made: number; planned: number; reason: string };
-
-/**
- * What to say when a finished run made fewer expansions than it planned.
- *
- * `target_reward` means the goal was met, so it does not share the shortfall
- * sentence. Every other early stop still does.
- */
-export function evolveFinishNotice(view: EvolveRunView): EvolveFinishNotice | null {
-  if (isEvolveRunActive(view.status)) return null;
-  if (view.stopReason === "target_reward") {
-    return {
-      kind: "target",
-      made: view.expansions,
-      planned: view.expansionsPlanned ?? null,
-    };
-  }
-  if (view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned) {
-    return {
-      kind: "short",
-      made: view.expansions,
-      planned: view.expansionsPlanned,
-      reason: view.stopReason ?? "?",
-    };
-  }
-  return null;
+export function evolveTargetNotice(view: EvolveRunView): { made: number; planned: number | null } | null {
+  if (isEvolveRunActive(view.status) || view.stopReason !== "target_reward") return null;
+  return { made: view.expansions, planned: view.expansionsPlanned ?? null };
 }
 
 export function emptyRunView(): EvolveRunView {
@@ -335,12 +311,6 @@ export function headlineScore(view: EvolveRunView): number | null {
     ?? view.baselineScore;
 }
 
-/** Expansions dispatched against the budget, for the progress bar. */
-export function runProgress(view: EvolveRunView, budgetExpansions: number): number {
-  if (budgetExpansions <= 0) return 0;
-  return Math.min(1, view.expansions / budgetExpansions);
-}
-
 export type Verdict = "accepted" | "failed" | "rejected" | "violated";
 
 /** Which of the four outcomes a candidate row is showing.
@@ -398,21 +368,25 @@ export function formatScore(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isFinite(value) ? "—" : value.toFixed(4);
 }
 
-/** A signed delta against the baseline, with the sign drawn as an arrow. */
-export function formatDelta(value: number | null, baseline: number | null): string | undefined {
-  if (value === null || baseline === null) return undefined;
-  const delta = value - baseline;
-  if (!Number.isFinite(delta)) return undefined;
-  const sign = delta > 0 ? "+" : "";
-  return `${sign}${delta.toFixed(4)}`;
-}
-
 /** Tokens in the thousand/million units a reader scans, not a nine-digit
  *  number. `1234567` → `1.23M`. */
 export function formatTokens(tokens: number): string {
   if (tokens < 1_000) return String(tokens);
   if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
   return `${(tokens / 1_000_000).toFixed(2)}M`;
+}
+
+/** Seconds the run has been going, or `null` before it started.
+ *
+ *  A finished run reports the span it actually took rather than counting on
+ *  forever: the budget is about what was spent, and a clock that keeps growing
+ *  after the search ends is describing the wall, not the run. */
+export function elapsedSeconds(run: EvolveRun): number | null {
+  if (!run.startedAt) return null;
+  const started = Date.parse(run.startedAt);
+  if (Number.isNaN(started)) return null;
+  const ended = run.finishedAt ? Date.parse(run.finishedAt) : Date.now();
+  return Math.max(0, (Number.isNaN(ended) ? Date.now() : ended) - started) / 1000;
 }
 
 /** Seconds as a compact span. The boundary cases are 0 and over an hour, and

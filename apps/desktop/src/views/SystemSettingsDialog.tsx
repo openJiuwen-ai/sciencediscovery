@@ -25,12 +25,14 @@ import { NetworkSettings } from "./settings/NetworkSettings.js";
 import { RuntimeSettings } from "./settings/RuntimeSettings.js";
 import { SkillsSettings } from "./settings/SkillsSettings.js";
 import { McpServers } from "./settings/system/McpServers.js";
+import { MemorySettings } from "./settings/system/MemorySettings.js";
 import { SpecialistsSettings } from "./settings/system/Specialists.js";
 import { TimeoutSettings } from "./settings/system/Timeouts.js";
 
-/** The original desktop nav, extended with MCP, 专家 and 超时. */
+/** The original desktop nav, extended with MCP, 专家, 科学记忆 and 超时. */
 export type SettingsGroup =
   | "general"
+  | "memory"
   | "models"
   | "skills"
   | "mcp"
@@ -43,7 +45,10 @@ type CategoryId = "system" | "intelligence" | "connection" | "workspace";
 
 const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   { groups: ["general"], id: "system" },
-  { groups: ["models", "skills", "mcp", "specialists"], id: "intelligence" },
+  // 科学记忆 is how the agent remembers what it read and made, so it sits with
+  // the intelligence settings and after 专家, the last thing that is given to
+  // the agent rather than the environment it runs in.
+  { groups: ["models", "skills", "mcp", "specialists", "memory"], id: "intelligence" },
   { groups: ["sandbox-network", "remote"], id: "connection" },
   { groups: ["timeouts"], id: "workspace" },
 ];
@@ -66,7 +71,7 @@ interface Props {
 
 /**
  * 设置, in the original desktop app's shape: 系统 › 通用, 智能 › 模型/技能 plus
- * MCP 服务器 and 专家, 连接 › 网络/远程, and the new 工作区 › 超时.
+ * MCP 服务器, 专家 and 科学记忆, 连接 › 网络/远程, and the new 工作区 › 超时.
  *
  * There is no footer and no save button: every pane writes on the press — a
  * language, a model, a switch, a card's own 保存 — so a shared commit would
@@ -119,6 +124,8 @@ export function SystemSettingsDialog({
     switch (group) {
       case "general":
         return <GeneralSettings onShowGuide={onShowGuide} />;
+      case "memory":
+        return <MemorySettings client={client} />;
       case "models":
         return (
           <ModelSettings
@@ -132,7 +139,6 @@ export function SystemSettingsDialog({
       case "skills":
         return (
           <SkillsSettings
-            activeProjectId={state.activeProjectId}
             adding={addingSkill}
             client={client}
             onAddingChange={setAddingSkill}

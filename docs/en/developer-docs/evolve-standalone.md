@@ -33,12 +33,13 @@ parent selection, mutation prompt, options, and emitted events.
 | Prompt | `domain.prompt(parent.program)` | parent prompt plus archive context: global-best metrics and diverse inspiration code |
 | Engine-specific options | `c_puct`, `prior_exponent` | islands, archive size, feature bins, exploitation ratio, migration interval, and model retry options |
 
-PUCT and OpenEvolve both keep a per-rollout `solved_threshold` of `2.0`, so a rollout is never
-skipped as solved: a shard is a measurement of one program, not a task to finish. PUCT uses
-`blast_radius: 1.0`; OpenEvolve uses `0.6`. Both pass the scorecard's `solvedThreshold` as
-`target_reward`, and the search stops once the best held-out score reaches that line
-(`stop_reason` `target_reward`). Both read staleness policy from options. OpenEvolve defaults
-model retries/backoff to `2 / 1.0`.
+PUCT and OpenEvolve both keep a per-rollout `solved_threshold` of `2.0`, so every rollout can
+propose a candidate. PUCT uses `blast_radius: 1.0` and OpenEvolve uses `0.6`. Both pass the
+scorecard's `solvedThreshold` as `target_reward` and stop scheduling expansions when the
+framework detects that the best held-out score reached the target (`stop_reason` `target_reward`).
+Rollouts already in flight can still finish. Both read staleness policy from options. OpenEvolve forwards `model_retries` / `retry_backoff` to the
+shared transient HTTP retry policy, which defaults to `2 / 0.5`; completed empty or capped
+replies are not sent again.
 
 PUCT emits `expanded` with depth, parent index, and score. OpenEvolve adds island, program ID, and
 inspiration indexes, and emits `inserted` (complexity bin, diversity bin, island, insertion or
@@ -79,6 +80,9 @@ POST /runs/{search_id}/stop  → stop a run
   scorecard, scorecard hash, baseline code and score, rubric, evaluator script, source material,
   limits, packages, and resume sequence. Scorecard and script are passed by value so the sidecar
   needs no CAS access.
+- Thinking settings: `thinking` is `auto`, `enabled`, or `disabled`; `auto` leaves the provider
+  default untouched, while an explicit `enabled` mode may carry `thinking_effort`. The effort is
+  retained in the frozen run record even when the mode is `auto`, but is not sent on that wire.
 - Filesystem paths: `dataset_dir` and `workspace_dir`. This is the sole hard coupling.
 - Callback URLs and temporary credentials: `llm: {url, token}` and `judge: {url, token}`. URLs
   must be absolute so a remote sidecar need not guess an API origin.

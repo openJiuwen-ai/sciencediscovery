@@ -379,10 +379,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         }
         const deleteResponse = page.waitForResponse((response) => response.request().method() === "DELETE"
           && new URL(response.url()).pathname === `/api/providers/${providerId}`);
-        page.once("dialog", (confirmation) => {
-          void confirmation.accept();
-        });
         await editor.getByRole("button", { name: "删除" }).click();
+        await page.getByRole("dialog", { name: /删除服务商/ }).getByRole("button", { name: "删除", exact: true }).click();
         expect((await deleteResponse).status()).toBe(200);
         await expect(settings.locator(".provider-row")).toHaveCount(0);
         await expect(settings.getByText("还没有服务商——先在上方「连接模型」里选择服务商并填入 API Key。")).toBeVisible();

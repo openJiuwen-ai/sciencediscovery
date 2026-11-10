@@ -12,21 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 
 import { Markdown } from "../Markdown.js";
 import type { ApiClient } from "../api/client.js";
 import type { ToolDetail } from "../app/tool-io.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { TEXT } from "../text.js";
 import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../run-stream/model.js";
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
 import { subagentTask } from "../run-stream/subagent.js";
-import type { PermissionDecision, PermissionRequest, SessionRunStatus, Subagent } from "../api/types.js";
+import type {
+  ComposerReference,
+  PermissionDecision,
+  PermissionRequest,
+  SessionRunStatus,
+  Subagent,
+} from "../api/types.js";
 import { CheckpointAnsweredProvider } from "./CheckpointCard.js";
 import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolCard } from "./ToolCard.js";
+import { RowMenu, type MenuState } from "./RowMenu.js";
 
 /** The model's initial. Kept because the persisted transcript still has a
  *  model name to fall back on where no avatar is drawn. */
@@ -42,10 +50,10 @@ export function AssistantAvatar() {
   return <div aria-hidden="true" className="avatar-mini is-brand" />;
 }
 
-/** Copy the answer, and say the press landed. It is the only tool under an
- *  answer: the thumbs had nowhere to write a rating to. */
-function AnswerTools({ content }: { content: string }) {
+/** Actions belong to the completed reply they act on. */
+function AnswerTools({ content, onBranch }: { content: string; onBranch?: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [menu, setMenu] = useState<MenuState>();
 
   useEffect(() => {
     if (!copied) return;
@@ -71,6 +79,8 @@ function AnswerTools({ content }: { content: string }) {
           </svg>
         )}
       </button>
+      {onBranch ? <button className="answer-tool" aria-label={TEXT.researchPackage.messageMenu} aria-haspopup="menu" type="button" onClick={event => setMenu({ x: event.clientX, y: event.clientY, items: [{ label: TEXT.researchPackage.branch, onSelect: onBranch }] })}>⋯</button> : null}
+      <RowMenu menu={menu} onClose={() => setMenu(undefined)} />
     </div>
   );
 }
@@ -84,12 +94,16 @@ function AnswerTools({ content }: { content: string }) {
  * keeps them from drifting apart.
  */
 export function AnswerBlock({
+  onBranch,
   actions,
   answered,
   content,
   live,
+  onReferenceClick,
+  references,
   truncated,
 }: {
+  onBranch?: () => void;
   /** The copy/feedback row belongs under a finished answer, not under the
    *  prose a folded run wrote on its way to one. */
   actions?: boolean;
@@ -98,18 +112,22 @@ export function AnswerBlock({
   content: string;
   /** Text still arriving: a cursor follows it and the next frame will be longer. */
   live?: boolean;
+  /** Opens the memory card behind a `[alias]` chip in the answer. */
+  onReferenceClick?: (reference: ComposerReference) => void;
+  /** The aliases this answer cites. Without them the tokens stay plain text. */
+  references?: ComposerReference[];
   truncated?: boolean;
 }) {
   return (
     <div className="text">
       <CheckpointAnsweredProvider value={answered === true}>
-        <Markdown>{content}</Markdown>
+        <Markdown onReferenceClick={onReferenceClick} references={references}>{content}</Markdown>
       </CheckpointAnsweredProvider>
       {truncated ? (
         <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
       ) : null}
       {live ? <span className="spinner" /> : null}
-      {actions === true && !live ? <AnswerTools content={content} /> : null}
+      {actions === true && !live ? <AnswerTools content={content} onBranch={onBranch} /> : null}
     </div>
   );
 }
@@ -337,43 +355,38 @@ function StopDivider({ reason, word }: { reason?: string; word: string }) {
  *  anything that went wrong or is worth investigating — an error, dropped
  *  events, a stream that ended without saying — keeps the marked notice row. */
 function RunStatusLine({ run }: { run: RunStreamState }) {
-  const lines: string[] = [];
-  if (run.droppedEvents > 0) lines.push(TEXT.conversation.droppedEvents(run.droppedEvents));
-  if (run.unknownEvents > 0) lines.push(TEXT.conversation.unknownEvents(run.unknownEvents));
+  const lines: ReactNode[] = [];
+  if (run.droppedEvents > 0) lines.push(<div className="status-strip" key="dropped">{TEXT.conversation.droppedEvents(run.droppedEvents)}</div>);
+  if (run.unknownEvents > 0) lines.push(<div className="status-strip" key="unknown">{TEXT.conversation.unknownEvents(run.unknownEvents)}</div>);
   let stop: { reason?: string; word: string } | undefined;
-  if (run.error) {
-    // The whole line comes from TEXT: the code's brackets and the colon are
-    // punctuation of the language, not of the render.
-    lines.push(
-      run.error.code === undefined
-        ? TEXT.conversation.errorLine(run.error.message)
-        : TEXT.conversation.errorWithCode(run.error.code, run.error.message),
-    );
-  } else if (run.status === "cancelled") {
+  if (!run.error && run.status === "cancelled") {
     const reason = run.cancelledReason !== undefined && !GENERIC_CANCEL_REASONS.has(run.cancelledReason)
       ? run.cancelledReason
       : undefined;
     stop = { reason, word: TEXT.conversation.cancelled };
-  } else if (run.status === "interrupted") {
+  } else if (!run.error && run.status === "interrupted") {
     stop = { word: TEXT.conversation.interrupted };
-  } else if (run.terminal && run.status === undefined) {
-    lines.push(TEXT.conversation.streamEnded);
+  } else if (!run.error && run.terminal && run.status === undefined) {
+    lines.push(<div className="status-strip" key="ended">{TEXT.conversation.streamEnded}</div>);
   }
   return (
     <>
+      {run.error && run.error.code !== "SESSION_MODEL_UNAVAILABLE" && <RunFailureCard code={run.error.code} message={run.error.message} timeout={run.error.timeout} />}
       {stop === undefined ? null : <StopDivider reason={stop.reason} word={stop.word} />}
+      {run.error?.code === "SESSION_MODEL_UNAVAILABLE" && (
+        <div className="message assistant is-notice">
+          <div aria-hidden="true" className="avatar-mini">!</div>
+          <div className="body">
+            <div className="status-strip">{TEXT.errors.modelUnavailable}</div>
+          </div>
+        </div>
+      )}
       {lines.length === 0 ? null : (
         <div className="message assistant is-notice">
           <div aria-hidden="true" className="avatar-mini">
             !
           </div>
-          <div className="body">
-            {lines.map((line) => (
-              <div className="status-strip" key={line}>
-                {line}
-              </div>
-            ))}
-          </div>
+          <div className="body">{lines}</div>
         </div>
       )}
     </>
@@ -485,16 +498,26 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
  * The in-flight set of decisions lives here rather than in the run state: it is
  * about this window's clicks, not about what the run did, and it must not
  * survive a re-render of the run.
+ *
+ * Memoised: the shell re-renders for state that has nothing to do with the
+ * transcript (opening the artifact dialog is one), and re-rendering every
+ * answer then re-parses every Markdown body of the session — seconds of main
+ * thread for a long one. The callbacks this receives are stable for the same
+ * reason.
  */
-export function AssistantTurns({
+export const AssistantTurns = memo(function AssistantTurns({
+  onBranch,
   answered,
   client,
   onDecide,
   onOpenSubagent,
   onOpenTool,
+  onReferenceClick,
+  references,
   run,
   sessionId,
 }: {
+  onBranch?: () => void;
   /** A later turn exists in the transcript, so this run's checkpoint cards
    *  fold. The conversation is the only place that knows this. */
   answered?: boolean;
@@ -505,10 +528,20 @@ export function AssistantTurns({
   onOpenSubagent?: (id: string) => void;
   /** Open one tool's input or result in the right panel. */
   onOpenTool?: (detail: ToolDetail) => void;
+  /** Opens the memory card behind a `[alias]` chip in the answer. */
+  onReferenceClick?: (reference: ComposerReference) => void;
+  /** The aliases the persisted answer cites. The replayed run carries its own
+   *  (from `run.completed`); this is the stored message's copy, which is what
+   *  survives a record whose completion event was pruned. */
+  references?: ComposerReference[];
   run: RunStreamState;
   sessionId?: string;
 }) {
   const [deciding, setDeciding] = useState<ReadonlySet<string>>(() => new Set());
+  // The stored message is the copy that outlives a pruned event log, so it
+  // wins when present; a replayed run's own completion event carries the same
+  // list and covers a transcript whose message has not reloaded yet.
+  const citations = references ?? run.references;
   const answer = shownAnswer(run);
   const finalBody = run.finalContent?.trim() ? run.finalContent : undefined;
   // The completion payload only stands in when nothing was streamed: it is the
@@ -613,15 +646,27 @@ export function AssistantTurns({
               actions={!live}
               answered={answered}
               content={shown.content}
+              onBranch={onBranch}
               live={live && !shown.settled}
+              onReferenceClick={onReferenceClick}
+              references={citations}
               truncated={shown.truncated}
             />
           )}
-          {showFinal ? <AnswerBlock actions answered={answered} content={finalBody} /> : null}
+          {showFinal ? (
+            <AnswerBlock
+              actions
+              answered={answered}
+              content={finalBody}
+              onBranch={onBranch}
+              onReferenceClick={onReferenceClick}
+              references={citations}
+            />
+          ) : null}
         </div>
       </div>
       <RunStatusLine run={run} />
       <PendingCards context={tools} requests={pending} />
     </>
   );
-}
+});

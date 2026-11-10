@@ -95,8 +95,8 @@ skipped case is a failed run. So "the layer passed but ran fewer tests" is not
 a possible outcome any more; `node .ci/tagged-summary.mjs` fails the job unless
 `planned == executed == passed`, including when no plan was produced at all.
 Real E2E runs in L3/L4/L5 with explicit credentials and `CI_ALLOW_REAL=1`.
-The separate `ci:st:real` native compatibility smoke, adapter live tests, NPU
-and legacy-only suites keep their own opt-in entry points; they are not added
+The separate `ci:st:real` native compatibility smoke, adapter live tests and
+NPU suites keep their own opt-in entry points; they are not added
 by selecting the native backend. `test/support/tagged/MIGRATION.md` is the
 ledger of what is in and what is out. Quarantined cases stay outside the plan,
 never counted as passes. There is no suite API/token budget gate or historical
@@ -159,7 +159,7 @@ require a queue-only job before a PR can enter the queue. Require review of the
 current PR head and dismiss stale approvals; admin setup is documented in
 [.ci/README.md](../../../.ci/README.md#merge-queue-and-credentials-repository-setup).
 
-L3/L4/L5 reuse **nightly-ci-ds**, with no Environment required reviewers or
+L3/L4/L5 reuse **nightly-research**, with no Environment required reviewers or
 final approval job. Its model/judge variables configure `real-plan`; secrets
 are injected only into `real-e2e`. Keep model credentials in the Environment,
 not repository secrets, and exclude `pull_request` from jobs using them.

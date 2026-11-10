@@ -14,9 +14,11 @@
 
 import type { ApiClient } from "./client.js";
 import type {
+  ArtifactVersionProvenance,
   CreateSessionRequest,
   Project,
   ScientificArtifact,
+  ScientificArtifactVersion,
   Session,
   SessionArtifactOutput,
   SessionDetail,
@@ -186,6 +188,31 @@ export function listArtifactOutputs(
   );
 }
 
+/** Every version of one Artifact, oldest first. The artifact dialog's picker
+ *  lists them newest first; a citation pins a version *number*, which this
+ *  list turns into the version id the provenance and content routes read. */
+export function listArtifactVersions(
+  client: ApiClient,
+  sessionId: string,
+  artifactId: string,
+): Promise<ScientificArtifactVersion[]> {
+  return client.request<ScientificArtifactVersion[]>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/versions`,
+  );
+}
+
+/** The version's own record of how it was made: the files it was derived
+ *  from, the code that ran, the execution log, and the managed environment. */
+export function readArtifactProvenance(
+  client: ApiClient,
+  sessionId: string,
+  versionId: string,
+): Promise<ArtifactVersionProvenance> {
+  return client.request<ArtifactVersionProvenance>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifact-versions/${encodeURIComponent(versionId)}/provenance`,
+  );
+}
+
 /** A document as it came off the wire: the bytes, and the type the server gave
  *  them. The panel decides what to do with the two together — decode the bytes
  *  as text, or hand them to a renderer as a data URL. */
@@ -231,7 +258,7 @@ export function deleteSession(client: ApiClient, sessionId: string): Promise<{ d
 
 /** A Project the user made goes away whole — its Sessions, their transcripts
  *  and their workspaces. The inbox is not a Project the user made: the service
- *  refuses it with a 409, so the sidebar never offers this for 最近会话. The id
+ *  refuses it with a 409, so the sidebar never offers this for 会话. The id
  *  is repeated back as confirmation, the same gate a Session has. */
 export function deleteProject(client: ApiClient, projectId: string): Promise<{ deleted: string }> {
   return client.request<{ deleted: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {

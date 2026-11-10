@@ -142,7 +142,7 @@ output directory. CI should upload artifacts even when tests fail.
 
 | File | Consumer-facing information |
 | --- | --- |
-| `benchmark-metrics.json` | `schema_version`, case/run/model identifiers, timestamps, exact generation prompt, run/evaluation budgets, integration status, generation duration and raw session usage, child statuses, embedded evaluation result |
+| `benchmark-metrics.json` | `schema_version`, case/run/model identifiers, timestamps, exact generation prompt, run/evaluation budgets, integration status, generation duration and raw session usage, shared `measurements` (generated/total tokens, tool calls), child statuses, embedded evaluation result |
 | `deepresearchbench-<id>.json` | Original benchmark question and exact persisted report, usable for independent reevaluation |
 | `child-trajectories.json` | Persisted child execution records, including recovered tool failures |
 | `evaluation/scorecard.json` | Overall evaluation status, mode, thresholds, RACE/FACT results, Judge models/backend, upstream revision, report/reference hashes, evaluation duration and per-call Judge usage |

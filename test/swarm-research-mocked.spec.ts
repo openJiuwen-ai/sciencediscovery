@@ -69,11 +69,12 @@ test("Swarm child tool failure recovers and parent delivers report", { tag: ["@m
       const section = resultSections.nth(index);
       if (await section.getAttribute("open") === null) await section.locator(":scope > summary").click();
     }
-    const activity = await readRunActivity(page);
-    expect(activity.tools.some((tool) => /read_artifact/.test(tool.summary)
-      && /Recovery succeeded/.test(tool.details))).toBe(true);
-    expect(activity.tools.some((tool) => /task/.test(tool.summary)
-      && /artifact_id/.test(tool.details) && /fixture-sources.md/.test(tool.details))).toBe(true);
+    // Expanding starts asynchronous child-stream reads. The terminal run and
+    // the disclosure being open do not mean those results have rendered yet.
+    await expect.poll(async () => (await readRunActivity(page)).tools.some((tool) => /read_artifact/.test(tool.summary)
+      && /Recovery succeeded/.test(tool.details)), { timeout: 30_000 }).toBe(true);
+    await expect.poll(async () => (await readRunActivity(page)).tools.some((tool) => /task/.test(tool.summary)
+      && /artifact_id/.test(tool.details) && /fixture-sources.md/.test(tool.details)), { timeout: 30_000 }).toBe(true);
     for (const call of stub.calls.filter((call) => call.tool)) expect(call.offeredTools).toContain(call.tool);
     await card.locator(":scope > summary").click();
     await card.getByRole("button", { name: /^Open SubAgent: / }).click();

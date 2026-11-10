@@ -43,7 +43,7 @@ import {
 import { SearchGraphTable } from "../src/evolve/SearchGraphTable.js";
 import { diffGraph, layoutSearchGraph, rankScores } from "../src/evolve/search-graph-layout.js";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
-import { translate } from "../src/i18n/locale.js";
+import { formatEvolveTargetReached } from "../src/i18n/locale.js";
 
 function render(node: ReactElement): string {
   return renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" }, node));
@@ -489,8 +489,8 @@ test("a target-reached stop is not labelled as a shortfall", () => {
   ]);
 
   assert.deepEqual(evolveFinishNotice(view), { kind: "target", made: 1, planned: 24 });
-  const zh = translate("zh-CN", "evolve.panel.targetReachedEarly", { made: 1, planned: 24 });
-  const en = translate("en", "evolve.panel.targetReachedEarly", { made: 1, planned: 24 });
+  const zh = formatEvolveTargetReached("zh-CN", 1, 24);
+  const en = formatEvolveTargetReached("en", 1, 24);
   assert.match(zh, /1\/24/);
   assert.match(zh, /达到目标/);
   assert.doesNotMatch(zh, /停在/);

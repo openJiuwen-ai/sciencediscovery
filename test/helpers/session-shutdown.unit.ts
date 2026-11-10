@@ -65,13 +65,20 @@ test("failed snapshots never become an empty successful shutdown", async () => {
 
 test("active work at the deadline is a cleanup failure", async () => {
   let time = 0;
+  const reads: number[] = [];
   const result = await stopAndVerifySession({
     stop: async () => {},
-    snapshot: async () => snap([{ id: "root", status: "running" }]),
+    snapshot: async () => {
+      reads.push(time);
+      if (time >= 3) throw new Error("deadline snapshot would time out");
+      return snap([{ id: "root", status: "running" }]);
+    },
     cancelRun: async () => {}, cancelExecution: async () => {}, cancelTimer: async () => {},
   }, { now: () => time, sleep: async (ms) => { time += ms; }, quietMs: 2, pollMs: 1, timeoutMs: 3 });
   assert.equal(result.status, "cleanup_failed");
   assert.deepEqual(result.activeRuns, [{ id: "root", status: "running" }]);
+  assert.deepEqual(reads, [0, 1, 2], "do not launch a 1 ms snapshot after the shared deadline");
+  assert.deepEqual(result.errors, []);
 });
 
 

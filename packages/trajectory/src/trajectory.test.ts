@@ -13,6 +13,31 @@ import { openSessionTrajectory, orderEvents, type RecordedEvent } from "./server
 import { readAgentJournal, type JournalEvent } from "./journal.js";
 import { internalEntry } from "./presentation.js";
 
+test("trajectory projections share context, isolate event states and evict old contexts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "trajectory-projection-"));
+  const store = new VersionStore(directory), agentId = "main:s";
+  try {
+    const stateRef = await store.putRecord("AgentStateSnapshot", { agentId, api_key: "secret", turn: 0 });
+    const nextState = await store.putRecord("AgentStateSnapshot", { agentId, turn: 1 });
+    const modelContext = await store.putRecord("ModelContextSnapshot", { input: { systemPrompt: "rules", history: [] } });
+    const contexts = await Promise.all(Array.from({ length: 130 }, (_, turn) => store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn })));
+    const events: RecordedEvent[] = contexts.map((contextRef, i) => ({ id: String(i), agentId, runId: "r", sequence: i,
+      createdAt: "2026-10-24T00:00:00Z", event: { type: "model.completed", evidence: { agentId, contextRef, stateRef, agentRunId: "r" } } }));
+    events.push({ ...events[0]!, id: "override", event: { type: "model.completed", evidence: { agentId, contextRef: contexts[0], stateRef: nextState, agentRunId: "r" } } });
+    const view = await openSessionTrajectory(directory, { sessionId: "s", agents: [{ id: agentId, label: "Main" }], events }, new AbortController().signal);
+    const first = (await view.detail("event:0"))!;
+    const override = (await view.detail("event:override"))!;
+    assert.equal(first.context!.input, override.context!.input);
+    assert.notEqual(first.context, override.context);
+    assert.deepEqual(first.context!.state, { agentId, api_key: "[REDACTED]", turn: 0 });
+    assert.deepEqual(override.context!.state, { agentId, turn: 1 });
+    for (let i = 1; i < contexts.length; i++) await view.detail(`event:${i}`);
+    const reloaded = (await view.detail("event:0"))!;
+    assert.notEqual(first.context!.input, reloaded.context!.input, "old projections must be evicted by the entry bound");
+    assert.deepEqual(first, reloaded, "eviction must preserve the detail contract");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("exact admitted system sections preserve order and separators, not rejected proposals", () => {
   const input = { systemPrompt: "rules\nscience", history: [{ role: "user", content: "question" }], tools: [{ name: "search" }] };
   const assembly = { trace: { used: "dynamic", admitted: { sections: [
@@ -43,6 +68,40 @@ test("classification and structured credential redaction", () => {
   assert.equal(eventKind({ type: "subagent.step", step: { kind: "tool" } }), "tool");
   assert.equal(eventKind({ type: "mcp.invocation" }), "mcp");
   assert.deepEqual(redact({ authorization: "secret", nested: [{ api_key: "secret", answer: "hello" }] }), { authorization: "[REDACTED]", nested: [{ api_key: "[REDACTED]", answer: "hello" }] });
+});
+
+test("imported CAS identities retain exact inputs and all reasoning packets without reading the source Agent's history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "trajectory-import-"));
+  const store = new VersionStore(directory), refs = await RefStore.open(store);
+  const original = "main:source", imported = "main:imported", signal = new AbortController().signal;
+  try {
+    const revision = await store.putRecord("AgentRevision", { agentId: original, requestExecutionId: "original-request" });
+    const stateRef = await store.putRecord("AgentStateSnapshot", { agentId: original, agentRevision: revision });
+    const input = { systemPrompt: "exact original system", history: [{ role: "user", content: "exact original request" }], tools: [] };
+    const modelContext = await store.putRecord("ModelContextSnapshot", { input });
+    const contextRef = await store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn: 0 });
+    const privateContext = await store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn: 99 });
+    const start = await store.putRecord("TrajectoryStart", { state: stateRef });
+    await refs.commit(store, `agents/${encodeURIComponent(original)}/trajectories/private-run`, null, start);
+    await refs.commit(store, "attempts/private-run/99", null, privateContext);
+    const evidence = { agentId: imported, agentRunId: "original-agent-run", requestExecutionId: "request", contextRef, stateRef, recordedAt: "2026-10-24T00:00:00Z" };
+    const chunks = ["reasoning ".repeat(3000), "END_OF_REASONING"];
+    const events: RecordedEvent[] = [
+      { id: "input", agentId: imported, runId: "request", createdAt: evidence.recordedAt, event: { type: "agent.record", name: "context.captured", evidence } },
+      ...chunks.map((delta, i) => ({ id: `thinking-${i}`, agentId: imported, runId: "request", streamId: "main", sequence: i + 2, createdAt: evidence.recordedAt, event: { type: "assistant.thinking.delta", delta, responseId: "response", evidence } })),
+    ];
+    const view = await openSessionTrajectory(directory, { sessionId: "imported", agents: [{ id: imported, label: "Main" }], events, agentAliases: { [original]: imported } }, signal);
+    assert.deepEqual(view.index.warnings, []);
+    assert.equal(view.index.entries.length, 2);
+    assert.ok(!JSON.stringify(view.index).includes(privateContext.digest));
+    const detail = (await view.detail("event:input"))!;
+    assert.deepEqual(detail.context?.input, input);
+    const thinking = (await view.detail("event:thinking-0"))!.value as { packets: RecordedEvent[] };
+    assert.equal(thinking.packets.map((packet) => (packet.event as { delta: string }).delta).join(""), chunks.join(""));
+    const unrelated = await openSessionTrajectory(directory, { sessionId: "imported", agents: [{ id: imported, label: "Main" }], events }, signal);
+    assert.ok(unrelated.index.warnings.some((warning) => warning.includes("missing or invalid")), "ownership checks remain required without the server-owned import alias");
+    assert.deepEqual((await store.readRecord(stateRef)).value, { agentId: original, agentRevision: revision });
+  } finally { refs.close(); await rm(directory, { recursive: true, force: true }); }
 });
 test("failed attempts remain inspectable, scoped, immutable and self-contained in NDJSON", async () => {
   const directory = await mkdtemp(join(tmpdir(), "trajectory-"));

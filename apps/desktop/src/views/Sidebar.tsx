@@ -36,6 +36,8 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
+  onExportSession?: (session: Session) => void;
+  onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
   activeProjectId?: string;
   activeSessionId?: string;
@@ -75,7 +77,7 @@ const PAGE_SIZE = 6;
  * Session belongs to.
  *
  * 项目 comes first — every Project the user made is a fold with its own `+`,
- * which starts a Session inside it. Below it, 最近会话 holds the conversations
+ * which starts a Session inside it. Below it, 会话 holds the conversations
  * that belong to no Project: the inbox's Sessions, where the top button and the
  * first message land. That distinction is the point of the screen: a
  * conversation is standalone until someone puts it in a Project, and a Project
@@ -84,11 +86,13 @@ const PAGE_SIZE = 6;
  * thing.
  *
  * This column used to end with a 会话 section that held nothing but a running
- * Session, if any. 最近会话 takes its place, and the running Session keeps its
+ * Session, if any. 会话 takes its place, and the running Session keeps its
  * spinner on its own row instead of being listed twice.
  */
 export function Sidebar({
   actions,
+  onExportSession,
+  onImportSession,
   activeProjectId,
   activeSessionId,
   onToggleSidebar,
@@ -141,7 +145,7 @@ export function Sidebar({
       return;
     }
     // The sentinel is the service's name for "nobody has named this". Storing
-    // it as a Session's name would make a conversation the column and 最近会话
+    // it as a Session's name would make a conversation the column and 会话
     // are built not to list: the row would leave the sidebar while its
     // messages stayed. 未命名会话 is what the field shows for an unnamed
     // Session, and Enter on that text is not a rename to it either.
@@ -203,6 +207,7 @@ export function Sidebar({
                     label: TEXT.menu.rename,
                     onSelect: () => setRenaming({ kind: "session", session, value: sessionTitle(session.title) }),
                   },
+                  ...(onExportSession ? [{ icon: <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg>, label: TEXT.researchPackage.export, onSelect: () => onExportSession(session) }] : []),
                   {
                     icon: "🗑",
                     label: TEXT.menu.delete,
@@ -245,12 +250,19 @@ export function Sidebar({
         {onToggleSidebar ? <SidebarToggle onClick={onToggleSidebar} open /> : null}
       </div>
 
-      <button className="side-new" onClick={() => actions.newSession()} type="button">
+      <div className="side-new-split"><button className="side-new" onClick={() => actions.newSession()} type="button">
         <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" viewBox="0 0 24 24" width="16">
           <path d="M12 5v14M5 12h14" />
         </svg>
         <span>{TEXT.sidebar.newTask}</span>
       </button>
+        <div className="side-import-dropdown">
+          <button className="side-import-trigger" aria-label={TEXT.researchPackage.newOptions} aria-haspopup="menu" type="button">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m7 10 5 5 5-5" /></svg>
+          </button>
+          <div className="side-import-menu" role="menu"><button className="ctx-item" role="menuitem" onClick={() => onImportSession?.()} type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg><span>{TEXT.researchPackage.import}</span></button></div>
+        </div>
+      </div>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">

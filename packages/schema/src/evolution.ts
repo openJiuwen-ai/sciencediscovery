@@ -27,6 +27,8 @@
  */
 
 /** Which search algorithm runs the loop. Not two code paths — one field. */
+import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+
 export type EvolveAlgorithm = "puct" | "openevolve";
 
 /**
@@ -224,11 +226,9 @@ export type EvolveScoring =
 export type EvolveScoringKind = EvolveScoring["kind"];
 
 /**
- * A reward at or above this counts as solved, so no proposal is requested.
- * 0.999 is right for a binary scorer and wrong in a way that produces no error
- * for a graded one: an LLM judge rarely reaches it, so every rollout asks the
- * reflector to "fix" an answer that scored 0.95 and the run reports
- * below-threshold as if the reflector were the problem.
+ * A held-out reward at or above this marks the goal as solved. The sidecar
+ * uses it for the seed preflight and as the search's target reward.
+ * Graded LLM judges use a lower target than binary scorers.
  */
 export const SOLVED_THRESHOLD_BY_SCORING: Readonly<Record<EvolveScoringKind, number>> = {
   custom_script: 0.999,
@@ -337,7 +337,8 @@ export interface EvolveBudgetPlan {
   /** Applied by `create_evolve_run`, keyed by algorithm. */
   perCallCeiling: Record<EvolveAlgorithm, number>;
   thinking: {
-    effective: "enabled" | "disabled";
+    effective: ModelThinkingMode;
+    effort?: ModelThinkingEffort;
     /** Present only when the requested setting could not be honored. */
     note?: string;
   };
@@ -409,7 +410,8 @@ export interface EvolveRunProposal {
   packages?: string[];
   expansions: number;
   workers: number;
-  thinking?: "disabled" | "enabled";
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
   /** How the search explores. Omit to take upstream's settings, which is the
    *  right answer whenever nothing about the task argues against them. */
   search?: EvolveSearchTuning;
@@ -517,7 +519,8 @@ export interface EvolveGoal {
    * and needs a ceiling high enough to hold the thinking *and* the program.
    * `undefined` sends nothing and lets the provider decide.
    */
-  thinking?: "disabled" | "enabled";
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
   /**
    * Packages the candidates need that the runtime does not already have.
    *

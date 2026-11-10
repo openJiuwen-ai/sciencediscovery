@@ -19,7 +19,8 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
-import { effectiveRunnerIds } from "@sciencediscovery/schema";
+import { effectiveRunnerIds, isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
@@ -300,6 +301,11 @@ export { MAIN_RUN_STREAM } from "./store/run-streams.js";
 const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
 const NEWLINE_BYTE = 0x0a;
 
+/** How long shutdown waits for in-flight array writes before it says it gave up.
+ *  Far longer than a write takes, far shorter than a person's patience with a
+ *  hung quit. */
+const WRITE_DRAIN_TIMEOUT_MS = 10_000;
+
 const SESSION_DATA_CATEGORIES = [
   "messages",
   "execution records",
@@ -550,13 +556,60 @@ function buildWorkspaceProvenanceIndex(
 }
 
 export class SessionStoreHttpError extends Error {
-  constructor(message: string, readonly statusCode: 400 | 404 | 409) {
+  constructor(message: string, readonly statusCode: 400 | 404 | 409 | 503, readonly code?: string) {
     super(message);
     this.name = "SessionStoreHttpError";
   }
 }
 
+export class SessionEvidenceLockedError extends SessionStoreHttpError {
+  readonly code = "SESSION_EVIDENCE_LOCKED";
+  constructor() { super("导入证据快照为只读，请创建新会话继续研究。", 409); }
+}
+
 export class SessionStore {
+  private readonly researchRestoration = new AsyncLocalStorage<string>();
+
+  /** Only the server's restoration service holds this capability. */
+  withResearchRestoration<T>(operationId: string, restore: () => Promise<T>): Promise<T> {
+    return this.researchRestoration.run(operationId, restore);
+  }
+
+  async setResearchSnapshots(entries: Array<{ sessionId: string; snapshot: NonNullable<Session["researchSnapshot"]>; conversationBranch?: Session["conversationBranch"] }>): Promise<void> {
+    for (const entry of entries) {
+      const session = this.getSession(entry.sessionId);
+      if (!session) throw new SessionStoreHttpError("Session not found", 404);
+      if (entry.conversationBranch) {
+        if (!this.isResearchRestoring(session.id)) throw new Error("Restoration capability required");
+        session.conversationBranch = structuredClone(entry.conversationBranch);
+      }
+      session.researchSnapshot = structuredClone(entry.snapshot);
+      if (entry.snapshot.role === "imported_snapshot" || entry.snapshot.state !== "ready") this.notifications.stop(session.id);
+    }
+    await this.saveCatalog();
+  }
+
+  isResearchRestoring(sessionId: string): boolean {
+    const operationId = this.researchRestoration.getStore();
+    return Boolean(operationId && this.getSession(sessionId)?.researchSnapshot?.operationId === operationId);
+  }
+
+  async clearResearchSnapshot(sessionId: string, operationId: string): Promise<void> {
+    if (!this.isResearchRestoring(sessionId)) throw new Error("Restoration capability required");
+    const session = this.getSession(sessionId)!;
+    if (session.researchSnapshot?.operationId !== operationId) throw new Error("Snapshot operation mismatch");
+    delete session.researchSnapshot;
+    await this.saveCatalog();
+  }
+
+  /** Server restoration/recovery only; incomplete copies stay out of public lists. */
+  researchSessions(projectId: string): Session[] {
+    return this.catalog.sessions.filter((session) => session.projectId === projectId);
+  }
+
+  researchOperationSessions(operationId: string): Session[] {
+    return this.catalog.sessions.filter((session) => session.researchSnapshot?.operationId === operationId);
+  }
   readonly executionBlocks = new ExecutionBlocks<ConfigurationLiveActivation>();
   readonly dataDir: string;
   // Ephemeral provenance: after a restart, stale rename requests fail closed.
@@ -799,7 +852,7 @@ export class SessionStore {
     this.pluginControl = new PluginControl(this.database, this, (value) => this.normalizeSettings(value));
     this.notificationStore = new AgentNotifications(this.database, (sessionId) => {
       const session = this.getSession(sessionId);
-      return !session || Boolean(session.archivedAt);
+      return !session || Boolean(session.archivedAt) || isEvidenceSessionReadOnly(session);
     });
     this.transferStore = new WorkspaceTransfers(this.database, new VersionStore(this.dataDir));
     this.shellExecutionStore = new ShellExecutions(this.database, new VersionStore(this.dataDir), this.notificationStore);
@@ -959,7 +1012,6 @@ export class SessionStore {
     const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
     const migratedModels = JSON.stringify(models) !== JSON.stringify(savedModels);
     const modelIds = new Set(models.map((model) => model.id));
-    const fallbackModelId = models[0]?.id;
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
@@ -1135,7 +1187,6 @@ export class SessionStore {
     const epochIds = new Set(permissionEpochs.map((epoch) => epoch.id));
     let migratedEpoch = false;
     let migratedSessionSettings = false;
-    let migratedSessionAssignments = false;
     const savedSessions = Array.isArray(saved.sessions) ? saved.sessions : [];
     const sessions = savedSessions.map((session) => {
       let permissionEpochId = session.permissionEpochId;
@@ -1155,11 +1206,9 @@ export class SessionStore {
       if (!Array.isArray(session.enabledConnectorIds)
         || !Array.isArray(session.enabledSkillIds)
         || session.semanticReviewEnabled === undefined) migratedSessionSettings = true;
-      const modelId = session.modelId && modelIds.has(session.modelId) ? session.modelId : fallbackModelId;
-      const reviewModelId = session.reviewModelId && modelIds.has(session.reviewModelId)
-        ? session.reviewModelId
-        : modelId ?? fallbackModelId;
-      if (modelId !== session.modelId || reviewModelId !== session.reviewModelId) migratedSessionAssignments = true;
+      // Legacy catalogs stored the session choice in compatibility fields.
+      const modelId = session.modelId;
+      const reviewModelId = session.reviewModelId;
       const enabledConnectorIds = Array.isArray(session.enabledConnectorIds)
         ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
         : [];
@@ -1182,10 +1231,23 @@ export class SessionStore {
         ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
-            ...(modelId ? { modelId } : {}),
-            ...(reviewModelId ? { reviewModelId } : {}),
+            ...(modelId && modelIds.has(modelId) ? { modelId } : {}),
+            ...(reviewModelId && modelIds.has(reviewModelId) ? { reviewModelId } : {}),
             semanticReviewEnabled,
           };
+      // Persisted session overrides keep their explicit model references even
+      // when the profile is gone, so the choice still blocks inherited fallbacks.
+      if (isRecord(session.settingsOverrides)) {
+        for (const field of ["modelId", "reviewModelId"] as const) {
+          const raw = session.settingsOverrides[field];
+          if (typeof raw === "string" && !modelIds.has(raw)) {
+            settingsOverrides[field] = raw;
+          }
+        }
+      } else {
+        if (typeof modelId === "string") settingsOverrides.modelId = modelId;
+        if (typeof reviewModelId === "string") settingsOverrides.reviewModelId = reviewModelId;
+      }
       const savedApproval = session as Omit<Session, "approvalMode"> & {
         approvalMode?: Session["approvalMode"] | "never_ask";
       };
@@ -1196,6 +1258,8 @@ export class SessionStore {
           : "ask_for_dangerous" as const,
         autoApplyLowRiskConfiguration: session.autoApplyLowRiskConfiguration === true,
         ...(session.archivedAt ? { archivedAt: session.archivedAt } : {}),
+        ...(session.researchSnapshot ? { researchSnapshot: structuredClone(session.researchSnapshot) } : {}),
+        ...(session.conversationBranch ? { conversationBranch: structuredClone(session.conversationBranch) } : {}),
         createdAt: session.createdAt,
         enabledConnectorIds,
         enabledSkillIds,
@@ -1427,7 +1491,6 @@ export class SessionStore {
       || migratedEnvironmentRevisions
       || migratedEpoch
       || migratedSessionSettings
-      || migratedSessionAssignments
       || migratedSessionOverrides
       || migratedSubagents
       || recoveredStoredSubagents
@@ -1942,6 +2005,7 @@ export class SessionStore {
       this.executionRunsPath(session.id),
       this.sessionRunsPath(session.id),
       resolve(this.dataDir, "run-events", session.id),
+      resolve(this.dataDir, "research-trajectories", `${encodeURIComponent(session.id)}.json`),
       this.artifactDerivationsPath(session.id),
       this.artifactPlansPath(session.id),
       this.artifactJobsPath(session.id),
@@ -2088,6 +2152,46 @@ export class SessionStore {
     await this.deletionWork;
   }
 
+  /** Resolves once every in-flight array write (session-runs, messages, artifact
+   *  plans, …) and every append-only stream write has finished. `closeApiServer`
+   *  awaits this immediately before closing the store so that a caller removing
+   *  the data directory right after cannot race a write-temp-then-rename that is
+   *  still between its two steps.
+   *
+   *  Bounded: a run that was never cancelled can keep writing status, and a
+   *  shutdown must not hang on it. The wait is capped and reports the writes it
+   *  abandoned, so a shutdown never claims a cleanliness it did not get. */
+  async whenWritesSettle(timeoutMs = WRITE_DRAIN_TIMEOUT_MS): Promise<boolean> {
+    const drained = (async () => {
+      // Both sets shrink as their writes finish, so re-reading them each pass
+      // terminates once the writers stop.
+      while (this.arrayWrites.size > 0 || this.streamAppendQueues.size > 0) {
+        await Promise.all([...this.arrayWrites, ...this.streamAppendQueues.values()]);
+      }
+      return true;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Not unref'd: the race's other arm is a promise the event loop does not
+    // hold, so an unref'd timer would let the process exit mid-shutdown instead
+    // of reaching this bound. It is cleared as soon as the race settles.
+    const timedOut = new Promise<false>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout(false), timeoutMs);
+    });
+    // Cleared on every exit path: the timer is not unref'd (see above), so one
+    // left armed by a throw would keep the process alive for the whole bound.
+    let settled: boolean;
+    try {
+      settled = await Promise.race([drained, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!settled) {
+      const abandoned = this.arrayWrites.size + this.streamAppendQueues.size;
+      console.warn(`Store shutdown stopped waiting for ${abandoned} in-flight write(s) after ${timeoutMs}ms`);
+    }
+    return settled;
+  }
+
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
     try {
       await rm(operation.root, { force: true, recursive: true });
@@ -2151,7 +2255,29 @@ export class SessionStore {
     }
   }
 
+  /** Every array write in flight, registered where the write happens rather than
+   *  at the caller: `writeArray` is reached both through `mutateArray` and
+   *  directly by ~20 sites (messages, artifact plans, prompt manifests, claims,
+   *  evidence, …), so a queue keyed on the mutating caller would cover only a
+   *  minority of the writes that race teardown. */
+  private readonly arrayWrites = new Set<Promise<void>>();
+
   private async writeArray(path: string, values: unknown[]): Promise<void> {
+    const work = this.writeArrayFile(path, values);
+    // The set holds an error-swallowing barrier, not `work` itself: the drain
+    // races it against a timeout, and a rejection inside that race would skip
+    // the timer cleanup and the abandoned-write report below. The failure still
+    // reaches this method's caller through `await work`.
+    const barrier = work.then(() => undefined, () => undefined);
+    this.arrayWrites.add(barrier);
+    try {
+      await work;
+    } finally {
+      this.arrayWrites.delete(barrier);
+    }
+  }
+
+  private async writeArrayFile(path: string, values: unknown[]): Promise<void> {
     const directory = dirname(path);
     const temporaryPath = resolve(directory, `.state-${process.pid}-${randomUUID()}.tmp`);
     await mkdir(directory, { recursive: true });
@@ -2254,6 +2380,15 @@ export class SessionStore {
         if (!hasOwn(overrides, field)) continue;
         const value = overrides[field];
         if (value === undefined) continue;
+        // Model references that no longer resolve to an installed profile are
+        // recorded at the layer that set them, with an empty effective value.
+        // This makes an explicit but invalid choice block inheritance instead of
+        // silently falling back to a lower layer.
+        if ((field === "modelId" || field === "reviewModelId") && typeof value === "string" && !this.getModel(value)) {
+          delete effective[field];
+          sources[field] = source;
+          continue;
+        }
         if (field === "plugins") effective.plugins = mergePluginSettings(effective.plugins, value as RuntimeSettingsOverrides["plugins"]);
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
@@ -2290,11 +2425,14 @@ export class SessionStore {
     const { effective } = this.resolveRuntimeSettings(session.id);
     session.enabledConnectorIds = [...effective.enabledConnectorIds];
     session.enabledSkillIds = [...effective.enabledSkillIds];
-    session.modelId = effective.modelId;
-    session.reviewModelId = effective.reviewModelId;
     session.semanticReviewEnabled = effective.semanticReviewEnabled;
     session.thinkingEffort = effective.thinkingEffort;
     session.thinkingMode = effective.thinkingMode;
+    // Compatibility mirrors always reflect the resolved effective model,
+    // including when no model is selected. Runs snapshot the effective settings
+    // at queue time, so historical model references are preserved there.
+    session.modelId = effective.modelId;
+    session.reviewModelId = effective.reviewModelId;
   }
 
   private syncSessionCompatibilityForProject(projectId?: string): void {
@@ -2432,6 +2570,19 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
+    const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
+    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
+    if (capabilityId === "web.credential") systemVersions = {
+      webSettings: version(this.catalog.webSettings),
+      webCredentials: webCredentialVersion(),
+      webProxy: webProxyVersion(),
+    };
+    if (capabilityId === "web.configure") systemVersions = {
+      web: version(this.catalog.webSettings),
+      webCredentials: webCredentialVersion(),
+      webProxy: webProxyVersion(),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2460,6 +2611,9 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "web.credential" ? { webProviders: this.getWebSettings().providers } : {}),
+        ...(capabilityId === "web.configure" ? { webSettings: this.getWebSettings(), webProxyPolicies: this.configurationWebProxyPolicies() } : {}),
+
         ...(capabilityId === "reviewer.enable" ? { globalReviewer: this.getReviewerSpecialistSettings() } : {}),
         ...(capabilityId === "plugin.json_viewer" ? { jsonViewerSettings: this.configurationJsonViewerSettings(sessionId) } : {}),
       },
@@ -2620,7 +2774,9 @@ export class SessionStore {
         level: values.level ?? reviewer.level,
       });
     } else throw new Error("Unsupported P1 capability");
-    const next = this.normalizeSettings({ ...current, ...patch });
+    const next = scope.kind === "session"
+      ? this.normalizeSessionOverrides({ ...current, ...patch }, current)
+      : this.normalizeSettings({ ...current, ...patch });
     if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
     else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
     session.updatedAt = new Date().toISOString();
@@ -2737,7 +2893,24 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(`web:${provider}`, row.encrypted_token) : undefined;
   }
 
-  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+  /** Uses the formal Web settings/key writer in the shared audit transaction. */
+  applyWebCredentialConfigurationSync(provider: WebKeyProvider, value: string | null): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Web credential configuration requires the shared transaction");
+    if (!WEB_KEY_PROVIDERS.includes(provider)) throw new Error("Unknown Web provider");
+    this.applyWebSettingsSync({ providerApiKeys: { [provider]: value } });
+  }
+
+  configurationWebProxyPolicies(): string[] {
+    return ["inherit", "none", ...this.catalog.proxyServers.map(server => `proxy:${server.id}`)];
+  }
+
+  /** Non-credential Web edits use the same formal normalizer and shared audit transaction. */
+  applyWebConfigurationSync(input: Omit<UpdateWebSettingsRequest, "providerApiKeys">): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    this.applyWebSettingsSync(input);
+  }
+
+  private applyWebSettingsSync(input: UpdateWebSettingsRequest): void {
     const { providerApiKeys, ...settingsInput } = input;
     const nextSettings = normalizeWebSettings({ ...this.catalog.webSettings, ...settingsInput });
     this.assertProxyPolicyKnown(nextSettings.proxyPolicy, "proxyPolicy");
@@ -2761,6 +2934,10 @@ export class SessionStore {
         ).run(provider, encrypted);
       }
     }
+  }
+
+  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+    this.applyWebSettingsSync(input);
     await this.saveCatalog();
     return this.getWebSettings();
   }
@@ -3243,10 +3420,10 @@ export class SessionStore {
           proposal.state = "stale";
         } else {
           // Add to the latest effective set so inherited entries are preserved.
-          session.settingsOverrides = this.normalizeSettings({
+          session.settingsOverrides = this.normalizeSessionOverrides({
             ...session.settingsOverrides,
             enabledConnectorIds: [...effective, proposal.connectorId],
-          });
+          }, session.settingsOverrides);
           this.syncSessionCompatibility(session);
           proposal.state = "applied";
         }
@@ -3404,7 +3581,9 @@ export class SessionStore {
   }
 
   private replaceRuntimeOverridesSync(scope: ConfigurationScope, value: unknown): void {
-    const normalized = this.normalizeSettings(value);
+    const normalized = scope.kind === "session"
+      ? this.normalizeSessionOverrides(value, this.assertSessionWritable(scope.id).settingsOverrides)
+      : this.normalizeSettings(value);
     if (scope.kind === "global") {
       this.catalog.globalSettings = withoutSkillSelection(normalized);
       this.syncSessionCompatibilityForProject();
@@ -3515,6 +3694,21 @@ export class SessionStore {
     });
   }
 
+  /** Keep an existing unavailable choice while validating every new field value. */
+  private normalizeSessionOverrides(value: unknown, previous: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
+    if (!isRecord(value)) return this.normalizeSettings(value);
+    const input = { ...value };
+    const unavailable: RuntimeSettingsOverrides = {};
+    for (const field of ["modelId", "reviewModelId"] as const) {
+      const id = input[field];
+      if (typeof id === "string" && id === previous[field] && !this.getModel(id)) {
+        unavailable[field] = id;
+        delete input[field];
+      }
+    }
+    return { ...this.normalizeSettings(input), ...unavailable };
+  }
+
   async replaceSessionSettings(sessionId: string, value: unknown, assertCurrent?: () => void): Promise<RuntimeSettingsDetails> {
     return this.withSettingsMutation(async () => {
       assertCurrent?.();
@@ -3601,7 +3795,7 @@ export class SessionStore {
       return { modelId: profile.id };
     } else throw new Error("Unsupported configuration capability");
     session.updatedAt = new Date().toISOString();
-    session.settingsOverrides = this.normalizeSettings(session.settingsOverrides);
+    session.settingsOverrides = this.normalizeSessionOverrides(session.settingsOverrides, session.settingsOverrides);
     this.syncSessionCompatibility(session);
     return typeof values.modelId === "string" ? { modelId: values.modelId } : {};
   }
@@ -3688,6 +3882,7 @@ export class SessionStore {
   private defaultGlobalTaskModel(profile: ModelProfile): void {
     if (!this.catalog.globalSettings.modelId) {
       this.catalog.globalSettings.modelId = profile.id;
+      this.syncSessionCompatibilityForProject();
     }
   }
 
@@ -3713,27 +3908,67 @@ export class SessionStore {
       this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
       profile.hasApiToken = true;
     }
-    // Heals catalogs from before auto-defaulting existed: re-saving a usable
-    // model claims the still-unset global task model slot.
-    if (profile.hasApiToken) this.defaultGlobalTaskModel(profile);
     await this.saveCatalog();
     return profile;
   }
 
-  async deleteModel(modelId: string): Promise<void> {
-    const profile = this.getModel(modelId);
-    if (!profile) throw new Error("Model not found");
-    const referencesModel = (settings: RuntimeSettingsOverrides) =>
-      settings.modelId === modelId || settings.reviewModelId === modelId;
-    if (referencesModel(this.catalog.globalSettings)
-      || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides))
-      || this.catalog.sessions.some((session) =>
-        session.modelId === modelId || session.reviewModelId === modelId || referencesModel(session.settingsOverrides))) {
-      throw new Error("Model is referenced by runtime settings and cannot be deleted");
+  async deleteModel(modelId: string, replacementModelId?: string | null): Promise<void> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      if (!this.getModel(modelId)) throw new Error("Model not found");
+      this.removeModelResources([modelId], replacementModelId);
+    });
+  }
+
+  /** Catalog, defaults, compatibility mirrors and encrypted secrets commit together. */
+  private removeModelResources(modelIds: string[], replacementModelId?: string | null, providerId?: string): void {
+    this.validateReplacementModelId(modelIds, replacementModelId);
+    const replacesDefault = modelIds.includes(this.catalog.globalSettings.modelId ?? "");
+    const database = this.getConfigurationDatabase();
+    const previous = this.snapshotCatalogForRollback();
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of modelIds) {
+        this.clearRuntimeModelReferences(id);
+        this.setModelApiToken(id, undefined);
+      }
+      this.catalog.models = this.catalog.models.filter(model => !modelIds.includes(model.id));
+      if (providerId) {
+        this.setProviderApiToken(providerId, undefined);
+        this.catalog.providers = this.catalog.providers.filter(provider => provider.id !== providerId);
+      }
+      // A stale confirmation must never overwrite another window's new default.
+      if (replacesDefault && replacementModelId) this.catalog.globalSettings.modelId = replacementModelId;
+      this.syncSessionCompatibilityForProject();
+      database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
+        .run(JSON.stringify(this.persistedCatalog()));
+      this.flushSideTables(database);
+      database.exec("COMMIT");
+      this.clearPendingSideTables();
+    } catch (error) {
+      database.exec("ROLLBACK");
+      this.restoreCatalog(previous);
+      throw error;
     }
-    this.setModelApiToken(modelId, undefined);
-    this.catalog.models = this.catalog.models.filter((model) => model.id !== modelId);
-    await this.saveCatalog();
+  }
+
+  /** Validate that a replacement model id is a string that exists and is not one
+   *  of the models being deleted. `null` is an explicit "leave unset" sentinel. */
+  private validateReplacementModelId(deletedModelIds: string[], replacementModelId?: string | null): void {
+    if (replacementModelId === undefined || replacementModelId === null) return;
+    if (typeof replacementModelId !== "string") throw new SessionStoreHttpError("replacementModelId must be a string or null", 400);
+    if (deletedModelIds.includes(replacementModelId)) throw new SessionStoreHttpError("Replacement cannot be a deleted model", 400);
+    if (!this.getModel(replacementModelId)) throw new SessionStoreHttpError("Replacement model not found", 400);
+  }
+
+  /** Clear defaults while retaining explicit session overrides as unavailable choices. */
+  private clearRuntimeModelReferences(modelId: string): void {
+    if (this.catalog.globalSettings.modelId === modelId) delete this.catalog.globalSettings.modelId;
+    if (this.catalog.globalSettings.reviewModelId === modelId) delete this.catalog.globalSettings.reviewModelId;
+    for (const project of this.catalog.projects) {
+      if (project.settingsOverrides.modelId === modelId) delete project.settingsOverrides.modelId;
+      if (project.settingsOverrides.reviewModelId === modelId) delete project.settingsOverrides.reviewModelId;
+    }
   }
 
   listProviders(): ModelProvider[] {
@@ -3822,25 +4057,13 @@ export class SessionStore {
     return provider;
   }
 
-  async deleteProvider(providerId: string): Promise<void> {
-    const provider = this.getProvider(providerId);
-    if (!provider) throw new Error("Provider not found");
-    const children = this.catalog.models.filter((model) => model.providerId === providerId);
-    const referencesModel = (settings: RuntimeSettingsOverrides, id: string) =>
-      settings.modelId === id || settings.reviewModelId === id;
-    for (const child of children) {
-      if (referencesModel(this.catalog.globalSettings, child.id)
-        || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides, child.id))
-        || this.catalog.sessions.some((session) =>
-          session.modelId === child.id || session.reviewModelId === child.id || referencesModel(session.settingsOverrides, child.id))) {
-        throw new Error("Provider models are referenced by runtime settings and cannot be deleted");
-      }
-    }
-    for (const child of children) this.setModelApiToken(child.id, undefined);
-    this.setProviderApiToken(providerId, undefined);
-    this.catalog.models = this.catalog.models.filter((model) => model.providerId !== providerId);
-    this.catalog.providers = this.catalog.providers.filter((entry) => entry.id !== providerId);
-    await this.saveCatalog();
+  async deleteProvider(providerId: string, replacementModelId?: string | null): Promise<void> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      if (!this.getProvider(providerId)) throw new Error("Provider not found");
+      const children = this.catalog.models.filter(model => model.providerId === providerId);
+      this.removeModelResources(children.map(model => model.id), replacementModelId, providerId);
+    });
   }
 
   /** Ensure a profile backs the given provider/model pair so the rest of the
@@ -4196,6 +4419,7 @@ export class SessionStore {
   listSessions(projectId: string, state: SessionListState = "active"): Session[] {
     return this.catalog.sessions
       .filter((session) => session.projectId === projectId
+        && !(session.researchSnapshot?.role === "research_copy" && session.researchSnapshot.state !== "ready")
         && (state === "all" || (state === "archived" ? Boolean(session.archivedAt) : !session.archivedAt)))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
@@ -4215,6 +4439,8 @@ export class SessionStore {
     } = {},
     options: {
       allowUnconfiguredModel?: boolean;
+      researchSnapshot?: Session["researchSnapshot"];
+      restorationSessionId?: string;
     } = {},
   ): Promise<Session> {
     const project = this.getProject(projectId);
@@ -4228,7 +4454,9 @@ export class SessionStore {
       { overrides: settingsOverrides, source: "session" },
     ]);
     const selectedModel = this.getModel(resolved.effective.modelId);
-    if (!selectedModel && !options.allowUnconfiguredModel) throw new Error("A task model is required");
+    if (!selectedModel && !options.allowUnconfiguredModel) {
+      throw new SessionStoreHttpError("A task model is required", 400, "SESSION_MODEL_UNAVAILABLE");
+    }
     if (selectedModel && !this.getModelApiToken(selectedModel.id)
       && !this.modelAllowsMissingToken(selectedModel) && !options.allowUnconfiguredModel) {
       throw new Error("The task model must have a saved API token");
@@ -4240,7 +4468,9 @@ export class SessionStore {
     const runnerIds = governance.runnerIds === undefined ? undefined : this.validateRunnerIds(governance.runnerIds);
     const remoteRunnerHostIds = runnerIds ? runnerIds.filter((id) => id !== "local")
       : governance.remoteRunnerHostIds === undefined ? undefined : this.validateSessionRemoteRunnerHosts(projectId, governance.remoteRunnerHostIds);
-    const sessionId = randomUUID();
+    if (options.restorationSessionId && !this.researchRestoration.getStore()) throw new Error("Restoration capability required");
+    const sessionId = options.restorationSessionId ?? randomUUID();
+    if (this.getSession(sessionId)) throw new Error("Duplicate session id");
     const permissionEpoch = createPermissionEpoch(
       sessionId,
       `Session created; approval mode from ${governance.approvalMode !== undefined ? "explicit Session choice" : resolved.sources.defaultApprovalMode === "unset" ? "built-in Ask" : `${resolved.sources.defaultApprovalMode} default`}`,
@@ -4249,6 +4479,7 @@ export class SessionStore {
       this.currentSandboxNetworkAccess(),
     );
     const session: Session = {
+      ...(options.researchSnapshot ? { researchSnapshot: structuredClone(options.researchSnapshot) } : {}),
       approvalMode: governance.approvalMode ?? resolved.effective.defaultApprovalMode ?? "ask_for_dangerous",
       autoApplyLowRiskConfiguration: governance.autoApplyLowRiskConfiguration === true,
       createdAt: now,
@@ -4276,7 +4507,10 @@ export class SessionStore {
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
     await this.writeArray(this.messagesPath(session.id), []);
     await mkdir(resolve(this.dataDir, "session-runs"), { recursive: true });
-    await writeFile(this.sessionRunsPath(session.id), "[]\n", "utf8");
+    // Through writeArray, not a bare writeFile: everything that lands in this
+    // directory has to be visible to whenWritesSettle, and "[]\n" is exactly
+    // what writeArray produces for an empty array.
+    await this.writeArray(this.sessionRunsPath(session.id), []);
     await mkdir(resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), { recursive: true });
     this.catalog.permissionEpochs.push(permissionEpoch);
     this.catalog.sessions.push(session);
@@ -4531,6 +4765,19 @@ export class SessionStore {
     if (added) await this.saveCatalog();
   }
 
+  /** Archive data only: imported tasks never acquire runnable context or handoffs. */
+  async restoreHistoricalSubagent(subagent: Subagent): Promise<void> {
+    this.assertSessionWritable(subagent.sessionId);
+    const { contextRef: _context, handoff: _handoff, runtimeInput: _input, runtimeOptions: _options, runtimeSessionId: _runtime, ...snapshot } = subagent;
+    const restored = structuredClone({ ...snapshot,
+      status: snapshot.status === "running" ? "cancelled" : snapshot.status,
+      interruptedByRestart: false,
+    });
+    this.catalog.subagents.push(restored);
+    this.stageSubagent(restored);
+    await this.saveCatalog();
+  }
+
   async updateSubagentBrief(
     sessionId: string,
     subagentId: string,
@@ -4587,6 +4834,17 @@ export class SessionStore {
     baseline?: ReadonlyMap<string, string>,
     options: { scanComplete?: boolean } = {},
   ): Promise<Map<string, WorkspaceFileProvenanceSummary>> {
+    if (isEvidenceSessionReadOnly(this.getSession(sessionId)) && !this.isResearchRestoring(sessionId)) {
+      const summaries = new Map<string, WorkspaceFileProvenanceSummary>();
+      for (const file of files) {
+        const source = this.getWorkspaceFileProvenance(sessionId, file.path);
+        if (source) summaries.set(file.path, {
+          revisionId: source.currentRevision.id, fileId: source.file.id,
+          origin: source.currentRevision.origin, recordedAt: source.currentRevision.createdAt,
+        });
+      }
+      return summaries;
+    }
     const workspaceRoot = this.workspacePath(sessionId);
     const reconciliationBaseline = baseline ?? this.snapshotWorkspaceFileRevisions(sessionId);
     const normalizedFiles = files.map((file) => ({
@@ -4711,6 +4969,7 @@ export class SessionStore {
     sessionId: string,
     inputs: WorkspaceFileRevisionInput[],
   ): Promise<WorkspaceFileRevision[]> {
+    this.assertSessionWritable(sessionId);
     const workspaceRoot = this.workspacePath(sessionId);
     const prepared = inputs.map((input) => {
       const path = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
@@ -4869,6 +5128,45 @@ export class SessionStore {
     });
   }
 
+  /** Restore archive metadata after all artifact versions and sessions exist. */
+  async restoreWorkspaceFileProvenance(sessionId: string, snapshots: WorkspaceFileProvenance[]): Promise<void> {
+    const session = this.assertSessionWritable(sessionId);
+    await this.withWorkspaceFileMutation(sessionId, async () => {
+      for (const snapshot of snapshots) {
+        const file = snapshot.file;
+        const path = normalizeWorkspaceRelativePath(this.workspacePath(sessionId), file.path);
+        const revisions = [...snapshot.revisions.filter((row) => row.id !== snapshot.currentRevision.id), snapshot.currentRevision];
+        if (file.sessionId !== sessionId || file.projectId !== session.projectId || file.path !== path
+          || !savedWorkspaceFileRecord(file) || revisions.some((row) => !savedWorkspaceFileRevision(row))
+          || file.currentRevisionId !== snapshot.currentRevision.id
+          || revisions.some((row) => row.sessionId !== sessionId || row.projectId !== session.projectId || row.fileId !== file.id || row.path !== path
+            || row.artifactVersionIds.some((id) => !this.catalog.artifactVersions.some((version) => version.id === id && version.projectId === session.projectId)))) {
+          throw new Error("Invalid imported workspace provenance");
+        }
+        const previous = this.catalog.workspaceFileRecords.filter((row) => row.sessionId === sessionId && row.path === path);
+        const previousIds = new Set(previous.map((row) => row.id));
+        for (const row of previous) {
+          this.pendingWorkspaceFiles.delete(row.id);
+          this.deletedWorkspaceFiles.add(row.id);
+        }
+        for (const row of this.catalog.workspaceFileRevisions) {
+          if (!previousIds.has(row.fileId)) continue;
+          this.pendingWorkspaceRevisions.delete(row.id);
+          this.deletedWorkspaceRevisions.add(row.id);
+        }
+        this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((row) => !previousIds.has(row.id));
+        this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((row) => !previousIds.has(row.fileId));
+        const restoredFile = structuredClone({ ...file, sessionTitle: session.title });
+        const restoredRevisions = structuredClone(revisions);
+        this.catalog.workspaceFileRecords.push(restoredFile);
+        this.catalog.workspaceFileRevisions.push(...restoredRevisions);
+        this.stageWorkspaceFile(restoredFile);
+        for (const revision of restoredRevisions) this.stageWorkspaceRevision(revision);
+      }
+      await this.saveCatalog();
+    });
+  }
+
   getWorkspaceFileProvenance(sessionId: string, pathInput: string): WorkspaceFileProvenance | undefined {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
@@ -4927,7 +5225,8 @@ export class SessionStore {
   listArtifacts(sessionId: string): ScientificArtifact[] {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
-    return this.listProjectArtifacts(session.projectId);
+    const produced = new Set(this.catalog.artifactVersions.filter((version) => version.sessionId === sessionId).map((version) => version.artifactId));
+    return this.listProjectArtifacts(session.projectId).filter((artifact) => artifact.createdInSessionId === sessionId || produced.has(artifact.id));
   }
 
   /**
@@ -4957,7 +5256,10 @@ export class SessionStore {
 
   listProjectArtifacts(projectId: string): ScientificArtifact[] {
     if (!this.getProject(projectId)) throw new Error("Project not found");
-    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId && !artifact.deletedAt))
+    return structuredClone(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId && !artifact.deletedAt
+      && (!this.getSession(artifact.createdInSessionId)?.researchSnapshot
+        || this.getSession(artifact.createdInSessionId)?.researchSnapshot?.state === "ready"
+        || this.isResearchRestoring(artifact.createdInSessionId))))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -4976,6 +5278,7 @@ export class SessionStore {
     if (!this.getProject(projectId)) throw new SessionStoreHttpError("Project not found", 404);
     const artifact = this.catalog.artifacts.find((candidate) => candidate.id === artifactId && candidate.projectId === projectId);
     if (!artifact) throw new SessionStoreHttpError("Artifact not found", 404);
+    this.assertSessionWritable(artifact.createdInSessionId);
     if (artifact.deletedAt) return structuredClone(artifact);
     const now = new Date().toISOString();
     artifact.deletedAt = now;
@@ -4987,9 +5290,16 @@ export class SessionStore {
   getArtifactByName(sessionId: string, name: string): ScientificArtifact | undefined {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
-    const artifact = this.catalog.artifacts.find((candidate) =>
-      candidate.projectId === session.projectId && candidate.name === name && !candidate.deletedAt);
+    const candidates = this.catalog.artifacts.filter((candidate) => candidate.projectId === session.projectId && candidate.name === name && !candidate.deletedAt);
+    const artifact = candidates.find((candidate) => candidate.createdInSessionId === sessionId)
+      ?? candidates.find((candidate) => this.artifactSharesResearchScope(sessionId, candidate.createdInSessionId));
     return artifact ? structuredClone(artifact) : undefined;
+  }
+
+  private artifactSharesResearchScope(sessionId: string, ownerId: string): boolean {
+    const source = this.getSession(sessionId)?.researchSnapshot;
+    const owner = this.getSession(ownerId)?.researchSnapshot;
+    return !source && !owner || Boolean(source && owner && source.operationId === owner.operationId);
   }
 
   listArtifactVersions(sessionId: string, artifactId: string): ScientificArtifactVersion[] {
@@ -5094,8 +5404,13 @@ export class SessionStore {
     sourcePath?: string;
     title?: string;
     turnId?: string;
+    /** Importers can preserve same-named products as independent Session artifacts. */
+    forceNewArtifact?: boolean;
+    /** Server restoration only; preallocated identities resolve forward references. */
+    restorationIds?: { artifactId: string; versionId: string };
   }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }> {
     this.assertSessionWritable(input.sessionId);
+    if (input.restorationIds && !this.isResearchRestoring(input.sessionId)) throw new Error("Restoration capability required");
     const session = this.getSession(input.sessionId)!;
     const projectId = session.projectId;
     const logicalName = input.logicalName?.trim();
@@ -5112,6 +5427,8 @@ export class SessionStore {
     const explicit = input.artifactId ? this.catalog.artifacts.find(a =>
       a.id === input.artifactId && a.projectId === projectId && !a.deletedAt) : undefined;
     if (input.artifactId && !explicit) throw new Error("Artifact not found in this Project");
+    if (explicit && !this.artifactSharesResearchScope(input.sessionId, explicit.createdInSessionId)) throw new SessionStoreHttpError("请在当前研究会话中创建独立产物，不能改写另一个研究副本。", 409);
+    if (explicit && isEvidenceSessionReadOnly(this.getSession(explicit.createdInSessionId)) && !this.isResearchRestoring(explicit.createdInSessionId)) throw new SessionEvidenceLockedError();
     const base = input.baseVersionId ? this.catalog.artifactVersions.find(v =>
       v.id === input.baseVersionId && v.artifactId === explicit?.id && v.projectId === projectId) : undefined;
     if (input.baseVersionId && !base) throw new Error("Artifact base version not found");
@@ -5134,8 +5451,10 @@ export class SessionStore {
       throw new Error("Artifact dependency must reference a version in the same Project");
     }
     const now = new Date().toISOString();
-    let artifact = explicit ?? this.catalog.artifacts.find((candidate) =>
-      candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
+    let artifact = explicit ?? (input.forceNewArtifact ? undefined : this.catalog.artifacts.find((candidate) =>
+      candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt
+      && this.artifactSharesResearchScope(input.sessionId, candidate.createdInSessionId)
+      && (!isEvidenceSessionReadOnly(this.getSession(candidate.createdInSessionId)) || this.isResearchRestoring(candidate.createdInSessionId))));
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
       throw new Error("Server-generated Artifacts accept new versions only from a server-generated writer");
@@ -5147,7 +5466,7 @@ export class SessionStore {
         createdInSessionTitle: session.title,
         currentVersion: 0,
         ...(input.description?.trim() ? { description: input.description.trim() } : {}),
-        id: randomUUID(),
+        id: input.restorationIds?.artifactId ?? randomUUID(),
         kind: input.kind,
         logicalName,
         name: logicalName,
@@ -5169,7 +5488,7 @@ export class SessionStore {
       content: structuredClone(input.content),
       createdAt: now,
       executionRunIds: [...new Set(input.executionRunIds ?? [])],
-      id: randomUUID(),
+      id: input.restorationIds?.versionId ?? randomUUID(),
       inputArtifactVersionIds: dependencies,
       mediaType: input.mediaType,
       projectId,
@@ -5190,6 +5509,73 @@ export class SessionStore {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
     return structuredClone(this.catalog.artifactAnnotations.filter((annotation) => annotation.sessionId === sessionId
       && (!versionId || annotation.artifactVersionId === versionId)));
+  }
+
+  async restoreArtifactAnnotations(sessionId: string, annotations: ArtifactAnnotation[]): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    if (!this.isResearchRestoring(sessionId)) throw new Error("Restoration capability required");
+    if (annotations.some((annotation) => annotation.sessionId !== sessionId
+      || !this.getArtifactVersion(sessionId, annotation.artifactVersionId))) throw new Error("Invalid imported annotation");
+    await this.saveCatalog(() => { this.catalog.artifactAnnotations.push(...structuredClone(annotations)); });
+  }
+
+  /** Resolve imported lineage after every version has been allocated. */
+  async restoreArtifactVersionLineage(sessionId: string, versionId: string, inputArtifactVersionIds: string[], createdAt: string, originalVersion?: number, originalBaseVersionId?: string): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    const projectId = this.getSession(sessionId)!.projectId;
+    const version = this.catalog.artifactVersions.find((item) => item.id === versionId && item.projectId === projectId);
+    if (!version) throw new Error("Artifact version not found");
+    if (inputArtifactVersionIds.some((id) => !this.catalog.artifactVersions.some((item) => item.id === id && item.projectId === projectId))) throw new Error("Imported dependency not found");
+    version.inputArtifactVersionIds = [...new Set(inputArtifactVersionIds)];
+    version.baseVersionId = originalBaseVersionId;
+    version.createdAt = createdAt;
+    if (originalVersion !== undefined && Number.isSafeInteger(originalVersion) && originalVersion > 0) {
+      version.version = originalVersion;
+      const artifact = this.catalog.artifacts.find((item) => item.id === version.artifactId)!;
+      artifact.currentVersion = Math.max(...this.catalog.artifactVersions.filter((item) => item.artifactId === artifact.id).map((item) => item.version));
+    }
+    await this.saveCatalog();
+  }
+
+  async restoreArtifactMetadata(sessionId: string, artifactId: string, source: ScientificArtifact): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    if (!this.isResearchRestoring(sessionId)) throw new Error("Restoration capability required");
+    const artifact = this.catalog.artifacts.find((item) => item.id === artifactId);
+    if (!artifact) throw new Error("Artifact not found");
+    artifact.createdAt = source.createdAt;
+    artifact.updatedAt = source.updatedAt;
+    artifact.createdInSessionId = sessionId;
+    artifact.sessionId = sessionId;
+    artifact.createdInSessionTitle = source.createdInSessionTitle ?? this.getSession(sessionId)!.title;
+    await this.saveCatalog();
+  }
+
+  /** Compensation only for unpublished copies created by this operation. Shared CAS stays intact. */
+  async discardResearchCopies(operationId: string): Promise<void> {
+    const sessions = this.researchOperationSessions(operationId);
+    if (sessions.some((session) => session.researchSnapshot?.role !== "research_copy" || session.researchSnapshot.state === "ready")) throw new Error("Cannot discard published research");
+    const sessionIds = new Set(sessions.map((session) => session.id));
+    const artifactIds = new Set(this.catalog.artifacts.filter((artifact) => sessionIds.has(artifact.createdInSessionId)).map((artifact) => artifact.id));
+    const fileIds = new Set(this.catalog.workspaceFileRecords.filter((file) => sessionIds.has(file.sessionId)).map((file) => file.id));
+    await this.saveCatalog(() => {
+      for (const file of this.catalog.workspaceFileRecords) {
+        if (!fileIds.has(file.id)) continue;
+        this.pendingWorkspaceFiles.delete(file.id);
+        this.deletedWorkspaceFiles.add(file.id);
+      }
+      for (const revision of this.catalog.workspaceFileRevisions) {
+        if (!fileIds.has(revision.fileId)) continue;
+        this.pendingWorkspaceRevisions.delete(revision.id);
+        this.deletedWorkspaceRevisions.add(revision.id);
+      }
+      this.dropWorkspaceProvenanceCache();
+      this.catalog.artifacts = this.catalog.artifacts.filter((artifact) => !artifactIds.has(artifact.id));
+      this.catalog.artifactVersions = this.catalog.artifactVersions.filter((version) => !artifactIds.has(version.artifactId));
+      this.catalog.artifactAnnotations = this.catalog.artifactAnnotations.filter((annotation) => !sessionIds.has(annotation.sessionId));
+      this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((file) => !fileIds.has(file.id));
+      this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => !fileIds.has(revision.fileId));
+    });
+    for (const session of sessions) await this.deleteSession(session.id, session.id);
   }
 
   async createArtifactAnnotation(
@@ -5718,6 +6104,7 @@ export class SessionStore {
   assertSessionWritable(sessionId: string): Session {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
+    if (isEvidenceSessionReadOnly(session) && !this.isResearchRestoring(sessionId)) throw new SessionEvidenceLockedError();
     if (session.archivedAt) throw new Error("Session is archived and read-only");
     return session;
   }
@@ -5828,7 +6215,7 @@ export class SessionStore {
     if (confirmationId !== project.id) throw new Error("Project deletion confirmation does not match the target");
     let sessions: Session[] = [];
     return this.withDeletionBoundary(() => {
-      sessions = this.listSessions(projectId, "all");
+      sessions = this.researchSessions(projectId);
       return [...sessions.flatMap((session) => this.knownSessionDataPaths(session)), resolve(this.dataDir, "projects", projectId)];
     }, () => sessions.map((session) => session.id),
       [resolve(this.dataDir, "projects", projectId)], async (operation, roots) => {
@@ -5837,7 +6224,7 @@ export class SessionStore {
         if (!this.getProject(projectId)) throw new Error("Project not found");
         // Include a Session inserted while this delete waited: it belongs to
         // the project that is about to disappear.
-        sessions = this.listSessions(projectId, "all");
+        sessions = this.researchSessions(projectId);
         const sessionIds = new Set(sessions.map((session) => session.id));
         const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => sessionIds.has(job.sessionId)).map((job) => job.id));
         const projectArtifactIds = new Set(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId).map((artifact) => artifact.id));
@@ -5886,7 +6273,7 @@ export class SessionStore {
       const session = this.assertSessionWritable(sessionId);
       const { approvalMode, autoApplyLowRiskConfiguration, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
-      const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+      const nextSettings = this.normalizeSessionOverrides({ ...session.settingsOverrides, ...settingsChanges }, session.settingsOverrides);
       if (nextSettings.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       const nextModel = this.getModel(nextSettings.modelId);
       if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
@@ -6492,6 +6879,28 @@ export class SessionStore {
     }
   }
 
+  /** Restore an immutable transcript from a validated research package. */
+  async restoreMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
+    const session = this.assertSessionWritable(sessionId);
+    await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
+    const result = await this.mutateArray<ChatMessage, ChatMessage[]>(this.messagesPath(sessionId), (existing) => {
+      const existingIds = new Set(existing.map((message) => message.id));
+      const incomingIds = new Set<string>();
+      for (const message of messages) {
+        if (!message.id || incomingIds.has(message.id)) throw new Error("Research package contains duplicate message ids");
+        incomingIds.add(message.id);
+      }
+      existing.push(...messages.filter((message) => !existingIds.has(message.id)).map((message) => structuredClone(message)));
+      return structuredClone(existing);
+    });
+    const latest = result.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)).at(-1);
+    if (latest) {
+      session.updatedAt = session.updatedAt > latest.createdAt ? session.updatedAt : latest.createdAt;
+      await this.saveCatalog();
+    }
+    return result;
+  }
+
   async listSessionRuns(sessionId: string): Promise<SessionRun[]> {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
     return (await this.readArray<SessionRun>(this.sessionRunsPath(sessionId)))
@@ -6500,6 +6909,21 @@ export class SessionStore {
 
   async getSessionRun(sessionId: string, runId: string): Promise<SessionRun | undefined> {
     return (await this.listSessionRuns(sessionId)).find((run) => run.id === runId);
+  }
+
+  /** Import historical runs atomically as terminal records, never briefly queue them. */
+  async restoreSessionRun(sessionId: string, imported: SessionRun): Promise<SessionRun> {
+    this.assertSessionWritable(sessionId);
+    if (["queued", "running", "blocked"].includes(imported.status)) {
+      throw new Error("Imported runs must have a terminal status");
+    }
+    return await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(sessionId), (runs) => {
+      const run = { ...structuredClone(imported), sessionId, notificationDelivery: undefined };
+      if (runs.some((item) => item.id === run.id)) throw new Error("Duplicate imported run id");
+      if (!this.isResearchRestoring(sessionId)) run.queueOrder = runs.reduce((max, item) => Math.max(max, item.queueOrder), 0) + 1;
+      runs.push(run);
+      return structuredClone(run);
+    });
   }
 
   async createSessionRun(input: {
@@ -6622,12 +7046,36 @@ export class SessionStore {
     return await this.appendRunStreamEvent(sessionId, runId, MAIN_RUN_STREAM, event);
   }
 
+  async exportRunStreams(sessionId: string, runId: string): Promise<Array<{ streamId: string; events: SessionRunEvent[] }>> {
+    const names = await readdir(this.runStreamDir(sessionId, runId)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    const streams = new Set([MAIN_RUN_STREAM, ...names.filter((name) => name.endsWith(".jsonl")).map((name) => name.slice(0, -6))]);
+    return await Promise.all([...streams].map(async (streamId) => ({ streamId, events: await this.listRunStreamEvents(sessionId, runId, streamId) })));
+  }
+
+  /** Restore archived observations without publishing live events or replaying work. */
+  async restoreRunStream(sessionId: string, runId: string, streamId: string, events: SessionRunEvent[]): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    if (!await this.getSessionRun(sessionId, runId)) throw new Error("Run not found");
+    assertValidStreamId(streamId);
+    let last = 0;
+    for (const record of events) {
+      if (!Number.isSafeInteger(record.sequence) || record.sequence <= last || !Number.isFinite(Date.parse(record.createdAt))) throw new Error("Invalid archived run stream");
+      last = record.sequence;
+    }
+    await mkdir(this.runStreamDir(sessionId, runId), { recursive: true });
+    await writeFile(this.runStreamPath(sessionId, runId, streamId), events.map(({ createdAt, sequence, event }) => JSON.stringify({ createdAt, sequence, event })).join("\n") + (events.length ? "\n" : ""), { flag: "wx" });
+  }
+
   async appendRunStreamEvent(
     sessionId: string,
     runId: string,
     streamId: string,
     event: SessionRunEvent["event"],
   ): Promise<SessionRunEvent> {
+    this.assertSessionWritable(sessionId);
     const run = await this.getSessionRun(sessionId, runId);
     if (!run) throw new Error("Run not found");
     assertValidStreamId(streamId);
@@ -6999,7 +7447,7 @@ export class SessionStore {
       (tasks) => {
         this.assertSessionWritable(task.sessionId);
         const existing = tasks.find((candidate) => candidate.id === task.id
-          || (candidate.inputFingerprint === task.inputFingerprint
+          || (!this.isResearchRestoring(task.sessionId) && candidate.inputFingerprint === task.inputFingerprint
             && candidate.origin === task.origin
             && candidate.status !== "cancelled"
             && candidate.status !== "failed"
@@ -7046,7 +7494,8 @@ export class SessionStore {
   async appendReviewFeedback(feedback: ReviewFeedback): Promise<ReviewFeedback> {
     this.assertSessionWritable(feedback.sessionId);
     return await this.mutateArray<ReviewFeedback, ReviewFeedback>(this.reviewFeedbackPath(feedback.sessionId), (items) => {
-      const existing = items.find((candidate) => candidate.feedbackFingerprint === feedback.feedbackFingerprint);
+      const existing = items.find((candidate) => candidate.id === feedback.id
+        || (!this.isResearchRestoring(feedback.sessionId) && candidate.feedbackFingerprint === feedback.feedbackFingerprint));
       if (existing) return structuredClone(existing);
       items.push(structuredClone(feedback));
       return structuredClone(feedback);

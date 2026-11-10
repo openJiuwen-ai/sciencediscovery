@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import { expect } from "@playwright/test";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 
+import { writeCaseMetrics } from "./helpers/case-measurements.ts";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
@@ -67,7 +69,7 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
       await requireRealStack(testInfo);
       test.setTimeout(600_000);
-      const setup = await waitForEnvironmentSetup(() => environmentSetup(page));
+      const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
       testInfo.skip(
         setup.state !== "ready",
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
@@ -77,11 +79,13 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
 
   const fixture = await createProjectAndSession(page, {
     approvalMode: "always_allow",
+    ...realModelThinking(),
     model: {
       apiToken: real.E2E_LLM_TOKEN,
       baseUrl: real.E2E_LLM_BASE_URL,
       model: real.E2E_LLM_MODEL,
       name: `J5 real model ${Date.now()}`,
+      apiVariant: realModelApiVariant(), ...realModelThinking(),
     },
     projectName: `J5 real request ${Date.now()}`,
     sessionTitle: `J5 statistics session ${Date.now()}`,
@@ -166,6 +170,7 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       },
     );
   } finally {
+    await writeCaseMetrics(page.request, testInfo, fixture.session.id);
     await cleanupJourney(page, fixture);
   }
 });

@@ -57,6 +57,9 @@ export interface FileContent {
 }
 
 export interface SessionRecord {
+  /** What the composer's permission row prints. A Session the fixture writes
+   *  without one reads as asking, which is the service's default. */
+  approvalMode?: string;
   archivedAt?: string;
   createdAt: string;
   id: string;
@@ -115,6 +118,32 @@ export interface MockOptions {
   /** The bytes behind `GET .../artifact-versions/:id/content`, keyed by version
    *  id. A version with no entry reads as empty. */
   artifactContents?: Record<string, string>;
+  /** Every version of one Artifact, keyed `<session id>|<artifact id>`. The
+   *  provenance tab turns the cited version number into a version id here. */
+  artifactVersions?: Record<string, JsonRecord[]>;
+  /** The record behind `GET .../artifact-versions/:id/provenance`, keyed by
+   *  version id. A missing entry answers 404, which the tab reports as an
+   *  error rather than as "nothing was recorded". */
+  artifactProvenance?: Record<string, JsonRecord>;
+  /** 科学记忆's read side. The card list answers once for both kinds; each
+   *  provenance hop is keyed `<node id>|<kind>` and a missing key reads empty,
+   *  which is what a node with no recorded relation actually returns. */
+  memory?: {
+    hits?: JsonRecord[];
+    reason?: string;
+    truncated?: boolean;
+    chains?: Record<string, JsonRecord>;
+  };
+  /** 设置 › 科学记忆, and the `memoryGraph` the health probe reports. A write
+   *  replaces only the fields it names, like the real route. */
+  memorySettings?: {
+    backend?: string;
+    enabled?: boolean;
+    hasNeo4jPassword?: boolean;
+    memoryGraphStatus?: string;
+    neo4jHttp?: string;
+    neo4jUser?: string;
+  };
   files?: unknown[];
   /** The runs each Session already took, keyed by Session id. A Session with no
    *  entry has taken none, which is the fresh workspace every other spec opens
@@ -129,7 +158,7 @@ export interface MockOptions {
    *  Session with no entry has never evolved anything. */
   evolveRunsBySession?: Record<string, EvolveFixture[]>;
   /** What `GET /api/evolve/status` answers. The runtime is ready by default:
-   *  the shelf and the panel are about watching a search, and only the setup
+   *  the cards and the panel are about watching a search, and only the setup
    *  spec is about installing one. */
   evolveStatus?: JsonRecord;
   /** What `POST /api/evolve/init` answers, and what the status route answers
@@ -145,6 +174,8 @@ export interface MockOptions {
   runners?: unknown[];
   connectors?: JsonRecord[];
   skills?: JsonRecord[];
+  jiuwenSwarmSkills?: JsonRecord[];
+  skillToggleFailures?: string[];
   specialists?: JsonRecord[];
   mcpServers?: JsonRecord[];
   mcpSources?: JsonRecord[];
@@ -163,6 +194,11 @@ export interface MockOptions {
   connectError?: string;
   /** Make one write fail, for the "the reason stays on screen" cases. */
   fail?: { method: string; path: string | RegExp; status?: number; message?: string };
+  /** Hold one route's answer until `mock.release()`. For a spec that has to
+   *  look at the screen while a read it is waiting for is still outstanding —
+   *  the write that came before it has already landed, and what the page shows
+   *  in between is the thing under test. */
+  hold?: { method: string; path: string | RegExp };
   /** What `POST /api/mcp/servers/:id/test` answers. The default is a healthy
    *  server; `error` is the provider's own refusal, not an HTTP failure. */
   mcpTest?: "error" | "ok";
@@ -198,6 +234,15 @@ export interface MockState {
   connectors: JsonRecord[];
   files: unknown[];
   mcpServers: JsonRecord[];
+  /** The settings row behind 设置 › 科学记忆 and the state read beside it. */
+  memorySettings: {
+    backend: string;
+    enabled: boolean;
+    hasNeo4jPassword: boolean;
+    memoryGraphStatus: string;
+    neo4jHttp: string;
+    neo4jUser: string;
+  };
   models: ModelRecord[];
   overrides: Record<string, unknown>;
   projectSettings: JsonRecord;
@@ -213,6 +258,7 @@ export interface MockState {
   sandboxNetwork: { allowedDomains: string[]; mode: string };
   sessions: SessionRecord[];
   skills: JsonRecord[];
+  jiuwenSwarmSkills: JsonRecord[];
   specialists: JsonRecord[];
   timeouts: Record<string, number>;
   /** Names the upload route refuses, per file. See `MockOptions.uploadRejects`. */
@@ -222,6 +268,9 @@ export interface MockState {
 export interface Mock {
   calls: RecordedCall[];
   state: MockState;
+  /** Let the route `hold` is holding answer, so the spec can finish with the
+   *  page's own read-back instead of leaving a request hanging. */
+  release: () => void;
 }
 
 const DEFAULT_MODEL: ModelRecord = {
@@ -239,7 +288,7 @@ export const DEFAULT_PROJECT: ProjectRecord = {
 };
 
 /** The Project standalone conversations live in. Its name is never shown — the
- *  interface calls it 最近会话 — so only its id matters here. */
+ *  interface calls it 会话 — so only its id matters here. */
 export const INBOX_PROJECT: ProjectRecord = {
   createdAt: CREATED_AT,
   id: "inbox-1",
@@ -249,6 +298,7 @@ export const INBOX_PROJECT: ProjectRecord = {
 
 export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
+    approvalMode: "ask",
     createdAt: CREATED_AT,
     id: "session-1",
     modelId: DEFAULT_MODEL.id,
@@ -257,6 +307,16 @@ export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
     updatedAt: UPDATED_AT,
     ...over,
   };
+}
+
+/** The clock every write on a Session moves forward, so a record the fixture
+ *  writes reads as newer than the seeded one — and a spec can seed a replay
+ *  that is older than the write it must not undo. */
+let writeClock = Date.parse(UPDATED_AT);
+
+function newUpdatedAt(): string {
+  writeClock += 1000;
+  return new Date(writeClock).toISOString();
 }
 
 function sse(events: readonly unknown[]): string {
@@ -289,6 +349,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     connectors: [...(options.connectors ?? [])],
     files: [...(options.files ?? [])],
     mcpServers: [...(options.mcpServers ?? [])],
+    memorySettings: {
+      backend: "local",
+      enabled: true,
+      hasNeo4jPassword: false,
+      memoryGraphStatus: "healthy",
+      neo4jHttp: "",
+      neo4jUser: "",
+      ...(options.memorySettings ?? {}),
+    },
     models: [...(options.models ?? [DEFAULT_MODEL])],
     overrides: { ...options.overrides },
     projectSettings: {
@@ -304,6 +373,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     sandboxNetwork: structuredClone(options.sandboxNetwork ?? { allowedDomains: [], mode: "open" }),
     sessions: [...(options.sessions ?? [])],
     skills: [...(options.skills ?? [])],
+    jiuwenSwarmSkills: structuredClone(options.jiuwenSwarmSkills ?? []),
     specialists: [...(options.specialists ?? [])],
     uploadRejects: [...(options.uploadRejects ?? [])],
     timeouts: {
@@ -322,6 +392,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     options.evolveStatus ?? { canInitialize: true, state: "ready" },
   );
 
+  // One gate for the route `hold` names, resolved by the spec through
+  // `release`. Everything else answers immediately.
+  let released = false;
+  let resolveHeld: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    resolveHeld = resolve;
+  });
+
   // Match the API by its path, not by a `**/api/**` glob: that glob also
   // matches Vite's own module URLs (`/src/api/client.ts`), which would make
   // the mock answer the app's source code with a 404.
@@ -334,6 +412,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       const path = decodeURIComponent(url.pathname);
       const body = request.postData() ?? undefined;
       calls.push({ body, method, path });
+
+      if (
+        options.hold !== undefined
+        && !released
+        && options.hold.method === method
+        && (typeof options.hold.path === "string"
+          ? options.hold.path === path
+          : options.hold.path.test(path))
+      ) {
+        await held;
+      }
 
       if (
         options.fail !== undefined
@@ -352,6 +441,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         return json(route, 200, {
           status: "ok",
           workspace: { maxFileBytes: 10 * 1024 * 1024 },
+          // The switch on 设置 › 科学记忆 is what the state line beside it
+          // reports, so the mock derives the answer from the same state the
+          // page writes.
+          memoryGraph: state.memorySettings.enabled ? state.memorySettings.memoryGraphStatus : "disabled",
         });
       }
 
@@ -364,7 +457,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/settings" && method === "GET") {
         return json(route, 200, {
-          effective: {},
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
           // The initial default is what the first boot would adopt from the
           // catalog; a spec that needs a different one passes `overrides`.
           overrides: { modelId: state.models[0]?.id, ...state.overrides },
@@ -375,7 +468,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/settings" && method === "PUT") {
         // `PUT` replaces the whole override object, so the mock does too.
         state.overrides = JSON.parse(body ?? "{}") as Record<string, unknown>;
-        return json(route, 200, { effective: {}, overrides: state.overrides, sources: {} });
+        return json(route, 200, {
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
+          overrides: state.overrides,
+          sources: {},
+        });
       }
 
       if (path === "/api/providers" && method === "GET") {
@@ -446,6 +543,30 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/connectors" && method === "GET") {
         return json(route, 200, state.connectors);
+      }
+
+      if (path === "/api/jiuwenswarm/skills" && method === "GET") {
+        return json(route, 200, { backend: "jiuwenswarm", skills: state.jiuwenSwarmSkills });
+      }
+      const namedSkillSwitch = path.match(/^\/api\/jiuwenswarm\/skills\/([^/]+)$/u);
+      if (namedSkillSwitch && method === "PUT") {
+        const name = decodeURIComponent(namedSkillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(name)) return json(route, 502, { error: "Skill switch failed" });
+        const installed = state.jiuwenSwarmSkills.find((skill) => skill.name === name);
+        if (!installed) return json(route, 404, { error: "Skill not found" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        installed.enabled = input.enabled;
+        return json(route, 200, { name, enabled: input.enabled });
+      }
+      const skillSwitch = path.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/u);
+      if (skillSwitch && method === "PUT") {
+        const skillId = decodeURIComponent(skillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(skillId)) return json(route, 502, { error: "Skill switch failed" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        const existing = state.jiuwenSwarmSkills.find((skill) => skill.skillId === skillId);
+        if (existing) existing.enabled = input.enabled;
+        else state.jiuwenSwarmSkills.push({ skillId, name: skillId, enabled: input.enabled, source: "sciencediscovery", description: "" });
+        return json(route, 200, { skillId, name: skillId, enabled: input.enabled });
       }
 
       if (path === "/api/skills" && method === "GET") {
@@ -633,7 +754,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         }
         if (method === "PATCH") {
           const patch = JSON.parse(body ?? "{}") as Partial<SessionRecord>;
-          state.sessions[index] = { ...state.sessions[index]!, ...patch };
+          // Every write on the service stamps `updatedAt`, and the app leans on
+          // that to drop an older copy of the record arriving out of order. A
+          // mock that left the timestamp alone would let a stale replay look
+          // exactly as fresh as the rename it must not undo.
+          state.sessions[index] = { ...state.sessions[index]!, ...patch, updatedAt: newUpdatedAt() };
           return json(route, 200, state.sessions[index]);
         }
         if (method === "DELETE") {
@@ -670,9 +795,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           sessionId: session.id,
           status: "running",
         };
+        // What the event carries is the Session record, and the service's has no
+        // transcript in it: the messages live in their own list. The mock keeps
+        // them on the record for its own convenience, so the published copy
+        // leaves them behind — an event that carried them would hand the page a
+        // second copy of a conversation it is already drawing.
+        const published = renamed ? { ...session, messages: undefined } : undefined;
         return route.fulfill({
           body: sse([
-            ...(renamed ? [{ session, type: "session.updated" }] : []),
+            ...(published ? [{ session: published, type: "session.updated" }] : []),
             { run, type: "run.queued" },
             { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
             { responseId: "response-1", turn: 1, type: "assistant.response.started" },
@@ -694,6 +825,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (runEvents && method === "GET") {
         const [sessionId, runId] = [runEvents[1]!, runEvents[2]!];
         const entry = (options.runsBySession?.[sessionId] ?? []).find((candidate) => candidate.run.id === runId);
+        // One route, two readers: rebuilding a finished run reads it as JSON,
+        // and following a run that is still going subscribes to it as a stream.
+        // The subscription replays from cursor 0, which is what puts an older
+        // `session.updated` in front of a page that has just read a newer one.
+        if ((request.headers().accept ?? "").includes("text/event-stream")) {
+          return route.fulfill({
+            body: sse(entry?.events ?? []),
+            contentType: "text/event-stream",
+            status: 200,
+          });
+        }
         return json(route, 200, (entry?.events ?? []).map((event, index) => ({
           createdAt: String(entry?.run.createdAt ?? CREATED_AT),
           event,
@@ -777,6 +919,66 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         // Sessions' groups has to say which output belongs to which.
         const perSession = options.artifactsBySession?.[outputs[1]!];
         return json(route, 200, perSession ?? state.artifacts);
+      }
+
+      if (path === "/api/memory/settings" && method === "GET") {
+        return json(route, 200, state.memorySettings);
+      }
+
+      if (path === "/api/memory/settings" && method === "PUT") {
+        const input = JSON.parse(body ?? "{}") as {
+          backend?: string;
+          enabled?: boolean;
+          neo4jHttp?: string;
+          neo4jPassword?: string | null;
+          neo4jUser?: string;
+        };
+        // The password is write-only: a string stores one, `null` removes it,
+        // and its absence leaves whatever is stored alone.
+        if (typeof input.neo4jPassword === "string") state.memorySettings.hasNeo4jPassword = true;
+        if (input.neo4jPassword === null) state.memorySettings.hasNeo4jPassword = false;
+        if (input.backend !== undefined) state.memorySettings.backend = input.backend;
+        if (input.enabled !== undefined) state.memorySettings.enabled = input.enabled;
+        if (input.neo4jHttp !== undefined) state.memorySettings.neo4jHttp = input.neo4jHttp;
+        if (input.neo4jUser !== undefined) state.memorySettings.neo4jUser = input.neo4jUser;
+        return json(route, 200, state.memorySettings);
+      }
+
+      if (path === "/api/memory/query/by-node-type" && method === "POST") {
+        const hits = options.memory?.hits ?? [];
+        return json(route, 200, {
+          hits,
+          total: hits.length,
+          truncated: options.memory?.truncated ?? false,
+          ...(options.memory?.reason === undefined ? {} : { reason: options.memory.reason }),
+        });
+      }
+
+      if (path === "/api/memory/query/chain" && method === "POST") {
+        const input = JSON.parse(body ?? "{}") as { kind?: string; node_id?: string };
+        const answer = options.memory?.chains?.[`${input.node_id ?? ""}|${input.kind ?? ""}`] ?? {};
+        // The real chain always includes its source node; a fixture that wants
+        // one says so, and the surface filters it out again by id.
+        return json(route, 200, {
+          edges: [],
+          nodes: [],
+          total: 0,
+          truncated: false,
+          ...answer,
+        });
+      }
+
+      const versions = /^\/api\/sessions\/([^/]+)\/artifacts\/([^/]+)\/versions$/.exec(path);
+      if (versions && method === "GET") {
+        return json(route, 200, options.artifactVersions?.[`${versions[1]}|${versions[2]}`] ?? []);
+      }
+
+      const provenance = /^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/provenance$/.exec(path);
+      if (provenance && method === "GET") {
+        const record = options.artifactProvenance?.[provenance[2]!];
+        return record === undefined
+          ? json(route, 404, { error: "Artifact version not found" })
+          : json(route, 200, record);
       }
 
       const versionContent = /^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/content$/.exec(path);
@@ -1018,5 +1220,12 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       return json(route, 404, { error: `not mocked: ${method} ${path}` });
   });
 
-  return { calls, state };
+  return {
+    calls,
+    release: () => {
+      released = true;
+      resolveHeld();
+    },
+    state,
+  };
 }

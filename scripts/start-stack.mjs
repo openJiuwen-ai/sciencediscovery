@@ -8,12 +8,19 @@
 // The original bash script stays untouched (Linux/macOS and Docker users are
 // unaffected). Every platform fork lives in scripts/lib/stack-platform.mjs.
 //
-// Product contract (mirrors start-stack.sh line by line):
+// Product contract (same start order and rules as start-stack.sh):
 //   start order runner → memory-graph → evolve → JiuwenSwarm → adapter → api
-//   an unhealthy runner only warns (the workbench stays usable); any other
-//   sidecar failure stops the stack;
+//   an unhealthy runner only warns (the workbench stays usable);
+//   any other sidecar failure stops the stack;
 //   in local mode the API runs in the foreground and Ctrl-C tears down the
 //   whole stack.
+//
+// One deliberate difference: an unhealthy memory-graph only warns here, while
+// start-stack.sh still calls wait_healthy without ignoring its failure and so
+// aborts the whole stack. Scientific memory is an optional, user-toggled
+// feature — /api/health reports the sidecar as "degraded" and the workbench
+// stays usable, which is what the launcher (services/launcher) does too. The
+// bash entry point is left untouched for Linux/macOS and Docker users.
 
 import { existsSync, copyFileSync, rmSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
@@ -455,10 +462,32 @@ const legacyPort = Number(process.env.SCIENCE_AGENT_LEGACY_PORT ?? publicPort + 
 const memoryGraphPort = Number(process.env.SCIENCE_AGENT_MEMORY_GRAPH_PORT ?? 17674);
 const evolvePort = Number(process.env.SCIENCE_AGENT_EVOLVE_PORT ?? 4313);
 
-// The shell's port-epoch system may shift the memory-graph port; the
-// API's client is URL-driven, so the URL must follow the port unless an
-// operator pinned it explicitly (prevents a PORT/URL desync foot-gun).
-process.env.SCIENCE_AGENT_MEMORY_GRAPH_URL ??= `http://127.0.0.1:${memoryGraphPort}`;
+// The shell's port-epoch system may shift the memory-graph port, and the
+// API's client is URL-driven — so URL and port must come from one source.
+// When this stack supervises its own sidecar on `memoryGraphPort`, the URL is
+// derived from the port rather than inherited. A stale
+// SCIENCE_AGENT_MEMORY_GRAPH_URL would otherwise leave the API talking to a
+// different instance (or to nothing) while the sidecar started here answers
+// its own /health; that route is unauthenticated, so the UI would read
+// "healthy" while every write 401s or lands in another process's graph.
+//
+// When it starts no sidecar — SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0, or no
+// bundled python for the graph — the explicit URL is the only one there is,
+// and repointing the API at a loopback port this stack never bound would leave
+// scientific memory permanently "degraded" with nothing but a warning to
+// explain it. Keep what the operator set.
+const startsMemoryGraph = process.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE !== "0" && memoryGraphPython !== "";
+const memoryGraphUrl = `http://127.0.0.1:${memoryGraphPort}`;
+const inheritedMemoryGraphUrl = process.env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim();
+if (startsMemoryGraph) {
+  if (inheritedMemoryGraphUrl && inheritedMemoryGraphUrl !== memoryGraphUrl) {
+    say(`WARNING: ignoring SCIENCE_AGENT_MEMORY_GRAPH_URL=${inheritedMemoryGraphUrl}; `
+      + `this stack points the API at the sidecar it starts (${memoryGraphUrl}).`);
+  }
+  process.env.SCIENCE_AGENT_MEMORY_GRAPH_URL = memoryGraphUrl;
+} else if (inheritedMemoryGraphUrl) {
+  process.env.SCIENCE_AGENT_MEMORY_GRAPH_URL = inheritedMemoryGraphUrl;
+}
 
 // Same contract for evolve, which has no launcher control plane in this
 // script: the API reaches the sidecar only through these two variables, and
@@ -479,8 +508,7 @@ const portsToCheck = [
   { name: "runner", host: runnerHost, port: runnerPort },
   { name: "api", host: "127.0.0.1", port: useJiuwenswarm ? legacyPort : publicPort },
   ...(useJiuwenswarm ? [{ name: "adapter", host: "127.0.0.1", port: publicPort }] : []),
-  ...(process.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE !== "0" && memoryGraphPython
-    ? [{ name: "memory-graph", host: "127.0.0.1", port: memoryGraphPort }] : []),
+  ...(startsMemoryGraph ? [{ name: "memory-graph", host: "127.0.0.1", port: memoryGraphPort }] : []),
   ...(evolvePython ? [{ name: "evolve", host: "127.0.0.1", port: evolvePort }] : []),
 ];
 const portFailures = [];
@@ -513,6 +541,10 @@ if (portFailures.length) {
 
 
 const healthTimeoutSeconds = Number(process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS ?? 20);
+// A cold Windows start pays first-touch import cost for fastapi/uvicorn under
+// Defender's initial scan; the optional memory graph gets a floor so it is not
+// declared dead while it is still loading.
+const memoryGraphTimeoutSeconds = Math.max(healthTimeoutSeconds, 60);
 const runnerUrl = process.env.SCIENCE_AGENT_RUNNER_URL ?? `http://${runnerHost}:${runnerPort}`;
 
 try {
@@ -560,19 +592,37 @@ try {
   // Sidecars: memory-graph and evolve run in the background. The control API
   // does not need them to answer /api/health, so don't block the API on them.
   const sidecarPromises = [];
-  if (process.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE !== "0" && memoryGraphPython) {
+  if (startsMemoryGraph) {
     sidecarPromises.push((async () => {
       say("Starting the memory-graph service...");
       perf("memory-graph-spawn");
-      children.push(spawnService(memoryGraphPython, ["-m", "sciencediscovery_memory_graph.server"], {
+      const memoryGraphChild = spawnService(memoryGraphPython, ["-m", "sciencediscovery_memory_graph.server"], {
         env: {
           SCIENCE_AGENT_DATA_DIR: dataDir,
+          // The default for the local store. Without it the graph lands in
+          // ~/.science-agent/memory-graph, outside the app's data lifecycle
+          // (uninstall, backup and migration would miss it), and two sidecars
+          // on different ports would append to the same JSONL files with
+          // per-process node ids. An explicit value still wins: it is the
+          // documented way to point this stack at a store an earlier install
+          // wrote, and services/launcher resolves it the same way.
+          SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR: process.env.SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR?.trim()
+            || join(dataDir, "memory-graph"),
           SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP: process.env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP ?? "http://127.0.0.1:7474",
           SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: process.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN ?? "sciencediscovery-memory-graph-local",
         },
-      }));
-      if (!await waitHealthy("memory-graph", `http://127.0.0.1:${memoryGraphPort}/health`, { timeoutSeconds: healthTimeoutSeconds })) {
-        throw new Error("memory-graph sidecar failed to start; stopping the stack.");
+      });
+      children.push(memoryGraphChild);
+      if (!await waitHealthy("memory-graph", `${memoryGraphUrl}/health`, { timeoutSeconds: memoryGraphTimeoutSeconds })) {
+        // Scientific memory is optional and user-toggled: a sidecar that will
+        // not come up must not take the whole app down. The API process was
+        // already spawned above with its own env snapshot, so there is nothing
+        // to hand off — it simply finds the sidecar unreachable and reports
+        // memoryGraph="degraded" on /api/health, which the UI shows.
+        const childIndex = children.indexOf(memoryGraphChild);
+        if (childIndex >= 0) children.splice(childIndex, 1);
+        killTree(memoryGraphChild);
+        say("WARNING: the memory-graph service is unavailable; continuing without scientific memory.");
       }
       perf("memory-graph-healthy");
     })());

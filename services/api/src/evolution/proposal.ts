@@ -47,6 +47,8 @@ import type {
   EvolveScoring,
   EvolveSearchTuning,
   EvolveSplit,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   ScorecardCriterion,
 } from "@sciencediscovery/schema";
 import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
@@ -75,12 +77,24 @@ export interface ProposalDeps {
    *  inherit the approval. */
   approvedUnisolated: boolean;
   sessionId: string;
+  /** Frozen parent Run settings; explicit proposal settings take precedence. */
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
   /** Whether the run's model can be told to stop thinking. False when its API
    *  variant has no thinking-control field, or a toggle but no "disabled" stop:
    *  the request is accepted and ignored, and the quiet ceiling then pays for
    *  reasoning nobody sees. Required: a caller that cannot answer must not
    *  silently inherit the quiet ceiling. */
   thinkingSupported: boolean;
+  /** Searches already running on this session, if the caller can answer.
+   *
+   *  One search owns the session's budget and its frozen scoring, so a second
+   *  one started beside it is the failure #997 records: two live panels, two
+   *  formulas, and no way for the user to say which result counts. Checked
+   *  before anything is spent — the probe alone runs two real evaluations.
+   *  Optional so a caller without the store still works; the composition root
+   *  always supplies it. */
+  activeRuns?: () => Promise<Array<{ id: string; status: string }>>;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
@@ -159,6 +173,22 @@ export async function startProposedRun(
 ): Promise<EvolveRunProposalResult> {
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
+
+  // One search at a time per session. This is the guard behind the create
+  // tool's wording: the description asks the agent to stop the running search
+  // first, and this refuses the second start when it does not. Refused as data
+  // so the agent can recover by calling stop_evolve_run, not as an exception
+  // that reads like a broken tool.
+  const active = deps.activeRuns ? await deps.activeRuns() : [];
+  if (active.length) {
+    const named = active.slice(0, 4).map((run) => `${run.id}（${run.status}）`).join("、");
+    return {
+      refusedBecause: `this session already has a search running: ${named}. One search owns `
+        + "the session's budget and its frozen scoring, so a second one beside it would split the "
+        + "budget and score against a different formula. Call stop_evolve_run on it, report that it "
+        + "stopped, and then propose this search again.",
+    };
+  }
 
   // Probed before the goal is assembled, not after: whether this search runs
   // unconfined is a property of what the goal records, and a stray
@@ -338,13 +368,9 @@ async function assembleGoal(
 ): Promise<EvolveGoal> {
   const now = new Date().toISOString();
   const split = proposal.split ?? DEFAULT_SPLIT;
-  // Stated, never left to the provider. Pre-flight's per-call floor is keyed on
-  // this field, so an absent one is read as "thinking on" — and the ceiling this
-  // side would then pick is the quiet one, which pre-flight refuses. Off is also
-  // the right default on its merits: with thinking on, one whole-program rewrite
-  // has been measured taking longer than the proxy's ceiling and returning
-  // nothing at all.
-  const requestedThinking = proposal.thinking ?? "disabled";
+  // Freeze the effective parent settings rather than independently defaulting
+  // background mutations to disabled. The budget follows this same mode.
+  const requestedThinking = proposal.thinking ?? deps.thinking ?? "auto";
   // "Off" is a budget plan only if the endpoint carries the request. A model on
   // a dialect with no thinking-control field ignores it and reasons anyway, and
   // the ceiling is then spent on hidden tokens: a custom gateway returned
@@ -354,6 +380,14 @@ async function assembleGoal(
   const thinking = requestedThinking === "disabled" && deps.thinkingSupported === false
     ? "enabled"
     : requestedThinking;
+  // Keep the parent Run's effort in the frozen goal for `auto` as well. The
+  // sidecar omits it at the provider boundary while auto is active; retaining
+  // it here keeps the run snapshot complete and preserves the high fallback
+  // when no effort was supplied. Disabled thinking remains effort-free because
+  // strict providers reject an effort beside `thinking: disabled`.
+  const thinkingEffort = thinking === "disabled"
+    ? undefined
+    : proposal.thinkingEffort ?? deps.thinkingEffort ?? "high";
 
   const startCas = proposal.mode === "test_gate"
     ? ""
@@ -435,6 +469,7 @@ async function assembleGoal(
     statement: proposal.statement,
     target: targetOf(proposal, startCas),
     thinking,
+    thinkingEffort,
   };
 }
 
