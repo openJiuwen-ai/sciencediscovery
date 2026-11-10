@@ -17,9 +17,22 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import { formatFileSize } from "../src/app/attachments.js";
+import { sizeInUnit } from "../src/app/size-units.js";
 import { formatByteLimit } from "../src/app/upload.js";
 import { formatFreeSpace } from "../src/views/SetupWizard.js";
 import { formatWorkspaceSize } from "../src/views/WorkspacePanel.js";
+
+test("the ladder itself puts the boundary in the unit the caller prints", () => {
+  // Pinned on the shared rule, not only through a caller: one byte under 1 MiB
+  // is 1023.999 KB, and a whole-number printer reads that as 1024 — the base of
+  // its level — so the ladder climbs to MB and leaves 0.999999 MB to print as
+  // 1MB. Zero never climbs.
+  const whole = (value: number) => Math.round(value);
+  const boundary = sizeInUnit(1_048_575, whole, 4);
+  assert.equal(boundary.unit, 2, "the boundary belongs to MB, not to a 1024KB");
+  assert.equal(whole(boundary.value), 1, "and the caller prints 1MB from it");
+  assert.deepEqual(sizeInUnit(0, whole, 4), { unit: 0, value: 0 });
+});
 
 test("an attachment one byte under 1 MiB reads 1MB, not 1024KB", () => {
   // The card prints a whole number above a hundred units, so the unit has to be
