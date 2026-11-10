@@ -7582,6 +7582,42 @@ test("WSP-003 rejects traversal upload paths and leaves the host untouched", asy
   await assert.rejects(stat(workspaceOutside), { code: "ENOENT" });
 });
 
+test("WSP-004 a reserved device name in an upload answers 400 and names the file", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `wsp-reserved-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Reserved device name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Reserved device name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+  // The guard refuses the name while the parts are read, before anything is
+  // written, so the caller sees its own bad input and can say what to rename.
+  const form = new FormData();
+  form.append("files", new Blob([Buffer.from("metric,value\nrows,3\n")], { type: "text/csv" }), "CON.csv");
+  const refused = await jsonRequest<{ error?: string }>(
+    `${origin}/api/sessions/${session.body.id}/workspace/upload`,
+    { body: form, headers: authorization, method: "POST" },
+  );
+  assert.equal(refused.response.status, 400);
+  assert.match(refused.body.error ?? "", /CON\.csv/);
+  assert.match(refused.body.error ?? "", /reserved device name/);
+  // Nothing landed under the refused name, so the workspace still holds nothing.
+  const listed = await jsonRequest<WorkspaceFile[]>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    { headers: authorization },
+  );
+  assert.deepEqual(listed.body, []);
+});
+
 test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
