@@ -63,8 +63,12 @@ export class ContinuationTasks {
             ? await this.client.getResearchContinuation(task.sourceSessionId, task.operation.id)
             : await this.client.createResearchContinuation(task.sourceSessionId, task.requestId);
           if (this.disposed) return;
-          task.operation = operation; task.error = undefined; task.failures = 0;
+          task.operation = operation; task.error = undefined;
+          // The reset belongs *after* the shape guard below: a ready operation
+          // with no session information throws on every poll, and resetting the
+          // count first would keep that branch from ever reaching the limit.
           if (operation.state === "ready" && (!operation.entrySessionId || !operation.sessionIds?.length)) throw new Error(translateActive("researchPackage.copyMissingSession"));
+          task.failures = 0;
           task.state = operation.state;
           if (operation.state === "failed") task.error = operation.error || translateActive("researchPackage.copyFailed");
           this.publish();
