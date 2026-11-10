@@ -40,6 +40,10 @@ Environment:
   BINARY_CACHE_URL          Remote cache base URL checked before the source URL.
   BINARY_CACHE_DIR          Local verified-archive staging directory.
   BINARY_CACHE_ONLY         Set to 1 to fail instead of using the source URL.
+  BINARY_DOWNLOAD_STALL_MS  Fail when no bytes arrive for this long (default 30000).
+  BINARY_DOWNLOAD_MIN_BYTES_PER_SECOND
+                            Fail when the average rate falls below this floor once
+                            512 KiB or 5 s of body has arrived (default 0, off).
 `;
 
 function parseArguments(argv) {
@@ -113,10 +117,101 @@ export function binaryCacheUrl(baseUrl, filename) {
   return `${parsed.href.replace(/\/$/, "")}/${encodeURIComponent(filename)}`;
 }
 
-async function downloadVerifiedBytes(entry, url, fetchImplementation) {
+/** How long a download may go without a byte before it is abandoned. */
+const DEFAULT_STALL_MS = 30_000;
+/** Rate sampling: once this much body or this much time has arrived, check it. */
+const MIN_RATE_SAMPLE_BYTES = 512 * 1024;
+const MIN_RATE_SAMPLE_MS = 5_000;
+const DOWNLOAD_WATCHDOG_MS = 100;
+
+function environmentCount(name, fallback, unit) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a non-negative integer number of ${unit}`);
+  return Number(raw);
+}
+
+const kilobytes = bytes => (bytes / 1024).toFixed(1);
+
+/** One readable line for a stalled body, instead of the caller's timeout. */
+function stalledLine(url, received, elapsedMs, stallMs) {
+  return `external asset download too slow: ${kilobytes(received)} KB in ${(elapsedMs / 1000).toFixed(1)} s,`
+    + ` then no data for ${(stallMs / 1000).toFixed(1)} s: ${url}`;
+}
+
+/** One readable line for a trickle, instead of the caller's timeout. */
+function trickleLine(url, received, elapsedMs, floor) {
+  const seconds = Math.max(elapsedMs / 1000, 0.001);
+  return `external asset download too slow: ${kilobytes(received)} KB in ${seconds.toFixed(1)} s`
+    + ` (${kilobytes(received / seconds)} KB/s, below the ${kilobytes(floor)} KB/s floor): ${url}`;
+}
+
+/**
+ * Stream a response body under two progress guards.
+ *
+ * `fetch` resolving with a 200 proves nothing: the body can stay empty, or
+ * arrive at a few KB/s. Reading it with `arrayBuffer()` hides both until the
+ * caller's own timeout kills the job, which is what #1026 reported. Reading
+ * the stream instead lets a watchdog name the failure in one line:
+ *
+ * - no byte for `stallMs` is a stall;
+ * - an average rate below `minBytesPerSecond`, once 512 KiB or 5 s of body has
+ *   arrived, is a trickle.
+ *
+ * The watchdog races every read, so a fetch implementation that ignores the
+ * abort signal cannot keep the job waiting.
+ */
+async function readWithDownloadGuard(response, url, { stallMs, minBytesPerSecond }) {
+  const reader = response.body?.getReader();
+  if (!reader) return Buffer.from(await response.arrayBuffer());
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  let received = 0;
+  const chunks = [];
+  let failure;
+  let abortGuard;
+  const guard = new Promise((_, reject) => { abortGuard = reject; });
+  guard.catch(() => {});
+  const stop = (message) => {
+    if (failure) return;
+    failure = message;
+    abortGuard(new Error(message));
+    Promise.resolve(reader.cancel()).catch(() => {});
+  };
+  const watchdog = setInterval(() => {
+    const now = Date.now();
+    const elapsed = now - startedAt;
+    if (stallMs > 0 && now - lastProgressAt >= stallMs) {
+      stop(stalledLine(url, received, elapsed, stallMs));
+      return;
+    }
+    if (minBytesPerSecond > 0 && (received >= MIN_RATE_SAMPLE_BYTES || elapsed >= MIN_RATE_SAMPLE_MS)) {
+      if (received / Math.max(elapsed / 1000, 0.001) < minBytesPerSecond) {
+        stop(trickleLine(url, received, elapsed, minBytesPerSecond));
+      }
+    }
+  }, DOWNLOAD_WATCHDOG_MS);
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), guard]);
+      if (done) break;
+      received += value.byteLength;
+      lastProgressAt = Date.now();
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    if (failure) throw new Error(failure);
+    throw error;
+  } finally {
+    clearInterval(watchdog);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function downloadVerifiedBytes(entry, url, fetchImplementation, downloadGuard) {
   const response = await fetchImplementation(url, { redirect: "follow" });
   if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await readWithDownloadGuard(response, url, downloadGuard);
   const digest = createHash("sha256").update(bytes).digest("hex");
   if (digest !== entry.sha256) {
     throw new Error(`Checksum mismatch for ${entry.filename}: expected ${entry.sha256}, got ${digest}`);
@@ -129,7 +224,10 @@ export async function downloadRuntimeArchive(entry, cacheDirectory, {
   binaryCacheBaseUrl = "",
   binaryCacheOnly = false,
   fetchImplementation = fetch,
+  stallMs = environmentCount("BINARY_DOWNLOAD_STALL_MS", DEFAULT_STALL_MS, "milliseconds"),
+  minBytesPerSecond = environmentCount("BINARY_DOWNLOAD_MIN_BYTES_PER_SECOND", 0, "bytes per second"),
 } = {}) {
+  const downloadGuard = { stallMs, minBytesPerSecond };
   await mkdir(cacheDirectory, { recursive: true });
   const target = join(cacheDirectory, entry.filename);
   if (await exists(target)) {
@@ -145,7 +243,7 @@ export async function downloadRuntimeArchive(entry, cacheDirectory, {
     const cacheUrl = binaryCacheUrl(binaryCacheBaseUrl, entry.filename);
     process.stderr.write(`Checking remote cache: ${cacheUrl}\n`);
     try {
-      bytes = await downloadVerifiedBytes(entry, cacheUrl, fetchImplementation);
+      bytes = await downloadVerifiedBytes(entry, cacheUrl, fetchImplementation, downloadGuard);
       process.stderr.write(`Binary remote cache hit: ${entry.filename}\n`);
     } catch (error) {
       process.stderr.write(`Binary remote cache miss or invalid entry for ${entry.filename}: ${error.message}\n`);
@@ -158,7 +256,7 @@ export async function downloadRuntimeArchive(entry, cacheDirectory, {
 
   if (!bytes) {
     process.stderr.write(`Downloading authoritative source: ${entry.url}\n`);
-    bytes = await downloadVerifiedBytes(entry, entry.url, fetchImplementation);
+    bytes = await downloadVerifiedBytes(entry, entry.url, fetchImplementation, downloadGuard);
   }
   const temporary = `${target}.${process.pid}.tmp`;
   try {
