@@ -1,0 +1,306 @@
+[
+  {
+    "kind": "restoreExplicit",
+    "reversalInput": {
+      "connectorId": "pubmed",
+      "restoreConnectorIds": "[\"uniprot\"]"
+    },
+    "view": {
+      "protocolVersion": 3,
+      "options": [
+        {
+          "id": "persist",
+          "kind": "persisted_apply",
+          "label": "Apply configuration",
+          "description": "Save the reviewed configuration using its declared scope and activation mode.",
+          "available": true
+        },
+        {
+          "id": "dismiss",
+          "kind": "dismiss",
+          "label": "Not now",
+          "description": "Do not change this configuration.",
+          "available": true
+        }
+      ],
+      "selectedOptionId": "persist",
+      "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "id": "cfg",
+      "sessionId": "session",
+      "projectId": "project",
+      "revision": 1,
+      "stateVersion": 1,
+      "capabilityId": "connector.enable",
+      "adapterVersion": 1,
+      "schemaVersion": 1,
+      "state": "awaiting_confirmation",
+      "reason": {
+        "code": "CONFIGURATION_REQUIRED",
+        "message": "Reverse the selected configuration change"
+      },
+      "scope": {
+        "kind": "session",
+        "id": "session"
+      },
+      "fields": [
+        {
+          "id": "connectorId",
+          "label": "Connector",
+          "required": true,
+          "kind": "enum",
+          "value": "pubmed",
+          "choices": [
+            {
+              "id": "arxiv",
+              "label": "arxiv"
+            },
+            {
+              "id": "europe-pmc",
+              "label": "europe-pmc"
+            },
+            {
+              "id": "pubmed",
+              "label": "pubmed"
+            },
+            {
+              "id": "uniprot",
+              "label": "uniprot"
+            },
+            {
+              "id": "biorxiv",
+              "label": "biorxiv"
+            },
+            {
+              "id": "medrxiv",
+              "label": "medrxiv"
+            },
+            {
+              "id": "pdb",
+              "label": "pdb"
+            },
+            {
+              "id": "ensembl",
+              "label": "ensembl"
+            },
+            {
+              "id": "reactome",
+              "label": "reactome"
+            },
+            {
+              "id": "clinvar",
+              "label": "clinvar"
+            },
+            {
+              "id": "chembl",
+              "label": "chembl"
+            },
+            {
+              "id": "geo",
+              "label": "geo"
+            },
+            {
+              "id": "llm-wiki",
+              "label": "llm-wiki"
+            },
+            {
+              "id": "web",
+              "label": "web"
+            }
+          ]
+        }
+      ],
+      "changes": [
+        {
+          "field": "enabledConnectorIds",
+          "before": "uniprot, pubmed",
+          "after": "uniprot"
+        }
+      ],
+      "impact": {
+        "resourceLocation": "Session settings",
+        "effectiveScope": "This session only",
+        "message": "Other sessions stay unchanged. Tool calls retain their own approval policy."
+      },
+      "verificationPlan": {
+        "targets": [],
+        "actions": [],
+        "maxRequests": 0,
+        "mayCharge": false
+      },
+      "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "activation": {
+        "mode": "next_run",
+        "state": "not_requested"
+      },
+      "resumption": {
+        "state": "not_requested"
+      },
+      "allowedActions": [
+        "preview",
+        "apply",
+        "dismiss"
+      ],
+      "createdAt": "2026-11-09T00:00:00.000Z",
+      "updatedAt": "2026-11-09T00:00:00.000Z",
+      "expiresAt": "2026-11-09T01:00:00.000Z"
+    },
+    "result": {
+      "effective": [
+        "uniprot"
+      ],
+      "overridePresent": true
+    }
+  },
+  {
+    "kind": "restoreInheritance",
+    "reversalInput": {
+      "connectorId": "pubmed",
+      "restoreInheritance": true
+    },
+    "view": {
+      "protocolVersion": 3,
+      "options": [
+        {
+          "id": "persist",
+          "kind": "persisted_apply",
+          "label": "Apply configuration",
+          "description": "Save the reviewed configuration using its declared scope and activation mode.",
+          "available": true
+        },
+        {
+          "id": "dismiss",
+          "kind": "dismiss",
+          "label": "Not now",
+          "description": "Do not change this configuration.",
+          "available": true
+        }
+      ],
+      "selectedOptionId": "persist",
+      "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "id": "cfg",
+      "sessionId": "session",
+      "projectId": "project",
+      "revision": 1,
+      "stateVersion": 1,
+      "capabilityId": "connector.enable",
+      "adapterVersion": 1,
+      "schemaVersion": 1,
+      "state": "awaiting_confirmation",
+      "reason": {
+        "code": "CONFIGURATION_REQUIRED",
+        "message": "Reverse the selected configuration change"
+      },
+      "scope": {
+        "kind": "session",
+        "id": "session"
+      },
+      "fields": [
+        {
+          "id": "connectorId",
+          "label": "Connector",
+          "required": true,
+          "kind": "enum",
+          "value": "pubmed",
+          "choices": [
+            {
+              "id": "arxiv",
+              "label": "arxiv"
+            },
+            {
+              "id": "europe-pmc",
+              "label": "europe-pmc"
+            },
+            {
+              "id": "pubmed",
+              "label": "pubmed"
+            },
+            {
+              "id": "uniprot",
+              "label": "uniprot"
+            },
+            {
+              "id": "biorxiv",
+              "label": "biorxiv"
+            },
+            {
+              "id": "medrxiv",
+              "label": "medrxiv"
+            },
+            {
+              "id": "pdb",
+              "label": "pdb"
+            },
+            {
+              "id": "ensembl",
+              "label": "ensembl"
+            },
+            {
+              "id": "reactome",
+              "label": "reactome"
+            },
+            {
+              "id": "clinvar",
+              "label": "clinvar"
+            },
+            {
+              "id": "chembl",
+              "label": "chembl"
+            },
+            {
+              "id": "geo",
+              "label": "geo"
+            },
+            {
+              "id": "llm-wiki",
+              "label": "llm-wiki"
+            },
+            {
+              "id": "web",
+              "label": "web"
+            }
+          ]
+        }
+      ],
+      "changes": [
+        {
+          "field": "enabledConnectorIds",
+          "before": "uniprot, pubmed",
+          "after": "Inherit parent settings"
+        }
+      ],
+      "impact": {
+        "resourceLocation": "Session settings",
+        "effectiveScope": "This session only",
+        "message": "Other sessions stay unchanged. Tool calls retain their own approval policy."
+      },
+      "verificationPlan": {
+        "targets": [],
+        "actions": [],
+        "maxRequests": 0,
+        "mayCharge": false
+      },
+      "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "activation": {
+        "mode": "next_run",
+        "state": "not_requested"
+      },
+      "resumption": {
+        "state": "not_requested"
+      },
+      "allowedActions": [
+        "preview",
+        "apply",
+        "dismiss"
+      ],
+      "createdAt": "2026-11-09T00:00:00.000Z",
+      "updatedAt": "2026-11-09T00:00:00.000Z",
+      "expiresAt": "2026-11-09T01:00:00.000Z"
+    },
+    "result": {
+      "effective": [
+        "uniprot"
+      ],
+      "overridePresent": false
+    }
+  }
+]

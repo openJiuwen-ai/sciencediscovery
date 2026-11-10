@@ -20,6 +20,15 @@
  * saying so. Wording is reviewable here without reading any JSX.
  */
 export const ZH = {
+  configurationLegacy: {
+    title: "启用连接器", awaiting: "等待确认", change: "修改", scope: "范围", session: "仅当前会话",
+    continuation: "原任务", noTask: "没有已提交的任务", recorded: "服务器已记录任务续跑", serverOwned: "由服务器管理原任务续跑",
+    enable: (name: string) => `启用 ${name}`, userReason: (name: string) => `你请求启用 ${name}。`, taskReason: (name: string) => `原任务需要使用 ${name}。`,
+    confirm: "确认并启用", decline: "暂不配置", saving: "正在保存…", saved: "已保存", dismissed: "未配置", stale: "请求已过时",
+    dismissedDetail: "本次请求没有启用此连接器。", staleDetail: "设置或原任务已发生变化，不能再应用此请求。",
+    countdown: (seconds: number) => `此前已授权的自动配置将在 ${seconds} 秒后由服务器复核。`, due: "正在等待服务器复核此前已授权的自动配置。",
+    waitRun: "请等待当前任务到达安全暂停点后再决定。", failed: "未能确认本次操作的结果。请刷新状态后再试。", refresh: "刷新状态",
+  },
   researchPackage: {
     continueUnavailable: "此导入记录尚未完整恢复，暂不能继续聊天。请查看导入省略项并恢复缺失服务后重新导入。", sourceUnavailable: "会话或所属项目已不存在。请刷新会话列表后重试。",
     projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入「会话」，也可以选择一个已有项目。", necessaryContents: "会话记录 · 当前文件与产物 · 依赖证据", completeContents: "会话记录 · 文件与产物版本 · 已有研究历史",
@@ -175,11 +184,14 @@ export const ZH = {
   },
 
   conversation: {
+    configurationRefreshFailed: "配置请求未能刷新。已显示的状态可能已过时，请重试后再确认。",
+    retryConfiguration: "重试",
     copyAnswer: "复制回答",
     copied: "已复制",
     /** The system-notice kinds the transcript can carry. */
     notices: {
       timeout_notice: "超时",
+      configuration_notice: "配置更新",
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",

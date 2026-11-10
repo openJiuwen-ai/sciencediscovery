@@ -2481,7 +2481,8 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
 
   // Replacing the password (non-null overwrites).
   const replacementPassword = `pw-${randomUUID()}`;
-  await store.updateMemoryGraphSettings({ neo4jPassword: replacementPassword });
+  // Preserve the legacy writer normalization; MCP exact drafts do not change this endpoint.
+  await store.updateMemoryGraphSettings({ neo4jPassword: ` \t${replacementPassword}\n ` });
   assert.equal(store.getMemoryGraphNeo4jPassword(), replacementPassword);
 
   // Removing the password (null clears it; hasNeo4jPassword flips back).

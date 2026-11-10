@@ -224,3 +224,19 @@ test("Jiuwen HTTP live-wait hint survives preview and disappears after cancellat
     await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
   }
 });
+
+for (const completed of [true, false]) test(`Manual settings answer ${completed} releases only the original live wait without activation`, async context => {
+  const f = await fixture(context);
+  const request = { protocolVersion: 3 as const, runId: f.run.id, capabilityId: "timeouts.configure" as const, values: { runnerExecTimeoutMs: 90000 } };
+  const view = await f.framework.propose(f.session.id, request);
+  const before = f.store.getSessionSettings(f.session.id); let activations = 0;
+  const waiting = f.framework.waitForDecision(f.session.id, view.id, undefined, async () => { activations++; throw new Error("Manual confirmation must not activate"); });
+  const result = await f.framework.confirmSettings(f.session.id, view.id, { revision: view.revision, stateVersion: view.stateVersion, destination: "timeouts", completed });
+  assert.equal((await waiting).settingsConfirmation?.completed, completed);
+  assert.equal(result.resumption.state, "started"); assert.equal(activations, 0);
+  assert.equal(f.framework.liveWaitRunId(f.session.id, view.id), undefined);
+  assert.deepEqual(f.store.getSessionSettings(f.session.id), before);
+  assert.equal((await f.store.listSessionRuns(f.session.id)).length, 1);
+  assert.equal((await f.store.getSessionRun(f.session.id, f.run.id))?.status, "running");
+  await assert.rejects(f.framework.propose(f.session.id, request), { code: "CONFIGURATION_NEED_ALREADY_DECIDED" });
+});

@@ -13,6 +13,7 @@ const efforts: ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"]
 const noProbe = { targets: [] as string[], actions: [] as string[], maxRequests: 0, mayCharge: false };
 function normalized(id: ConfigurationCapabilityId, raw: unknown): ConfigurationValues {
   const descriptor = CONFIGURATION_AGENT_DESCRIPTORS[id];
+  if (!descriptor) invalid("This configuration capability is not available");
   const input = object(raw, Object.keys(descriptor.fields), "values");
   const output: ConfigurationValues = {};
   for (const [key, value] of Object.entries(input)) {

@@ -39,7 +39,8 @@
     "@sciencediscovery/skill": "workspace:*",
     "@sciencediscovery/mcp": "workspace:*",
     "@sciencediscovery/plan": "workspace:*",
-    "@sciencediscovery/scheduler": "workspace:*"
+    "@sciencediscovery/scheduler": "workspace:*",
+    "@sciencediscovery/configuration-ui": "workspace:*"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.31.0",

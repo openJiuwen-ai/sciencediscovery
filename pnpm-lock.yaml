@@ -33,6 +33,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@sciencediscovery/configuration-ui':
+        specifier: workspace:*
+        version: link:../../packages/configuration-ui
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -85,6 +88,9 @@ importers:
       '@sciencediscovery/artifact-json':
         specifier: workspace:*
         version: link:../../packages/artifact-json
+      '@sciencediscovery/configuration-ui':
+        specifier: workspace:*
+        version: link:../../packages/configuration-ui
       '@sciencediscovery/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
@@ -268,6 +274,19 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/configuration-ui:
+    dependencies:
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
 
   packages/context:
     dependencies:
