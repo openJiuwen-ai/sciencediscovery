@@ -66,6 +66,10 @@ import { basename } from "node:path";
 export interface ProposalDeps {
   /** Puts text or a workspace file into the store; returns its `sha256:` ref. */
   store: (input: { content?: string; path?: string }) => Promise<string>;
+  /** Reads a stored blob back as text, by the ref `store` returned. A file's
+   *  contents — not its path — are what gets checked, so the check has to read
+   *  the bytes that will run, after they are stored. */
+  readText: (hash: string) => Promise<string>;
   casHas?: (hash: string) => Promise<boolean>;
   model?: (id: string) => unknown;
   modelId: string;
@@ -144,6 +148,21 @@ function workspaceRelative(path: string): string {
   return trimmed.startsWith("/workspace/") ? trimmed.slice("/workspace/".length) : trimmed;
 }
 
+/** Carries a problem the agent can fix back as a refusal rather than a crash.
+ *  A path that cannot be read and an evaluator that does not carry the
+ *  shard/result contract are the same kind of news: the design's author is
+ *  right there and can change it. */
+class ProposalRefusal extends Error {}
+
+/** The evaluator's text limit, matched to the tool's own `maxLength`. A file
+ *  skips that parameter check, so the same ceiling is applied to what the file
+ *  actually contains. */
+const MAX_EVALUATOR_CHARS = 200_000;
+
+/** The names an evaluator has to mention: the shard list it scores and the
+ *  file it writes its result to. */
+const EVALUATOR_MARKERS = ["SCIENCE_AGENT_SHARDS", "SCIENCE_AGENT_RESULT"] as const;
+
 /** Which proposal field a path came from, so a refusal can name it. */
 async function storePath(
   deps: ProposalDeps, field: string, path: string,
@@ -151,14 +170,64 @@ async function storePath(
   try {
     return await deps.store({ path: workspaceRelative(path) });
   } catch (error) {
-    throw new PathRefusal(`${field} points at ${path}, which cannot be read: ${
+    throw new ProposalRefusal(`${field} points at ${path}, which cannot be read: ${
       error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-/** Carries a path problem back to the agent as a refusal rather than a crash. */
-class PathRefusal extends Error {}
+/** Refuse an evaluator whose text does not carry the contract.
+ *
+ *  The same check runs on both routes — inline text and a file's contents —
+ *  because by then they are the same thing to the sidecar. The size ceiling
+ *  lives here too: a path bypasses the tool's own `maxLength`, and the two are
+ *  the same number. */
+function checkEvaluator(text: string): void {
+  if (text.trim() === "") {
+    throw new ProposalRefusal("the evaluator is empty — write the scoring script into "
+      + "evaluatorSource, or into the file evaluatorPath points at");
+  }
+  if (text.length > MAX_EVALUATOR_CHARS) {
+    throw new ProposalRefusal(
+      `the evaluator is ${text.length} characters, past the ${MAX_EVALUATOR_CHARS}-character `
+      + "limit. A large frozen table will not fit here as written: score by shard and build "
+      + "each case from the shard index instead of carrying the whole table in the script, "
+      + "or cut the table down");
+  }
+  for (const name of EVALUATOR_MARKERS) {
+    if (!text.includes(name)) {
+      throw new ProposalRefusal(
+        `the evaluator never mentions ${name} — it has to score by shard and write its result `
+        + "to the result file",
+      );
+    }
+  }
+}
 
+/** Store the evaluator and return its ref.
+ *
+ *  Inline text is checked before it is stored, so a rejected evaluator leaves
+ *  nothing behind. A file is read only after it is stored, and by ref: the
+ *  check has to be true of the bytes the run will execute, and those are the
+ *  CAS copy, not the file on disk a moment later. */
+async function storeEvaluator(
+  proposal: EvolveRunProposal, deps: ProposalDeps,
+): Promise<string> {
+  if (proposal.evaluatorSource?.trim()) {
+    const text = proposal.evaluatorSource;
+    checkEvaluator(text);
+    return deps.store({ content: text });
+  }
+  const cas = await storePath(deps, "evaluatorPath", proposal.evaluatorPath!);
+  let text: string;
+  try {
+    text = await deps.readText(cas);
+  } catch (error) {
+    throw new ProposalRefusal(`the evaluator was stored but cannot be read back: ${
+      error instanceof Error ? error.message : String(error)}`);
+  }
+  checkEvaluator(text);
+  return cas;
+}
 
 /**
  * Assemble, probe, pre-flight, start.
@@ -200,7 +269,7 @@ export async function startProposedRun(
   } catch (error) {
     // A path the agent got wrong is something it can fix, so it comes back as a
     // refusal naming the field. Anything else is this side breaking, and throws.
-    if (error instanceof PathRefusal) return { refusedBecause: error.message };
+    if (error instanceof ProposalRefusal) return { refusedBecause: error.message };
     throw error;
   }
   const issues = await preflight({
@@ -310,12 +379,13 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     if (thin) return thin;
   }
   if (proposal.mode === "custom_script") {
-    if (!proposal.evaluatorSource?.trim()) return "custom_script needs an evaluator script";
-    for (const name of ["SCIENCE_AGENT_SHARDS", "SCIENCE_AGENT_RESULT"]) {
-      if (!proposal.evaluatorSource.includes(name)) {
-        return `the evaluator never mentions ${name} — it has to score by shard and write its result `
-          + "to the result file";
-      }
+    if (proposal.evaluatorSource?.trim() && proposal.evaluatorPath?.trim()) {
+      return "custom_script takes evaluatorSource or evaluatorPath, not both — pass the text "
+        + "inline, or point at the file that holds it";
+    }
+    if (!proposal.evaluatorSource?.trim() && !proposal.evaluatorPath?.trim()) {
+      return "custom_script needs an evaluator script: write it into evaluatorSource, or put "
+        + "it in a workspace file and point evaluatorPath at it";
     }
     if (!proposal.split) {
       return "custom_script needs a split, and its shard count has to match the one the "
@@ -404,8 +474,10 @@ async function assembleGoal(
   // an evaluator: both are the scoring, in different languages.
   const scoringCas = proposal.mode === "llm_judge"
     ? await deps.store({ content: proposal.rubric! })
-    : proposal.mode === "custom_script" || proposal.mode === "npu_job"
+    : proposal.mode === "npu_job"
       ? await deps.store({ content: proposal.evaluatorSource! })
+      : proposal.mode === "custom_script"
+        ? await storeEvaluator(proposal, deps)
       : "";
 
   const measure = await measureOf(proposal, deps, split, scoringCas);

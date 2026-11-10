@@ -38,8 +38,22 @@ resolves. You do not need to reverse-engineer this.
 ## The evaluator runs alone and reads nothing
 
 It gets a scratch directory containing itself and the candidate — not the workspace, not the file
-you read while designing, and there is no way to ship it one. A shard is an *index*, and what index
-`i` means is the evaluator's choice: it **builds** case `i` — an equation with a known analytic
-solution, a generated input, a corpus drawn from a fixed seed, a property to check. Anything it
-opens by path fails on every candidate. If the material genuinely lives in a file, that is
-`dataset_metric`, which owns the splitting as well.
+you read while designing, and there is no way to ship it one at run time. A shard is an *index*,
+and what index `i` means is the evaluator's choice: it **builds** case `i` — an equation with a
+known analytic solution, a generated input, a corpus drawn from a fixed seed, a property to check.
+Anything it opens by path fails on every candidate. If the material genuinely lives in a file, that
+is `dataset_metric`, which owns the splitting as well.
+
+## Handing the script over: `evaluatorSource` or `evaluatorPath`
+
+The script itself travels one of two ways. `evaluatorSource` carries it verbatim in the tool call,
+which is the ordinary case. When the script is **too big to write in one call** — a frozen truth
+table of thousands of points, where retyping it costs more tokens than most turns have — write it to
+a workspace file with `run_shell`, run that file once to check it, and pass `evaluatorPath` instead.
+The control plane reads the file **once**, at the moment `create_evolve_run` is called, checks the
+contract above against its contents, and stores and freezes those bytes; editing the file afterwards
+does not change the run. Exactly one of the two fields, never both.
+
+The size ceiling is the same either way (200,000 characters). If the table alone is past it, the
+evaluator still has to **build** each case from the shard index rather than carry the table — the
+profile is not the exception to "reads nothing".

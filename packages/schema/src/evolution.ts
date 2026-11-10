@@ -401,10 +401,19 @@ export interface EvolveRunProposal {
   split?: EvolveSplit;
   /** `custom_script`: the evaluator, verbatim. The agent is expected to have
    *  run it before proposing — that is the whole advantage of designing inside
-   *  a loop that has an interpreter. */
+   *  a loop that has an interpreter. Exactly one of this and `evaluatorPath`. */
   evaluatorSource?: string;
   /** The JSON fields this run may change. */
   editableFields?: string[];
+  /** `custom_script`: a workspace file holding the evaluator, read once when
+   *  the run is proposed and stored exactly as `evaluatorSource` would be.
+   *
+   *  For an evaluator too large to write into one tool call — a frozen truth
+   *  table of thousands of points is the case this exists for — the agent
+   *  builds the file with a script and points here. The contents, not the
+   *  path, are what runs: they are checked for the shard/result contract and
+   *  frozen, and later edits to the file do not reach the run. */
+  evaluatorPath?: string;
   /** `llm_judge`: the rubric and its top mark. */
   rubric?: string;
   scaleMax?: number;

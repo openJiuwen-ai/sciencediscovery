@@ -200,18 +200,29 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     datasetPath: Type.Optional(Type.String({
       description: "dataset_metric only: the CSV to score against. Relative to the workspace, "
         + "or the /workspace/... path as you saw it in a tool result — both are accepted. "
-        + "A custom_script evaluator reads nothing: it builds case `i` from the shard index.",
+        + "A custom_script evaluator the run executes sees no workspace files: it builds case "
+        + "`i` from the shard index, and the evaluator itself travels in evaluatorSource or "
+        + "evaluatorPath.",
       maxLength: 2_000, minLength: 1,
     })),
     direction: Type.Optional(Type.Union([Type.Literal("maximize"), Type.Literal("minimize")])),
     entrypointPath: Type.Optional(Type.String({
-      description: "test_gate only: which file in the project a candidate replaces. "
-        + "Not where an evaluator lives — a custom_script evaluator is passed verbatim "
-        + "in evaluatorSource and never read from a path.",
+      description: "test_gate only: which file in the project a candidate replaces.",
+      maxLength: 2_000, minLength: 1,
+    })),
+    evaluatorPath: Type.Optional(Type.String({
+      description: "custom_script only: a workspace file holding the whole evaluator, instead "
+        + "of writing it inline in evaluatorSource. Use it when the evaluator is too large to "
+        + "write in one tool call — a frozen truth table of thousands of points, for instance: "
+        + "build the file with run_shell, check it, then point here. Relative, or the "
+        + "/workspace/... path as you saw it in a tool result. The file is read ONCE when this "
+        + "call is made, checked for the shard/result contract, stored and frozen — editing it "
+        + "afterwards does not change the run. Exactly one of this and evaluatorSource.",
       maxLength: 2_000, minLength: 1,
     })),
     evaluatorSource: Type.Optional(Type.String({
-      description: "custom_script only: the whole evaluator, verbatim. It is executed as a "
+      description: "custom_script only: the whole evaluator, verbatim. Use evaluatorPath "
+        + "instead when it is too large to write in one call. It is executed as a "
         + "script with __name__ == \"__main__\" (runpy.run_path), with the scratch directory "
         + "first on sys.path — so top-level code runs, a `if __name__ == \"__main__\":` guard "
         + "runs, and `import candidate` resolves. It runs ALONE in that "

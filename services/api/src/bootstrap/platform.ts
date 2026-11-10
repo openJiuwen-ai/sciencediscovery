@@ -484,6 +484,12 @@ export function createPlatformServices(
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
           orchestrator: evolveOrchestrator,
+          // The same store, read back: an evaluator handed in as a path is
+          // checked as the bytes the run will execute, not as the path it came
+          // from. `evolveCas` reaches both the agent-state pool the content
+          // writes land in and the workspace pool a `store({path})` ref names.
+          readText: async (hash: string) =>
+            (await evolveCas.read(hash.replace(/^sha256:/, ""))).toString("utf8"),
           sessionId: turn.sessionId,
           thinking: turn.thinkingMode ?? "auto",
           thinkingEffort: turn.thinkingEffort,
