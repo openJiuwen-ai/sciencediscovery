@@ -48,6 +48,7 @@ import type { EvolveBudget, EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRu
 import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { apiLog } from "../logging.js";
+import { RunnerGrantRegistry } from "./runner-proxy.js";
 import type { MemoryGraphSink } from "@sciencediscovery/memory";
 
 import { DatasetStagingError, casHash, needsData, stageDataset, type DatasetSource } from "./dataset.js";
@@ -87,7 +88,9 @@ function gatedByTests(goal: EvolveGoal): boolean {
  *  merging them would put a judge model into a mode that has none. */
 function scriptCas(goal: EvolveGoal): string | undefined {
   for (const criterion of goal.scorecard.criteria ?? []) {
-    if (criterion.measure.kind === "custom_script") return criterion.measure.scriptCas;
+    if (criterion.measure.kind === "custom_script" || criterion.measure.kind === "npu_job") {
+      return criterion.measure.scriptCas;
+    }
   }
   return undefined;
 }
@@ -106,6 +109,11 @@ function judgeSetup(goal: EvolveGoal): { judgeModelId: string; rubricCas: string
 }
 
 /** The engine that measures nothing. See `stage`. */
+
+function usesNpu(goal: EvolveGoal): boolean {
+  return (goal.scorecard.criteria ?? []).some((criterion) => criterion.measure.kind === "npu_job");
+}
+
 /**
  * `goal.search` in the shape the sidecar's engines read: an `options` bag.
  *
@@ -122,6 +130,14 @@ function searchOptions(goal: EvolveGoal): { options?: Record<string, unknown> } 
   if (goal.search?.priorExponent !== undefined) {
     options.prior_exponent = goal.search.priorExponent;
   }
+  return Object.keys(options).length ? { options } : {};
+}
+
+function mergedOptions(
+  search: Record<string, unknown> | undefined,
+  npu: Record<string, unknown> | undefined,
+): { options?: Record<string, unknown> } {
+  const options = { ...(search ?? {}), ...(npu ?? {}) };
   return Object.keys(options).length ? { options } : {};
 }
 
@@ -193,6 +209,7 @@ export class EvolveOrchestrator {
   /** Optional: without it a run gets no model access, which is what the stub
    *  engine needs and what a test wants by default. */
   private readonly runTokens: RunTokenRegistry | null;
+  readonly runnerGrants = new RunnerGrantRegistry();
   private readonly options: EvolveOrchestratorOptions;
   private readonly subscribers = new Map<string, Set<EvolveRunSubscriber>>();
   private readonly settleListeners = new Map<string, Set<EvolveRunSettled>>();
@@ -214,6 +231,24 @@ export class EvolveOrchestrator {
     this.probeSandbox = probeSandbox;
     this.runTokens = runTokens;
     this.options = options;
+  }
+
+  /** What the sidecar calls instead of the runner. The runner token never leaves this process. */
+  private npuSidecarOptions(
+    runId: string, sessionId: string, script: string, timeoutSeconds: number,
+  ): Record<string, unknown> {
+    if (!script.trim()) throw new Error("an NPU search has no fixed program");
+    const token = this.runnerGrants.issue(runId, sessionId, timeoutSeconds);
+    return {
+      npu: {
+        agentId: "evolve",
+        execution: { agentId: "evolve", code: script },
+        sessionId,
+        token,
+        transport: "api",
+        url: `${this.options.apiOrigin ?? ""}/internal/evolve-runner/${encodeURIComponent(runId)}`,
+      },
+    };
   }
 
   /**
@@ -245,6 +280,7 @@ export class EvolveOrchestrator {
 
     const judged = judgeSetup(goal);
     const scripted = scriptCas(goal);
+    const script = scripted ? await this.readRubric(scripted) : "";
     // A judged probe needs a grader, and the grader needs a token — the same
     // one-model-per-token rule the run follows. Revoked in `finally`, because a
     // probe that leaked a token would leave one alive with no run to end it.
@@ -272,11 +308,12 @@ export class EvolveOrchestrator {
         // The probe runs the starting point, and the starting point is what
         // uses these — without them here it fails as "the starting point does not run".
         ...(goal.packages?.length ? { packages: goal.packages } : {}),
+        ...(usesNpu(goal) ? { options: this.npuSidecarOptions(probeId, sessionId, script, goal.budget.candidateTimeoutSeconds) } : {}),
         ...(judged ? { rubric: await this.readRubric(judged.rubricCas) } : {}),
         sandbox: toSidecarCapability(await this.sandboxCapability()),
         scorecard: goal.scorecard,
         scorecardHash: goal.scorecard.hash,
-        ...(scripted ? { script: await this.readRubric(scripted) } : {}),
+        ...(script ? { script } : {}),
         searchId: probeId,
         statement: goal.statement,
         ...(goal.thinking ? { thinking: goal.thinking } : {}),
@@ -284,6 +321,7 @@ export class EvolveOrchestrator {
       });
     } finally {
       this.runTokens?.revoke(probeId);
+      this.runnerGrants.revoke(probeId);
       // The staged shards were for one question, already answered.
       await rm(this.store.runDirectory(probeId), { force: true, recursive: true })
         .catch(() => undefined);
@@ -548,7 +586,9 @@ export class EvolveOrchestrator {
           }
           : {}),
         maxTokensPerCall: run.goal.budget.maxTokensPerCall,
-        ...searchOptions(run.goal),
+        ...mergedOptions(searchOptions(run.goal).options, usesNpu(run.goal)
+          ? this.npuSidecarOptions(run.id, run.sessionId, script, run.goal.budget.candidateTimeoutSeconds)
+          : undefined),
         ...(run.goal.packages?.length ? { packages: run.goal.packages } : {}),
         ...(rubric ? { rubric } : {}),
         resumeFromSequence: run.lastSeq,
@@ -621,6 +661,7 @@ export class EvolveOrchestrator {
       // spends money, and the window is small enough that nothing would ever
       // reproduce the one time it mattered.
       this.runTokens?.revoke(run.id);
+      this.runnerGrants.revoke(run.id);
       // Always, and only here: a run that died before the sidecar answered has
       // no `search_finished` to close a stream on, and one that finished
       // normally has already published it.

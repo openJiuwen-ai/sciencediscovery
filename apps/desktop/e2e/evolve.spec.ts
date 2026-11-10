@@ -92,6 +92,11 @@ function liveRun(): EvolveFixture {
 
 /** 会话设置's first row is the way into a search: the header no longer
  *  carries an evolve capsule of its own. */
+async function sendWithoutScope(page: Page): Promise<void> {
+  await page.getByRole("dialog", { name: "确认演进设置" })
+    .getByRole("button", { name: "开始演进" }).click();
+}
+
 async function openEvolve(page: Page): Promise<void> {
   await page.getByRole("button", { name: "会话设置" }).click();
   await page.getByRole("button", { name: "程序演进实验" }).click();
@@ -206,6 +211,7 @@ test("a search started in this window opens its task tab by itself", async ({ pa
   started = true;
   await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
+  await sendWithoutScope(page);
 
   await expect(page.locator(".evolve-detail")).toBeVisible({ timeout: 10_000 });
   await expect(
@@ -222,6 +228,8 @@ test("the create dialog hands the goal to the conversation as the command", asyn
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("新建程序演进实验");
+  await expect(dialog.getByRole("switch", { name: "自定义 JSON 与修改范围" })).toHaveCount(0);
+  const originalWidth = await dialog.evaluate((element) => getComputedStyle(element).width);
 
   await dialog.getByRole("button", { name: "开始设计" }).click();
 
@@ -234,12 +242,32 @@ test("the create dialog hands the goal to the conversation as the command", asyn
 
   await page.locator("#composer-textarea").fill("让压缩比更高，且完全无损");
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "确认演进设置" });
+  await expect(settings).toBeVisible();
+  expect(await settings.evaluate((element) => getComputedStyle(element).width)).toBe(originalWidth);
+  const pause = settings.getByRole("switch", { name: /检查点需要人工确认/ });
+  await expect(pause).toBeChecked();
+  await pause.uncheck();
+  expect(posts(mock)).toHaveLength(0);
+  await settings.getByRole("radio", { name: /OpenEvolve/ }).click();
+  await expect(settings.getByLabel("上传 JSON")).toBeHidden();
+  await settings.getByRole("switch", { name: "自定义 JSON 与修改范围" }).check();
+  await expect(settings.getByRole("button", { name: "开始演进" })).toBeDisabled();
+  await settings.getByLabel("上传 JSON").setInputFiles({
+    name: "compression.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"window":8,"capacity":32}'),
+  });
+  await settings.getByRole("checkbox", { name: "允许修改 window" }).check();
+  await settings.getByRole("button", { name: "开始演进" }).click();
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
         call.method === "POST" &&
         call.path === "/api/sessions/session-1/messages" &&
-        call.body?.includes("/evolve-design --algorithm puct 让压缩比更高，且完全无损") === true,
+        call.body?.includes("/evolve-design --algorithm openevolve --no-confirm 让压缩比更高，且完全无损") === true
+        && call.body?.includes("evolve-input") === true
+        && call.body?.includes("window") === true,
     ),
   ).toBe(true);
   // The token belonged to that message, not to the composer.
@@ -267,6 +295,7 @@ test("the create dialog can send a design that does not pause at checkpoints", a
   // the way out — the pace the switch chose is still the command's flag.
   await page.locator("#composer-textarea").fill("让压缩比更高，并且要快");
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendWithoutScope(page);
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
@@ -310,6 +339,7 @@ test("a host with no sandbox asks for the no-isolation confirmation before sendi
 
   await page.locator("#composer-textarea").fill("让压缩比更高");
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendWithoutScope(page);
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
@@ -356,6 +386,7 @@ test("a typed design command on a host with no sandbox detours through the confi
   expect(posts(mock)).toHaveLength(0);
 
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendWithoutScope(page);
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
@@ -392,6 +423,7 @@ test("a pasted --allow-direct does not answer the warning in the user's place", 
   await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm puct --allow-direct");
   expect(posts(mock)).toHaveLength(0);
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendWithoutScope(page);
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
@@ -511,6 +543,7 @@ test("a checkpoint arrives as a card and its confirmation is sent as the reply",
   await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
+  await sendWithoutScope(page);
 
   const card = page.locator(".evolve-checkpoint");
   await expect(card).toBeVisible();
@@ -547,6 +580,7 @@ test("an automatic checkpoint is shown but asks for nothing, and the flow carrie
   await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design --no-confirm 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
+  await sendWithoutScope(page);
 
   const card = page.locator(".evolve-checkpoint").first();
   await expect(card).toBeVisible();
@@ -583,6 +617,7 @@ test("a checkpoint's change button writes the note in the card and sends it from
   await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
+  await sendWithoutScope(page);
 
   const card = page.locator(".evolve-checkpoint");
   await expect(card).toBeVisible();

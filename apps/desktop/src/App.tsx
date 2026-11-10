@@ -21,7 +21,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
+import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
@@ -71,6 +71,7 @@ import { CheckpointReplyProvider, type CheckpointReply } from "./views/Checkpoin
 import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
+import { draftEvolveDirection } from "./api/evolve.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
 import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
 import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
@@ -631,7 +632,7 @@ export function App({ initialToken }: Props) {
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
-  const sendMessage = (content: string, command?: string) => {
+  const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput) => {
     if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return; }
     // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
@@ -641,7 +642,8 @@ export function App({ initialToken }: Props) {
       setSeededCommand(undefined);
       awaitingSince.current = Date.now();
       setAwaitingRun(true);
-      void actions.send(composeEvolveMessage(command, content));
+      const message = composeEvolveMessage(command, content);
+      void actions.send(direction ? appendEvolveDirection(message, direction) : message);
       return;
     }
     const goal = evolveCommandGoal(content);
@@ -888,6 +890,15 @@ export function App({ initialToken }: Props) {
     onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
     onEvolve: openEvolve,
+    evolveSetup: {
+      archived: state.detail?.archivedAt !== undefined,
+      error: evolve.error,
+      initializing: evolve.initializing,
+      onInitialize: () => void evolve.initialize(),
+      status: evolve.status,
+    },
+    canConfirmTypedEvolve: evolve.status.state === "ready" && evolve.status.sandbox !== "direct",
+    onGenerateEvolveDirection: state.detail ? (task, signal) => draftEvolveDirection(client, state.detail!.id, task, signal) : undefined,
     onOpenSettings: () => openSettings("models"),
     // A skill that has a setup surface opens it instead of dropping its
     // command into the draft — the same dialog 会话设置's evolve row opens.
@@ -914,7 +925,7 @@ export function App({ initialToken }: Props) {
     running: state.running,
     seededCommand,
     selectedModelId: state.selectedModelId,
-    unavailableModel: Boolean(state.detail?.settingsOverrides.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
+    unavailableModel: Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
   };

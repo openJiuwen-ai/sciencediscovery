@@ -161,7 +161,8 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .composer-reference-chips button span { font-weight: 900; }
 .composer-reference-chips button i { display: grid; place-items: center; color: var(--muted); font-style: normal; }
 .composer:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(37, 99, 235, .1), var(--shadow-card); }
-.composer textarea { width: 100%; min-height: 44px; max-height: min(200px, 20vh); flex: 0 1 auto; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--text); padding: 14px 18px 8px; font-size: 15px; line-height: 1.65; }
+.composer { --composer-content-inset: 18px; }
+.composer textarea { width: 100%; min-height: 44px; max-height: min(200px, 20vh); flex: 0 1 auto; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--text); padding: 14px var(--composer-content-inset) 8px; font-size: 15px; line-height: 1.65; }
 .composer textarea::placeholder { color: var(--muted-light); }
 .composer-model-notice { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 3px 7px; border-top: 1px solid var(--warning-border); background: var(--warning-soft); padding: 5px 17px; color: var(--warning); font-size: 11px; line-height: 1.35; }
 .composer-model-notice button { border: 0; background: transparent; padding: 0; color: inherit; cursor: pointer; font: inherit; font-weight: 750; text-decoration: underline; text-underline-offset: 2px; }

@@ -107,6 +107,7 @@ import {
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
 import { findWindowsReservedDeviceSegment, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
+import { handleEvolveRunner } from "../evolution/runner-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
   handleListRuns as handleEvolveListRuns,
@@ -240,6 +241,7 @@ import {
 } from "../artifact-dashboard.js";
 import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
+import { draftEvolveDirection } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
@@ -1097,6 +1099,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
         return;
       }
+      if (url.pathname.startsWith("/internal/evolve-runner/") && await handleEvolveRunner(request, response, url, {
+        grants: evolveOrchestrator.runnerGrants,
+        runnerClient: (runnerId) => remoteCompute.runnerClient(runnerId),
+        sessions: store,
+      })) return;
 
       // OAuth callbacks are authorized by a single-use state and SDK PKCE verifier.
       if (await handleMcpOAuthCallback(request, response, url, platform.customMcpServers)) return;
@@ -3597,6 +3604,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           decodeURIComponent(searchGraphMatch[1]!),
           Number.isFinite(maxNodes) && maxNodes > 0 ? Math.floor(maxNodes) : undefined,
         ));
+        return;
+      }
+
+      const evolveDraftMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/evolve\/draft$/);
+      if (evolveDraftMatch && request.method === "POST") {
+        const sessionId = decodeURIComponent(evolveDraftMatch[1]!);
+        const session = store.assertSessionWritable(sessionId);
+        const body = await readJson<{ task?: unknown }>(request);
+        const task = typeof body.task === "string" ? body.task.trim() : "";
+        if (!task || task.length > 8000) return sendError(response, 400, "Enter a task of 1–8000 characters.");
+        const model = store.getModel(store.resolveRuntimeSettings(sessionId).effective.modelId);
+        const apiToken = model && store.getModelApiToken(model.id);
+        if (!model || !apiToken) return sendError(response, 409, "Configure a model for this session to generate a draft.");
+        const abort = new AbortController();
+        response.once("close", () => abort.abort());
+        const draft = await draftEvolveDirection(store, session, model, apiToken, task, abort.signal);
+        if (!draft) return sendError(response, 502, "The model did not return a usable JSON draft.");
+        sendJson(response, 200, draft);
         return;
       }
 

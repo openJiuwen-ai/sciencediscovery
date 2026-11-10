@@ -30,7 +30,8 @@ import type { MessageKey } from "../i18n/messages.js";
 
 export interface EvolveAlgorithmPickerProps {
   onSelect: (algorithm: EvolveAlgorithm) => void;
-  onDismiss: () => void;
+  onDismiss?: () => void;
+  selected?: EvolveAlgorithm;
 }
 
 interface AlgorithmOption {
@@ -58,15 +59,15 @@ const ALGORITHMS: readonly AlgorithmOption[] = [
   },
 ];
 
-export function EvolveAlgorithmPicker({ onSelect, onDismiss }: EvolveAlgorithmPickerProps) {
+export function EvolveAlgorithmPicker({ onSelect, onDismiss, selected }: EvolveAlgorithmPickerProps) {
   const { t } = useLocale();
   return (
     <div className="evolve-algorithm-picker" role="listbox" aria-label={t("evolve.picker.title")}>
       <div className="evolve-algorithm-picker-header">
         <span className="evolve-algorithm-picker-title">{t("evolve.picker.title")}</span>
-        <button type="button" className="icon-button" onClick={onDismiss} aria-label={t("evolve.picker.dismiss")}>
+        {onDismiss ? <button type="button" className="icon-button" onClick={onDismiss} aria-label={t("evolve.picker.dismiss")}>
           {"\u00d7"}
-        </button>
+        </button> : null}
       </div>
       <div className="evolve-algorithm-picker-options">
         {ALGORITHMS.map((algorithm) => (
@@ -74,7 +75,7 @@ export function EvolveAlgorithmPicker({ onSelect, onDismiss }: EvolveAlgorithmPi
             key={algorithm.id}
             type="button"
             role="option"
-            aria-selected={false}
+            aria-selected={selected === algorithm.id}
             className="evolve-algorithm-option"
             onClick={() => onSelect(algorithm.id)}
           >

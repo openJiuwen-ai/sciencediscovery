@@ -1150,6 +1150,89 @@ async function createTestModel(
   return result.body;
 }
 
+test("Evolve draft validates task and model, and records usable and unusable mock replies", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `evolve-draft-${randomUUID()}`);
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    method: "POST", headers, body: JSON.stringify({ name: "Evolve draft test" }),
+  });
+  assert.equal(project.response.status, 201);
+  const sessionPath = `${origin}/api/projects/${project.body.id}/sessions`;
+  const draft = (sessionId: string, task: string) => fetch(`${origin}/api/sessions/${sessionId}/evolve/draft`, {
+    method: "POST", headers, body: JSON.stringify({ task }),
+  });
+  const sessionId = project.body.firstSession.id;
+  for (const task of ["  ", "x".repeat(8001)]) {
+    const response = await draft(sessionId, task);
+    assert.equal(response.status, 400);
+    await response.json();
+  }
+  const noModel = await draft(sessionId, "Tune policy");
+  assert.equal(noModel.status, 409);
+  await noModel.json();
+
+  const startingFields = { weight: 1, fixed: 32 };
+  let calls = 0;
+  const provider = createHttpServer((request, response) => {
+    request.resume();
+    const content = ++calls === 1
+      ? "Not a JSON draft"
+      : JSON.stringify({ baseline: startingFields, editable: ["weight", "missing"] });
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+      choices: [{ message: { role: "assistant", content } }],
+      usage: { prompt_tokens: 14, completion_tokens: 6, total_tokens: 20 },
+    }));
+  });
+  await new Promise<void>(done => provider.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>(done => {
+    provider.close(() => done());
+    provider.closeAllConnections();
+  }));
+  const baseUrl = `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`;
+  const tokenless = await jsonRequest<ModelProfile>(origin + "/api/models", {
+    method: "POST", headers,
+    body: JSON.stringify({ baseUrl, apiProtocol: "openai-chat-completions", model: "fixture", name: "Tokenless model" }),
+  });
+  assert.equal(tokenless.response.status, 201);
+  const createSession = async (modelId: string) => {
+    const session = await jsonRequest<Session>(sessionPath, {
+      method: "POST", headers, body: JSON.stringify({ title: "Tune policy", modelId }),
+    });
+    assert.equal(session.response.status, 201, JSON.stringify(session.body));
+    return session.body.id;
+  };
+  assert.equal(tokenless.body.hasApiToken, false);
+  const settings = await jsonRequest<RuntimeSettingsDetails>(origin + "/api/sessions/" + sessionId + "/settings", { headers });
+  assert.equal(settings.response.status, 200);
+  assert.equal(settings.body.effective.modelId, tokenless.body.id);
+  const noToken = await draft(sessionId, "Tune policy");
+  assert.equal(noToken.status, 409);
+  await noToken.json();
+  assert.equal(calls, 0);
+
+  const model = await createTestModel(origin, { baseUrl, apiVariant: "openai", name: "Draft mock model" });
+  const configured = await createSession(model.id);
+  const unusable = await draft(configured, "Tune policy");
+  assert.equal(unusable.status, 502);
+  await unusable.json();
+  const usable = await draft(configured, "Tune policy");
+  assert.equal(usable.status, 200);
+  assert.deepEqual(await usable.json(), { baseline: JSON.stringify(startingFields), editable: ["weight"] });
+  assert.equal(calls, 2);
+
+  const usage = await jsonRequest<SessionUsageSummary>(`${origin}/api/sessions/${configured}/usage`, { headers });
+  assert.equal(usage.response.status, 200);
+  assert.deepEqual(usage.body.invocations.map(record => record.outcome).sort(), ["completed", "failed"]);
+  for (const record of usage.body.invocations) {
+    assert.equal(record.invocationKind, "evolve");
+    assert.equal(record.modelProfileId, model.id);
+    assert.equal(record.sessionId, configured);
+    assert.equal(record.totalTokens, 20);
+  }
+});
+
 test("authenticated proxy REST returns complete settings URLs and manages MCP policies", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `proxy-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

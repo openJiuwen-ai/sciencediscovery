@@ -44,6 +44,7 @@ import { SearchCellGrid } from "./SearchCellGrid.js";
 import { SearchGraphCanvas } from "./SearchGraphCanvas.js";
 import { SearchGraphTable } from "./SearchGraphTable.js";
 import { layoutSearchGraph } from "./search-graph-layout.js";
+import { FieldDirection } from "./FieldDirection.js";
 import { emptyRunView, evolveShortTitle, reduceEvolveRecord, runProgress, type EvolveRunView } from "./model.js";
 
 export interface EvolvePanelProps {
@@ -168,6 +169,12 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
             {view.candidates.length} candidates · {view.expansions}/{run.goal.budget.expansions} expansions
           </span>
         </div>
+        {run.goal.scorecard.direction?.editable?.length ? <FieldDirection
+          client={client}
+          codeHash={view.candidates.find((candidate) => candidate.nodeIndex === 0)?.codeHash}
+          editable={run.goal.scorecard.direction.editable}
+          runId={run.id}
+        /> : null}
         <div className="evolve-dashboard">
           {/* ① what happened to the score, ② what the search explored, ③ every
               expansion in order, ④ what it cost. Four blocks because a user who

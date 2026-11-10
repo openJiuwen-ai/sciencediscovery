@@ -16,7 +16,8 @@ import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnostic
 import { FeedbackDialog } from "./FeedbackDialog.js";
 import { openFeedback } from "./feedback-open.js";
 import { commitsOnEnter } from "./ime-enter.js";
-import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { appendEvolveDirection, evolveCommandTask, isEvidenceSessionReadOnly, readEvolveAlgorithm, withEvolveAlgorithm, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
+import { DirectionDialog } from "./evolve/DirectionDialog.js";
 import { ContinueResearchButton } from "./research-package/ContinueResearchButton.js";
 import { ResearchContinuationContext, ResearchContinuationStatus, useResearchContinuationTasks } from "./research-package/ResearchContinuationTasks.js";
 import { markResearchCopyCreated, ResearchCopyNotice } from "./research-package/ResearchCopyNotice.js";
@@ -1192,11 +1193,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const scheduledConfigurationSubmission = useRef<string | undefined>(undefined);
   const pendingConfigurationContinuation = useRef<{ sessionId: string; modelId: string; content: string } | undefined>(undefined);
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
-
+  const [evolveSubmission, setEvolveSubmission] = useState<{ sessionId: string; message: string }>();
+  const [evolveRetry, setEvolveRetry] = useState<{ sessionId: string; message: string; algorithm: EvolveAlgorithm; direction?: EvolveDirectionInput }>();
+  const evolveTask = evolveSubmission ? evolveCommandTask(evolveSubmission.message) : "";
 
   function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
-    const afterCommand = message.replace(/^\/evolve-design\s*/, "");
-    setMessage(`/evolve-design --algorithm ${algorithm} ${afterCommand}`.trimEnd());
+    setMessage(withEvolveAlgorithm(message, algorithm));
     setEvolvePickerDismissed(false);
     requestAnimationFrame(() => composerTextarea.current?.focus());
   }
@@ -3765,18 +3767,32 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function submitMessage(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (evolveCommandBlocked || configurationPreflightPendingRef.current) return;
+    if (activeSessionId && session && !session.archivedAt && !isEvidenceSessionReadOnly(session)
+        && /^\/evolve-design(?:\s|$)/u.test(message.trimStart())) {
+      if (!evolveCommandTask(message)) {
+        setError(locale === "zh-CN" ? "请先输入要演进的任务。" : "Enter the task you want to evolve.");
+        return;
+      }
+      setEvolveSubmission({ sessionId: activeSessionId, message: message.trim() });
+      return;
+    }
+    await sendComposerMessage();
+  }
+
+  async function sendComposerMessage(evolve?: { algorithm: EvolveAlgorithm; direction?: EvolveDirectionInput }): Promise<void> {
     scheduledConfigurationSubmission.current = undefined;
-    if (configurationPreflightPendingRef.current) { event.preventDefault(); return; }
+    if (configurationPreflightPendingRef.current) return;
     const targetSession = activeSessionId;
-    try { await submitMessageWithConfigurationReceipt(event); }
+    try { await submitMessageWithConfigurationReceipt(evolve); }
     finally {
       setConfigurationReceipt(current => current && current.sessionId === targetSession && current.continuation === "submitting"
         ? { ...current, continuation: "failed" } : current);
     }
   }
 
-  async function submitMessageWithConfigurationReceipt(event: FormEvent): Promise<void> {
-    event.preventDefault();
+  async function submitMessageWithConfigurationReceipt(evolve?: { algorithm: EvolveAlgorithm; direction?: EvolveDirectionInput }): Promise<void> {
     if (evolveCommandBlocked) return;
     if (!activeSessionId || !session || !message.trim() || session.archivedAt || isEvidenceSessionReadOnly(session)) return;
     if (configurationPreflightPendingRef.current) return;
@@ -3845,12 +3861,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       configurationPreflightPendingRef.current = false;
     }
     if (latestMessageRef.current.trim() !== requestedContent) return;
-    const content = message.trim();
+    const taskCommand = evolve ? withEvolveAlgorithm(requestedContent, evolve.algorithm) : requestedContent;
+    const content = evolve?.direction ? appendEvolveDirection(taskCommand, evolve.direction) : taskCommand;
     const autoNameFirstMessage = session.title === UNTITLED_SESSION_TITLE
       && !session.messages.some((item) => item.role === "user");
     const titleRefinementStartedAt = Date.now();
     const provisionalTitle = autoNameFirstMessage
-      ? createLocalSessionTitle(messageForSessionTitle(content), session.createdAt)
+      ? createLocalSessionTitle(messageForSessionTitle(evolve ? evolveCommandTask(taskCommand) : taskCommand), session.createdAt)
       : session.title;
     const runSessionTitle = provisionalTitle;
     const references = composerReferences.filter((reference) => content.includes(composerReferenceToken(reference)));
@@ -3863,11 +3880,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     );
     if (!queuedBehindActiveRun) runAbortControllers.current.set(submittedSessionId, controller);
 
-    const savedContent = content;
+    const savedContent = requestedContent;
     const savedReferences = composerReferences;
     const savedAnnotations = pendingAnnotations;
     const optimisticMessageId = `optimistic-${Date.now()}`;
 
+    setEvolveRetry(undefined);
     setMessage("");
     setComposerReferences([]);
     setPendingAnnotations([]);
@@ -3944,6 +3962,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         setError(reason instanceof Error ? reason : t("error.runFailed"));
         if (!streamRunId) {
           setMessage(savedContent);
+          if (evolve) setEvolveRetry({ sessionId: submittedSessionId, message: requestedContent, ...evolve });
           setComposerReferences(savedReferences);
           setPendingAnnotations(savedAnnotations);
           setSession((current) => current ? {
@@ -5268,6 +5287,19 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
                   {evolveCommandBlocked ? <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
+                  {evolveSubmission && evolveSubmission.sessionId === activeSessionId ? <DirectionDialog
+                    chinese={locale === "zh-CN"} task={evolveTask}
+                    initialAlgorithm={evolveRetry?.sessionId === activeSessionId && evolveRetry.message === evolveSubmission.message
+                      ? evolveRetry.algorithm : readEvolveAlgorithm(evolveSubmission.message)}
+                    value={evolveRetry?.sessionId === activeSessionId && evolveRetry.message === evolveSubmission.message
+                      ? evolveRetry.direction : undefined}
+                    onClose={() => setEvolveSubmission(undefined)}
+                    onConfirm={(algorithm, direction) => {
+                      setEvolveSubmission(undefined);
+                      if (latestMessageRef.current.trim() === evolveSubmission.message) void sendComposerMessage({ algorithm, direction });
+                    }}
+                    onGenerate={(signal) => client.draftEvolveDirection(evolveSubmission.sessionId, evolveTask, signal)}
+                  /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
                   {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={t("app.removeAnnotation", { name: annotation.artifactLogicalName, note: annotation.note })} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
@@ -5281,7 +5313,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   </div> : <textarea ref={composerTextarea} disabled={sessionReadOnly} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
-                    if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
+                    if (!value.startsWith("/evolve-design")) {
+                      setEvolvePickerDismissed(false);
+                      setEvolveRetry(undefined);
+                      setEvolveSubmission(undefined);
+                    }
                   }} onKeyDown={(event) => {
                     if (event.shiftKey || !commitsOnEnter(event)) return;
                     if (composerTrigger) return;

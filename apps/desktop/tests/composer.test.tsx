@@ -372,6 +372,10 @@ test("sending a seeded design joins the token to the sentence once", async () =>
       <Composer
         attachments={[]}
         landing
+        evolveSetup={{
+          archived: false, initializing: false, onInitialize: () => {},
+          status: { canInitialize: false, sandbox: "bwrap", state: "ready" },
+        }}
         models={[{ id: "m1", name: "测试模型" } as never]}
         onApprovalMode={() => {}}
         onClearAttachments={() => {}}
@@ -401,9 +405,17 @@ test("sending a seeded design joins the token to the sentence once", async () =>
     });
     const send = view.root.findByProps({ "aria-label": "发送" });
     await act(async () => { (send.props.onClick as () => void)(); });
-    // The flags and the sentence travel together, in that order.
+    assert.equal(sent.length, 0);
+    const algorithm = view.root.findAllByType("button").find((node) => node.props.role === "radio" && node.props["aria-checked"] === false);
+    assert.ok(algorithm);
+    await act(async () => { algorithm.props.onClick(); });
+    const confirm = view.root.findAllByType("button").find((node) => node.children.includes("开始演进"));
+    assert.ok(confirm);
+    const form = view.root.findByType("form");
+    await act(async () => { form.props.onSubmit({ preventDefault() {} }); });
+    // The selected algorithm and the original sentence travel together once.
     assert.deepEqual(sent, [
-      { command: "/evolve-design --algorithm puct", content: "让压缩比更高，并且要快" },
+      { command: "/evolve-design --algorithm openevolve", content: "让压缩比更高，并且要快" },
     ]);
     // The token belonged to that message: the next draft starts empty.
     assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "");

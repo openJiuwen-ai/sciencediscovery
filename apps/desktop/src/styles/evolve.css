@@ -460,7 +460,8 @@
   gap: 8px;
 }
 
-.evolve-create-settings h3 {
+.evolve-create-settings h3,
+.evolve-json-header h3 {
   margin: 0;
   color: var(--text-strong);
   font-size: 14px;
@@ -1864,3 +1865,52 @@
 .evolve-checkpoint.is-folded[open] > summary .collapse-chev { transform: rotate(90deg); }
 
 .evolve-checkpoint.is-folded > .evolve-checkpoint-body { padding: 16px 24px; }
+
+
+.evolve-direction-input { display: grid; gap: 12px; min-width: 0; }
+.evolve-direction-input p { margin: 0; }
+.evolve-json-tools, .evolve-json-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.evolve-json-header { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 8px; }
+.evolve-json-header p, .evolve-json-footer span, .evolve-json-file, .evolve-json-column-labels { color: var(--muted); font-size: 12px; }
+.evolve-json-tools { flex-wrap: wrap; justify-content: flex-start; }
+.evolve-json-tools button, .evolve-json-upload, .evolve-json-footer button, .evolve-json-children button {
+  position: relative; display: inline-flex; align-items: center; min-height: 34px; padding: 4px 10px;
+  border: 1px solid var(--border, #d9e0eb); border-radius: 8px; background: var(--surface); color: inherit; cursor: pointer; font: inherit;
+}
+.evolve-json-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.evolve-json-upload:focus-within { outline: 2px solid var(--primary, #2563eb); outline-offset: 2px; }
+.evolve-json-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.evolve-json-list { border: 1px solid var(--border, #d9e0eb); border-radius: 12px; overflow: hidden; }
+.evolve-json-row, .evolve-json-column-labels {
+  display: grid; grid-template-columns: 58px minmax(100px, 1fr) minmax(130px, 1.8fr) 30px;
+  align-items: center; gap: 8px; padding: 8px 10px;
+}
+.evolve-json-column-labels { background: var(--surface-soft, #f6f8fc); }
+.evolve-json-row { border-top: 1px solid var(--border, #d9e0eb); }
+.evolve-json-row[data-editable="true"] { background: color-mix(in srgb, var(--primary, #2563eb) 7%, var(--surface)); }
+.evolve-json-row > input[type="checkbox"] { justify-self: center; width: 17px; height: 17px; accent-color: var(--primary, #2563eb); }
+.evolve-json-row input:not([type="checkbox"]), .evolve-json-value select, .evolve-json-child > input {
+  min-width: 0; width: 100%; min-height: 32px; box-sizing: border-box; padding: 4px 7px;
+  border: 1px solid var(--border, #d9e0eb); border-radius: 7px; background: var(--surface); color: inherit; font: inherit;
+}
+.evolve-json-value { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.evolve-json-value > select:last-child { width: auto; max-width: 44%; }
+.evolve-json-value > :first-child { flex: 1; min-width: 0; }
+.evolve-json-remove, .evolve-json-child > button { border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; }
+.evolve-json-remove:hover { color: var(--danger, #b42318); background: var(--surface-soft, #f6f8fc); }
+.evolve-json-empty { padding: 24px 14px; border: 1px dashed var(--border, #d9e0eb); border-radius: 12px; color: var(--muted); text-align: center; }
+.evolve-json-footer { margin-top: 10px; }
+.evolve-json-file { overflow-wrap: anywhere; }
+.evolve-json-error { color: var(--danger, #b42318); }
+.evolve-json-nested > summary { cursor: pointer; padding: 5px 0; }
+.evolve-json-children { display: grid; gap: 6px; padding-left: 6px; border-left: 1px solid var(--border, #d9e0eb); }
+.evolve-json-child { display: flex; gap: 5px; flex-wrap: wrap; }
+.evolve-json-child > input { flex: 1 1 65px; }
+.evolve-json-child > .evolve-json-value { flex: 2 1 105px; }
+@media (max-width: 560px) {
+  .evolve-json-header { grid-template-columns: minmax(0, 1fr); }
+  .evolve-json-column-labels { display: none; }
+  .evolve-json-row { grid-template-columns: 24px minmax(0, 1fr) 30px; }
+  .evolve-json-row > .evolve-json-value { grid-column: 2; grid-row: 2; }
+  .evolve-json-row > .evolve-json-remove { grid-column: 3; grid-row: 1; }
+}
