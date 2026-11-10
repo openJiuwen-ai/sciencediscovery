@@ -18,6 +18,11 @@ import { normalizeTags, inheritTags, compileSelector } from '../tags.mjs';
 import { createPlan, validatePlan, verifyResults, digest } from '../plan.mjs';
 import { preflight, hostPlatform, hostArch } from '../environment.mjs';
 import { parse } from '../cli.mjs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const tags = ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'npu:none', 'model:none', 'judge:none'];
 const item = overrides => ({ id: 'one', source: 'one.test.mjs', sourceHash: 'a'.repeat(64), runner: 'node', tags, ...overrides });
@@ -157,7 +162,47 @@ test('the plan ignores the host platform while the compatibility shim honours it
   assert.equal(createTest(import.meta.url, { tags: [...nativeTags, `os:${here}`, `arch:${hostArch(process.arch)}`] }).test, test);
 });
 
-test('a plan frozen from a CI profile records the profile inside its digest', () => {
+/** Run one generated file through `node --test` and return what the runner
+ *  printed. The file imports the real shim, so this is the direct path the
+ *  issue reports on — not the frozen-plan path. */
+function runDirect(source) {
+  const root = mkdtempSync(join(tmpdir(), 'science-compat-'));
+  try {
+    const file = join(root, 'probe.test.mjs');
+    writeFileSync(file, source);
+    const adapter = new URL('../compat.mjs', import.meta.url).href;
+    // The parent is itself a `node --test` child here, and a nested run that
+    // inherits NODE_TEST_CONTEXT reports into the parent instead of running
+    // the file as its own suite.
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ['--test', file], { encoding: 'utf8', env: childEnv });
+    return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}`, adapter };
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+test('a file excluded by its host tag reports a skip instead of a silent pass', () => {
+  const elsewhere = ['linux', 'macos', 'windows'].find(name => name !== hostPlatform(process.platform));
+  const source = `import { createTest } from ${JSON.stringify(new URL('../compat.mjs', import.meta.url).href)};
+const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:${elsewhere}'] });
+test('would-run-on-another-host', () => { console.log('CASE_RAN'); });
+`;
+  const run = runDirect(source);
+  assert.equal(run.status, 0);
+  assert.equal(run.output.includes('CASE_RAN'), false, 'no case executes on this host');
+  assert.match(run.output, /platform-inapplicable/);
+  assert.match(run.output, /skipped 1/);
+  assert.match(run.output, new RegExp(`host ${hostPlatform(process.platform)}/${hostArch(process.arch)} is not declared by os:${elsewhere}`));
+});
+test('a file that declares this host still registers its own cases', () => {
+  const source = `import { createTest } from ${JSON.stringify(new URL('../compat.mjs', import.meta.url).href)};
+const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:${hostPlatform(process.platform)}', 'arch:${hostArch(process.arch)}'] });
+test('runs-here', () => { console.log('CASE_RAN'); });
+`;
+  const run = runDirect(source);
+  assert.equal(run.status, 0);
+  assert.equal(run.output.includes('CASE_RAN'), true, 'the matching host runs the case');
+  assert.equal(run.output.includes('platform-inapplicable'), false);
+});test('a plan frozen from a CI profile records the profile inside its digest', () => {
   const daily = plan([item()], { profile: 'daily' });
   assert.equal(daily.profile, 'daily');
   assert.deepEqual(validatePlan(JSON.parse(JSON.stringify(daily))), daily);

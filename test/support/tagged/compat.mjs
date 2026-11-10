@@ -25,9 +25,13 @@ const declares = (tags, group, value) => {
  * A package's own `node --test` command has no plan and no target, so a file
  * that declares another platform has nothing it can run there. Registering
  * nothing is what those files did before they were tagged, when each test
- * skipped itself on the wrong host.
+ * skipped itself on the wrong host — but the runner counts the *file* as one
+ * passing test, so "excluded by a tag" and "ran and passed" printed the same
+ * `# tests 1 / # pass 1 / # skipped 0`. One skipped case puts the exclusion in
+ * the tally, with the host and the tag that caused it.
  */
-function inapplicable() {
+function inapplicable(reason) {
+  native.test('platform-inapplicable', { skip: reason }, () => {});
   const declaration = () => {};
   declaration.skip = declaration; declaration.todo = declaration; declaration.only = declaration;
   const hooks = Object.fromEntries(['before', 'after', 'beforeEach', 'afterEach'].map(name => [name, () => {}]));
@@ -45,8 +49,12 @@ function inapplicable() {
 export function createTest(file, options) {
   if (globalThis[Symbol.for('sciencediscovery.tagged.registry')]) return taggedTest(file, options);
   const tags = options?.tags ?? [];
-  if (!declares(tags, 'os', hostPlatform(process.platform)) || !declares(tags, 'arch', hostArch(process.arch))) {
-    return inapplicable();
-  }
-  return native;
+  const hostOs = hostPlatform(process.platform);
+  const hostCpu = hostArch(process.arch);
+  const unmet = [];
+  if (!declares(tags, 'os', hostOs)) unmet.push('os');
+  if (!declares(tags, 'arch', hostCpu)) unmet.push('arch');
+  if (!unmet.length) return native;
+  const declared = tags.filter(tag => unmet.some(group => tag.startsWith(`${group}:`)));
+  return inapplicable(`host ${hostOs}/${hostCpu} is not declared by ${declared.join(', ')}`);
 }
