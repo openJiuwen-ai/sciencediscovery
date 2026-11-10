@@ -43,6 +43,20 @@ export interface EvolveCheckpoint {
   total?: number;
 }
 
+/**
+ * How many checkpoints a design asks the reader to answer.
+ *
+ * `total` counts the steps the model writes, and the last of them is the record
+ * of the run starting — it is drawn as a record and nobody confirms it. So a
+ * design numbered 1 to 4 asks three questions, and every number the card prints
+ * or sends has to be counted this way: the badge and the sentence under it are
+ * one line apart, and a card that says 「2/3」 over a button that answers
+ * 「2/4」 reads as a bug, which it was.
+ */
+export function askedCheckpoints(total: number | undefined): number | undefined {
+  return total === undefined ? undefined : Math.max(1, total - 1);
+}
+
 /** One piece of an answer: the prose, or a card standing between two runs of
  *  it. Splitting is what lets the card be a real block element instead of a
  *  `<pre>` with a section smuggled inside it. */

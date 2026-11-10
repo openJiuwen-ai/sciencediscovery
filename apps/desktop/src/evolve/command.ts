@@ -81,6 +81,26 @@ export function evolveCommandCheckpointMode(text: string): EvolveCheckpointMode 
   return /--no-confirm\b/.test(leadingFlags(text)) ? "auto" : "confirm";
 }
 
+/** The pace of the design the Session is on: its latest `/evolve-design`
+ *  command, or the one still being sent.
+ *
+ *  The auto-continue reads this to decide whether it may act at all. A design
+ *  started with pauses is waiting for a person by construction, and a client
+ *  that pushed it forward would be answering a question the user asked to be
+ *  asked. Reading it from the transcript rather than remembering a switch
+ *  keeps a second client's design, and a reopened Session, on the same rule. */
+export function latestEvolveCheckpointMode(
+  messages: ReadonlyArray<{ content: string; role: string }>,
+  pending?: string,
+): EvolveCheckpointMode | undefined {
+  const commands = messages
+    .filter((message) => message.role === "user" && isEvolveCommand(message.content))
+    .map((message) => message.content);
+  if (pending !== undefined && isEvolveCommand(pending)) commands.push(pending);
+  const latest = commands.at(-1);
+  return latest === undefined ? undefined : evolveCommandCheckpointMode(latest);
+}
+
 /** The search the command names, as `--algorithm` says.
  *
  *  Read here so the setup detour keeps the choice: a command typed with

@@ -1866,7 +1866,6 @@
 
 .evolve-checkpoint.is-folded > .evolve-checkpoint-body { padding: 16px 24px; }
 
-
 .evolve-direction-input { display: grid; gap: 12px; min-width: 0; }
 .evolve-direction-input p { margin: 0; }
 .evolve-json-tools, .evolve-json-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1913,4 +1912,21 @@
   .evolve-json-row { grid-template-columns: 24px minmax(0, 1fr) 30px; }
   .evolve-json-row > .evolve-json-value { grid-column: 2; grid-row: 2; }
   .evolve-json-row > .evolve-json-remove { grid-column: 3; grid-row: 1; }
+}
+
+/* The band's one warning: the client carried this step once and stopped. It
+   sits in the band rather than the body because a record folds — the stop has
+   to be readable without opening the card. Amber rather than red: nothing
+   failed, the design is simply waiting on a person. */
+.evolve-checkpoint-stopped {
+  flex: none;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning-strong);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
 }

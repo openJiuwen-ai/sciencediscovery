@@ -14,7 +14,7 @@
 
 import { createContext, useContext, useId, useState } from "react";
 
-import type { EvolveCheckpoint } from "../evolve/checkpoint.js";
+import { askedCheckpoints, type EvolveCheckpoint } from "../evolve/checkpoint.js";
 import { MarkdownProse } from "../MarkdownProse.js";
 import { TEXT } from "../text.js";
 
@@ -63,6 +63,25 @@ export function useCheckpointAnswered(): boolean {
 }
 
 /**
+ * The step whose unattended continuation this client stopped.
+ *
+ * An `auto` card is a record: the client carries the design past it itself,
+ * because the card has nothing to press and nobody is typing into the
+ * conversation. When the same step comes back a second time the client stops
+ * instead of pushing it again, and the card is the only thing on screen that
+ * can say so. It is a context rather than a prop for the same reason the
+ * answer and the reply are: the card is drawn by `Markdown`, and only the
+ * shell that owns the conversation knows what the client did.
+ */
+const CheckpointRefusedContext = createContext<number | undefined>(undefined);
+
+export const CheckpointRefusedProvider = CheckpointRefusedContext.Provider;
+
+export function useCheckpointRefused(): number | undefined {
+  return useContext(CheckpointRefusedContext);
+}
+
+/**
  * One checkpoint of a design conversation.
  *
  * It is the checkpoint, not a decoration next to it: the title is the question
@@ -76,9 +95,16 @@ export function useCheckpointAnswered(): boolean {
  * over the language store, and a label captured at import would stay in the
  * language the window opened in.
  */
-export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint }) {
+export function CheckpointCard({ checkpoint, trailing }: {
+  checkpoint: EvolveCheckpoint;
+  /** This is the last thing the answer wrote. Only the trailing card can be
+   *  the point the design stopped on — the client carries a turn that ended
+   *  on a card, not one that ended on prose after it. */
+  trailing?: boolean;
+}) {
   const reply = useCheckpointReply();
   const answered = useCheckpointAnswered();
+  const refused = useCheckpointRefused();
   const text = TEXT.evolve.checkpoint;
   const auto = checkpoint.pace === "auto";
   /**
@@ -101,13 +127,18 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   /** The last step is written after the run started and never asks; it is a
    *  record, not one of the checkpoints the reader answers. So the counter
    *  counts only the ones that do — four steps, three checkpoints. */
-  const asked = checkpoint.total === undefined ? undefined : Math.max(1, checkpoint.total - 1);
+  const asked = askedCheckpoints(checkpoint.total);
   /** A record prints no counter at all: nobody is being asked which question
    *  of how many it is. */
   const count = record ? undefined : text.count(checkpoint.step, asked);
   const label = record
     ? text.stepEyebrow(checkpoint.step)
     : text.eyebrow(checkpoint.step, asked);
+  /** The client carried this step once and will not carry it again: the turn
+   *  ended here twice and the design is waiting on a person. Drawn on the
+   *  band, because a record folds and the stop has to be readable without
+   *  opening the card. */
+  const stopped = auto && trailing === true && !answered && refused === checkpoint.step;
   const noteId = useId();
   /** 需要调整 opens the note in the card instead of handing the composer a
    *  sentence: the change is described where the step is, and sending it does
@@ -154,6 +185,15 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           {count === undefined ? null : (
             <span className="evolve-checkpoint-count">{count}</span>
           )}
+          {stopped ? (
+            <span
+              className="evolve-checkpoint-stopped"
+              data-auto-continue="stopped"
+              title={text.autoStoppedHint}
+            >
+              {text.autoStopped}
+            </span>
+          ) : null}
           <span aria-hidden="true" className="collapse-chev">›</span>
         </summary>
         {body}
@@ -239,7 +279,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           <button
             className="evolve-checkpoint-confirm"
             disabled={reply.busy}
-            onClick={() => reply.reply(text.confirmReply(checkpoint.step, checkpoint.total))}
+            onClick={() => reply.reply(checkpointConfirmReply(checkpoint))}
             title={reply.busy ? text.busy : undefined}
             type="button"
           >
@@ -249,6 +289,17 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
       )}
     </section>
   );
+}
+
+/**
+ * The sentence the confirm button sends for `checkpoint`.
+ *
+ * It counts what the badge above it counts — the checkpoints the reader
+ * answers, not the steps the model numbers — so the button and the header of
+ * the same card can never disagree about which one this is.
+ */
+export function checkpointConfirmReply(checkpoint: Pick<EvolveCheckpoint, "step" | "total">): string {
+  return TEXT.evolve.checkpoint.confirmReply(checkpoint.step, askedCheckpoints(checkpoint.total));
 }
 
 /** The card's mark: a sheet of paper with a folded corner and two lines. It is

@@ -27,6 +27,7 @@ import {
   evolveCommandGoal,
   isEvolveCommand,
   isEvolveSkill,
+  latestEvolveCheckpointMode,
   splitEvolveCommand,
 } from "../src/evolve/command.js";
 import {
@@ -259,6 +260,21 @@ test("the pace flag is read as a flag, not as part of the goal", () => {
   assert.equal(evolveCommandCheckpointMode("/evolve-design --no-confirm faster"), "auto");
   assert.equal(evolveCommandCheckpointMode("/evolve-design faster"), "confirm");
   assert.equal(evolveCommandCheckpointMode("hello"), undefined);
+
+  // The pace the Session is on is the latest design command's, including one
+  // still being sent — a continuation, a question and an earlier design are
+  // not commands.
+  const user = (content: string) => ({ content, role: "user" });
+  const reply = (content: string) => ({ content, role: "assistant" });
+  assert.equal(latestEvolveCheckpointMode([]), undefined);
+  assert.equal(latestEvolveCheckpointMode([user("/evolve-design one")]), "confirm");
+  assert.equal(latestEvolveCheckpointMode([user("/evolve-design one"), reply("ok"), user("继续步骤 1/4")]), "confirm");
+  assert.equal(
+    latestEvolveCheckpointMode([user("/evolve-design --no-confirm one"), user("/evolve-design two")]),
+    "confirm",
+  );
+  assert.equal(latestEvolveCheckpointMode([user("/evolve-design one")], "/evolve-design --no-confirm two"), "auto");
+  assert.equal(latestEvolveCheckpointMode([user("/evolve-design --no-confirm one")], "继续步骤 1/4"), "auto");
 
   assert.equal(evolveCommandAlgorithm("/evolve-design --algorithm openevolve faster"), "openevolve");
   assert.equal(evolveCommandAlgorithm("/evolve-design --no-confirm --algorithm puct faster"), "puct");

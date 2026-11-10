@@ -91,9 +91,11 @@ title: 什么算“更好”
 
 Write the card once, when the step is done — not while you are still working on it.
 
-The card's confirm button answers with the step it confirms: 「确认检查点 N/4，继续。」 or, when the
-client's language is English, "Confirm checkpoint N/4, continue." Treat that as an answer to that
-step and nothing else — continue from it, and do not show the step again.
+The card's confirm button answers with the step it confirms: 「确认检查点 N/3，继续。」 or, when the
+client's language is English, "Confirm checkpoint N/3, continue." The denominator counts the
+checkpoints the reader answers — every step but the last, which is the record of the run starting —
+so it is one fewer than `total`; the step number is what identifies the card. Treat that as an
+answer to that step and nothing else — continue from it, and do not show the step again.
 
 In auto the client keeps the flow moving: when a turn ends on an auto card before step 4, it sends
 「继续步骤 N/4。」 or "Continue with step N/4.". That is not a new instruction and not a

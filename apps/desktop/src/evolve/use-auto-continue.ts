@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * Carry a no-confirm design past the card its turn ended on.
+ * Carry a no-confirm design past the turn it ended on.
  *
  * With `--no-confirm` the skill is told to do all four steps in one pass and
  * to write each checkpoint as a record on the way. The model usually does the
@@ -22,12 +22,21 @@
  * step 1 and looks broken. The client is the only participant that can start
  * the next turn, so it does: one message, once per step.
  *
+ * The same stall has a second shape. Some turns end with nothing at all — no
+ * card, no `create_evolve_run`, no search — and the model, watched live, spent
+ * its remaining turns re-checking the evaluator instead of submitting it. That
+ * ending is answered once per design, with a sentence that names the one thing
+ * the turn owed.
+ *
  * It refuses to guess. A run that did not complete (failed, cancelled, lost
- * its stream), an answer that ends on anything but a non-final auto card, or a
+ * its stream), a design started with pauses, a Session that already has a
+ * search, an answer that ends on anything but a non-final auto card, or a
  * step that was already carried forward all leave the conversation alone.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import type { EvolveCheckpointMode } from "@sciencediscovery/schema";
 
 import type { RunStreamState } from "../run-stream/model.js";
 import { TEXT } from "../text.js";
@@ -112,6 +121,14 @@ export interface AutoContinueInput {
    *  step 1 is refused while a second design's step 1 is not. Absent only
    *  before any design is known, when the check is per-session and per-step. */
   design?: string;
+  /** The pace the design was started with, from its `/evolve-design` command.
+   *  Only an `auto` design — nobody waiting at the checkpoints — may be pushed
+   *  forward by this client. */
+  checkpointMode?: EvolveCheckpointMode;
+  /** Whether the Session already has a search. A turn that ran after the
+   *  search exists is not a stalled design, and continuing it would be a paid
+   *  call answering nothing. */
+  searchStarted?: boolean;
   /** Whether a turn is in flight. The transition to `false` is the signal that
    *  one just ended. */
   running: boolean;
@@ -121,7 +138,31 @@ export interface AutoContinueInput {
   sessionId?: string;
 }
 
-export function useAutoContinue({ design, running, run, send, sessionId }: AutoContinueInput): void {
+/** The step number a stall is remembered by. Zero is not a real checkpoint —
+ *  they start at 1 — so one design can be carried past a card and then, once,
+ *  past a turn that ended with nothing at all. */
+const STALLED_STEP = 0;
+
+/** What the hook did to the conversation, for the transcript to draw.
+ *
+ *  One step is state a card cannot read for itself. The client carries a
+ *  no-confirm design past an auto card once; when the same step comes back a
+ *  second time it stops, because pushing again would be a paid turn answering
+ *  a card that was already answered. `refusedStep` is that stop, and the card
+ *  with that number is the only place it can be said: the turn ended, nothing
+ *  else will move, and a record with nothing to press otherwise reads as a
+ *  design that hung. */
+export interface AutoContinueState {
+  refusedStep?: number;
+}
+
+function lastTurnCalled(run: RunStreamState, name: string): boolean {
+  return (run.turns.at(-1)?.tools ?? []).some((tool) => tool.trace.name === name);
+}
+
+export function useAutoContinue({
+  checkpointMode, design, running, run, searchStarted, send, sessionId,
+}: AutoContinueInput): AutoContinueState {
   const wasRunning = useRef(false);
   /** The ending already carried forward, as `autoContinueKey` spells it. A
    *  model that ends on the same step twice — reworded or not — is not
@@ -129,6 +170,16 @@ export function useAutoContinue({ design, running, run, send, sessionId }: AutoC
    *  while a new design that happens to stop on the same step number still
    *  is. */
   const carried = useRef<string | undefined>(undefined);
+  /** The step whose push was refused, for the card to show. State, not a ref:
+   *  the transcript has to re-render for the reason to be on screen. */
+  const [refusedStep, setRefusedStep] = useState<number | undefined>(undefined);
+
+  /** A refusal belongs to one design in one Session. Opening another Session
+   *  — or starting another design in this one — must not leave the previous
+   *  "已停止自动续跑" on whatever card happens to share its step number. */
+  useEffect(() => {
+    setRefusedStep(undefined);
+  }, [sessionId, design]);
   // Read at fire time so a new `send` identity does not re-run the check.
   const latestSend = useRef(send);
   useEffect(() => {
@@ -145,12 +196,42 @@ export function useAutoContinue({ design, running, run, send, sessionId }: AutoC
     // its last text happened to end with a card.
     if (run.status !== "completed") return;
     const answer = lastAnswer(run);
-    if (answer === undefined) return;
-    const next = trailingAutoStep(answer);
-    if (next === undefined) return;
-    const key = autoContinueKey(sessionId, design, next.step);
+    const next = answer === undefined ? undefined : trailingAutoStep(answer);
+    if (next !== undefined) {
+      const key = autoContinueKey(sessionId, design, next.step);
+      if (carried.current === key) {
+        // The step came back after it was already carried. Pushing it again is
+        // a paid turn answering the same card, so the client stops here — and
+        // says so, because otherwise the design is a folded record with
+        // nothing to press and no sign of why it stopped.
+        setRefusedStep(next.step);
+        return;
+      }
+      setRefusedStep(undefined);
+      carried.current = key;
+      latestSend.current(TEXT.evolve.checkpoint.autoContinue(next.step, next.total));
+      return;
+    }
+    // The same stall, one shape later: the turn ended with no card to continue
+    // from and no search to show for it. Nothing in the conversation can move
+    // it — the design is unattended, and the search it was drawing up does not
+    // exist — so the client sends one sentence, once per design, and only for
+    // a design that was started without pauses.
+    if (checkpointMode !== "auto") return;
+    if (searchStarted === true || run.evolveRunsCreated > 0) return;
+    if (lastTurnCalled(run, "create_evolve_run")) return;
+    // With no turn recorded there is nothing to conclude from — a stream whose
+    // events were dropped is not evidence of a design that stopped. The card
+    // path above does not need this because the card is in the answer itself.
+    if (run.turns.length === 0) return;
+    // A turn that called tools and then ended is still stalled — the search is
+    // what it owed — and a turn that called nothing at all is the shape seen
+    // most often. Both are answered the same way, once.
+    const key = autoContinueKey(sessionId, design, STALLED_STEP);
     if (carried.current === key) return;
     carried.current = key;
-    latestSend.current(TEXT.evolve.checkpoint.autoContinue(next.step, next.total));
-  }, [design, run, running, sessionId]);
+    latestSend.current(TEXT.evolve.checkpoint.autoResume);
+  }, [checkpointMode, design, run, running, searchStarted, sessionId]);
+
+  return { refusedStep };
 }

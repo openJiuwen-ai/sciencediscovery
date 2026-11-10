@@ -26,9 +26,13 @@ import { Markdown } from "../src/Markdown.js";
 import { TEXT } from "../src/text.js";
 import {
   CheckpointAnsweredProvider,
+  CheckpointRefusedProvider,
   CheckpointReplyProvider,
+  checkpointConfirmReply,
   type CheckpointReply,
 } from "../src/views/CheckpointCard.js";
+
+import { act, create } from "./support/dom-renderer.js";
 
 const values: CheckpointReply = {
   busy: false,
@@ -63,12 +67,15 @@ function render(
   answer: string,
   reply: CheckpointReply | null = values,
   answered = false,
+  refused?: number,
 ): string {
   const markdown = <Markdown>{answer}</Markdown>;
   return renderToStaticMarkup(
-    <CheckpointAnsweredProvider value={answered}>
-      {reply === null ? markdown : <CheckpointReplyProvider value={reply}>{markdown}</CheckpointReplyProvider>}
-    </CheckpointAnsweredProvider>,
+    <CheckpointRefusedProvider value={refused}>
+      <CheckpointAnsweredProvider value={answered}>
+        {reply === null ? markdown : <CheckpointReplyProvider value={reply}>{markdown}</CheckpointReplyProvider>}
+      </CheckpointAnsweredProvider>
+    </CheckpointRefusedProvider>,
   );
 }
 
@@ -107,6 +114,30 @@ test("a record is a step, not a checkpoint: no badge, nothing to press", () => {
   assert.doesNotMatch(html, /evolve-checkpoint-actions/);
 });
 
+test("a record the client stopped carrying says so on its band", () => {
+  // The same step ended twice, so the client refused to push it again. The
+  // turn is over and nothing else on screen moves: without this the design
+  // reads as a hang on a card with nothing to press.
+  const html = render(card({ pace: "auto", step: 3 }), values, false, 3);
+  assert.match(html, /data-auto-continue="stopped"/);
+  assert.match(html, /已停止自动续跑/);
+  // It stays a record: the badge explains the stop, it does not turn the card
+  // into something with buttons.
+  assert.doesNotMatch(html, /<button/);
+});
+
+test("the stop is drawn only on the card the answer ended on", () => {
+  // A card followed by prose is not where a turn ended, so the client never
+  // carried it and cannot have stopped on it.
+  const html = render(`${card({ pace: "auto", step: 3 })}\n\n随后是说明。`, values, false, 3);
+  assert.doesNotMatch(html, /data-auto-continue="stopped"/);
+});
+
+test("a refusal for another step is not drawn on this card", () => {
+  const html = render(card({ pace: "auto", step: 2 }), values, false, 3);
+  assert.doesNotMatch(html, /data-auto-continue="stopped"/);
+});
+
 test("a record folds to its header like an answered card", () => {
   // The record is the longest thing in the transcript and asks for nothing, so
   // it is closed by default: the header says which step it is and what it was
@@ -139,6 +170,44 @@ test("a confirmation names the step it answers", () => {
   // reply now.
   assert.equal(TEXT.evolve.checkpoint.confirmReply(3, 4), "确认检查点 3/4，继续。");
   assert.equal(TEXT.evolve.checkpoint.confirmReply(2), "确认检查点 2，继续。");
+});
+
+test("the confirmation counts the checkpoints, not the four steps", () => {
+  // The badge on the card says 2/3 — the fourth step is the record of the run
+  // starting — and the button under it answered 2/4. One card cannot count
+  // two ways, so the sentence counts what the badge counts.
+  assert.equal(checkpointConfirmReply({ step: 2, total: 4 }), "确认检查点 2/3，继续。");
+  // A design the model numbered differently is counted the same way: every
+  // step but the last is a checkpoint.
+  assert.equal(checkpointConfirmReply({ step: 2, total: 3 }), "确认检查点 2/2，继续。");
+  // No total to count from: the step alone, as before.
+  assert.equal(checkpointConfirmReply({ step: 2 }), "确认检查点 2，继续。");
+});
+
+test("pressing the confirm button sends the sentence its badge counts", async () => {
+  // Static markup never touches the click handler, so the handler and the
+  // badge could disagree — and did: the card read 2/3 over a button that
+  // answered 2/4. This mounts the real card and presses what the reader
+  // presses.
+  const sent: string[] = [];
+  let view;
+  await act(async () => {
+    view = create(
+      <CheckpointReplyProvider value={{ busy: false, reply: (text) => sent.push(text) }}>
+        <Markdown>{card({ step: 2 })}</Markdown>
+      </CheckpointReplyProvider>,
+    );
+  });
+  try {
+    const confirm = view.root.find(
+      (node: { props: { className?: string }; type: unknown }) =>
+        node.type === "button" && node.props.className === "evolve-checkpoint-confirm",
+    );
+    await act(async () => { confirm.props.onClick(); });
+    assert.deepEqual(sent, ["确认检查点 2/3，继续。"]);
+  } finally {
+    view.unmount();
+  }
 });
 
 test("a card with no one to answer it still shows its content", () => {
