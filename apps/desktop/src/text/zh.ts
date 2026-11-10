@@ -1580,6 +1580,7 @@ export const ZH = {
       limit: (max: number) => `最多 ${max} 张`,
       remove: "移除截图",
       preparing: "正在处理图片…",
+      truncated: (max: number, skipped: number) => `只附加了前 ${max} 张截图，另有 ${skipped} 张被跳过。`,
       privacy: "截图对仓库协作者可见，请先遮挡敏感信息。",
       error: {
         type: "仅支持 PNG、JPEG 或 WebP 图片。",

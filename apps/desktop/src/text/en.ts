@@ -1534,6 +1534,7 @@ export const EN: Text = {
       limit: (max: number) => `Up to ${max} images`,
       remove: "Remove screenshot",
       preparing: "Processing images…",
+      truncated: (max: number, skipped: number) => `Only the first ${max} screenshots were attached; ${skipped} skipped.`,
       privacy: "Screenshots are visible to anyone with repository access; hide sensitive information first.",
       error: {
         type: "Only PNG, JPEG or WebP images are supported.",
