@@ -3531,11 +3531,13 @@ export function scheduleSessionRuns(
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
   executionGovernance?: ExecutionGovernance,
-): void {
-  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
+): Promise<void> {
+  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return Promise.resolve();
   const owner = Symbol(sessionId);
   scheduledSessions.set(sessionId, owner);
-  void (async () => {
+  // The caller starting a scheduler can await recovery and the final re-read.
+  // The rejection boundary below also protects callers that dispatch and return.
+  return (async () => {
     let currentRun: SessionRun | undefined;
     let recovery: { run: SessionRun; error: string; finishedAt: string } | undefined;
     let failures = 0;
