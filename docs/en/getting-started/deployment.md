@@ -56,12 +56,14 @@ Then select **Test and continue**.
 
 ![A custom provider](../../images/install/win-10-provider-custom.png)
 
-### Connection succeeds
+### Basic connection check passed
 
-On success the wizard shows **Connection succeeded** with the round-trip time. Select **Start using** to open
-the main window. If the test fails, check the API key, base URL and model name, then select **Test again**.
+On success the wizard shows **Basic check passed** with the round-trip time, plus a note that this basic check only
+confirms the provider answers a minimal request — it does not verify the full session run path, thinking, or tool use.
+Select **Start using** to open the main window. If the test fails, check the API key, base URL and model name, then
+select **Test again**.
 
-![Connection succeeded](../../images/install/win-11-connected.png)
+![Basic connection check passed](../../images/install/win-11-connected.png)
 
 ![Main window](../../images/install/win-12-home.png)
 

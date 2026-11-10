@@ -151,6 +151,14 @@ export function ModelConnectivityButton({
       {icon}
       <span aria-live="polite">{label}</span>
     </button>
+    {/* A reader who never hovers still has to see what a pass does not prove
+      (issue #824): the caveat under the button is the same one the wizard
+      shows as visible text. */}
+    {state.status === "result" && state.result.ok ? (
+      <small className="model-test-scope-note" role="note">
+        {t(scope === "matrix" ? "settings.modelTest.matrixScopeNote" : "settings.modelTest.basicScopeNote")}
+      </small>
+    ) : null}
     {state.status === "result" && state.result.protocols ? <div role="status" className="model-compatibility-results">
       <p>{t("settings.modelTest.selectionUnchanged")}</p>
       <ul>{state.result.protocols.map(p => <li key={p.apiProtocol}>

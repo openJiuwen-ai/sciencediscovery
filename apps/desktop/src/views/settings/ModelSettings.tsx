@@ -191,6 +191,11 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
                         title={probeResult.ok ? TEXT.settings.model.testOkNotice : undefined}
                       >
                         {" · "}{probeResult.text}
+                        {/* Visible, not tooltip-only: a reader who never hovers
+                          still sees what the pass does not prove (#824). */}
+                        {probeResult.ok ? (
+                          <em className="model-row-probe-note">{" · "}{TEXT.settings.model.testOkNotice}</em>
+                        ) : null}
                       </span>
                     ) : null}
                   </small>

@@ -4308,6 +4308,11 @@ body.is-resizing {
 .model-row-probe {
   color: #8c8c8c;
 }
+.model-row-probe .model-row-probe-note {
+  color: #8c8c8c;
+  font-style: normal;
+  opacity: 0.85;
+}
 
 .model-row-actions {
   display: flex;
