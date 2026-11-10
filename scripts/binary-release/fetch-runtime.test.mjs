@@ -2,7 +2,7 @@ import { createTest } from "../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 
@@ -120,4 +120,75 @@ test("cache-only runtime downloads fail without contacting the source", async (c
     /Required binary cache object is missing or invalid/,
   );
   assert.deepEqual(requested, ["https://cache.example/toolchains/v1/runtime.tar.xz"]);
+});
+
+test("a stalled runtime download fails with one readable line", async (context) => {
+  const root = await fixture(context);
+  const entry = {
+    filename: "runtime.tar.xz",
+    sha256: "0".repeat(64),
+    url: "https://source.example/runtime.tar.xz",
+  };
+  // A 200 whose body sends one chunk and then nothing.
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(1024));
+    },
+  });
+
+  await assert.rejects(
+    downloadRuntimeArchive(entry, root, {
+      stallMs: 200,
+      fetchImplementation: async () => new Response(body, { status: 200 }),
+    }),
+    /external asset download too slow: 1\.0 KB in [\d.]+ s, then no data for 0\.2 s: https:\/\/source\.example\/runtime\.tar\.xz/,
+  );
+});
+
+test("a trickle below the rate floor fails instead of waiting for the caller timeout", async (context) => {
+  const root = await fixture(context);
+  const entry = {
+    filename: "runtime.tar.xz",
+    sha256: "0".repeat(64),
+    url: "https://source.example/runtime.tar.xz",
+  };
+  // 512 KiB arrives at once, so the floor is checked immediately; a floor far
+  // above the observed rate is the trickle the job would otherwise sit on.
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(512 * 1024));
+    },
+  });
+
+  await assert.rejects(
+    downloadRuntimeArchive(entry, root, {
+      stallMs: 0,
+      minBytesPerSecond: 1_000_000_000,
+      fetchImplementation: async () => new Response(body, { status: 200 }),
+    }),
+    /external asset download too slow: 512\.0 KB in [\d.]+ s \([\d.]+ KB\/s, below the \d+\.\d KB\/s floor\): https:\/\/source\.example\/runtime\.tar\.xz/,
+  );
+});
+
+test("reuses a verified local archive without any request", async (context) => {
+  const root = await fixture(context);
+  const payload = Buffer.from("local runtime");
+  const entry = {
+    filename: "runtime.tar.xz",
+    sha256: createHash("sha256").update(payload).digest("hex"),
+    url: "https://source.example/runtime.tar.xz",
+  };
+  await writeFile(join(root, entry.filename), payload);
+  let requests = 0;
+
+  const archive = await downloadRuntimeArchive(entry, root, {
+    binaryCacheBaseUrl: "https://cache.example/toolchains/v1",
+    fetchImplementation: async () => {
+      requests += 1;
+      return new Response("unexpected", { status: 500 });
+    },
+  });
+
+  assert.equal(requests, 0);
+  assert.equal(archive, join(root, entry.filename));
 });

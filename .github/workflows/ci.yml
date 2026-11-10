@@ -450,6 +450,11 @@ jobs:
           # Where the cache step above restores the verified archive, and where
           # fetch-runtime.mjs looks for it before touching the network.
           BINARY_CACHE_DIR: ${{ runner.temp }}/binary-cache
+          # A cache miss must not sit on a trickle: 128 KB/s is the floor at
+          # which the pinned 34 MB archive finishes inside this job's budget,
+          # and a slower read now fails in seconds with one readable line
+          # instead of being killed by the journey's own 300 s cap (#1026).
+          BINARY_DOWNLOAD_MIN_BYTES_PER_SECOND: "131072"
         run: pnpm ci:st -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
