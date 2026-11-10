@@ -466,10 +466,19 @@ class StaleProbeSweepTests(unittest.TestCase):
         _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
         self.assertTrue(probe.exists())
 
-    def test_this_process_probe_is_never_swept(self) -> None:
+    def test_this_process_probe_from_a_killed_run_is_swept(self) -> None:
+        # A pid the namespace recycled can be ours now, yet the probe was written by
+        # the run that was killed. Sweeping it is what stops that leftover from
+        # reddening the real-tree walk, which is the residue this module exists to
+        # clean up.
         probe = self.write_probe(os.getpid())
         stale = time.time() - 600
         os.utime(probe, (stale, stale))
+        _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
+        self.assertFalse(probe.exists())
+
+    def test_this_process_probe_is_kept_while_it_is_fresh(self) -> None:
+        probe = self.write_probe(os.getpid())
         _remove_stale_probes(PROBE_ROOT, PROBE_PATTERN)
         self.assertTrue(probe.exists())
 
