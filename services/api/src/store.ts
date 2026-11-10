@@ -7515,9 +7515,13 @@ export class SessionStore {
 
   async appendMcpInvocation(invocation: McpInvocation): Promise<void> {
     this.assertSessionWritable(invocation.sessionId);
-    const values = await this.listMcpInvocations(invocation.sessionId);
-    values.push(invocation);
-    await this.writeArray(this.mcpInvocationsPath(invocation.sessionId), values);
+    await this.mutateArray<McpInvocation, void>(
+      this.mcpInvocationsPath(invocation.sessionId),
+      (values) => {
+        this.assertSessionWritable(invocation.sessionId);
+        values.push(structuredClone(invocation));
+      },
+    );
   }
 
   async listMcpInvocations(sessionId: string): Promise<McpInvocation[]> {
@@ -7527,9 +7531,13 @@ export class SessionStore {
 
   async appendPaperAcquisition(acquisition: PaperAcquisition): Promise<void> {
     this.assertSessionWritable(acquisition.sessionId);
-    const values = await this.listPaperAcquisitions(acquisition.sessionId);
-    values.push(acquisition);
-    await this.writeArray(this.paperAcquisitionsPath(acquisition.sessionId), values);
+    await this.mutateArray<PaperAcquisition, void>(
+      this.paperAcquisitionsPath(acquisition.sessionId),
+      (values) => {
+        this.assertSessionWritable(acquisition.sessionId);
+        values.push(structuredClone(acquisition));
+      },
+    );
   }
 
   async listPaperAcquisitions(sessionId: string): Promise<PaperAcquisition[]> {
@@ -7539,9 +7547,13 @@ export class SessionStore {
 
   async appendPaperVisionRun(run: PaperVisionRun): Promise<void> {
     this.assertSessionWritable(run.sessionId);
-    const values = await this.listPaperVisionRuns(run.sessionId);
-    values.push(run);
-    await this.writeArray(this.paperVisionRunsPath(run.sessionId), values);
+    await this.mutateArray<PaperVisionRun, void>(
+      this.paperVisionRunsPath(run.sessionId),
+      (values) => {
+        this.assertSessionWritable(run.sessionId);
+        values.push(structuredClone(run));
+      },
+    );
   }
 
   async listPaperVisionRuns(sessionId: string): Promise<PaperVisionRun[]> {

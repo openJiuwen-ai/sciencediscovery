@@ -24,7 +24,9 @@ import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 import {
   buildConversationBlocks,
   canSummarizeRunAsSkill,
+  isSkillEvolutionRun,
   latestSkillSourceRun,
+  selectSessionMainReplayRun,
   skillSummaryRun,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
@@ -203,6 +205,17 @@ test("Skill summaries use the latest eligible source and an exact linked Run", (
   assert.equal(latestSkillSourceRun([first, linked, latest], "session-a")?.id, latest.id);
   assert.equal(skillSummaryRun([wrong, linked], latest)?.id, linked.id);
   assert.equal(skillSummaryRun([{ ...linked, sessionId: "other" }], latest), undefined);
+});
+
+test("Skill evolution runs stay out of the main timeline replay", () => {
+  const source = sessionRun("source", 1, "running");
+  const summary = {
+    ...sessionRun("summary", 2, "running"),
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source",
+  };
+
+  assert.equal(isSkillEvolutionRun(summary), true);
+  assert.equal(selectSessionMainReplayRun([source, summary])?.id, source.id);
 });
 
 test("Skill authoring runs do not offer the redundant self-evolution action", () => {

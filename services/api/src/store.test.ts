@@ -22,7 +22,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 
-import type { ArtifactDerivation, ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
+import type { ArtifactDerivation, ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, McpInvocation, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
   INBOX_PROJECT_NAME,
   UNTITLED_SESSION_TITLE,
@@ -1149,6 +1149,26 @@ test("SessionStore ignores duplicate model usage attempts but keeps retries", as
   assert.deepEqual(records.map((usage) => usage.id).toSorted(), ["usage-0", "usage-retry"]);
   assert.deepEqual(records.map((usage) => usage.attemptIndex).toSorted(), [0, 1]);
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
+});
+
+test("SessionStore serializes concurrent MCP invocation writes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `mcp-invocation-concurrency-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("MCP invocation persistence");
+  const session = await store.createSession(project.id, "Concurrent MCP", {}, {}, { allowUnconfiguredModel: true });
+  const now = new Date().toISOString();
+  const records = Array.from({ length: 32 }, (_, index) => ({
+    id: `mcp-invocation-${index}`, sessionId: session.id, projectId: project.id,
+    sourceId: "custom-test", toolId: "echo", mcpServerId: "custom-test", toolCallId: `call-${index}`,
+    turnId: `turn-${index}`, adapterVersion: "test", attempts: [], attribution: "test",
+    cache: { hit: false, key: `key-${index}`, scope: "session" }, finishedAt: now,
+    license: "test", resultCount: 0, startedAt: now, status: "succeeded", transport: "mcp",
+    request: { hash: `sha256:${"0".repeat(64)}`, size: 0 },
+    normalizedResult: { hash: `sha256:${"1".repeat(64)}`, size: 0 },
+  } satisfies McpInvocation));
+  await Promise.all(records.map((record) => store.appendMcpInvocation(record)));
+  assert.deepEqual((await store.listMcpInvocations(session.id)).map((record) => record.id).toSorted(), records.map((record) => record.id).toSorted());
 });
 
 test("SessionStore serializes concurrent Session run creation and updates", async (context) => {

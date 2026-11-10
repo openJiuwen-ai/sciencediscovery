@@ -58,7 +58,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         config = McpServerConfig(server_name="sci", server_id="sci-test", client_type="streamable-http",
             server_path=f"http://127.0.0.1:{sock.getsockname()[1]}/mcp", params={"timeout_s": 5})
-        self.client = ToolMgr._create_client(config)
+        self.config = config
+        self.client = ToolMgr._create_client(self.config)
         self.assertIsInstance(self.client, SciHttpClient)
         # Prewarm finishes before callers start, as in production.
         self.assertTrue(await asyncio.create_task(self.client.connect()))
@@ -81,6 +82,28 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "done")
         self.assertTrue(seen)
         self.assertTrue(all(value is None for value in seen))
+
+    async def test_stateless_platform_client_does_not_pool_idle_sockets(self):
+        # The platform MCP endpoint has no session transport to preserve. An
+        # idle socket can be closed by the endpoint between runs and then be
+        # handed back by httpx for the next call as a ReadError. Verify the
+        # client disables only idle pooling; it must still allow new sockets.
+        original_init = httpx.AsyncClient.__init__
+        seen = {}
+
+        def capture_init(client, *args, **kwargs):
+            seen["limits"] = kwargs.get("limits")
+            return original_init(client, *args, **kwargs)
+
+        fresh = None
+        with patch.object(httpx.AsyncClient, "__init__", capture_init):
+            fresh = ToolMgr._create_client(self.config)
+            try:
+                self.assertTrue(await fresh.connect())
+            finally:
+                await fresh.disconnect()
+        self.assertIsInstance(seen.get("limits"), httpx.Limits)
+        self.assertEqual(seen["limits"].max_keepalive_connections, 0)
 
     async def test_concurrent_results_remain_correlated(self):
         results = await asyncio.gather(self.client.call_tool("task", {"delay": .15, "value": "first"}),

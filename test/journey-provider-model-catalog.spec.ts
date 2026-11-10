@@ -800,16 +800,15 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         });
         providerIds.push(providerA.id, providerB.id);
         raceProviderBId = providerB.id;
-        await page.reload();
-        // The registry mounts ProviderModelSettings, which pre-loads every
-        // configured provider's real model list in parallel (per-provider
-        // listing slot). Register both responses before opening the registry
-        // so the late A response still lands in A's own row and never bleeds
-        // into B's catalog.
+        // Register both responses before reloading. The current URL may still
+        // point at the open model registry, so reload can mount
+        // ProviderModelSettings and start both requests before
+        // openModelRegistry() is called.
         const responseA = page.waitForResponse((response) => new URL(response.url()).pathname
           === `/api/providers/${providerA.id}/models`);
         const responseB = page.waitForResponse((response) => new URL(response.url()).pathname
           === `/api/providers/${providerB.id}/models`);
+        await page.reload();
         const dialog = await openModelRegistry();
         await Promise.all([responseA, responseB]);
         const rowA = dialog.locator(".provider-row").filter({ hasText: "J7 Race Provider A" });
