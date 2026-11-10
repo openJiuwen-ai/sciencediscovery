@@ -363,7 +363,10 @@ const SUBAGENT_PROGRESS_FLUSH_MS = 250;
  *  the snapshots in between are transient and never reach the run stream. */
 const SUBAGENT_STREAM_EMIT_MS = 250;
 const activeSessions = new Map<string, RuntimeSessionRun>();
-const scheduledSessions = new Set<string>();
+const scheduledSessions = new Map<string, symbol>();
+// Live diagnostics survive reconnects while their durable write is unavailable.
+// They never claim that a terminal state has already reached disk.
+const pendingRunInterruptions = new WeakMap<SessionStore, Map<string, SessionRun>>();
 const activeRunAbortControllers = new Map<string, AbortController>();
 const activeSubagentAbortControllers = new Map<string, AbortController>();
 const cancelledRuns = new Set<string>();
@@ -3530,15 +3533,20 @@ export function scheduleSessionRuns(
   executionGovernance?: ExecutionGovernance,
 ): void {
   if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
-  scheduledSessions.add(sessionId);
+  const owner = Symbol(sessionId);
+  scheduledSessions.set(sessionId, owner);
   void (async () => {
-    try {
+    let currentRun: SessionRun | undefined;
+    let recovery: { run: SessionRun; error: string; finishedAt: string } | undefined;
+    let failures = 0;
+    const drain = async (): Promise<void> => {
       while (true) {
         if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
         const runs = await store.listSessionRuns(sessionId);
         if (runs.some((run) => run.status === "blocked" && run.configurationWait)) return;
         const next = runs.find((run) => run.status === "queued");
         if (!next) return;
+        currentRun = next;
         if (next.configurationContinuation) {
           const request = store.getConnectorConfigurationRequest(sessionId, next.configurationContinuation.requestId);
           const source = await store.getSessionRun(sessionId, next.configurationContinuation.sourceRunId);
@@ -3549,6 +3557,7 @@ export function scheduleSessionRuns(
             || !store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId)
             || (request.connectorId !== "web" && mcpCatalog.getStatus(request.connectorId).status !== "ready")) {
             await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+            currentRun = undefined;
             continue;
           }
         }
@@ -3574,16 +3583,19 @@ export function scheduleSessionRuns(
               runOverlay: Boolean(overlay), savedConnector: request ? store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId) : false,
               connectorReady: request ? request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready" : false });
             await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+            currentRun = undefined;
             continue;
           }
         }
         if (next.automaticWake && (!next.notificationDelivery || !store.notifications.deliveryAllowed(next.notificationDelivery))) {
           await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+          currentRun = undefined;
           continue;
         }
         if (cancelledRuns.has(next.id)) {
           await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
           cancelledRuns.delete(next.id);
+          currentRun = undefined;
           continue;
         }
         const startedAt = new Date().toISOString();
@@ -3592,8 +3604,10 @@ export function scheduleSessionRuns(
         const started = await store.updateSessionRunStatusIfCurrent(sessionId, next.id, "queued", "running", { startedAt });
         if (!started) {
           activeRunAbortControllers.delete(next.id);
+          currentRun = undefined;
           continue;
         }
+        currentRun = started;
         runLog.info("run_started", { runId: next.id, sessionId });
         let eventQueue = Promise.resolve();
         const publish: RunEventSink = (event, delivery) => {
@@ -3675,6 +3689,7 @@ export function scheduleSessionRuns(
             ...(error && status === "failed" ? { error } : {}),
             ...(status === "blocked" ? {} : { finishedAt: new Date().toISOString() }),
           });
+          currentRun = finished;
           await publishRunEvent(store, sessionId, next.id, { run: finished, status, type: "run.status" });
           const durationMs = Math.max(0, Date.now() - Date.parse(startedAt));
           if (status === "completed") {
@@ -3691,36 +3706,98 @@ export function scheduleSessionRuns(
               sessionId,
             });
           }
+          currentRun = undefined;
+          failures = 0;
+        }
+      }
+    };
+    try {
+      for (;;) {
+        try {
+          if (!store.getSession(sessionId) || isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
+          if (recovery) {
+            // Persist the interruption before dispatching more work. Never replay
+            // a model/tool turn whose side effects may already have happened.
+            const persisted = await store.getSessionRun(sessionId, recovery.run.id);
+            if (!persisted) {
+              pendingRunInterruptions.get(store)?.delete(runSubscriberKey(sessionId, recovery.run.id));
+              recovery = undefined;
+              currentRun = undefined;
+              continue;
+            }
+            const interrupted = isTerminalRunStatus(persisted.status) ? persisted
+              : await store.updateSessionRunStatusIfCurrent(sessionId, recovery.run.id, persisted.status, "interrupted", {
+                error: recovery.error, finishedAt: recovery.finishedAt,
+              });
+            if (!interrupted) continue;
+            await publishRunEvent(store, sessionId, interrupted.id, {
+              run: interrupted, status: interrupted.status, type: "run.status",
+            });
+            pendingRunInterruptions.get(store)?.delete(runSubscriberKey(sessionId, recovery.run.id));
+            recovery = undefined;
+            currentRun = undefined;
+            failures = 0;
+          }
+          await drain();
+          // A run may have been queued while the final read was in flight.
+          // Release before re-reading so another HTTP wake can take ownership.
+          scheduledSessions.delete(sessionId);
+          const remaining = await store.listSessionRuns(sessionId);
+          if (scheduledSessions.has(sessionId)) return;
+          scheduledSessions.set(sessionId, owner);
+          if (!remaining.some((run) => run.status === "queued")
+            || remaining.some((run) => run.status === "blocked" && run.configurationWait)) return;
+        } catch (reason) {
+          // A new owner may have started during the final re-read. Its recovery
+          // is independent; this old task must not reschedule or clear its lock.
+          if (scheduledSessions.has(sessionId) && scheduledSessions.get(sessionId) !== owner) return;
+          scheduledSessions.set(sessionId, owner);
+          failures += 1;
+          const error = `Run interrupted because session state could not be saved or read: ${runFailureMessage(reason)}. Check available disk space and data-directory permissions, then retry the run after storage recovers.`;
+          const retryMs = Math.min(500 * 2 ** Math.min(failures - 1, 6), 30_000);
+          runLog.error("run_scheduler_failed", {
+            errorMessage: shortErrorMessage(runFailureMessage(reason)),
+            sessionId, runId: currentRun?.id, retryMs,
+          });
+          if (currentRun && !recovery) {
+            recovery = { run: currentRun, error, finishedAt: new Date().toISOString() };
+            const interruptions = pendingRunInterruptions.get(store) ?? new Map<string, SessionRun>();
+            const visible: SessionRun = isTerminalRunStatus(currentRun.status) ? currentRun : {
+              ...currentRun, status: "interrupted", error, finishedAt: recovery.finishedAt,
+            };
+            interruptions.set(runSubscriberKey(sessionId, currentRun.id), visible);
+            pendingRunInterruptions.set(store, interruptions);
+            activeRunAbortControllers.get(currentRun.id)?.abort();
+            activeRunAbortControllers.delete(currentRun.id);
+            cancelledRuns.delete(currentRun.id);
+            // Storage itself is unavailable: the live diagnostic must not depend
+            // on another durable write succeeding. Recovery persists it later.
+            try {
+              await publishRunEvent(store, sessionId, currentRun.id, {
+                type: "run.status", status: visible.status, reason: visible.error,
+                run: visible,
+              }, { transient: true });
+            } catch (notificationError) {
+              runLog.error("run_scheduler_notification_failed", {
+                sessionId, runId: currentRun.id, errorMessage: shortErrorMessage(runFailureMessage(notificationError)),
+              });
+            }
+          }
+          if (!store.getSession(sessionId)) return;
+          // Keep ownership during recovery so an HTTP wake cannot bypass the
+          // delay. Continue slowly on long outages instead of abandoning a queue.
+          await new Promise<void>((resolve) => { setTimeout(resolve, retryMs).unref(); });
         }
       }
     } finally {
-      scheduledSessions.delete(sessionId);
-      const remaining = await store.listSessionRuns(sessionId);
-      const stillQueued = remaining.some((run) => run.status === "queued")
-        && !remaining.some((run) => run.status === "blocked" && run.configurationWait);
-      if (stillQueued) scheduleSessionRuns(
-        store,
-        runnerClient,
-        provenanceRecorder,
-        mcpBroker,
-        webBroker,
-        mcpRegistry,
-        mcpCatalog,
-        artifactManager,
-        paperService,
-        remoteCompute,
-        skillCatalog,
-        skillLibraryCatalog,
-        ideaTreeAuthorities,
-        ideaTreeRepository,
-        memoryGraphSink,
-        sessionId,
-        serverConfig,
-        memoryGraphClient,
-        evolve,
-      );
+      if (recovery) pendingRunInterruptions.get(store)?.delete(runSubscriberKey(sessionId, recovery.run.id));
+      if (scheduledSessions.get(sessionId) === owner) scheduledSessions.delete(sessionId);
     }
-  })();
+  })().catch((reason: unknown) => {
+    runLog.error("run_scheduler_recovery_failed", {
+      sessionId, errorMessage: shortErrorMessage(runFailureMessage(reason)),
+    });
+  });
 }
 
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
@@ -3809,7 +3886,8 @@ export async function streamStoredRunEvents(
   after: number,
   closeOnTerminal: boolean,
 ): Promise<void> {
-  const run = await store.getSessionRun(sessionId, runId);
+  const interruption = pendingRunInterruptions.get(store)?.get(runSubscriberKey(sessionId, runId));
+  const run = interruption ?? await store.getSessionRun(sessionId, runId);
   if (!run) {
     sendError(response, 404, "Run not found");
     return;
@@ -3830,9 +3908,10 @@ export async function streamStoredRunEvents(
   let sawTerminal = isTerminalRunStatus(run.status);
   const deliver = (record: SessionRunEvent) => {
     if (record.sequence <= 0) {
-      // Child-stream payloads fan out live without a main-stream cursor; a
-      // reconnecting client re-reads them from their own stream instead.
+      // Live payloads have no durable cursor. A scheduler interruption is
+      // replayed from memory until storage can persist its terminal status.
       writeSse(response, record.event);
+      if (isTerminalRunEvent(record.event)) sawTerminal = true;
       return;
     }
     if (record.sequence <= lastSequence) return;
@@ -3857,10 +3936,14 @@ export async function streamStoredRunEvents(
       runLog.info("run_stream_disconnected", { reason: "client_disconnect", runId, sessionId });
     }
   });
-  const replay = await store.listSessionRunEvents(sessionId, runId, after);
+  const replay = interruption ? [] : await store.listSessionRunEvents(sessionId, runId, after);
   for (const record of replay) deliver(record);
   buffering = false;
   for (const record of buffered.toSorted((left, right) => left.sequence - right.sequence)) deliver(record);
+  if (interruption) deliver({
+    createdAt: interruption.finishedAt ?? interruption.createdAt, sequence: 0, sessionId, runId,
+    event: { type: "run.status", status: interruption.status, run: interruption, reason: interruption.error },
+  });
   if (closeOnTerminal && sawTerminal) response.end();
 }
 
