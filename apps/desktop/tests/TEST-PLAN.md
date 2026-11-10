@@ -66,7 +66,7 @@
 1. `approvalMode` 不能与 `modelId`/`title` 同在一个 PATCH 里（服务端要求独立请求），夹具改为两次 PATCH。
 2. 上传成功后产品会自动展开工作区面板，因此不能再点「工作区面板」按钮（此时按钮已消失），改为直接断言「工作区」标签出现。
 3. 服务端 keep-alive 空闲 5 秒即关连接，长 UI 步骤后的 REST 断言会撞上 `ECONNRESET`；`api()` 与清理请求改为 `connection: close`。
-4. 连通性探测只给 8 个合成 token；推理模型可能把预算花在 reasoning 上并返回 `finish_reason: length`。当时产品判为 inconclusive，`models.real.spec.ts` 在这种供应商响应下具名跳过，而不是把端点判坏。（2026-10-28 更新：探测已把“结构有效但在自身输出上限处被截断”视为连接通过，跳过分支已删除，用例现在要求显示 `✓ 可用`。）
+4. 连通性探测只给 8 个合成 token；推理模型可能把预算花在 reasoning 上并返回 `finish_reason: length`。当时产品判为 inconclusive，`models.real.spec.ts` 在这种供应商响应下具名跳过，而不是把端点判坏。（2026-10-28 更新：探测已把“结构有效但在自身输出上限处被截断”视为连接通过，跳过分支已删除，用例现在要求显示 `✓ 基础检查通过`。）
 
 ## 优先级总表
 
