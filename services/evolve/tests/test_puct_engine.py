@@ -1265,14 +1265,49 @@ def test_rollouts_are_never_skipped_as_solved() -> None:
     Measured live: an evaluator clamped any shard compressed past 50% to a
     flat 1.0, four of six rollout shards saturated, and a run planned for 20
     expansions made 12 — two-thirds of the rollout budget burned on skips.
+
+    Narrowed to the assignment itself, because `_search` now *does* read the
+    scorecard's `solvedThreshold` — as `target_reward`, which ends the run
+    rather than turning a rollout into a no-op. The two knobs are separate and
+    must stay that way: wiring the scorecard threshold into `solved_threshold`
+    is exactly the budget shredding measured above.
     """
     import inspect
 
     from sciencediscovery_evolve.puct_engine import PuctEngine
 
-    source = inspect.getsource(PuctEngine._search)
-    assert '"solved_threshold": 2.0' in source
-    assert 'spec.scorecard.get("solvedThreshold")' not in source
+    lines = [line.strip() for line in inspect.getsource(PuctEngine._search).splitlines()]
+    skipped = [line for line in lines if '"solved_threshold"' in line]
+    assert skipped == ['"solved_threshold": 2.0,']
+    # ... and the scorecard's threshold is wired as the run's own stop instead.
+    target = [line for line in lines if '"target_reward"' in line]
+    assert len(target) == 1 and "solvedThreshold" in target[0]
+
+
+@pytest.mark.parametrize("mode", ["serial", "async"])
+def test_reaching_the_scorecard_s_solved_threshold_ends_the_run(mode: str) -> None:
+    """A tree whose best node reaches the goal stops instead of spending the budget.
+
+    Measured live (#948): three nodes scored 1.000 against the run's solved
+    threshold, and the tree still produced and expanded #16-#23 before stopping
+    at the 23/24 expansion cap — the stop reason named the budget, not the goal.
+    The scorecard's own threshold is now the framework's `target_reward`, read
+    against the tree's held-out best, on both drivers.
+    """
+    harness = Harness(scores=[1.0] * 12)
+    harness.run(spec(expansions=8, options={"mode": mode},
+                     scorecard={**SCORECARD, "solvedThreshold": 1.0}))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["stopReason"] == "target_reward"
+    assert finished["status"] == "succeeded"
+    assert finished["expansionsPlanned"] == 8
+    # The aim, stated as a number: the budget is not what ended this search.
+    assert len(harness.of("expanded")) < 8
+    # And the reason is on the record for whoever reads the run, not only in a
+    # field: "made 1 of 8" with no explanation reads as a broken run.
+    said = " ".join(str(event.get("message", "")) for event in harness.of("log"))
+    assert "target_reward" in said
 
 
 def test_an_unclosed_fence_still_yields_importable_code() -> None:

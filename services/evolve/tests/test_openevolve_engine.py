@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
@@ -393,6 +394,24 @@ def test_finish_warns_when_all_scores_identical():
     assert any("scored the same" in e["message"] for e in logs)
 
 
+def test_finish_carries_why_the_run_stopped_early():
+    """A run ended by the scorecard's threshold says so on the finish event.
+
+    `target_reward` — the scorecard's `solvedThreshold` — ends a sweep at 1 of 8
+    expansions (#948). The summary the user reads is built from this event, so a
+    reason that lives only in the log leaves the run looking like it just stopped.
+    """
+    program = _make_program(iteration=1, score=1.0)
+    archive = _make_archive_with([program])
+    reporter, collector = _make_reporter(archive=archive, spec=_spec(expansions=8))
+    reporter.note_outcome(SimpleNamespace(stop_reason="target_reward"), 8)
+    reporter.finish("succeeded")
+
+    finished = next(e for e in collector.events if e["type"] == "search_finished")
+    assert finished["stopReason"] == "target_reward"
+    assert finished["expansionsPlanned"] == 8
+
+
 def test_rollouts_are_never_skipped_as_solved():
     """As in the PUCT engine: a rollout scoring past `solved_threshold` proposes nothing.
 
@@ -403,5 +422,10 @@ def test_rollouts_are_never_skipped_as_solved():
 
     from sciencediscovery_evolve.openevolve_engine import OpenEvolveEngine
 
-    source = inspect.getsource(OpenEvolveEngine._search)
-    assert '"solved_threshold": 2.0' in source
+    # Narrowed to the assignment: `_search` now reads the scorecard's
+    # `solvedThreshold` as `target_reward`, the run's own stop, which is a
+    # separate knob from this rollout-level skip.
+    lines = [line.strip() for line in inspect.getsource(OpenEvolveEngine._search).splitlines()]
+    assert [line for line in lines if '"solved_threshold"' in line] == ['"solved_threshold": 2.0,']
+    target = [line for line in lines if '"target_reward"' in line]
+    assert len(target) == 1 and "solvedThreshold" in target[0]
