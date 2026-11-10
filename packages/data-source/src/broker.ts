@@ -162,7 +162,9 @@ function invocationError(code: McpError["code"], message: string, retryable = fa
   return { code, message: message.slice(0, 1_000), retryable };
 }
 
-function upstreamError(response: {
+/** Exported for the provider-error contract tests: the mapping from one failed
+ *  invocation to the model-facing code is what agents act on (#1049). */
+export function upstreamError(response: {
   attempts: Array<{ errorCode?: string; errorMessage?: string; retryAfterMs?: number; status: string }>;
   content: Array<{ text?: string; type: string }>;
 }): McpError {
@@ -181,6 +183,18 @@ function upstreamError(response: {
   }
   if (last?.errorCode === "UNAUTHORIZED") {
     return { code: "UNAUTHORIZED", message: message.slice(0, 1_000), retryable: false };
+  }
+  if (last?.errorCode === "ENDPOINT_UNAVAILABLE") {
+    // The provider said the configured endpoint itself is gone. Reporting this
+    // as NOT_FOUND told agents the record did not exist, so a dead integration
+    // was recorded as a gap in the literature (#1049).
+    return {
+      code: "UPSTREAM_UNAVAILABLE",
+      guidance: "The configured upstream service is unavailable, not the record: treat this as an outage and do not record a gap in the literature.",
+      message: message.slice(0, 1_000),
+      retryable: false,
+      upstreamCode: "ENDPOINT_UNAVAILABLE",
+    };
   }
   if (last?.errorCode === "NOT_FOUND") {
     return { code: "NOT_FOUND", message: message.slice(0, 1_000), retryable: false };

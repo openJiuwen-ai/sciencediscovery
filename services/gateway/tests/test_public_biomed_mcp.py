@@ -798,15 +798,49 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["records"][0]["identifier"], "PMC123")
         self.assertEqual(result["records"][0]["contentScope"], "abstract")
 
-    async def test_pmc_candidate_rejects_non_allowlisted_pdf_host(self) -> None:
-        locator = """<OA><records><record license="CC BY">
-          <link format="pdf" href="https://attacker.example/paper.pdf"/>
-        </record></records></OA>"""
+    async def test_pmc_candidate_reads_the_oa_package_bucket(self) -> None:
+        # PMC retired the OA Web Service in 2026; the replacement service is the
+        # OA package bucket, so the candidate is built from a listing key rather
+        # than from a locator that no longer answers (#1049).
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Contents><Key>PMC123.1/PMC123.1.pdf</Key></Contents>
+          <Contents><Key>PMC123.2/PMC123.2.pdf</Key></Contents>
+          <Contents><Key>PMC123.2/metadata.json</Key></Contents>
+        </ListBucketResult>"""
         with patch(
             "sciencediscovery_gateway.public_biomed_mcp._get_text",
-            new=AsyncMock(return_value=locator),
+            new=AsyncMock(return_value=listing),
         ):
-            with self.assertRaisesRegex(ValueError, "host allowlist"):
+            result = await _pmc_pdf_candidate("europe-pmc", "PMC123")
+        artifact = result["artifacts"][0]
+        # The newest package version wins, and the URL is built from the
+        # configured bucket, never from a provider-supplied href.
+        self.assertEqual(artifact["sourceUrl"],
+                         "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.2/PMC123.2.pdf")
+        self.assertEqual(artifact["mimeType"], "application/pdf")
+
+    async def test_pmc_candidate_reports_a_record_without_a_package(self) -> None:
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Contents><Key>PMC123.1/metadata.json</Key></Contents>
+        </ListBucketResult>"""
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(return_value=listing),
+        ):
+            with self.assertRaisesRegex(ValueError, "does not provide a PDF"):
+                await _pmc_pdf_candidate("europe-pmc", "PMC123")
+
+    async def test_pmc_candidate_ignores_a_key_that_leaves_the_bucket(self) -> None:
+        # Keys come from the provider, so one that escapes the record's own
+        # version directory must never become a download candidate.
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Contents><Key>PMC123.1/../../attacker.example/paper.pdf</Key></Contents>
+        </ListBucketResult>"""
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(return_value=listing),
+        ):
+            with self.assertRaisesRegex(ValueError, "does not provide a PDF"):
                 await _pmc_pdf_candidate("europe-pmc", "PMC123")
 
     def test_raise_for_status_keeps_status_and_retry_after_but_not_the_query(self) -> None:
@@ -836,6 +870,26 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(metadata["endpoint"], "https://export.arxiv.org")
             self.assertNotIn("secret", str(caught.exception))
             self.assertNotIn(body, str(caught.exception))
+
+    def test_gone_responses_are_attributed_to_the_configured_endpoint(self) -> None:
+        # A retired provider path answers 404 for records that exist, so the
+        # scope must say "the service is gone" instead of "we did not classify
+        # it" — otherwise the client reports the record as absent (#1049).
+        request = httpx.Request("GET", "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=PMC1")
+        for status in (404, 405, 410):
+            with self.assertRaises(RuntimeError) as caught:
+                _raise_for_status(httpx.Response(status, request=request))
+            metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
+            self.assertEqual(metadata["failureScope"], "endpoint")
+            self.assertEqual(metadata["statusCode"], status)
+            self.assertEqual(metadata["endpoint"], "https://www.ncbi.nlm.nih.gov")
+
+    def test_a_server_error_stays_unclassified(self) -> None:
+        request = httpx.Request("GET", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
+        with self.assertRaises(RuntimeError) as caught:
+            _raise_for_status(httpx.Response(503, request=request))
+        metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
+        self.assertEqual(metadata["failureScope"], "unknown")
 
     def test_retry_after_supports_http_date_and_ignores_invalid_values(self) -> None:
         request = httpx.Request("GET", "https://export.arxiv.org/api/query")
