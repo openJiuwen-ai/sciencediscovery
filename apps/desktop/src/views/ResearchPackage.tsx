@@ -49,6 +49,13 @@ interface Props {
   projects: Project[];
   onOpen: (session: string) => void; onRefresh: () => Promise<void>;
 }
+/** What the copy line says, if anything. A ready copy is reached through 继续聊天,
+ *  which navigates on its own, so there is deliberately no text and no second
+ *  "open" affordance for that state (#1057). */
+export function copyStatusLine(copy: CopyOperation | undefined, t: typeof TEXT.researchPackage): string | undefined {
+  if (!copy || copy.state === "ready") return undefined;
+  return copy.state === "copying" ? t.copying : copy.error ?? t.failed;
+}
 export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
   const t = TEXT.researchPackage;
   const [dialog, setDialog] = useState<"export" | "import" | "branch">();
@@ -60,6 +67,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [preview, setPreview] = useState<PackagePreview>();
   const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
+  /** True while a preview for the current selection is in flight: the file list
+   *  stays mounted and only the size line reports the recalculation (#1057). */
+  const [estimating, setEstimating] = useState(false);
+  /** The level/options the last preview described. Only a change there may
+   *  reset the list, because only then does the list itself change. */
+  const previewScope = useRef("");
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
@@ -182,7 +195,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
     if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
@@ -217,11 +230,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
-    setPreview(undefined); setError("");
-    const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory, graph, files).then(value => { if (active) setPreview(value); }).catch(reason => {
+    // Ticking a workspace file must not blank the dialog: the list stays mounted
+    // and the size line says it is recalculating. A level or option change does
+    // reset, because that is when the list itself changes (#1057).
+    const scope = `${level}|${trajectory}|${graph}`;
+    if (previewScope.current !== scope) { previewScope.current = scope; setPreview(undefined); }
+    setEstimating(true); setError("");
+    const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory, graph, files).then(value => { if (active) { setPreview(value); setEstimating(false); } }).catch(reason => {
       if (!active) return;
       if (reason?.code === "EXPORT_PREVIEW_PENDING") timer = setTimeout(load, 1500);
-      else setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason));
+      else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
   }, [client, dialog, detail?.id, projectId, level, trajectory, graph, files]);
@@ -295,10 +313,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const activeExports = exports.filter(record => record.phase === "packaging" || record.phase === "saving");
   const finishedExports = exports.filter(record => record.phase === "saved" || record.phase === "save-failed" || record.phase === "pack-failed");
 
+  // The only omission number derivable from this payload: files the user unticked
+  // (or that the server did not select), never an invented version count (#1057).
+  const excludedWorkspaceFiles = preview
+    ? preview.files.filter(item => files ? !files.includes(item.path) : item.selected === false).length
+    : 0;
   return <>
     {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
-    {copy ? <div className="research-package-status" role="status">{copy.state === "copying" ? t.copying : copy.state === "failed" ? copy.error ?? t.failed : t.ready}{copy.state === "ready" && copy.entrySessionId ? <button onClick={() => onOpen(copy.entrySessionId!)} type="button">{t.open}</button> : null}</div> : null}
+    // A ready copy is reachable through 继续聊天, which navigates as soon as the copy
+    // exists; a second permanent "open" entry point only duplicated it (#1057).
+    {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
     {activeFlash ? <div className={`research-package-flash is-${activeFlash.tone}`} role="status"><span>{activeFlash.message}</span>{activeFlash.savedToken ? <button onClick={() => void openLocation(activeFlash.savedToken!)} type="button">{t.openLocation}</button> : null}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
@@ -314,19 +339,19 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? `${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : "—"}</b></span>
           </button>)}</div>
           {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.trajectory}</label><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
-          <p>{preview ? `${t.estimate} ${(preview.estimatedBytes / 1024).toFixed(1)} KiB` : t.calculating}</p>
+          <p>{preview ? <>{t.estimate} <b>{(preview.estimatedBytes / 1024).toFixed(1)} KiB</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
-          {preview?.omissions.length ? <details><summary>{t.omissions} · {preview.omissions.length}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
+          {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
           {finishedExports.length > 0 ? <div className="research-package-saved"><h3>{t.savedExports}</h3>{finishedExports.map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "saved" && record.savedToken ? <button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button> : null}{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <span className="is-error">{record.error ?? t.failed}</span> : null}</div>)}</div> : null}
         </> : dialog === "import" ? <>
           <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
           <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span>{file ? <span className="research-package-upload-filename">{file.name}</span> : null}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
-          {inspection ? <div className="research-import-review"><p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects}</p><p className="research-package-notice">{t.importHint}</p>{inspection.manifest.omissions.length > 0 ? <ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul> : null}</div> : <p className="research-package-notice">{t.importHint}</p>}
-        </> : <><p>{t.branchHint}</p><blockquote>{detail?.messages.find(message => message.id === messageId)?.content.slice(0, 240)}</blockquote></>}
+          {inspection ? <div className="research-import-review"><p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects} · {(file!.size / 1024).toFixed(1)} KiB</p><p className="research-package-notice">{t.importHint}</p></div> : <p className="research-package-notice">{t.importHint}</p>}
+        </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the
