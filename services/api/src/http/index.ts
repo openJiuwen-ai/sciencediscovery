@@ -416,6 +416,96 @@ function extractReplacementModelId(body: unknown): string | null | undefined {
   throw new ApiStatusError(400, "replacementModelId must be a string or null");
 }
 
+/**
+ * The Specialist routes forward plain `Error`s from the store, and the store's
+ * wording is the message the settings pane shows. Only the store's own
+ * rejections may be answered as client errors; anything else raised in these
+ * handlers is an internal fault and must read 500. Exported for the route test.
+ */
+export function specialistErrorStatus(error: unknown): 400 | 404 | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const match = SPECIALIST_REJECTIONS.find(([wording]) =>
+    typeof wording === "string" ? error.message === wording : wording.test(error.message));
+  return match?.[1];
+}
+
+/**
+ * One entry per rejection `services/api/src/store.ts` raises for these routes,
+ * by its exact wording. A wording the store does not raise is not client input:
+ * `isKnownClientInputError` matches any message containing "must" or "cannot",
+ * which would relabel an internal fault as 400 and hide it from the log.
+ */
+const SPECIALIST_REJECTIONS: ReadonlyArray<readonly [string | RegExp, 400 | 404]> = [
+  ["Specialist not found", 404],
+  ["Specialist name is required", 400],
+  ["Specialist description is required", 400],
+  ["Specialist description must be 1-500 characters", 400],
+  ["Specialist instructions must be 1-20000 characters", 400],
+  ["Specialist name already exists", 400],
+  [/^Specialist (?:skills|connectors) are unavailable: /, 400],
+  ["Built-in specialists are read-only; only their enabled flag can be toggled", 400],
+  ["Built-in specialists cannot be deleted", 400],
+  ["Specialist is referenced by a Session or subagent and cannot be deleted", 400],
+  ["enabled must be a boolean", 400],
+];
+
+/**
+ * Answer one Specialist route, keeping the store's message and its status.
+ *
+ * A rejection the store did not raise is a fault. It is answered here rather
+ * than rethrown, because the catch-all judges an unknown `Error` by its
+ * wording: a failed `saveCatalog()` surfaces `node:sqlite`'s
+ * `cannot start a transaction within a transaction` (with
+ * `code: "ERR_SQLITE_ERROR"`), which would answer 400 with its raw text. Only
+ * the two typed errors and the one coded store rejection the catch-all maps
+ * without reading the message go through it.
+ */
+async function answerSpecialistRoute<T>(
+  response: ServerResponse,
+  request: IncomingMessage,
+  path: string,
+  status: number,
+  work: () => Promise<T>,
+): Promise<void> {
+  try {
+    sendJson(response, status, await work());
+  } catch (error) {
+    const errorStatus = specialistErrorStatus(error);
+    if (errorStatus !== undefined) {
+      sendError(response, errorStatus, error instanceof Error ? error.message : "Specialist request failed");
+      return;
+    }
+    if (error instanceof ApiStatusError || error instanceof SessionStoreHttpError
+      || (error as { code?: unknown } | null)?.code === "SPECIALIST_RUNTIME_INVALID") {
+      throw error;
+    }
+    apiLog.error("unclassified_specialist_request_error", {
+      errorMessage: shortErrorMessage(error),
+      method: request.method ?? "UNKNOWN",
+      path,
+      status: 500,
+    });
+    sendError(response, 500, "Internal server error");
+  }
+}
+
+/**
+ * Read a Specialist body that has to be a JSON object.
+ *
+ * `readJson` returns whatever `JSON.parse` produced, so a bare `null` body
+ * reaches the store and fails on a property read. That `TypeError` names
+ * nothing in `SPECIALIST_REJECTIONS`, so the route would answer it as a 500
+ * fault; rejecting it here keeps the status class the base answered for a
+ * malformed client body, before any of it touches the store.
+ */
+async function readSpecialistBody<T>(request: IncomingMessage): Promise<T> {
+  const body = (await readJson<unknown>(request)) as unknown;
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiStatusError(400, "Request body must be a JSON object");
+  }
+  return body as T;
+}
+
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
   const {
@@ -2255,20 +2345,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/specialists") {
-        sendJson(response, 201, await store.createSpecialist(await readJson<CreateSpecialistRequest>(request)));
+        const body = await readSpecialistBody<CreateSpecialistRequest>(request);
+        await answerSpecialistRoute(response, request, url.pathname, 201, () => store.createSpecialist(body));
         return;
       }
       const specialistMatch = url.pathname.match(/^\/api\/specialists\/([^/]+)$/);
       if (specialistMatch && request.method === "PUT") {
-        sendJson(response, 200, await store.updateSpecialist(
-          specialistMatch[1]!,
-          await readJson<UpdateSpecialistRequest>(request),
-        ));
+        const body = await readSpecialistBody<UpdateSpecialistRequest>(request);
+        await answerSpecialistRoute(response, request, url.pathname, 200, () => store.updateSpecialist(specialistMatch[1]!, body));
         return;
       }
       if (specialistMatch && request.method === "DELETE") {
-        await store.deleteSpecialist(specialistMatch[1]!);
-        sendJson(response, 200, { deleted: specialistMatch[1] });
+        await answerSpecialistRoute(response, request, url.pathname, 200, async () => {
+          await store.deleteSpecialist(specialistMatch[1]!);
+          return { deleted: specialistMatch[1] };
+        });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills") {
