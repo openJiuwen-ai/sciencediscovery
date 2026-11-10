@@ -26,6 +26,17 @@ import type { McpTransportClient } from "./transport.js";
 import { SourceHealth, SOURCE_HEALTH_POLICY } from "./source-health.js";
 import { ResourceRateLimiter } from "./resource-rate-limiter.js";
 
+/** How long a case waits for the call it named. Long enough that a loaded runner
+ *  only delays the wait, short enough that a fault which never arrives fails the
+ *  case instead of the worker's slice. */
+const FAULT_OBSERVATION_DEADLINE_MS = 10_000;
+
+interface FaultWait {
+  timeoutMs?: number;
+  /** Read only on the way out, so a red case says what it was waiting for. */
+  diagnose?: () => string;
+}
+
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const directory = await mkdtemp(join(tmpdir(), "issue-208-health-"));
   const registry = createBuiltinMcpSourceRegistry();
@@ -50,8 +61,38 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
       inputSchema: registry.getTool(id, "search").inputSchema,
     })),
   }] };
+  // A case waits for the call it named rather than polling a clock: the injected
+  // fault is an event this suite triggers, so a loaded runner can delay the wait but
+  // cannot turn it into a failure, and a fault that never arrives still fails fast.
+  interface CallWaiter { target: number; resolve: () => void }
+  const callWaiters: CallWaiter[] = [];
+  const nextCall = (target: number, wait: FaultWait = {}): Promise<void> => {
+    if (calls >= target) return Promise.resolve();
+    const startedAt = performance.now();
+    return new Promise<void>((resolveWait, rejectWait) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter: CallWaiter = { target, resolve: () => { clearTimeout(timer); resolveWait(); } };
+      timer = setTimeout(() => {
+        const index = callWaiters.indexOf(waiter);
+        if (index >= 0) callWaiters.splice(index, 1);
+        const elapsed = Math.round(performance.now() - startedAt);
+        const diagnosis = wait.diagnose?.();
+        rejectWait(new Error(
+          `Timed out waiting for local fault injection after ${elapsed} ms${diagnosis ? `: ${diagnosis}` : ""}`,
+        ));
+      }, wait.timeoutMs ?? FAULT_OBSERVATION_DEADLINE_MS);
+      callWaiters.push(waiter);
+    });
+  };
   const gateway: McpTransportClient = { catalog: async () => catalogData, reload: async () => catalogData,
-    invoke: async (request, signal) => { calls++; return fault(request, signal); } };
+    invoke: async (request, signal) => {
+      calls += 1;
+      for (let index = callWaiters.length - 1; index >= 0; index -= 1) {
+        if (calls < callWaiters[index]!.target) continue;
+        callWaiters.splice(index, 1)[0]!.resolve();
+      }
+      return fault(request, signal);
+    } };
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
   const limiter = new ResourceRateLimiter();
@@ -62,7 +103,8 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const invoke = (query: string, sourceId = "arxiv", sessionId = "session", signal?: AbortSignal) => broker.invoke({
     input: { query, limit: 1 }, projectId: "project", sessionId, sourceId, toolId: "search", toolCallId: query, turnId: query, signal,
   });
-  return { invoke, invocations, gateway, broker, sibling, registry, limiter, health, setFault: (next: typeof fault) => { fault = next; }, calls: () => calls };
+  return { invoke, nextCall, invocations, gateway, broker, sibling, registry, limiter, health,
+    setFault: (next: typeof fault) => { fault = next; }, calls: () => calls };
 }
 
 function failure(status: "rate-limited" | "semantic-error", retryAfterMs?: number): McpInvokeResponse {
@@ -95,14 +137,31 @@ function success(): McpInvokeResponse {
     durationMs: 1, isError: false, requestId: "success", serverId: "biomed", toolName: "search" };
 }
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
-async function waitFor(predicate: () => boolean) {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  assert.fail("Timed out waiting for local fault injection");
-}
+test("the fault rendezvous resolves on the call it named and not before", async t => {
+  // The wait names its call, so it must stay pending while that call has not entered
+  // the transport: resolving on any earlier call would let the cases that gate on it
+  // proceed with the wrong one.
+  const f = await fixture(t);
+  f.setFault(async () => success());
+  await f.invoke("first");
+  let secondEntered = false;
+  const second = f.nextCall(2).then(() => { secondEntered = true; });
+  await settle();
+  assert.equal(secondEntered, false, "the wait must not resolve before the call it named");
+  await f.invoke("second");
+  await second;
+  assert.equal(f.calls(), 2);
+});
+
+test("the fault rendezvous stays bounded and says what it waited for", async t => {
+  // It replaces a polling gate, so it inherits the gate's duty: a fault that never
+  // arrives fails with the state it waited for instead of stalling the worker.
+  const f = await fixture(t);
+  await assert.rejects(
+    () => f.nextCall(1, { diagnose: () => `calls=${f.calls()}`, timeoutMs: 50 }),
+    /Timed out waiting for local fault injection after \d+ ms: calls=0/,
+  );
+});
 
 test("parallel 429 callers share cooldown, drain their queue and do not retry inside one slot", async t => {
   const f = await fixture(t);
@@ -113,7 +172,7 @@ test("parallel 429 callers share cooldown, drain their queue and do not retry in
     return failure("rate-limited", 60_000);
   });
   const requests = Array.from({ length: 12 }, (_, i) => f.invoke(`parallel-${i}`, "arxiv", `sibling-${i}`).catch(error => error));
-  await waitFor(() => f.calls() === 1);
+  await f.nextCall(1, { diagnose: () => `calls=${f.calls()}` });
   await settle(); finish();
   const errors = await Promise.all(requests);
   assert.equal(f.calls(), 1);
@@ -184,7 +243,7 @@ test("cooldown admits one recovery probe, excludes siblings and restores access 
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
   const probe = f.invoke("probe");
-  await waitFor(() => f.calls() === 2);
+  await f.nextCall(2, { diagnose: () => `calls=${f.calls()}` });
   const siblings = await Promise.all(Array.from({ length: 8 }, (_, i) => f.invoke(`probe-peer-${i}`).catch(error => error)));
   assert.ok(siblings.every((error: McpInvocationError) => error.invocation.error?.sourceHealth?.decision === "probe-in-flight"));
   assert.equal(f.calls(), 2);
@@ -228,7 +287,8 @@ test("queue exhaustion, timeout and cancellation free resources for subsequent r
   const f = await fixture(t);
   let finish!: () => void;
   f.setFault(async () => { await new Promise<void>(resolve => { finish = resolve; }); return success(); });
-  const active = f.invoke("active"); await waitFor(() => f.calls() === 1);
+  const active = f.invoke("active");
+  await f.nextCall(1, { diagnose: () => `calls=${f.calls()}` });
   const controller = new AbortController();
   const cancelled = f.invoke("cancelled", "arxiv", "session", controller.signal).catch(error => error);
   await settle(); controller.abort(new DOMException("Cancelled", "AbortError"));
