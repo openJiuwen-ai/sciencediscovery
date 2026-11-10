@@ -27,6 +27,13 @@ export function isKnownClientInputError(error: unknown): boolean {
     /\bcannot\b/i,
     /\bdoes not match\b/i,
     /\binvalid\b/i,
+    // A caller-supplied string over its length limit. The stores that reject
+    // one end the message with the phrase, so it is anchored to the end of the
+    // message (allowing only a sentence period and trailing whitespace): the
+    // caller gets the 400 that names the field, while an executor fault such as
+    // `Runner bundle path is too long for tar: <path>` keeps the phrase
+    // mid-sentence and its generic 500, so the path never reaches the client.
+    /\bis too long\.?\s*$/i,
     /\bunsafe\b.*\b(?:archive|package|path)\b/i,
     /\bplain basename\b/i,
   ].some((pattern) => pattern.test(error.message));

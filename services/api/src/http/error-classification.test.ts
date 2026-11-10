@@ -35,3 +35,37 @@ test("keeps known validation failures at 400 without hiding internal faults", ()
   assert.equal(isKnownClientInputError(new SyntaxError("Malformed JSON")), true);
   assert.equal(isKnownClientInputError(new Error("Database invariant failed")), false);
 });
+
+test("a length rejection is client input only when it is the whole message", () => {
+  // Every store that rejects a caller-supplied string over its limit ends the
+  // message with the phrase. Pinned by name, so narrowing the pattern cannot
+  // silently drop one.
+  for (const message of [
+    "The LLM API token is too long",
+    "The proxy URL is too long",
+    "neo4jHttp is too long",
+    "neo4jUser is too long",
+    "The Neo4j password is too long",
+    "Model ID is too long",
+    "The stored runnerToken is too long",
+    "pip indexUrl is too long",
+  ]) {
+    assert.equal(isKnownClientInputError(new Error(message)), true, message);
+  }
+
+  // Upstream copy may end the sentence with a period or a line break.
+  assert.equal(isKnownClientInputError(new Error("The LLM API token is too long.")), true);
+  assert.equal(isKnownClientInputError(new Error("The Neo4j password is too long. \r\n")), true);
+
+  // These carry a filesystem path mid-sentence, so they are server-side faults:
+  // the client keeps the generic 500 instead of a body naming the path.
+  for (const message of [
+    "Runner bundle path is too long for tar: /srv/ws_a/data/model.bin",
+    "The remote data directory path is too long for a Unix socket: /tmp/sc-remote/ws_a/.agent.sock",
+  ]) {
+    assert.equal(isKnownClientInputError(new Error(message)), false, message);
+  }
+
+  // Mentioning a length alone is not a validation shape either.
+  assert.equal(isKnownClientInputError(new Error("Chunk length 16384 exceeds the internal buffer budget")), false);
+});
