@@ -91,7 +91,8 @@ test("model test button spins, shows a result, and can be clicked again", async 
   assert.equal(testingButton.findByType("svg").props.className, "spin");
 
   await act(async () => { resolveFirst?.(success); });
-  assert.equal(buttonText(renderer!), "可用 · 42 ms");
+  assert.equal(buttonText(renderer!), "基础检查通过 · 42 ms");
+  assert.match(renderer!.root.findByType("button").props.title, /不验证完整会话执行路径、思考或工具调用/);
   assert.equal(renderer!.root.findByType("button").props.disabled, false);
 
   await acceptProbeCost(renderer!);
@@ -138,7 +139,7 @@ test("saving a changed profile clears its previous test result", async () => {
     renderer!.root.findByType("button").props.onClick();
     await Promise.resolve();
   });
-  assert.equal(buttonText(renderer!), "可用 · 42 ms");
+  assert.equal(buttonText(renderer!), "基础检查通过 · 42 ms");
   await act(async () => { renderer!.update(view(testModel, "version-2")); });
   assert.equal(buttonText(renderer!), "测试");
   assert.equal(renderer!.root.findByType("input").props.checked, false);
@@ -230,13 +231,39 @@ test('scope defaults to one selected-protocol request and switching to matrix re
   assert.deepEqual(modes, [false, true]); await act(async () => renderer!.unmount());
 });
 
-test('selected-protocol insufficient evidence stays inconclusive, with a specific valid-budget notice', async () => {
-  for (const locale of ['en', 'zh-CN'] as const) for (const budget of [false, true]) {
+test('selected-protocol insufficient evidence stays inconclusive', async () => {
+  for (const locale of ['en', 'zh-CN'] as const) {
     let renderer: ReactTestRenderer;
-    await act(async () => { renderer = create(view(async () => ({ ...success, category: 'invalid_response', ok: false, ...(budget ? { inconclusiveReason: 'output_limit' as const } : {}) }), 'v1', false, locale)); });
+    await act(async () => { renderer = create(view(async () => ({ ...success, category: 'invalid_response', ok: false }), 'v1', false, locale)); });
     await acceptProbeCost(renderer!); await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
     assert.match(buttonText(renderer!), locale === 'en' ? /Inconclusive/ : /无法确认/);
-    if (budget) assert.match(renderer!.root.findByType('button').props.title, locale === 'en' ? /output limit/ : /输出预算/);
     await act(async () => renderer!.unmount());
   }
+});
+
+for (const locale of ['zh-CN', 'en'] as const) test(`a successful basic probe is presented as a qualified basic check, never an unqualified readiness claim (${locale})`, async () => {
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view(async () => success, 'v1', false, locale)); });
+  await acceptProbeCost(renderer!);
+  await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
+  const label = buttonText(renderer!);
+  const detail = renderer!.root.findByType('button').props.title as string;
+  assert.match(label, locale === 'zh-CN' ? /基础检查通过/ : /Basic check passed/);
+  assert.match(detail, locale === 'zh-CN' ? /不验证完整会话执行路径、思考或工具调用/ : /does not verify the full session run path, thinking, or tool use/);
+  assert.doesNotMatch(label, locale === 'zh-CN' ? /^可用/ : /^Ready\b/);
+  assert.doesNotMatch(detail, locale === 'zh-CN' ? /连接成功，耗时/ : /^Connection succeeded/);
+  await act(async () => renderer!.unmount());
+});
+
+test('a successful full compatibility check gets its own verdict without claiming session readiness', async () => {
+  let renderer: ReactTestRenderer;
+  const outcome = { ok: true, category: 'ok' as const, message: 'observed' };
+  const protocols = (['openai-chat-completions'] as const).map(apiProtocol => ({ apiProtocol, basic: outcome, streaming: outcome, tools: outcome, usage: 'available' as const }));
+  await act(async () => { renderer = create(view(async () => ({ ...success, protocols }), 'v1', false, 'zh-CN')); });
+  await act(async () => { renderer!.root.findByType('select').props.onChange({ target: { value: 'matrix' } }); });
+  await acceptProbeCost(renderer!);
+  await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
+  assert.match(buttonText(renderer!), /兼容性检查完成 · 42 ms/);
+  assert.match(renderer!.root.findByType('button').props.title, /均不能证明会话可完整运行/);
+  await act(async () => renderer!.unmount());
 });

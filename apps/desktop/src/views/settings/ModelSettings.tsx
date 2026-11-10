@@ -62,7 +62,7 @@ const TONES = ["tone-1", "tone-2", "tone-3", "tone-4", "tone-5", "tone-6"];
  */
 export function ModelSettings({ actions, adding, client, onAddingChange, state }: Props) {
   const [probing, setProbing] = useState<string>();
-  const [probe, setProbe] = useState<Record<string, string>>({});
+  const [probe, setProbe] = useState<Record<string, { ok: boolean; text: string }>>({});
   /** Which row is open, and the name being typed into it. */
   const [openId, setOpenId] = useState<string>();
   const [draft, setDraft] = useState("");
@@ -131,15 +131,18 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
       setProbe((current) => ({
         ...current,
         [profile.id]: result.ok
-          ? TEXT.settings.model.testOk(result.latencyMs)
-          : TEXT.settings.model.testFailed(result.message || TEXT.errors.generic),
+          ? { ok: true, text: TEXT.settings.model.testOk(result.latencyMs) }
+          : { ok: false, text: TEXT.settings.model.testFailed(result.message || TEXT.errors.generic) },
       }));
     } catch (reason) {
       setProbe((current) => ({
         ...current,
-        [profile.id]: TEXT.settings.model.testFailed(
-          reason instanceof Error ? reason.message : TEXT.errors.generic,
-        ),
+        [profile.id]: {
+          ok: false,
+          text: TEXT.settings.model.testFailed(
+            reason instanceof Error ? reason.message : TEXT.errors.generic,
+          ),
+        },
       }));
     } finally {
       setProbing(undefined);
@@ -161,6 +164,9 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
             const provider = profile.providerId === undefined
               ? undefined
               : state.providers.find((candidate) => candidate.id === profile.providerId);
+            // Extracted so JSX narrowing survives: repeated indexed access
+            // (`probe[profile.id]`) does not narrow under noUncheckedIndexedAccess.
+            const probeResult = probe[profile.id];
             return (
               <article className={`model-row${open ? " is-open" : ""}`} key={profile.id}>
                 <span className={`model-row-mark ${TONES[index % TONES.length]}`} aria-hidden="true">
@@ -179,7 +185,14 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
                   </span>
                   <small>
                     {profile.model}
-                    {probe[profile.id] ? <span className="model-row-probe"> · {probe[profile.id]}</span> : null}
+                    {probeResult ? (
+                      <span
+                        className="model-row-probe"
+                        title={probeResult.ok ? TEXT.settings.model.testOkNotice : undefined}
+                      >
+                        {" · "}{probeResult.text}
+                      </span>
+                    ) : null}
                   </small>
                 </button>
                 <div className="model-row-actions">

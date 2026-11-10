@@ -112,10 +112,16 @@ export function ModelConnectivityButton({
   } else if (state.status === "result" && state.result.ok) {
     className += " success";
     icon = <CheckIcon size={14} />;
-    label = t("settings.modelTest.success", { latency: state.result.latencyMs });
-    title = t("settings.modelTest.successDetail", { latency: state.result.latencyMs });
+    // A pass proves one thing: the provider answered a minimal request. Say
+    // "basic check passed", never an unqualified readiness claim — a session
+    // run also exercises thinking and tool use on a different gateway path
+    // (issue #824). The full matrix gets its own verdict label for the same
+    // reason: more protocols observed still is not session-run readiness.
+    const matrix = scope === "matrix";
+    label = t(matrix ? "settings.modelTest.matrixSuccess" : "settings.modelTest.success", { latency: state.result.latencyMs });
+    title = t(matrix ? "settings.modelTest.matrixSuccessDetail" : "settings.modelTest.successDetail", { latency: state.result.latencyMs });
   } else if (state.status === "result") {
-    const copy = state.result.category === "invalid_response" ? { label: t("settings.modelTest.inconclusive"), title: t(state.result.inconclusiveReason === "output_limit" ? "wizard.outputLimitNotice" : "settings.modelTest.inconclusiveDetail") } : failureCopy(state.result.category, t);
+    const copy = state.result.category === "invalid_response" ? { label: t("settings.modelTest.inconclusive"), title: t("settings.modelTest.inconclusiveDetail") } : failureCopy(state.result.category, t);
     className += " failure";
     icon = <AlertCircleIcon size={14} />;
     label = copy.label;

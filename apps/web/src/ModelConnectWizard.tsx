@@ -136,7 +136,7 @@ export function ModelConnectWizard({
   useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, apiVariant, proxyPolicy, baseUrlOverride, selectedPresetId, isCustom]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
-  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
+  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -402,8 +402,7 @@ export function ModelConnectWizard({
       const testOutcome = await client.testModel(firstProfile.id, false, hasHttpDestination
         ? { baseUrl: endpoint.baseUrl, profileUpdatedAt: firstProfile.updatedAt } : undefined);
 
-      const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
-      if (!testOutcome.ok && !budgetLimited) {
+      if (!testOutcome.ok) {
         // Failed: roll back everything this attempt created.
         // Remove only this attempt's auto-default; unrelated concurrent
         // settings edits and newer default selections must remain intact.
@@ -450,22 +449,24 @@ export function ModelConnectWizard({
 
       const count = createdModelIds.length;
       const defaultChanged = !hadModels && setFirstModelAsGlobalDefault;
+      // The probe that gate-kept this save is the basic one: a minimal
+      // request the provider answered. The success copy says so instead of
+      // claiming the model can run tasks (issue #824).
       const successDesc = defaultChanged
-        ? t(budgetLimited ? "wizard.savedDesc" : "wizard.successDesc", { count, model: firstProfile.name })
-        : t(budgetLimited ? "wizard.savedDescKeepDefault" : setFirstModelAsGlobalDefault ? "wizard.successDescKeepDefault" : "wizard.successDescSession", { count });
+        ? t("wizard.successDesc", { count, model: firstProfile.name })
+        : t(setFirstModelAsGlobalDefault ? "wizard.successDescKeepDefault" : "wizard.successDescSession", { count });
 
       setSuccessInfo({
         count,
         defaultChanged,
         latencyMs: testOutcome.latencyMs,
-        inconclusive: budgetLimited,
         modelName: firstProfile.name,
       });
       // The plan belonged to the provider that now exists; the next connect
       // starts from a clean slate.
       resetPlan();
 
-      onNotice?.(t(budgetLimited ? "wizard.savedInconclusive" : "wizard.successTitle"), successDesc + (budgetLimited ? " " + t("wizard.outputLimitNotice") : ""));
+      onNotice?.(t("wizard.successTitle"), successDesc);
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
       await clearAttemptDefault();
@@ -825,16 +826,15 @@ export function ModelConnectWizard({
         {failureNode}
 
         {successInfo ? (
-          <div className={successInfo.inconclusive ? "wizard-alert" : "wizard-alert wizard-alert-success"} role="status">
-            {successInfo.inconclusive ? <AlertCircleIcon size={16} /> : <CheckIcon size={16} />}
+          <div className="wizard-alert wizard-alert-success" role="status">
+            <CheckIcon size={16} />
             <div className="wizard-alert-content">
-              <strong>{t(successInfo.inconclusive ? "wizard.savedInconclusive" : "wizard.successTitle")}: </strong>
+              <strong>{t("wizard.successTitle")}: </strong>
               <span>
                 {successInfo.defaultChanged
-                  ? t(successInfo.inconclusive ? "wizard.savedDesc" : "wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t(successInfo.inconclusive ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count: successInfo.count })}
+                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
-                {successInfo.inconclusive ? <span className="wizard-alert-detail">{t("wizard.outputLimitNotice")}</span> : null}
               </span>
             </div>
           </div>

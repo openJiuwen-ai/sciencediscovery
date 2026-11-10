@@ -562,7 +562,9 @@ export const ZH = {
     retest: "重新测试",
     finish: "开始使用",
     testing: "正在测试…",
-    testOk: (latency: number) => `✓ 连接成功（${latency} ms）`,
+    testOk: (latency: number) => `✓ 基础检查通过（${latency} ms）`,
+    // 通过仅证明服务商应答了一次最小请求——不代表完整会话执行路径、思考或工具调用可用（issue #824）。
+    basicCheckNotice: "仅基础检查：不验证完整会话执行路径、思考或工具调用。",
     missingKey: "请先填写 API key。",
     missingModel: "请先选择或填写模型名。",
     /** Fallbacks for a connectivity failure whose message came back empty. */
@@ -618,7 +620,8 @@ export const ZH = {
       defaultFailed: "没能把这个模型设为默认，请重试。",
       test: "测试连接",
       testFailed: (message: string) => `✕ ${message}`,
-      testOk: (latency: number) => `✓ 可用（${latency} ms）`,
+      testOk: (latency: number) => `✓ 基础检查通过（${latency} ms）`,
+      testOkNotice: "仅基础检查：不验证完整会话执行路径、思考或工具调用。",
       delete: "删除",
       deleteConfirm: (name: string) => `删除模型「${name}」？`,
       deleteBody: "删除后，明确指定此模型的会话需要重新选择模型。历史运行记录保留。",

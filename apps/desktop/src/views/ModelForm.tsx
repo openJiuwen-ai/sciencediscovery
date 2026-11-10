@@ -651,7 +651,12 @@ export function ModelForm({
             verdict.kind === "ok" ? " is-ok" : verdict.kind === "fail" ? " is-fail" : ""
           }`}
         >
-          {verdict.message}
+          <div>
+            {verdict.message}
+            {verdict.kind === "ok" ? (
+              <small className="test-result-note">{TEXT.wizard.basicCheckNotice}</small>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
