@@ -264,6 +264,85 @@ for (const mode of ["missing-terminal", "late-refresh"] as const) test(`Stop rec
   }
 });
 
+test("a reload watches an active Skill evolution run until its card becomes a record", async () => {
+  const browser = installBrowserStubs();
+  const previousFetch = globalThis.fetch;
+  const sourceRun = {
+    id: "source-run",
+    prompt: "source",
+    references: [],
+    annotationIds: [],
+    sessionId: session.id,
+    status: "completed" as const,
+    createdAt: "2026-01-01T00:00:01.000Z",
+    queueOrder: 1,
+    settingsSnapshot: { enabledConnectorIds: [], enabledSkillIds: [], modelId: "model-1", semanticReviewEnabled: false },
+  };
+  const summaryRun = {
+    ...sourceRun,
+    id: "summary-run",
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source-run",
+    status: "running" as const,
+    createdAt: "2026-01-01T00:00:02.000Z",
+    queueOrder: 2,
+  };
+  let summaryStatus: SessionRun["status"] = "running";
+  let subscriptions = 0;
+  let push = (_event: unknown) => {};
+  let close = () => {};
+  const writableLibrary = {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "library-a",
+    name: "Evaluation Skills",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const path = url.split("?")[0] ?? url;
+    if (path === "/api/projects/project-1/sessions") return jsonResponse([session]);
+    if (path === "/api/sessions/session-1/runs") return jsonResponse([sourceRun, { ...summaryRun, status: summaryStatus }]);
+    if (path === "/api/sessions/session-1/runs/summary-run/events"
+      && new Headers(init?.headers).get("accept") === "text/event-stream") {
+      subscriptions++;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          push = (event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          close = () => controller.close();
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true });
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    if (path === "/api/skill-libraries") return jsonResponse([writableLibrary]);
+    if (path === "/api/models") return jsonResponse([model]);
+    if (path === "/api/model-catalog") return jsonResponse({ models: [model] });
+    return jsonResponse(startupBody(url));
+  }) as typeof fetch;
+
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => { view = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(App, { initialToken: "test-token" }))); });
+    await settle(12);
+    const card = view!.root.findByProps({ "data-source-run-id": "source-run" });
+    assert.equal(card.parent?.parent?.props.className, "process-live", "reload subscribes while the summary is running");
+    assert.equal(subscriptions, 1, "the active summary gets one durable watcher");
+
+    await act(async () => {
+      summaryStatus = "completed";
+      push({ type: "run.status", status: "completed", run: { ...summaryRun, status: "completed" } });
+      close();
+    });
+    await settle(12);
+    const completedCard = view!.root.findByProps({ "data-source-run-id": "source-run" });
+    assert.match(String(completedCard.parent?.parent?.props.className), /^process-record/);
+  } finally {
+    await act(async () => view?.unmount());
+    globalThis.fetch = previousFetch;
+    browser.restore();
+  }
+});
+
 test("Web Evolve submits the selected algorithm and JSON scope from its confirmation card", async () => {
   const browser = installBrowserStubs();
   const previousFetch = globalThis.fetch;

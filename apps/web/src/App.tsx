@@ -404,6 +404,18 @@ export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is Sess
     && !isSkillAuthoringRun;
 }
 
+export function isSkillEvolutionRun(run: Pick<SessionRun, "prompt">): boolean {
+  return run.prompt.startsWith(SKILL_EVOLUTION_PROMPT_MARKER);
+}
+
+export function selectSessionMainReplayRun(runs: readonly SessionRun[]): SessionRun | undefined {
+  return selectSessionReplayRun(runs.filter((run) => !isSkillEvolutionRun(run)));
+}
+
+export function selectActiveSkillEvolutionRuns(runs: readonly SessionRun[]): SessionRun[] {
+  return runs.filter((run) => (run.status === "queued" || isActiveRunStatus(run.status)) && isSkillEvolutionRun(run));
+}
+
 export function latestSkillSourceRun(runs: readonly SessionRun[], sessionId: string): SessionRun | undefined {
   return selectSessionReplayRun(runs.filter((run) => run.sessionId === sessionId && canSummarizeRunAsSkill(run)));
 }
@@ -1295,6 +1307,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [runningSessionIds, setRunningSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [stoppingSessionIds, setStoppingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const runAbortControllers = useRef(new Map<string, AbortController>());
+  const skillEvolutionRunAbortControllers = useRef(new Map<string, AbortController>());
   const providerSettingsRef = useRef<ProviderModelSettingsHandle>(null);
   const thinkingNormalizationInFlight = useRef<string | undefined>(undefined);
   const [error, setErrorState] = useState<string>();
@@ -1559,8 +1572,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     const controllers = runAbortControllers.current;
+    const skillControllers = skillEvolutionRunAbortControllers.current;
     return () => {
       for (const controller of controllers.values()) controller.abort();
+      for (const controller of skillControllers.values()) controller.abort();
     };
   }, []);
 
@@ -2171,7 +2186,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.canImportResearchPackage(sessionId).catch(() => ({ canImport: false })),
       client.listArtifacts(sessionId),
     ]);
-    const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
+    const activeRun = selectSessionMainReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
     const terminalRuns = sessionRunItems.filter((run) => isTerminalRunStatus(run.status));
     const terminalEvents = await Promise.all(terminalRuns.map(async (run) => {
@@ -2231,6 +2246,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setSessionUsage(usageSummary);
     setExecutionRuns(executionRunItems);
     setSessionRuns(sessionRunItems);
+    // Skill-evolution runs are intentionally excluded from the main replay,
+    // but an active summary still needs its own durable stream after reload or
+    // when another tab opens the session. The watcher key guard makes this
+    // idempotent with the initial queue path.
+    for (const run of selectActiveSkillEvolutionRuns(sessionRunItems)) {
+      watchSkillEvolutionRun(sessionId, run.id);
+    }
     setArtifactOutputs(artifactOutputItems);
     setDerivations(artifactDerivations);
     setPromptManifests(manifests);
@@ -4038,6 +4060,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       const nextRuns = upsertSessionRunSnapshot(session.id, queued);
       setSessionRuns(nextRuns);
       syncSessionRunActivity(session.id, nextRuns);
+      watchSkillEvolutionRun(session.id, queued.id);
       setIsFollowingOutput(true);
       setError(undefined);
       pushToast("info", t("app.skillProposalQueued"), t("app.skillProposalQueuedDetail", { id: run.id.slice(0, 8) }));
@@ -4052,6 +4075,51 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         return next;
       });
     }
+  }
+
+  function watchSkillEvolutionRun(sessionId: string, runId: string): void {
+    const key = `${sessionId}:${runId}`;
+    if (skillEvolutionRunAbortControllers.current.has(key)) return;
+    const controller = new AbortController();
+    skillEvolutionRunAbortControllers.current.set(key, controller);
+    let terminalSnapshot: SessionRun | undefined;
+    const reconcile = async (): Promise<void> => {
+      if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
+      try {
+        await refreshSession(sessionId);
+        // The event stream is durable evidence and can be newer than a list
+        // response served while the terminal transition is still propagating.
+        // Re-apply that terminal snapshot after the best-effort refresh so a
+        // stale list response cannot turn the record live again.
+        if (terminalSnapshot) {
+          const nextRuns = upsertSessionRunSnapshot(sessionId, terminalSnapshot);
+          if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setSessionRuns(nextRuns);
+        }
+      } catch (reason) {
+        if (!isAbortError(reason) && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
+          setError(reason instanceof Error ? reason : t("error.resumeRunEvents"));
+        }
+      }
+    };
+    void client.subscribeRunEvents(
+      sessionId,
+      runId,
+      0,
+      (streamEvent) => {
+        if (streamEvent.type !== "run.queued" && streamEvent.type !== "run.status") return;
+        if (streamEvent.run.id !== runId) return;
+        if (isTerminalRunStatus(streamEvent.run.status)) terminalSnapshot = streamEvent.run;
+        const nextRuns = upsertSessionRunSnapshot(sessionId, streamEvent.run);
+        if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setSessionRuns(nextRuns);
+      },
+      controller.signal,
+    ).then(reconcile).catch(async (reason) => {
+      if (!isAbortError(reason)) await reconcile();
+    }).finally(() => {
+      if (skillEvolutionRunAbortControllers.current.get(key) === controller) {
+        skillEvolutionRunAbortControllers.current.delete(key);
+      }
+    });
   }
 
   async function stopRun(sessionId = activeSessionId): Promise<void> {

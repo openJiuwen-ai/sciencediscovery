@@ -24,7 +24,10 @@ import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 import {
   buildConversationBlocks,
   canSummarizeRunAsSkill,
+  isSkillEvolutionRun,
   latestSkillSourceRun,
+  selectSessionMainReplayRun,
+  selectActiveSkillEvolutionRuns,
   skillSummaryRun,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
@@ -203,6 +206,38 @@ test("Skill summaries use the latest eligible source and an exact linked Run", (
   assert.equal(latestSkillSourceRun([first, linked, latest], "session-a")?.id, latest.id);
   assert.equal(skillSummaryRun([wrong, linked], latest)?.id, linked.id);
   assert.equal(skillSummaryRun([{ ...linked, sessionId: "other" }], latest), undefined);
+});
+
+test("Skill evolution runs stay out of the main timeline replay", () => {
+  const source = sessionRun("source", 1, "running");
+  const summary = {
+    ...sessionRun("summary", 2, "running"),
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source",
+  };
+
+  assert.equal(isSkillEvolutionRun(summary), true);
+  assert.equal(selectSessionMainReplayRun([source, summary])?.id, source.id);
+});
+
+test("refresh discovers active Skill evolution runs for reload watchers", () => {
+  const queued = {
+    ...sessionRun("queued-summary", 2, "queued"),
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source",
+  };
+  const running = {
+    ...sessionRun("running-summary", 3, "running"),
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source",
+  };
+  const completed = {
+    ...sessionRun("completed-summary", 4, "completed"),
+    prompt: "[Skill self-evolution M1.6]\n- source_run_id: source",
+  };
+
+  assert.deepEqual(
+    selectActiveSkillEvolutionRuns([queued, running, completed]).map((run) => run.id),
+    [queued.id, running.id],
+    "reload resumes watchers only for summaries that can still transition",
+  );
 });
 
 test("Skill authoring runs do not offer the redundant self-evolution action", () => {
