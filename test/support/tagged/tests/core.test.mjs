@@ -22,7 +22,6 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const tags = ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'npu:none', 'model:none', 'judge:none'];
 const item = overrides => ({ id: 'one', source: 'one.test.mjs', sourceHash: 'a'.repeat(64), runner: 'node', tags, ...overrides });
@@ -170,14 +169,13 @@ function runDirect(source) {
   try {
     const file = join(root, 'probe.test.mjs');
     writeFileSync(file, source);
-    const adapter = new URL('../compat.mjs', import.meta.url).href;
     // The parent is itself a `node --test` child here, and a nested run that
     // inherits NODE_TEST_CONTEXT reports into the parent instead of running
     // the file as its own suite.
     const childEnv = { ...process.env };
     delete childEnv.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath, ['--test', file], { encoding: 'utf8', env: childEnv });
-    return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}`, adapter };
+    return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 test('a file excluded by its host tag reports a skip instead of a silent pass', () => {
@@ -202,7 +200,8 @@ test('runs-here', () => { console.log('CASE_RAN'); });
   assert.equal(run.status, 0);
   assert.equal(run.output.includes('CASE_RAN'), true, 'the matching host runs the case');
   assert.equal(run.output.includes('platform-inapplicable'), false);
-});test('a plan frozen from a CI profile records the profile inside its digest', () => {
+});
+test('a plan frozen from a CI profile records the profile inside its digest', () => {
   const daily = plan([item()], { profile: 'daily' });
   assert.equal(daily.profile, 'daily');
   assert.deepEqual(validatePlan(JSON.parse(JSON.stringify(daily))), daily);
