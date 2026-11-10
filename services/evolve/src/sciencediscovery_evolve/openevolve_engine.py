@@ -301,6 +301,10 @@ class OpenEvolveEngine:
             # program, not a task to finish. Measured: the first candidate scored 1.0, every later
             # rollout counted as solved and proposed nothing, and a run planned for 4 expansions made 1.
             "solved_threshold": 2.0,
+            # The scorecard's own solvedThreshold ends the whole run, as in the PUCT
+            # engine, and separately from `solved_threshold`: this is the framework's
+            # target stop, read against the archive's best held-out reward.
+            "target_reward": float(spec.scorecard.get("solvedThreshold") or 0.999),
             "self_verify": False,
             "strategy": strategy,
             "usage": None,
@@ -402,6 +406,13 @@ class _Reporter:
         self.failures: List[str] = []
         self._empty: Dict[int, str] = {}
         self._inspiration_by_iteration: Dict[int, Optional[int]] = {}
+        # Recorded from the framework's outcome and carried on `search_finished`,
+        # as the PUCT reporter does: a run that stopped at 1 of 8 expansions
+        # because it reached the scorecard's threshold and one that stopped
+        # because a worker died are not the same event, and this is the only
+        # place that knows which.
+        self._stop_reason = ""
+        self._planned = spec.expansions
         self._lock = threading.Lock()
 
     def note_usage(self, iteration: int, spent: CompletionUsage) -> None:
@@ -549,6 +560,11 @@ class _Reporter:
         error = str(getattr(outcome, "error", "") or "")
         retired = int(getattr(outcome, "retired_workers", 0) or 0)
         done = (len(self.archive.history) - 1) if self.archive is not None else 0
+        # Carried to `search_finished` unconditionally, ordinary reasons included:
+        # the summary says "made 1 of 8", and without this field the account of
+        # why is unrecoverable.
+        self._stop_reason = reason
+        self._planned = planned
 
         if error:
             self.emit(events.log("warn", f"the search was ended by an error: {error[:300]}"))
@@ -604,6 +620,8 @@ class _Reporter:
         nodes = len(self.archive.history) if self.archive is not None else 0
         self.emit(events.search_finished(
             status, best_index, nodes, best_test_score=best_test_score,
+            stop_reason=self._stop_reason,
+            expansions_planned=self._planned,
         ))
 
         log.info(

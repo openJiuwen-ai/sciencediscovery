@@ -390,6 +390,13 @@ class PuctEngine:
             # governing the control plane; it just no longer turns rollouts
             # into no-ops.
             "solved_threshold": 2.0,
+            # What *does* end the search is the scorecard's own solvedThreshold,
+            # through the framework's separate target stop. Measured live: a tree
+            # whose best node reached 1.000 went on to expand #16-#23 and stopped
+            # at the 23/24 expansion cap with the goal already met. Kept apart
+            # from `solved_threshold` above deliberately — that one decides
+            # whether a rollout proposes, this one whether the run is over.
+            "target_reward": float(spec.scorecard.get("solvedThreshold") or 0.999),
             "self_verify": False,
             "strategy": PuctStrategy(domain),
             "usage": None,
