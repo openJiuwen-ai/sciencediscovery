@@ -391,13 +391,27 @@ outage, and is never soft-classified; neither is a semantic failure, a
 delivery miss or a timeout. The provider context has to name the gateway
 itself: a product delivery failure that merely quotes a provider status — the
 words "provider", "llm", "gateway" or "upstream" beside a `500` — is the
-product's own failure and stays a `FAIL`. A delivery miss or an assertion
-diff is the product's own report in the first place, so it stays a `FAIL`
-even when it carries the provider's words with it — with one deliberate
-exception: a status-less transport break is checked before that product
-report, because the failed case text wraps the provider's words in
-`delivery_status=failed`, which is the product restating a run that died on
-the wire, not evidence it mishandled a complete answer.
+product's own failure and stays a `FAIL`.
+
+A delivery miss outranks the gateway: it is the product's own verdict, so it
+stays a `FAIL` even when it carries the provider's words with it. An assertion
+diff is not that verdict — Playwright appends the failed `expect()` to the
+error it saw, so a gateway outage reaches the accounting with the assertion
+block attached. Four shapes therefore stay apart:
+
+- a delivery miss, with or without the gateway's words, is a `FAIL`;
+- a status-less transport break is checked before that product report, because
+  the failed case text wraps the provider's words in `delivery_status=failed`,
+  which is the product restating a run that died on the wire, not evidence it
+  mishandled a complete answer;
+- an assertion diff that carries the gateway's own status and context — the
+  `181001` model-call code, `model call failed`, `openai api`,
+  `chat/completions` beside a 5xx — is the outage and becomes `PROVIDER_FAULT`;
+- an assertion that only quotes a bare provider word beside a status is the
+  product's own failure and stays a `FAIL`.
+
+The "a soft classification is not a soft pass" floor above is unchanged either
+way.
 
 A case whose first attempt died early on such a fault is run once more, on
 its own. Only an attempt that failed within five minutes is repeated, so a
