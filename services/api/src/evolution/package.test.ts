@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createTest } from "../../../test/support/tagged/compat.mjs";
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
@@ -68,7 +68,7 @@ test("a session's evolve runs travel with their event log and come back under th
   const target = new EvolutionStore(targetDir);
   const run = await source.createRun({ goal: goal(), id: "run-1", sessionId: "session-source" });
   await source.appendEvents("run-1", [
-    { event: { level: "info", message: "started", type: "log" } as never, runId: "run-1", sequence: 1, at: "2026-08-19T00:00:01.000Z" } as never,
+    { createdAt: "2026-08-19T00:00:01.000Z", event: { level: "info", message: "started", type: "log" } as never, sequence: 1 },
   ]);
   await source.patchRun("run-1", { candidates: 7, status: "succeeded", tokens: 1_234 });
   // A run of another session must not be packed.
