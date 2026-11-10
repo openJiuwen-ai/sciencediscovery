@@ -65,7 +65,15 @@ export const Markdown = memo(function Markdown({ children, onReferenceClick, ref
     <>
       {segments.map((segment, index) => (
         segment.kind === "checkpoint"
-          ? <CheckpointCard checkpoint={segment.checkpoint} key={`checkpoint-${index}`} />
+          ? (
+            <CheckpointCard
+              checkpoint={segment.checkpoint}
+              key={`checkpoint-${index}`}
+              // The card a turn ended on is the one the client carries — or,
+              // when it has already carried that step, stops at.
+              trailing={index === segments.length - 1}
+            />
+          )
           : (
             <MarkdownProse key={`prose-${index}`} onReferenceClick={onReferenceClick} references={references}>
               {segment.text}

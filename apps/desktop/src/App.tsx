@@ -51,6 +51,7 @@ import {
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveSkill,
+  latestEvolveCheckpointMode,
   splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
@@ -68,7 +69,7 @@ import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { ArtifactDialog } from "./views/ArtifactDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
-import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
+import { CheckpointRefusedProvider, CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
 import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
@@ -702,13 +703,22 @@ export function App({ initialToken }: Props) {
     [state.detail?.messages, state.pendingMessage?.content],
   );
 
+  /** The pace that design was started with, from the same transcript. Only a
+   *  design nobody is waiting on may be carried forward. */
+  const designPace = useMemo(
+    () => latestEvolveCheckpointMode(state.detail?.messages ?? [], state.pendingMessage?.content),
+    [state.detail?.messages, state.pendingMessage?.content],
+  );
+
   // A no-confirm design that ends its turn on an auto card is carried forward
   // here — the model cannot start the next turn by itself, and the card offers
   // nothing to press. See the hook for what it refuses to act on.
-  useAutoContinue({
+  const autoContinue = useAutoContinue({
+    checkpointMode: designPace,
     design,
     running: state.running,
     run: state.run,
+    searchStarted: evolve.runs.length > 0,
     send: (text) => latestSend.current(text),
     sessionId: state.sessionId,
   });
@@ -1004,28 +1014,36 @@ export function App({ initialToken }: Props) {
             <Landing composer={composerProps} key={landingKey(state)} />
           ) : (
             <>
-              <Conversation
-                onOpenConfigurationSettings={openSettings}
-                client={client}
-                detail={state.detail}
-                configuration={configuration}
-                onConfigurationChange={actions.refreshConfiguration}
-                configurationReadOnly={isEvidenceSessionReadOnly(state.detail) || state.detail?.archivedAt !== undefined}
-                // A search keeps running after the turn that started it, so its
-                // card is the last thing the conversation produced. It draws
-                // nothing at all for a session that has no searches.
-                evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
-                loading={state.loadingSession}
-                onDecidePermission={decidePermission}
-                onOpenSubagent={openSubagentDetails}
-                onOpenTool={openToolDetails}
-                onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
-                onReferenceClick={openReference}
-                pending={state.pendingMessage}
-                replays={state.replays}
-                run={state.run}
-                workspaceFiles={state.panelFiles}
-              />
+              {/* A design the client stopped carrying says so on the card it
+                  stopped at; the value is the step, and every other card
+                  ignores it. Hidden while a turn runs: the refusal describes
+                  the ending that already happened, and a new answer that
+                  happens to stream a card of the same step must not wear that
+                  ending's badge for a frame. */}
+              <CheckpointRefusedProvider value={state.running ? undefined : autoContinue.refusedStep}>
+                <Conversation
+                  onOpenConfigurationSettings={openSettings}
+                  client={client}
+                  detail={state.detail}
+                  configuration={configuration}
+                  onConfigurationChange={actions.refreshConfiguration}
+                  configurationReadOnly={isEvidenceSessionReadOnly(state.detail) || state.detail?.archivedAt !== undefined}
+                  // A search keeps running after the turn that started it, so its
+                  // card is the last thing the conversation produced. It draws
+                  // nothing at all for a session that has no searches.
+                  evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
+                  loading={state.loadingSession}
+                  onDecidePermission={decidePermission}
+                  onOpenSubagent={openSubagentDetails}
+                  onOpenTool={openToolDetails}
+                  onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
+                  onReferenceClick={openReference}
+                  pending={state.pendingMessage}
+                  replays={state.replays}
+                  run={state.run}
+                  workspaceFiles={state.panelFiles}
+                />
+              </CheckpointRefusedProvider>
               {isEvidenceSessionReadOnly(state.detail) ? null : <Composer {...composerProps} />}
             </>
           )}

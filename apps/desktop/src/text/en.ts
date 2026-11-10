@@ -1265,6 +1265,14 @@ export const EN: Text = {
         total === undefined ? `Confirm checkpoint ${step}, continue.` : `Confirm checkpoint ${step}/${total}, continue.`,
       autoContinue: (step: number, total?: number) =>
         total === undefined ? `Continue with step ${step}.` : `Continue with step ${step}/${total}.`,
+      /* The other shape of the same stall: no card to continue from, and the
+         turn simply ended before the search existed. */
+      autoResume: "Finish the remaining checkpoints and call create_evolve_run to start the search. Do not stop before the search starts.",
+      /* The same step ending twice is where the client stops carrying: one
+         more push would be a paid turn answering a card that was already
+         answered. The card says so — nothing else on screen moves. */
+      autoStopped: "Auto-continue stopped",
+      autoStoppedHint: "This step was already carried forward once, so the client will not push it again. Reply to carry the design on.",
       adjustDraft: "I'd like to change this step: ",
       busy: "This reply is still running; wait for it to finish.",
     },
