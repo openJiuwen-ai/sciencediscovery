@@ -74,3 +74,18 @@ test("CFG-XBUG-09: an independent setting has no original task to continue and m
     assert.doesNotMatch(CONFIGURATION_AGENT_DESCRIPTORS[id].whenNeeded, /does not resume the active run/);
   }
 });
+
+for (const completed of [true, false]) test(`Manual settings answer ${completed} resumes only the original task without applying`, async context => {
+  const h = await fixture(context), frozen = structuredClone(h.run.settingsSnapshot);
+  const card = await h.framework.propose(h.session.id, { protocolVersion: 3, runId: h.run.id, capabilityId: "timeouts.configure", values: { runnerExecTimeoutMs: 90000 } });
+  const before = h.store.getSessionSettings(h.session.id);
+  const input = { revision: card.revision, stateVersion: card.stateVersion, destination: "timeouts" as const, completed };
+  const result = await h.framework.confirmSettings(h.session.id, card.id, input, "manual");
+  assert.equal(result.settingsConfirmation?.completed, completed); assert.equal(result.settingsConfirmation?.verified, false);
+  assert.equal(result.resumption.state, "queued"); assert.equal(result.activation.state, "not_requested");
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  await h.framework.confirmSettings(h.session.id, card.id, input, "manual"); assert.equal(h.scheduled.length, 1);
+  assert.deepEqual(h.store.getSessionSettings(h.session.id), before);
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+  assert.equal((await h.store.listSessionRuns(h.session.id)).length, 1);
+});

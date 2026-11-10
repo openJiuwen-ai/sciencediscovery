@@ -69,7 +69,24 @@ export type ConfigurationFieldView = {
   | { kind: "multiselect"; value?: string[]; choices: Array<{ id: string; label: string }> }
   | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
 );
+export type ConfigurationSettingsDestination = "models" | "timeouts" | "mcp" | "proxy";
+export interface ConfigurationSettingsConfirmationInput {
+  revision: number;
+  stateVersion: number;
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+}
+/** A user report, never evidence that the adapter wrote or verified settings. */
+export interface ConfigurationSettingsConfirmationReceipt {
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+  source: "user";
+  verified: false;
+  configurationWritten: false;
+  confirmedAt: string;
+}
 export interface ConfigurationRequestView {
+  settingsConfirmation?: ConfigurationSettingsConfirmationReceipt;
   endpointAuthorization?: ConfigurationEndpointAuthorization;
   /** Missing means the historical v2 apply/dismiss protocol. */
   protocolVersion?: 3;

@@ -1670,6 +1670,8 @@ body.is-resizing {
    and the light grey it gains on hover. */
 .composer-model-pill {
   height: 28px;
+  min-width: 0;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1699,11 +1701,16 @@ body.is-resizing {
 }
 
 .composer-model-pill .model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: inherit;
   font-weight: 400;
 }
 
 .composer-model-pill .model-chev {
+  flex: 0 0 auto;
   color: #8c8c8c;
 }
 
@@ -1765,6 +1772,13 @@ body.is-resizing {
   position: relative;
   display: inline-flex;
   align-items: center;
+}
+
+/* Let the model name give space back to the upload/settings/send controls.
+   The fixed-height pill must never wrap its label into the message input. */
+.composer-menu-anchor.is-model {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .composer-dropdown {

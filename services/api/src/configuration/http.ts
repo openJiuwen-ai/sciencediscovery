@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView } from "@sciencediscovery/schema";
+import type { ConfigurationSettingsConfirmationInput, ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
 import { readJson } from "../http/body.js";
 import { sendJson } from "../http/response.js";
@@ -16,7 +16,7 @@ export async function handleConfigurationHttp(input: {
   hasActiveRun(sessionId: string, ownRequestId?: string): Promise<boolean>;
 }): Promise<boolean> {
   const { request, response, url, store, framework } = input;
-  const match = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(configuration-requests(?:\/([^/]+)(?:\/(credentials|preview|decision|continue|reversal|endpoint-consent))?)?|configuration\/capabilities)$/);
+  const match = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(configuration-requests(?:\/([^/]+)(?:\/(credentials|preview|decision|settings-confirmation|continue|reversal|endpoint-consent))?)?|configuration\/capabilities)$/);
   if (!match) return false;
   const sessionId = match[1]!;
   const requestId = match[3];
@@ -84,7 +84,7 @@ export async function handleConfigurationHttp(input: {
       sendJson(response, 200, await framework.provideCredential(sessionId, requestId, body as ConfigurationCredentialInput, key));
     } else if (operation === "preview") {
       sendJson(response, 200, project(await framework.preview(sessionId, requestId, body as ConfigurationPreviewInput, key)));
-    } else if (operation === "decision") {
+    } else if (operation === "decision" || operation === "settings-confirmation") {
       if (await input.hasActiveRun(sessionId, requestId)) throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The current task must reach its configuration checkpoint before this decision", 409);
       if (record.view.runId) {
         const run = await store.getSessionRun(sessionId, record.view.runId);
@@ -92,7 +92,9 @@ export async function handleConfigurationHttp(input: {
         if (!alreadyResuming && framework.liveWaitRunId(sessionId, requestId) !== record.view.runId && (!run?.configurationWait || run.configurationCheckpoint?.requestId !== requestId))
           throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original task is not ready for configuration", 409);
       }
-      sendJson(response, 200, project(await framework.decide(sessionId, requestId, body as ConfigurationDecisionInput, key)));
+      sendJson(response, 200, project(operation === "settings-confirmation"
+        ? await framework.confirmSettings(sessionId, requestId, body as ConfigurationSettingsConfirmationInput, key)
+        : await framework.decide(sessionId, requestId, body as ConfigurationDecisionInput, key)));
     } else if (operation === "continue") {
       object(body, [], "continuation");
       sendJson(response, 200, project(await framework.settle(sessionId, requestId)));

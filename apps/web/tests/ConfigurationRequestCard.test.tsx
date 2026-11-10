@@ -5,6 +5,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ConfigurationRequestView } from "@sciencediscovery/schema";
 import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol } from "@sciencediscovery/schema";
@@ -917,4 +918,248 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+// Compatibility projections come from independently deployed capability backends;
+// the main schema deliberately does not register those capabilities yet.
+function compatibilityRequest(capabilityId: string, extra: Record<string, unknown> = {}): ConfigurationRequestView {
+  return { ...request(), capabilityId, ...extra } as unknown as ConfigurationRequestView;
+}
+
+test("shared compatibility: security gates fail closed for missing, malformed, stale and server-first consent", async () => {
+  for (const [capabilityId, extra] of [
+    ["security.network", {}], ["proxy.default", {}],
+    ["server.first", { securityConsent: null }],
+    ["security.network", { securityConsent: { revision: 1, targetDigest: "digest", statement: "Review", status: "confirmed" } }],
+    ["server.first", { securityConsent: { revision: 2, targetDigest: "", statement: "Review", status: "confirmed" } }],
+  ] as const) {
+    const renderer = await mount(compatibilityRequest(capabilityId, extra));
+    assert.equal(renderer.root.findByProps({ className: "primary-button" }).props.disabled, true);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("shared compatibility: independent consent binds revision and digest and never calls endpoint consent", async () => {
+  let endpointCalls = 0; const calls: unknown[] = [];
+  const consent = { revision: 2, targetDigest: "security-target", statement: "Exact security effects", status: "required" };
+  const view = compatibilityRequest("security.network", { securityConsent: consent });
+  const renderer = await mount(view, actions({ consent: async () => { endpointCalls++; return view; }, securityConsent: async input => {
+    calls.push(input); return { ...view, securityConsent: { ...consent, status: "confirmed" } } as ConfigurationRequestView;
+  } }));
+  const approve = () => renderer.root.findAllByType("button").find(node => node.children.includes("Independently approve this exact security policy"))!;
+  assert.equal(approve().props.disabled, true);
+  await act(async () => approve().props.onClick());
+  assert.equal(calls.length, 0);
+  const checkbox = renderer.root.findAllByType("input").find(node => String(node.props.id).endsWith("-security-ack"))!;
+  await act(async () => checkbox.props.onChange({ target: { checked: true } }));
+  assert.equal(approve().props.disabled, false);
+  await act(async () => approve().props.onClick());
+  assert.deepEqual(calls, [{ revision: 2, targetDigest: "security-target", acknowledged: true }]);
+  assert.equal(endpointCalls, 0);
+  await act(async () => renderer.unmount());
+});
+
+test("shared compatibility: MCP server changes clear and disable destructive dependent fields", async () => {
+  for (const [capabilityId, fieldId] of [["mcp.remove_header", "headerName"], ["mcp.remove_env", "envName"], ["mcp.delete", "confirmDelete"]]) {
+    const renderer = await mount(compatibilityRequest(capabilityId!, { fields: [
+      { id: "serverId", kind: "enum", value: "one", label: "Server", choices: [{ id: "one", label: "One" }, { id: "two", label: "Two" }], required: true },
+      { id: fieldId, kind: "text", value: "old-target", label: "Target", required: true },
+    ] }));
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "two" } }));
+    assert.equal(renderer.root.findByProps({ name: fieldId }).props.value, "");
+    assert.equal(renderer.root.findByProps({ name: fieldId }).props.disabled, true);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("shared compatibility: provider and MCP credentials require a destination; proxy target changes clear secrets", async () => {
+  for (const capabilityId of ["provider.connection", "provider.credential", "mcp.header_credential"]) {
+    const renderer = await mount(compatibilityRequest(capabilityId, { fields: [{ id: "apiToken", kind: "credential", label: "Key", required: true, status: "missing" }] }));
+    assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    assert.equal(renderer.root.findByProps({ className: "primary-button" }).props.disabled, true);
+    await act(async () => renderer.unmount());
+  }
+  const renderer = await mount(compatibilityRequest("proxy.resources", { fields: [
+    { id: "proxyId", kind: "text", value: "one", label: "Proxy", required: true },
+    { id: "proxyUrl", kind: "credential", status: "missing", label: "Proxy URL", required: true },
+  ] }));
+  await act(async () => renderer.root.findByProps({ name: "proxyUrl" }).props.onChange({ target: { value: "secret-url" } }));
+  await act(async () => renderer.root.findByProps({ name: "proxyId" }).props.onChange({ target: { value: "two" } }));
+  assert.equal(renderer.root.findByProps({ name: "proxyUrl" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
+test("shared compatibility: acknowledgement cannot survive target digest changes or accept mismatched replies", async () => {
+  let accepted = 0;
+  let view = compatibilityRequest("server.first", { securityConsent: { revision: 2, targetDigest: "first", statement: "First effects", status: "required" } });
+  const api = actions({ securityConsent: async () => compatibilityRequest("server.first", {
+    securityConsent: { revision: 2, targetDigest: "unexpected", statement: "Different effects", status: "confirmed" },
+  }) });
+  let renderer: ReactTestRenderer;
+  const draw = () => createElement(ConfigurationRequestCard, { request: view, actions: api, onUpdate: () => { accepted++; } });
+  await act(async () => { renderer = create(draw()); });
+  const approve = () => renderer!.root.findAllByType("button").find(node => node.children.includes("Independently approve this exact security policy"))!;
+  const acknowledge = async () => act(async () => renderer!.root.findAllByType("input")
+    .find(node => String(node.props.id).endsWith("-security-ack"))!.props.onChange({ target: { checked: true } }));
+  await acknowledge();
+  assert.equal(approve().props.disabled, false);
+  view = compatibilityRequest("server.first", { securityConsent: { revision: 2, targetDigest: "second", statement: "Second effects", status: "required" } });
+  await act(async () => renderer!.update(draw()));
+  assert.equal(approve().props.disabled, true);
+  await acknowledge();
+  await act(async () => approve().props.onClick());
+  assert.equal(accepted, 0);
+  assert.equal(renderer!.root.findByProps({ className: "primary-button" }).props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
+
+test("shared compatibility: memory, MCP and proxy summaries and capability labels remain specific", async () => {
+  const memory = await mount(compatibilityRequest("memory.enable", { state: "applied", activation: { mode: "next_request", state: "active" } }));
+  assert.match(JSON.stringify(memory.toJSON()), /Subsequent memory operations; readiness unverified/);
+  await act(async () => memory.unmount());
+  const mcp = await mount(compatibilityRequest("mcp.metadata", { fields: [{ id: "description", label: "Description", kind: "text", value: "Notes", required: false }] }));
+  assert.equal(mcp.root.findByType("textarea").props.value, "Notes");
+  assert.match(JSON.stringify(mcp.toJSON()), /MCP server description/);
+  await act(async () => mcp.unmount());
+  const proxy = await mount(compatibilityRequest("proxy.resources", { fields: [{ id: "operation", label: "Operation", kind: "enum", value: "create", required: true, choices: [{ id: "create", label: "Create" }] }] }), actions(), () => {}, "zh");
+  assert.match(JSON.stringify(proxy.toJSON()), /新建/);
+  assert.doesNotMatch(JSON.stringify(proxy.toJSON()), /凭据操作/);
+  await act(async () => proxy.unmount());
+});
+
+test("CFG destination warnings name API keys for model/provider changes and generic credentials for MCP", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    for (const capabilityId of ["model.connect", "model.repair_credential", "provider.connection", "provider.credential", "model.api_identity", "mcp.header_credential"] as const) {
+      const apiKey = capabilityId !== "mcp.header_credential";
+      for (const classification of ["public_http", "loopback", "private_network"] as const) {
+        const blocked = classification === "public_http";
+        const renderer = await mount(request({ capabilityId, fields: [], endpointAuthorization: {
+          endpointTarget: "http://destination.test/v1", host: "destination.test", classification,
+          status: blocked ? "blocked" : "required", revision: 2,
+        } }), actions(), () => undefined, locale);
+        try {
+          const content = JSON.stringify(renderer.toJSON());
+          const warning = locale === "zh"
+            ? blocked ? (apiKey ? /不能接收 API Key/ : /不能接收凭据/) : (apiKey ? /发送的 API Key 会以明文传输/ : /发送的凭据会以明文传输/)
+            : blocked ? (apiKey ? /cannot receive an API key/ : /cannot receive a credential/) : (apiKey ? /an API key sent to an HTTP gateway travels in plaintext/ : /a credential sent to an HTTP gateway travels in plaintext/);
+          assert.match(content, warning, `${locale}: ${capabilityId}: ${classification}`);
+          assert.equal(button(renderer, locale === "zh" ? "确认此项变更" : "Confirm this change").props.disabled, true);
+        } finally {
+          await act(async () => renderer.unmount());
+        }
+      }
+    }
+  }
+});
+
+test("CFG changed destinations ask for the matching credential kind without uploading the previous secret", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    for (const capabilityId of ["model.repair_credential", "provider.credential", "mcp.header_credential"] as const) {
+      let latest = request({ capabilityId, fields: [
+        { id: "apiToken", kind: "credential", label: "Credential", required: true, status: "missing" },
+      ], endpointAuthorization: {
+        endpointTarget: "https://old.example.test/v1", host: "old.example.test", classification: "trusted_preset", status: "trusted", revision: 2,
+      } });
+      let renderer: ReactTestRenderer | undefined;
+      let uploads = 0;
+      const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1,
+        endpointAuthorization: { ...latest.endpointAuthorization!, endpointTarget: "https://new.example.test/v1", host: "new.example.test" } }),
+        credential: async () => { uploads++; throw new Error("Changed destinations must not upload old credentials"); },
+      });
+      const draw = () => createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, {
+        request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer!.update(draw()); },
+      }));
+      try {
+        await act(async () => { renderer = create(draw()); });
+        await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "old-target-only-fixture" } }));
+        await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+        const content = JSON.stringify(renderer!.toJSON());
+        const generic = capabilityId === "mcp.header_credential";
+        assert.match(content, locale === "zh" ? (generic ? /重新输入凭据/ : /重新输入密钥/) : (generic ? /enter the credential again/ : /enter the key again/));
+        assert.equal(uploads, 0);
+        assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+        assert.doesNotMatch(content, /old-target-only-fixture/);
+        assert.equal(button(renderer!, locale === "zh" ? "确认此项变更" : "Confirm this change").props.disabled, true);
+      } finally {
+        if (renderer) await act(async () => renderer!.unmount());
+      }
+    }
+  }
+});
+
+test("shared compatibility: a host without a security action cannot approve through endpoint consent or Apply", async () => {
+  const calls: string[] = [];
+  const view = compatibilityRequest("security.network", { securityConsent: {
+    revision: 2, targetDigest: "security-target", statement: "Exact security effects", status: "required",
+  } });
+  const renderer = await mount(view, actions({
+    consent: async () => { calls.push("endpoint"); return view; },
+    decide: async () => { calls.push("apply"); return view; },
+  }));
+  try {
+    assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+    assert.equal(renderer.root.findAllByProps({ className: "configuration-security-ack" }).length, 0);
+    assert.equal(renderer.root.findAllByType("button").some(node => node.children.includes("Independently approve this exact security policy")), false);
+    await act(async () => button(renderer, "Confirm this change").props.onClick());
+    assert.deepEqual(calls, []);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("shared compatibility: an absent security backend keeps Apply blocked after explicit acknowledgment", async () => {
+  const calls: unknown[] = [];
+  let updates = 0;
+  const view = compatibilityRequest("security.network", { securityConsent: {
+    revision: 2, targetDigest: "security-target", statement: "Exact security effects", status: "required",
+  } });
+  const renderer = await mount(view, actions({
+    securityConsent: async input => { calls.push(input); throw new ApiRequestError("Not found", 404); },
+    consent: async () => { calls.push("endpoint"); return view; },
+    decide: async () => { calls.push("apply"); return view; },
+  }), () => { updates++; });
+  try {
+    const approve = () => button(renderer, "Independently approve this exact security policy");
+    assert.equal(approve().props.disabled, true);
+    await act(async () => approve().props.onClick());
+    assert.deepEqual(calls, []);
+    const checkbox = renderer.root.findByProps({ className: "configuration-security-ack" }).findByType("input");
+    await act(async () => checkbox.props.onChange({ target: { checked: true } }));
+    await act(async () => approve().props.onClick());
+    assert.deepEqual(calls, [{ revision: 2, targetDigest: "security-target", acknowledged: true }]);
+    assert.equal(updates, 0);
+    assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+    assert.equal(approve().props.disabled, true);
+    assert.match(JSON.stringify(renderer.toJSON()), /This configuration request is no longer available/);
+    await act(async () => button(renderer, "Confirm this change").props.onClick());
+    assert.equal(calls.length, 1);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+
+test("memory summaries localize only the memory enabled field in full and compact presentations", () => {
+  for (const locale of ["en", "zh"] as const) {
+    for (const compact of [undefined, { fieldIds: [] }]) {
+      const view = (capabilityId: ConfigurationRequestView["capabilityId"], changes: ConfigurationRequestView["changes"]) =>
+        renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, {
+          request: request({ capabilityId, fields: [], changes }), actions: actions(), onUpdate: () => {}, compact,
+        })));
+      for (const [before, after] of [["Disabled", "Enabled"], ["Enabled", "Disabled"]]) {
+        const html = view("memory.enable", [{ field: "enabled", before, after }]);
+        assert.match(html, locale === "zh" ? /启用本地工作台记忆图谱/ : /Enable local workbench memory graph/);
+        assert.doesNotMatch(html, /<strong>enabled<\/strong>|启用全局审阅专家|Enable global Reviewer Specialist/);
+        if (locale === "zh") {
+          assert.match(html, /已停用/); assert.match(html, /已启用/);
+          assert.doesNotMatch(html, /Disabled|Enabled/);
+        } else {
+          assert.match(html, /Disabled/); assert.match(html, /Enabled/);
+        }
+      }
+      const other = view("reviewer.enable", [{ field: "enabled", before: "Disabled", after: "Enabled" }]);
+      assert.match(other, /Disabled/); assert.match(other, /Enabled/);
+      assert.doesNotMatch(other, /已停用|已启用|启用本地工作台记忆图谱/);
+      const unknown = view("memory.enable", [{ field: "other", before: "Disabled", after: "Enabled" },
+        { field: "enabled", before: "Unknown", after: undefined }]);
+      assert.match(unknown, /Disabled/); assert.match(unknown, /Enabled/); assert.match(unknown, /Unknown/);
+      assert.match(unknown, locale === "zh" ? /未设置/ : /Not set/);
+    }
+  }
 });

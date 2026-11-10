@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
+import type { ConfigurationSettingsConfirmationInput, ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
   ConfigurationRequestView, SessionRun } from "@sciencediscovery/schema";
 import type { ConfigurationWaitOwner } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
@@ -220,7 +220,7 @@ export class ConversationalConfigurationFramework {
         const baseline = this.snapshot(sessionId, input.capabilityId, target);
         const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
         const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
-          && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
+          && record.view.state === "dismissed" && (record.view.settingsConfirmation || ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? "")));
         if (prior) throw new ConfigurationError("CONFIGURATION_NEED_ALREADY_DECIDED", "This task already received a decision for the same configuration need. Continue using that choice instead of asking again.", 409);
       }
       if (bound?.configurationWait && bound.configurationCheckpoint && this.repository.get(bound.configurationCheckpoint.requestId, sessionId)?.view.state === "expired")
@@ -312,6 +312,23 @@ export class ConversationalConfigurationFramework {
       || !isAutoApplicableConnector(String(record.input.connectorId)) || !record.view.autoApplyAt
       || Date.parse(record.view.autoApplyAt) > Date.now() || record.stopGeneration !== this.store.notifications.generation(session.id))
       throw new ConfigurationError("CONFIGURATION_AUTO_NOT_AUTHORIZED", "Automatic configuration is not authorized or no longer eligible", 409);
+  }
+
+  async confirmSettings(sessionId: string, id: string, input: ConfigurationSettingsConfirmationInput, key?: string): Promise<ConfigurationRequestView> {
+    const prior = this.decisionQueues.get(id) ?? Promise.resolve();
+    const task = prior.catch(() => undefined).then(async () => {
+      await this.reconcileLifecycle(sessionId, id);
+      const record = this.service.getRecord(sessionId, id);
+      if (!this.options.nativeExecutor && record.view.runId && !record.view.settingsConfirmation && !this.liveWaitRunId(sessionId, id))
+        throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting", 409);
+      await this.service.confirmSettings(sessionId, id, input, key);
+      this.credentials.clearRequest(id);
+      await this.settle(sessionId, id);
+      return this.service.get(sessionId, id);
+    });
+    this.decisionQueues.set(id, task);
+    try { return await task; }
+    finally { if (this.decisionQueues.get(id) === task) this.decisionQueues.delete(id); }
   }
 
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string, source: "user" | "auto" = "user"): Promise<ConfigurationRequestView> {

@@ -331,3 +331,22 @@ test("CFG HTTP: capability entry, ownership, revision, resource versions and arc
   assert.deepEqual((await f.ok<RuntimeSettingsDetails>(`/api/sessions/${f.session.id}/settings`)).overrides, beforeArchive.overrides);
   assert.equal(f.probes.length, 0, "Rejected proposals and archived/stale decisions cannot make a model call");
 });
+
+for (const completed of [true, false]) test(`Manual settings HTTP ${completed}: strict receipt survives reload without probe or apply`, async context => {
+  const f = await fixture(context);
+  const card = await f.proposal("model.connect", f.values);
+  const input = { revision: card.revision, stateVersion: card.stateVersion, destination: "models", completed };
+  assert.equal((await f.call(f.path(card, "settings-confirmation", f.sibling.id), input)).status, 404);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, destination: "timeouts" })).status, 400);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, stateVersion: card.stateVersion + 1 })).status, 409);
+  const answer = await f.call<ConfigurationRequestView>(f.path(card, "settings-confirmation"), input, "POST", "manual-http");
+  assert.equal(answer.status, 200, answer.text);
+  assert.equal(answer.body.settingsConfirmation?.completed, completed);
+  assert.equal(answer.body.settingsConfirmation?.verified, false);
+  assert.equal(answer.body.settingsConfirmation?.configurationWritten, false);
+  assert.equal(answer.body.activation.state, "not_requested");
+  assert.deepEqual((await f.ok<ConfigurationRequestView>(f.path(card))).settingsConfirmation, answer.body.settingsConfirmation);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), input, "POST", "manual-http")).status, 200);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, completed: !completed })).status, 409);
+  assert.deepEqual(await f.ok<ModelProfile[]>("/api/models"), []); assert.equal(f.probes.length, 0);
+});

@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { settingsConfirmationInstruction } from "./settings-confirmation.js";
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
@@ -68,7 +69,8 @@ export function createConfigurationAgentTools(input: { store: SessionStore; sess
         const settled = await waiting;
         return { content: [{ type: "text", text: JSON.stringify({ requestId: settled.id, capabilityId: settled.capabilityId,
           state: settled.state, activationMode: settled.activation.mode, activationState: settled.activation.state,
-          instruction: settled.state === "dismissed" ? "The user declined this change. Continue this original task using available alternatives; do not repeat the proposal."
+          ...(settled.settingsConfirmation ? { settingsConfirmation: settled.settingsConfirmation } : {}),
+          instruction: settled.settingsConfirmation ? settingsConfirmationInstruction(settled.settingsConfirmation) : settled.state === "dismissed" ? "The user declined this change. Continue this original task using available alternatives; do not repeat the proposal."
             : settled.state !== "applied" ? "This proposal expired or was cancelled. No configuration was authorized. Explain the limitation without retrying this proposal."
             : settled.activation.mode === "same_run" && settled.activation.state !== "active" ? "The settings were saved but could not be activated in this task. Do not call the new connector or repeat this proposal; explain the limitation."
             : settled.activation.mode === "same_run" ? "The approved connector is now callable through mcp_recovered_call. Use mcp_readiness(action=check) to discover its exact tools. Normal execution permissions still apply. Continue the original task."

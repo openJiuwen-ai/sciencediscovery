@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { randomUUID } from "node:crypto";
-import type { ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScope } from "@sciencediscovery/schema";
+import type { ConfigurationSettingsConfirmationInput, ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScope } from "@sciencediscovery/schema";
 import type { ConfigurationAdapter, ConfigurationAdapterContext, ConfigurationApplyReceipt, ConfigurationHost, ConfigurationPlan, ConfigurationProposalInput, ConfigurationRecord, ConfigurationSnapshot } from "./types.js";
 import { ConfigurationRepository } from "./repository.js";
 import { ConfigurationRegistry } from "./registry.js";
@@ -169,6 +169,9 @@ export class ConfigurationRequestService {
     return structuredClone({
       ...(view.protocolVersion === 3 ? { protocolVersion: 3 as const, options: normalizeChoices(view.options ?? []), selectedOptionId: view.selectedOptionId, needKey: view.needKey,
         ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
+      ...(view.settingsConfirmation ? { settingsConfirmation: { destination: view.settingsConfirmation.destination,
+        completed: view.settingsConfirmation.completed, source: "user" as const, verified: false as const,
+        configurationWritten: false as const, confirmedAt: view.settingsConfirmation.confirmedAt } } : {}),
       id: view.id, sessionId: view.sessionId, projectId: view.projectId,
       ...(view.runId ? { runId: view.runId } : {}), revision: view.revision, stateVersion: view.stateVersion,
       ...(view.fields.some(field => field.kind === "credential") ? { credentialTargetDigest: digest([view.capabilityId, record.plan.data?.credentialTarget ?? record.target, view.fields.filter(field => field.kind === "credential").map(field => field.id)]) } : {}),
@@ -296,6 +299,46 @@ export class ConfigurationRequestService {
     return { sessionId: record.view.sessionId, requestId: record.view.id, revision: record.view.revision, input: record.input, plan: record.plan, snapshot, scope: record.view.scope,
       ...(record.view.runId ? { runId: record.view.runId } : {}), ...(record.view.previewDigest ? { previewDigest: record.view.previewDigest } : {}),
       ...(selectedChoice(record) ? { selectedOption: selectedChoice(record) } : {}), ...(record.credentialHandle ? { credentialHandle: record.credentialHandle } : {}) };
+  }
+  async confirmSettings(sessionId: string, id: string, input: ConfigurationSettingsConfirmationInput, key?: string): Promise<ConfigurationRequestView> {
+    object(input, ["revision", "stateVersion", "destination", "completed"], "settings confirmation");
+    integer(input.revision, "revision"); integer(input.stateVersion, "stateVersion");
+    if (typeof input.completed !== "boolean") invalid("A completed yes/no answer is required");
+    const destinations: Record<string, string[]> = {
+      models: ["model.connect"],
+      timeouts: ["timeouts.configure"],
+      mcp: ["mcp.header_credential", "mcp.metadata", "mcp.timeout", "mcp.delete", "mcp.remove_header", "mcp.remove_env"],
+      proxy: ["proxy.default"],
+    };
+    if (typeof input.destination !== "string" || !Object.hasOwn(destinations, input.destination)) invalid("Unknown settings destination");
+    await this.reconcileLifecycle(sessionId, id);
+    const scope = `${sessionId}:${id}:settings-confirmation`;
+    return this.transact(sessionId, () => {
+      const replay = this.replay(scope, key, input, sessionId); if (replay) return replay;
+      const record = this.getRecord(sessionId, id);
+      this.assertLifecycle(record);
+      if (!destinations[input.destination]!.includes(record.view.capabilityId)) invalid("Settings destination does not match this capability");
+      if (record.view.revision !== input.revision || record.view.stateVersion !== input.stateVersion
+        || !["collecting_input", "awaiting_confirmation", "needs_fix"].includes(record.view.state))
+        throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Refresh this settings confirmation", 409);
+      // Manual edits are expected to change resource versions. Still enforce Stop,
+      // expiry, archive and adapter identity, without verifying or applying settings.
+      this.guard(record, this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId), false);
+      const version = record.view.stateVersion;
+      record.view.settingsConfirmation = { destination: input.destination, completed: input.completed,
+        source: "user", verified: false, configurationWritten: false, confirmedAt: this.now() };
+      record.view.state = "dismissed";
+      record.view.decisionSource = "user";
+      record.view.stateVersion++; record.view.updatedAt = this.now();
+      record.approvedRevision = record.view.revision; record.approvedDigest = record.view.previewDigest;
+      delete record.view.autoApplyAt; delete record.view.error; delete record.view.choiceReceipt;
+      record.view.activation.state = "not_requested";
+      if (record.view.runId) { record.view.resumption.state = "pending"; this.enqueue(record, "resume", { decision: "dismiss", settingsConfirmation: record.view.settingsConfirmation }); }
+      this.repository.save(record, version);
+      this.repository.reserveIdempotency(scope, key, input, id);
+      const result = this.project(record); this.repository.finishIdempotency(scope, key, result);
+      return result;
+    });
   }
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string): Promise<ConfigurationRequestView> {
     object(input, ["revision", "previewDigest", "decision", "selectedOptionId"], "decision"); integer(input.revision, "revision"); string(input.previewDigest, "previewDigest", 100);
@@ -427,7 +470,7 @@ export class ConfigurationRequestService {
   }
   private enqueue(record: ConfigurationRecord, kind: "activate" | "resume" | "external_submit", extra: Record<string, unknown>): void {
     const now = this.now();
-    const option = selectedChoice(record);
+    const option = record.view.settingsConfirmation ? undefined : selectedChoice(record);
     this.repository.enqueueOutbox({ id: `${record.view.id}:${record.view.revision}:${kind}`, requestId: record.view.id, revision: record.view.revision, sessionId: record.view.sessionId, kind, state: "pending", payload: { ...extra, activationMode: record.view.activation.mode, ...(record.view.runId ? { runId: record.view.runId } : {}), stopGeneration: record.stopGeneration, previewDigest: record.view.previewDigest,
       ...(option ? { selectedOptionId: option.id, choiceKind: option.kind, ...(option.alternativeId ? { alternativeId: option.alternativeId } : {}), needKey: record.view.needKey } : {}) }, createdAt: now, updatedAt: now });
   }

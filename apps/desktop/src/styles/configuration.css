@@ -1,0 +1,281 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ * Licensed under the Apache License, Version 2.0 (the "License"); */
+
+/* The shared form borrows the desktop's permission-card, field and pill-button
+ * vocabulary from design.css. Keep these adapters local: apps/web and the
+ * settings/composer controls must retain their own styles. */
+.desktop-configuration {
+  min-width: 0;
+  width: 100%;
+  container-type: inline-size;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.desktop-configuration .conversation-configuration-card {
+  display: grid;
+  gap: 12px;
+  margin: 10px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.desktop-configuration .conversation-configuration-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.desktop-configuration .conversation-configuration-heading > div {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.desktop-configuration h3 {
+  margin: 3px 0 0;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.desktop-configuration .eyebrow {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.desktop-configuration .conversation-configuration-status {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.desktop-configuration p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.desktop-configuration strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* One quiet information tile, rather than a stack of independently framed
+ * cards. Scope, destination and verification stay fully visible. */
+.desktop-configuration .configuration-impact {
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(0, 2fr);
+  gap: 6px 16px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.desktop-configuration dt { color: var(--text-faint); }
+.desktop-configuration dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+
+.desktop-configuration .configuration-diff,
+.desktop-configuration .configuration-verification,
+.desktop-configuration .configuration-choice-options {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.desktop-configuration .configuration-diff ul,
+.desktop-configuration .configuration-endpoint ul { margin: 0; padding-left: 18px; }
+
+.desktop-configuration .configuration-verification,
+.desktop-configuration .configuration-stages {
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+}
+
+.desktop-configuration .configuration-fields,
+.desktop-configuration .configuration-field { display: grid; min-width: 0; gap: 14px; }
+.desktop-configuration .configuration-field { gap: 6px; }
+.desktop-configuration .configuration-field label { color: var(--text-secondary); font-size: 12px; }
+
+/* Match .field-input / .field-select, without changing the shared form. */
+.desktop-configuration input:not([type=checkbox]):not([type=radio]),
+.desktop-configuration select,
+.desktop-configuration textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.desktop-configuration textarea { resize: vertical; }
+.desktop-configuration select[multiple] { min-height: 104px; }
+.desktop-configuration input::placeholder,
+.desktop-configuration textarea::placeholder { color: var(--text-faint); }
+
+.desktop-configuration input:not([type=checkbox]):not([type=radio]):focus,
+.desktop-configuration select:focus,
+.desktop-configuration textarea:focus {
+  outline: 0;
+  border-color: var(--text-strong);
+  box-shadow: 0 0 0 1px var(--text-strong);
+}
+
+.desktop-configuration input[aria-invalid=true],
+.desktop-configuration select[aria-invalid=true],
+.desktop-configuration textarea[aria-invalid=true] { border-color: var(--danger); }
+
+.desktop-configuration input[type=checkbox],
+.desktop-configuration input[type=radio] {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--text-strong);
+}
+
+.desktop-configuration .configuration-field input[type=checkbox] { justify-self: start; }
+.desktop-configuration .configuration-field p,
+.desktop-configuration .configuration-field a,
+.desktop-configuration .configuration-verification p { color: var(--muted); font-size: 12px; }
+.desktop-configuration .configuration-field a { color: var(--primary); text-underline-offset: 2px; }
+.desktop-configuration .configuration-choice-options legend { margin-bottom: 8px; color: var(--text-secondary); font-weight: 600; }
+
+.desktop-configuration .configuration-choice-option,
+.desktop-configuration .configuration-security-ack { display: flex; align-items: flex-start; gap: 8px; }
+.desktop-configuration .configuration-choice-option { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-s); }
+.desktop-configuration .configuration-choice-option.is-selected { border-color: var(--text-strong); background: var(--surface-subtle); }
+.desktop-configuration .configuration-choice-option > span { min-width: 0; }
+.desktop-configuration .configuration-choice-option small,
+.desktop-configuration .configuration-choice-option strong { display: block; }
+.desktop-configuration .configuration-choice-option small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+.desktop-configuration .configuration-endpoint,
+.desktop-configuration .configuration-auto-apply,
+.desktop-configuration .configuration-expired-task {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  font-size: 12px;
+}
+
+.desktop-configuration .configuration-endpoint code { font-family: var(--font-mono); font-size: 12px; }
+.desktop-configuration .configuration-endpoint code,
+.desktop-configuration .configuration-endpoint bdi { overflow-wrap: anywhere; word-break: break-word; }
+.desktop-configuration .configuration-endpoint button,
+.desktop-configuration .configuration-expired-task button { justify-self: start; }
+.desktop-configuration .configuration-auto-apply { background: var(--warning-soft); border-color: var(--warning-border); color: var(--warning); }
+
+.desktop-configuration .conversation-configuration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.desktop-configuration .conversation-configuration-actions:empty { display: none; }
+
+/* The existing .primary-button owns its black fill and hover. Only adapt the
+ * shared form's unclassed controls and allow long action labels to wrap. */
+.desktop-configuration button {
+  max-width: 100%;
+  height: auto;
+  min-height: 32px;
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.desktop-configuration button:focus-visible { box-shadow: var(--shadow-glow); }
+.desktop-configuration button:not(.primary-button) { border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.desktop-configuration button:not(.primary-button):hover:not(:disabled) { background: var(--surface-subtle); }
+.desktop-configuration button:disabled,
+.desktop-configuration input:disabled,
+.desktop-configuration select:disabled,
+.desktop-configuration textarea:disabled { opacity: .45; cursor: not-allowed; }
+
+.desktop-configuration button.configuration-close {
+  flex: 0 0 28px;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.desktop-configuration button.configuration-close:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
+.desktop-configuration .conversation-configuration-error,
+.desktop-configuration.configuration-load-error { border: 1px solid var(--danger-border); border-radius: var(--radius-s); background: var(--danger-soft); color: var(--danger); padding: 10px 12px; }
+.desktop-configuration.configuration-load-error { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.desktop-configuration.configuration-load-error > span { flex: 1 1 240px; }
+
+/* Reuse the transcript's grey tool disclosure and trailing chevron. */
+.desktop-configuration-record > summary { overflow-wrap: anywhere; }
+.desktop-configuration-record > summary .collapse-title { min-width: 0; white-space: normal; }
+.desktop-configuration-record > summary .collapse-chev { flex: 0 0 auto; }
+.desktop-configuration-record > summary:focus-visible { outline: 2px solid var(--text-strong); outline-offset: 3px; border-radius: var(--radius-xs); }
+.desktop-configuration-record > .configuration-record-body { margin-top: 10px; padding: 12px 14px 14px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface); }
+.desktop-configuration-record .conversation-configuration-record-details { display: grid; min-width: 0; gap: 12px; }
+.desktop-configuration .configuration-failed { color: var(--danger); font-weight: 700; }
+
+@container (max-width: 500px) {
+  .desktop-configuration .configuration-impact { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .desktop-configuration dd { margin-bottom: 5px; }
+  .desktop-configuration .conversation-configuration-actions > button { flex: 1 1 140px; }
+  .desktop-configuration .conversation-configuration-card { padding: 12px; }
+}
+
+.desktop-configuration .configuration-more { min-width: 0; }
+.desktop-configuration .configuration-more > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.desktop-configuration .configuration-more[open] { display: grid; gap: 8px; }
+
+/* Conversation-only density. Original settings and old Web keep their styles. */
+.desktop-configuration .configuration-request-compact { gap: 8px; padding: 10px 12px; }
+.desktop-configuration .configuration-request-compact h3 { margin: 0; }
+.desktop-configuration .configuration-request-compact .configuration-fields { gap: 10px; }
+.desktop-configuration .configuration-request-compact .configuration-compact-scope { font-size: 12px; color: var(--muted); }
+.desktop-configuration .configuration-request-compact .conversation-configuration-actions > button {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 5px 14px;
+}
+.desktop-configuration .configuration-request-compact .conversation-configuration-actions {
+  justify-content: flex-end;
+  align-items: center;
+}
+@media (pointer: coarse) {
+  .desktop-configuration .configuration-request-compact .conversation-configuration-actions > button { min-height: 44px; }
+}

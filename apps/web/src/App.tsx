@@ -4606,10 +4606,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       onUnavailable={() => setConfigurationRequests((items) => items.filter((item) => item.id !== request.id))}
       actions={{
         consent: (input, key) => client.consentConfigurationEndpoint(request.sessionId, request.id, input, key),
+        securityConsent: (input, key) => client.consentConfigurationSecurity(request.sessionId, request.id, input, key),
         preview: (input, key) => client.previewConfigurationRequest(request.sessionId, request.id, input, key),
         credential: (input, key) => client.submitConfigurationCredential(request.sessionId, request.id, input, key),
         decide: (input, key) => client.decideConfigurationRequest(request.sessionId, request.id, input, key),
         query: () => client.getConfigurationRequest(request.sessionId, request.id),
+        confirmSettings: (input, key) => client.confirmConfigurationSettings(request.sessionId, request.id, input, key),
         continue: (key) => client.continueConfigurationRequest(request.sessionId, request.id, key),
         reversal: (key) => client.reverseConfigurationRequest(request.sessionId, request.id, key),
       }} />;

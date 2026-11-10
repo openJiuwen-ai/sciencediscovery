@@ -184,6 +184,61 @@ pnpm --filter @sciencediscovery/desktop exec vite preview   # 构建产物跑在
 
 `pnpm build` 会为结构浏览器单独产出一个约 3.2 MB 的 chunk（gzip 后约 880 kB），主包约 500 kB；只有真正打开结构文件时才会下载前者，所以构建输出里的这个大 chunk 不是启动成本。
 
+## 7. 对话配置卡片
+
+`apps/web` 与 `apps/desktop` 共用 `packages/configuration-ui` 的表单、凭据草稿、
+预览和确认逻辑。宿主只提供语言、API 错误类型、终态记录样式和 API 操作。
+新 UI 的 `app/use-configuration-requests.ts` 负责当前会话的加载、轮询和版本归并；
+旧会话的迟到响应不会覆盖新会话。没有聊天消息的会话也能显示待处理卡片。
+
+卡片保留精确目的地同意、专用凭据通道、独立安全策略确认和最终手动保存。
+保存后客户端刷新设置、读取服务器创建的接续运行，不重发用户消息。
+终态回执在原通知处只显示一次；归档、只读证据会话或刷新失败时不能执行写操作。
+
+共享组件包含 Memory、MCP、模型/供应商、安全策略和代理模块的前端显示兼容。
+这不注册后端能力，也不代表这些模块已经部署；后端仍需有对应适配器和接口。
+合并修改旧卡片路径的分支时，应将组件/文案增量保留在共享包，而不是重新建立两份实现。
+
+两个宿主都通过
+`POST /api/sessions/:sessionId/configuration-requests/:requestId/security-consent`
+发送独立安全策略确认，绑定当前显示的版本、目标摘要和明确勾选的确认。
+[#758](https://github.com/openJiuwen-ai/sciencediscovery/pull/758) 的安全策略能力和
+[#734](https://github.com/openJiuwen-ai/sciencediscovery/pull/734) 的 `proxy.default`
+均需部署对应后端及此路由。本变更不会注册后端路由或能力，只有服务器返回需要独立确认的卡片、
+且用户明确勾选并确认后才会发送安全策略确认请求。若该卡片对应的路由不可用，
+请求失败并保持禁止写入；端点同意或普通 Apply 都不能替代安全策略确认。
+
+`test/journey-desktop-configuration.spec.ts` 通过实际公开 API 和桌面前端验证超时配置的
+预览、保存、重载回执及拒绝流程，覆盖中英文和窄窗口。它不调用真实模型或外部服务。
+浏览器依赖或运行环境未满足时不能将该旅程计为通过；组件测试不能代替截图验收。
+
+固定版本的 Playwright 环境通过 `test/helpers/e2e.ts`、`@mocked` 和 `category:e2e`
+自动发现中英文两条用例，不需要逐文件添加 package script。其 `status:reviewed`、
+`model:mock` 和 `isolation:global` 标签将两条用例纳入默认 `pnpm ci:e2e` / PR 计划，
+由 `standard-config` 分片串行执行。旅程只创建自己的临时记录，并恢复修改前的超时设置。
+可用 `pnpm test:list --slice e2e` 检查共享计划而不执行；只列出用例不能视为浏览器旅程通过。
+
+在仓库根目录准备一次固定版本的运行环境，然后列出此文件的用例：
+
+```bash
+node test/sync-e2e.mjs --write
+npm --prefix .e2e ci
+.e2e/node_modules/.bin/playwright install chromium
+npm --prefix .e2e run test:list -- journey-desktop-configuration.spec.ts
+```
+
+执行前，按 [E2E 隔离说明](../../../.agents/skills/e2e-testing/SKILL.md#isolated-stack-per-run)
+从同一已提交版本启动隔离栈，将 `E2E_BASE_URL` 设为该栈的 API 地址，
+将 `E2E_API_TOKEN` 设为该栈生成的令牌；不要指向日常使用的实例。
+旅程会自行启动并关闭端口 4178 上的桌面 Vite 入口，请保持该端口空闲。然后在仓库根目录执行：
+
+```bash
+npm --prefix .e2e run test:mocked -- journey-desktop-configuration.spec.ts
+```
+
+旅程报告器将逐步截图和 `report.md` / `report.html` 保存到 `.e2e/journey-reports/`，
+也可通过 `E2E_JOURNEY_REPORTS` 指定输出目录。
+
 ## 相关文档
 
 - [Web 前端](web-frontend.md) — 当前根路径前端

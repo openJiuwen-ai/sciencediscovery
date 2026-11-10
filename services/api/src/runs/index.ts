@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
+import { settingsConfirmationInstruction } from "../configuration/settings-confirmation.js";
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -592,6 +593,7 @@ export function skillAuthoringCommandPrompt(content: string): string | undefined
 function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: string, run: SessionRun): string {
   const resume = run.configurationResume!;
   const record = nativeConfigurationChoiceRecord(store, sessionId, resume.requestId);
+  if (record?.view.settingsConfirmation) return settingsConfirmationInstruction(record.view.settingsConfirmation);
   const choice = record?.view.choiceReceipt;
   if (record && record.view.capabilityId !== "connector.enable") {
     const outcome = resume.decision === "dismiss" ? "The user declined the configuration; no change was saved."

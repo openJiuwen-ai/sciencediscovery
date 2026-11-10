@@ -41,6 +41,7 @@ function render(
     seededCommand?: { command: string; nonce: number; text: string };
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
+    modelName?: string;
     selectedModelId?: string | null;
     unavailableModel?: boolean;
   } = {},
@@ -52,7 +53,7 @@ function render(
       attachLimit={options.limit}
       attachments={options.attachments ?? []}
       landing={options.landing}
-      models={[{ id: "m1", name: "测试模型" } as never]}
+      models={[{ id: "m1", name: options.modelName ?? "测试模型" } as never]}
       onApprovalMode={() => {}}
       onClearAttachments={() => {}}
       onCreateProject={() => {}}
@@ -103,6 +104,12 @@ test("the composer offers the model pill, upload and session settings", () => {
   // give the same choice two homes.
   assert.doesNotMatch(markup, /composer-permission-pill/);
   assert.doesNotMatch(markup, /class="composer-options"/);
+  const longName = "Desktop configuration 长模型名称 85fedd8a-9420-47f7-9790-1ece4fd4cfa4";
+  for (const landing of [false, true]) {
+    const longMarkup = render(false, { modelName: longName, landing });
+    assert.ok(longMarkup.includes(`class="model-name" title="${longName}">${longName}</span>`),
+      "Truncation is visual only: the selected model keeps its complete text and tooltip");
+  }
 });
 
 test("the plus uploads and states the per-file ceiling in its tooltip", () => {
