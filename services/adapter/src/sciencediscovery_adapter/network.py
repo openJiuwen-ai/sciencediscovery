@@ -12,37 +12,82 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Keep the adapter's local service traffic out of host-configured proxies."""
-
-import inspect
+"""Keep internal loopback transport independent of outbound proxy settings."""
+from functools import partialmethod
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
-import websockets
+import httpx
 
 
-def is_loopback_url(url: str) -> bool:
-    host = urlsplit(url).hostname or ""
-    if host.rstrip(".").lower() == "localhost":
+def is_loopback(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
         return True
     try:
-        return ip_address(host).is_loopback
+        address = ip_address(host)
+        return address.is_loopback or bool(getattr(address, "ipv4_mapped", None) and address.ipv4_mapped.is_loopback)
     except ValueError:
         return False
 
 
-def loopback_mounts(*urls: str) -> dict[str, None]:
-    """Use HTTPX's direct transport for local services, preserving remote proxies and TLS settings."""
-    hosts = {"localhost", "localhost.", "127.0.0.1", "::1"}
-    hosts.update(urlsplit(url).hostname for url in urls if is_loopback_url(url))
-    return {f"all://[{host}]" if ":" in host else f"all://{host}": None for host in hosts}
+class InternalClient:
+    """Lazy external client: an invalid external proxy must not block startup.
+
+    Each URL is classified before choosing its client. Redirect following is
+    disabled, so a local endpoint cannot redirect through the direct client to
+    an external destination. The configured non-local service path retains
+    httpx's normal environment/NO_PROXY handling.
+    """
+    def __init__(self, *, base_url: str = "", transport=None, timeout=None, limits=None):
+        self.base_url = httpx.URL(base_url)
+        # httpx's limits default is a live Limits object; an explicit None would
+        # break the pool later (None.max_connections), so only pass it through
+        # when the caller supplied one.
+        self.options = dict(base_url=base_url, timeout=timeout, follow_redirects=False, transport=transport)
+        if limits is not None:
+            self.options["limits"] = limits
+        self.direct = httpx.AsyncClient(**self.options, trust_env=False)
+        self.external = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.direct.aclose()
+        if self.external is not None:
+            await self.external.aclose()
+
+    def build_request(self, *args, **kwargs):
+        return self.direct.build_request(*args, **kwargs)
+
+    def _outbound_for(self, destination: str) -> httpx.AsyncClient:
+        """Pick the transport for one destination.
+
+        Loopback destinations belong to the direct client. Anything else goes
+        through the environment-aware client, which is created on first use so
+        that a broken proxy configuration never blocks startup.
+        """
+        if is_loopback(destination):
+            return self.direct
+        if self.external is None:
+            self.external = httpx.AsyncClient(**self.options)
+        return self.external
+
+    async def send(self, request, **kwargs):
+        outbound = self._outbound_for(str(request.url))
+        return await outbound.send(request, **kwargs)
+
+    async def _dispatch(self, method: str, url: str, **kwargs):
+        prepared = self.build_request(method, url, **kwargs)
+        return await self.send(prepared)
+
+    # Verb shortcuts bind _dispatch partially instead of hand-writing the
+    # usual per-verb async wrappers; call sites keep awaiting client.get(...)
+    # and client.post(...) exactly as before.
+    get = partialmethod(_dispatch, "GET")
+    post = partialmethod(_dispatch, "POST")
 
 
-def connect_gateway(url: str):
-    # websockets 15+ auto-detects proxies. Older supported releases connect
-    # directly already and don't accept the proxy argument. Remote URLs keep
-    # the library's default proxy behavior in either case.
-    options = {}
-    if is_loopback_url(url) and "proxy" in inspect.signature(websockets.connect).parameters:
-        options["proxy"] = None
-    return websockets.connect(url, max_size=None, **options)
+def websocket_proxy_options(url: str) -> dict:
+    return {"proxy": None} if is_loopback(url) else {}

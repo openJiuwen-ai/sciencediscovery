@@ -453,3 +453,83 @@ def test_an_approval_card_shows_the_arguments_that_run_with_the_command():
     request = {"id": "q1", "summary": "mcp_sci_run_shell（当前模式默认需确认）", "resource": "x"}
     describe_approval(request, route)
     assert request["summary"] == "run_shell: python -c 'print('\"'\"'hi'\"'\"')'"
+
+
+async def test_a_loopback_model_endpoint_stays_direct_under_a_broken_outbound_proxy(monkeypatch):
+    # Regression: a user-configured model endpoint may be a local server (an
+    # Ollama on 127.0.0.1). It must be reached directly even when the adapter
+    # inherits proxy variables that point nowhere and NO_PROXY is empty.
+    # Driven through create_app so the wiring under test is the product's own:
+    # with the old plain httpx.AsyncClient(trust_env=True) model client the
+    # request would be sent to the dead proxy and time out instead.
+    import asyncio
+
+    from sciencediscovery_adapter.app import create_app
+    from sciencediscovery_adapter.config import Settings
+    from sciencediscovery_adapter.network import InternalClient
+
+    async def model_endpoint(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(model_endpoint, "127.0.0.1", 0)
+    async with server:
+        endpoint_port = server.sockets[0].getsockname()[1]
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.setenv(name, "http://127.0.0.1:1")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+
+        app = create_app(Settings(host="127.0.0.1", port=4311, legacy_url="http://legacy.test"),
+                         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"status": "ok"})))
+        async with app.router.lifespan_context(app):
+            # The model client must be the loopback-aware one, and a loopback
+            # endpoint must never leave the direct client.
+            assert isinstance(app.state.models, InternalClient)
+            routes = app.state.agent_runner.routes
+            token = routes.add(replace(ROUTE, base_url=f"http://127.0.0.1:{endpoint_port}/v1"))
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter",
+                                         timeout=httpx.Timeout(5)) as client:
+                response = await client.post(f"/llm/{token}/v1/chat/completions", json={})
+            assert response.status_code == 200
+            assert response.text == "OK"
+            assert app.state.models.external is None, "a loopback model endpoint must stay on the direct client"
+
+
+async def test_an_external_model_endpoint_keeps_environment_proxy_support(monkeypatch):
+    # The mirror case: external model endpoints must keep going through the
+    # environment proxy, not through the direct client. A local socket plays
+    # the proxy; if the request arrives there, the external path was used.
+    import asyncio
+
+    seen = []
+
+    async def fake_proxy(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        seen.append("proxied")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(fake_proxy, "127.0.0.1", 0)
+    async with server:
+        proxy_port = server.sockets[0].getsockname()[1]
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            monkeypatch.setenv(name, f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+
+        from sciencediscovery_adapter.network import InternalClient
+
+        routes = LlmRoutes()
+        token = routes.add(replace(ROUTE, base_url="http://external.test/v1"))
+        app = FastAPI()
+        app.include_router(llm_router(routes, lambda: InternalClient()))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
+            response = await client.post(f"/llm/{token}/v1/chat/completions", json={})
+    assert seen == ["proxied"], "the external endpoint must be reached through the environment proxy"

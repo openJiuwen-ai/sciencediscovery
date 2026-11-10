@@ -30,11 +30,35 @@ import {
 } from "./ci-contract.mjs";
 import * as catalog from "./test-catalog.mjs";
 import { prepareRealE2EResults } from "./prepare-real-e2e-results.mjs";
-import { resultsLabel } from "../test/support/tagged/shared.mjs";
+import { coverageSourceMapStep, resultsLabel } from "../test/support/tagged/shared.mjs";
 
 // Repository-local, like the other script tests, so a fixture never lands
 // outside the checkout CI cleans up.
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".tmp", "ci-script-tests");
+
+test("coverage source-map preparation selects TypeScript workspaces, not source-loaded JavaScript", async t => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "coverage-projects-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const directory of ["packages/network", "packages/model", "services/api", "config", "apps/web"]) {
+    await mkdir(join(root, directory), { recursive: true });
+    await writeFile(join(root, directory, "package.json"), "{}");
+    if (directory !== "packages/network") await writeFile(join(root, directory, "tsconfig.json"), "{}");
+  }
+  assert.deepEqual(coverageSourceMapStep(root), ["pnpm", ["--recursive", "--filter", "./config", "--filter", "./packages/model", "--filter", "./services/api", "exec", "tsc", "-p", "tsconfig.json", "--sourceMap"]]);
+  // Invalid configuration is still selected: tsc must report it, not silently skip it.
+  await writeFile(join(root, "packages/model/tsconfig.json"), "invalid-json");
+  assert.ok(coverageSourceMapStep(root)[1].includes("./packages/model"));
+});
+
+test("coverage source-map preparation does not run an unfiltered command without TS projects", async t => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "coverage-js-only-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "packages/network"), { recursive: true });
+  await writeFile(join(root, "packages/network/package.json"), "{}");
+  assert.equal(coverageSourceMapStep(root), undefined);
+});
 
 for (const runtimeKind of ["relative", "absolute"]) {
   test(`E2E exports one absolute data directory for ${runtimeKind} runtime paths`, async (t) => {

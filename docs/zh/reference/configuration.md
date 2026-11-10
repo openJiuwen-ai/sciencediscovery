@@ -122,7 +122,7 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验、并播种到数据目录的副本 |
-| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容。升级前请先用当前初始包集合（含 `pysocks`）重新种入缓存：无法从缓存提供的初始包升级会被跳过并在 setup 消息中说明，存量任务环境走 SOCKS 路由的 pip 安装也依赖缓存中的该包 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
 | `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | 远程 runner 的 SSH 配置文件（容器内路径）；放在宿主 `./data/ssh` 下即已在 `/app/data/ssh` 可见 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
