@@ -38,6 +38,12 @@
  * which is the product restating a run that died on the wire, not evidence it
  * mishandled a complete answer.
  *
+ * An assertion diff is not that product verdict. Playwright appends the failed
+ * `expect()` to the error it saw, so the gateway's `181001 … 503` arrives in
+ * the same message as `Expected: "completed" / Received: "failed"`. The
+ * gateway's own vocabulary outranks the assertion wrapper; only a delivery miss
+ * outranks the gateway.
+ *
  * Naming a fault is not a pass. The accounting keeps the two apart and
  * reports the fault as such, but a planned case that only faulted is an
  * unverified case: the gate does not pass on it.
@@ -106,10 +112,24 @@ const GATEWAY_CONTEXT = /\b181001\b|\bmodel call failed\b|\bopenai api\b|\bchat\
 const TRANSPORT_BREAK = /\bread\s+econnreset\b|\beconnreset\b|\bother side closed\b|\bsocket hang up\b|\bund_err_socket\b/i;
 
 /**
+ * The product's delivery verdict, which outranks the gateway.
+ *
+ * This is the report that the product ran and did not deliver — the one the
+ * gate must keep as `FAIL` even when the same text also carries the gateway's
+ * error, which is how a delivery miss on top of an outage is recorded.
+ */
+const DELIVERY_MISS = /\bdelivery[ _-]?(?:status|failed|missed)\b|\bdelivered[ _-]?artifacts\b|\bmain run must (?:complete|reference)\b/i;
+
+/**
  * The product's own report: a delivery miss or an assertion diff. Such a
  * text says what the product did with the answer, not what the provider
  * answered, so a provider status quoted inside it is the product's failure
- * to keep. It never soft-classifies.
+ * to keep.
+ *
+ * An assertion alone is the weaker half: a Playwright failure message carries
+ * the gateway's error *and* the `Expected:` / `Received:` block it produced,
+ * so the assertion wording must not swallow the gateway's own 181001/5xx.
+ * Only the delivery half (`DELIVERY_MISS`) wins over the gateway's words.
  */
 const PRODUCT_REPORT = /\bdelivery[ _-]?(?:status|failed|missed)\b|\bdelivered[ _-]?artifacts\b|\bmain run must (?:complete|reference)\b|\bexpected\s*:|\breceived\s*:|\bassertion\b/i;
 
@@ -149,11 +169,17 @@ export function detectProviderFault(text) {
   // product restating a run that died on the transport, not evidence that the
   // product mis-handled an answer it received whole.
   if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return { code: 'provider-transport', status: null };
-  // A delivery miss or an assertion diff is the product's own report, even
-  // when it quotes a provider status: the product ran and did not deliver.
-  if (PRODUCT_REPORT.test(text)) return null;
+  // A delivery miss is the product's own verdict, even when the provider's
+  // words were recorded beside it: the product ran and did not deliver.
+  if (DELIVERY_MISS.test(text)) return null;
   const routing = ROUTING_FAILURE.test(text);
   const status = serverStatus(text);
+  const gatewayStatus = status !== null && GATEWAY_CONTEXT.test(text);
+  // The gateway naming its own server status outranks the assertion wrapper
+  // that carries it: `[181001] model call failed … 503` followed by
+  // `Expected: "completed" / Received: "failed"` is the outage, not the
+  // assertion. A text that only quotes a status still belongs to the product.
+  if (PRODUCT_REPORT.test(text) && !gatewayStatus) return null;
   // A status alone belongs to the product until something places it at the
   // gateway: the local API answering 500 is a product failure, not an outage.
   if (!routing && !status) return null;
@@ -168,15 +194,20 @@ export function detectProviderFault(text) {
 }
 
 /**
- * Classify a failed case from the text its errors carry. A case is a provider
- * fault only when every text that names a fault agrees; one unrelated line
- * cannot make a product failure look like an outage.
+ * Classify a failed case from the text its errors carry.
+ *
+ * A case is a provider fault when at least one recorded text names one and no
+ * text reports a delivery miss. A Playwright case appends its assertion to the
+ * gateway's error, so requiring every text to classify let that assertion line
+ * veto the outage and turn a whole queue red as a product regression.
  */
 export function detectProviderFaultFromErrors(errors = []) {
   const texts = (Array.isArray(errors) ? errors : [errors]).filter(text => typeof text === 'string');
   if (!texts.length) return null;
+  // A delivery miss anywhere in the case is the product's own report.
+  if (texts.some(text => DELIVERY_MISS.test(text))) return null;
   const detected = texts.map(text => detectProviderFault(text)).filter(Boolean);
-  return detected.length === texts.length ? detected[0] : null;
+  return detected.length ? detected[0] : null;
 }
 
 /**
