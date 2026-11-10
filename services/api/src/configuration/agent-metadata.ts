@@ -8,7 +8,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "next_request" | "same_run_if_bound";
+  activation: "next_run" | "next_connection" | "same_run_if_bound" | "next_request";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -20,6 +20,9 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     pipSource: { kind: "string", choices: ENVIRONMENT_PIP_SOURCE_PRESETS.map(preset => preset.id) },
     condaSource: { kind: "string", choices: ENVIRONMENT_CONDA_SOURCE_PRESETS.map(preset => preset.id) },
   }, activation: "next_run", diagnostics: [] },
+  "proxy.resources": { label: "Rename a shared proxy resource", whenNeeded: "Only an explicit request to rename an existing proxy resource. Supply its registered proxyId and new name. Creation, deletion, proxy type, URL, credentials and deployment default changes are not supported. Routing and stored URLs stay unchanged. Omit scope; global manual v3 confirmation is required.", fields: { operation: { kind: "string", choices: ["update"] }, proxyId: id, name: id }, activation: "next_connection", diagnostics: [] },
+  "proxy.provider": { label: "Configure a model provider proxy", whenNeeded: "Only an explicit user request to change the proxy route of an existing shared model provider. This affects all child models. Choose inherit, none or an existing proxy ID; no endpoint/key changes, probes, permissions, new resources. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Omit scope: shared resource changes require global manual v3 confirmation.", fields: { providerId: id, proxyPolicy: id }, activation: "next_run", diagnostics: [] },
+  "proxy.mcp": { label: "Configure an MCP server proxy", whenNeeded: "Only an explicit user request to change the proxy route of an existing registered MCP server. Use its server ID, not connector ID. All connectors sharing it are affected. Later calls and connections of an active task may use the new route; existing connections and in-flight requests may retain the old route. Choose inherit, none or an existing proxy ID. No server creation, credentials, commands, refresh, reconnect or tool call by this settings writer. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Omit scope; global manual v3 confirmation is required.", fields: { mcpServerId: id, proxyPolicy: id }, activation: "next_connection", diagnostics: [] },
   "web.credential": { label: "Manage Web service credentials", whenNeeded: "The user explicitly asks to replace or clear a shared Web provider key. Use only the current backend provider list. Never put a key in values or chat; the secure user card collects it. Changing a key can activate an already-selected paid provider. Saving is not authentication verification and does not retry a Web request.", fields: { webProvider: { kind: "string", choices: WEB_KEY_PROVIDERS }, operation: { kind: "string", choices: ["replace", "clear"] } }, activation: "next_request", diagnostics: [] },
 
   "settings.inherit": { label: "Restore ordinary settings inheritance", whenNeeded: "Only an explicit request to remove selected ordinary overrides at this Session or its Project. selectedFields is a finite list of model/review/semantic/thinking/connector/Skill selection fields. Session is default; no Global, security, approval, auto-review, network, plugin JSON, Runner or credential reset. Manual v3 confirmation. Lower overrides keep precedence and frozen runs do not change.", fields: { selectedFields: ids }, activation: "next_run", diagnostics: [] },
@@ -53,7 +56,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources"] as const satisfies readonly ConfigurationCapabilityId[];
-export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure", "web.credential", "proxy.resources", "proxy.provider", "proxy.mcp", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })

@@ -30,6 +30,11 @@ test("CFG client isolates credential upload, encodes request ownership, and send
     assert.deepEqual(calls[5]!.body, { capabilityId: "model.repair_credential", values: { modelId: "model-1" } });
     assert.match(calls[6]!.url, /\/endpoint-consent$/);
     assert.deepEqual(calls[6]!.body, { revision: 5, endpointTarget: "https://example.test|openai" });
+    const manual = { revision: 5, stateVersion: 8, destination: "proxy" as const, completed: false };
+    await client.confirmConfigurationSettings("session/a", "request/b", manual, "manual-operation");
+    assert.match(calls.at(-1)!.url, /sessions\/session%2Fa\/configuration-requests\/request%2Fb\/settings-confirmation$/);
+    assert.deepEqual(calls.at(-1)!.body, manual);
+    assert.equal(calls.at(-1)!.headers.get("Idempotency-Key"), "manual-operation");
     assert.ok(calls.every((call) => call.headers.get("authorization") === "Bearer control-token"));
     assert.ok(calls.every((call) => !/\/(messages|runs)(\/|$)/.test(call.url)));
     assert.doesNotMatch(JSON.stringify(calls.slice(1)), /test-key/);

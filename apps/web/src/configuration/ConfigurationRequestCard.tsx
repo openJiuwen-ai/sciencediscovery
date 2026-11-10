@@ -4,7 +4,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
-  ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
+  ConfigurationSettingsConfirmationInput, ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
 import { useLocale } from "../i18n/index.js";
 import { ProcessRecord } from "../ProcessRecord.js";
@@ -15,6 +15,7 @@ export interface ConfigurationRequestActions {
   preview(input: ConfigurationPreviewInput, key: string): Promise<ConfigurationRequestView>;
   credential(input: ConfigurationCredentialInput, key: string): Promise<ConfigurationCredentialDraftView>;
   decide(input: ConfigurationDecisionInput, key: string): Promise<ConfigurationRequestView>;
+  confirmSettings?(input: ConfigurationSettingsConfirmationInput, key: string): Promise<ConfigurationRequestView>;
   query(): Promise<ConfigurationRequestView>;
   continue(key: string): Promise<ConfigurationRequestView>;
   reversal(key: string): Promise<ConfigurationRequestView>;
@@ -66,7 +67,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation", "proxyId", "kind", "replaceUrl"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -275,6 +276,14 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     }, () => uploading);
   }
   const title = m.capability[request.capabilityId] ?? request.capabilityId;
+  const changeFieldLabel = (field: string) => {
+    if (field === "proxyPolicy" || field === "defaultPolicy") return ownMessage(m.field, field, field);
+    if (request.capabilityId === "web.credential" || request.capabilityId === "web.configure") return ownMessage(m.field, field, field);
+    if (request.capabilityId !== "proxy.resources") return field;
+    if (field === "name") return locale.startsWith("zh") ? "代理名称" : "Proxy name";
+    if (field === "operation") return locale.startsWith("zh") ? "操作" : "Operation";
+    return ownMessage(m.field, field, field);
+  };
   const scope = `${m.scope[request.scope.kind]}${request.scope.kind !== "global" ? ` · ${request.scope.id}` : ""}`;
   const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
     `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
@@ -302,7 +311,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{(request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{changeFieldLabel(change.field)}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -342,6 +351,17 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     {hasAction("continue") ? <button className="secondary-button" disabled={busy || runActive || readOnly || mutationsBlocked} type="button" onClick={() => void perform(() => actions.continue(operationKey("continue")))}>{m.retryContinuation}</button> : null}
     {hasAction("reversal") ? <button className="secondary-button" disabled={busy || readOnly || mutationsBlocked} type="button" onClick={() => void perform(() => actions.reversal(operationKey("reversal")))}>{m.reversal}</button> : null}
   </>;
+  if (request.settingsConfirmation) return <ProcessRecord className="conversation-configuration-record configuration-settings-receipt"
+    label={<span id={`configuration-request-${request.id}`}>{`${m.settingsOpened} · ${m.settingsDestination[request.settingsConfirmation.destination]} · ${request.settingsConfirmation.completed ? m.settingsCompleted : m.settingsNotCompleted}`}</span>}
+    failed={request.resumption.state === "failed"}>
+    <section aria-label={m.settingsDestination[request.settingsConfirmation.destination]} className="conversation-configuration-record-details">
+      <p>{m.settingsReported}</p>
+      <dl className="configuration-impact"><dt>{m.settingsPage}</dt><dd>{m.settingsDestination[request.settingsConfirmation.destination]}</dd>
+        <dt>{m.scopeLabel}</dt><dd>{m.scope[request.scope.kind]}</dd></dl>
+      {hasAction("continue") || error ? <div className="conversation-configuration-actions">{secondaryActions}</div> : null}
+      {error ? <p role="alert" className="conversation-configuration-error">{error}</p> : null}
+    </section>
+  </ProcessRecord>;
   if (terminal) return <><ProcessRecord className="conversation-configuration-record" label={summary} failed={request.activation.state === "failed" || request.resumption.state === "failed"}>
     <section aria-label={title} className="conversation-configuration-record-details">
       {details}<div className="conversation-configuration-actions">{secondaryActions}</div>
@@ -392,7 +412,11 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{request.capabilityId === "proxy.resources"
+            ? (locale.startsWith("zh")
+              ? field.id === "name" ? "代理名称" : field.id === "operation" ? "操作" : ownMessage(m.field, field.id, field.label)
+              : field.label)
+            : ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
@@ -407,7 +431,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
               ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
-                ? ownMessage(m.credentialOperation, choice.id, choice.label) : choice.label}</option>)}
+                ? ownMessage(m.credentialOperation, choice.id, choice.label)
+                : locale.startsWith("zh") && request.capabilityId === "proxy.resources" && ["operation", "kind"].includes(field.id)
+                  ? ({ create: "新建", update: "修改", delete: "删除", custom_url: "自定义 URL", environment: "环境代理", system: "系统代理" } as Record<string, string>)[choice.id] ?? choice.label
+                  : choice.label}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
             : <input {...common} type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
               value={values[field.id] === undefined ? "" : String(values[field.id])} placeholder={field.placeholder}

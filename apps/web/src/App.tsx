@@ -4610,6 +4610,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         credential: (input, key) => client.submitConfigurationCredential(request.sessionId, request.id, input, key),
         decide: (input, key) => client.decideConfigurationRequest(request.sessionId, request.id, input, key),
         query: () => client.getConfigurationRequest(request.sessionId, request.id),
+        confirmSettings: (input, key) => client.confirmConfigurationSettings(request.sessionId, request.id, input, key),
         continue: (key) => client.continueConfigurationRequest(request.sessionId, request.id, key),
         reversal: (key) => client.reverseConfigurationRequest(request.sessionId, request.id, key),
       }} />;

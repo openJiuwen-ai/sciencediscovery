@@ -13,14 +13,14 @@ import { normalizeConfigurationFields, normalizeTokenSchema } from "./schema-nor
 import { normalizeChoices } from "./choices.js";
 import { configurationNeedKey } from "./need-key.js";
 
-function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean; choiceOptions?: ConfigurationHost["choiceOptions"]; applyRunOverlay?: ConfigurationHost["applyRunOverlay"] } = {}) {
+function harness(options: { capabilityId?: ConfigurationAdapter["id"]; verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean; choiceOptions?: ConfigurationHost["choiceOptions"]; applyRunOverlay?: ConfigurationHost["applyRunOverlay"] } = {}) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE domain_settings (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO domain_settings VALUES (1, '[]')");
   const repo = new ConfigurationRepository(db);
   let generation = 0; let version = 0; let writes = 0; let writable = true;
   const snapshot = (): ConfigurationSnapshot => ({ projectId: "project", stopGeneration: generation, writable, resourceVersions: { settings: String(version), parent: "v1", credential: "generation-1" }, data: {} });
   const adapter: ConfigurationAdapter = {
-    id: "connector.enable", version: 1, schemaVersion: 1, scopes: ["session"], persistence: "local_transaction",
+    id: options.capabilityId ?? "connector.enable", version: 1, schemaVersion: 1, scopes: ["session"], persistence: "local_transaction",
     normalize(input) { const value = object(input, ["connectorId"], "values"); return { connectorId: string(value.connectorId, "connectorId") }; },
     target(input) { return String(input.connectorId); },
     preview(input, context) { return { ready: true, fields: [{ id: "connectorId", label: "Connector", required: true, kind: "text", value: string(input.connectorId, "connectorId") }, ...(options.credential ? [{ id: "apiKey", label: "API key", required: true, kind: "credential" as const, status: "missing" as const }] : [])], changes: [{ field: "connectors", after: String(input.connectorId) }], impact: { resourceLocation: "Catalog", effectiveScope: "Session", message: "Keep other connectors" }, verificationPlan: { targets: [], actions: [], maxRequests: 0, mayCharge: false }, activationMode: context.runId ? "same_run" : "next_run", data: { privateRef: "do-not-project" } }; },
@@ -410,4 +410,61 @@ test("review typed verification fields must belong to the approved form", async 
     assert.equal(result.error?.field, undefined);
     assert.doesNotMatch(JSON.stringify(result), /private provider text|synthetic-private-field/);
   } finally { h.db.close(); }
+});
+
+for (const completed of [true, false]) test(`Manual settings ${completed}: durable self-report resumes with no writes or verification`, async () => {
+  let probes = 0;
+  const h = harness({ capabilityId: "timeouts.configure", verify: async () => { probes++; return { ok: true }; } });
+  const view = await h.service.propose("session", { ...proposal, capabilityId: "timeouts.configure", protocolVersion: 3 });
+  h.changeVersion(); // User edits in the original settings must not block their answer.
+  const input = { revision: view.revision, stateVersion: view.stateVersion, destination: "timeouts" as const, completed };
+  const result = await h.service.confirmSettings("session", view.id, input, "manual-answer");
+  assert.equal(result.state, "dismissed"); assert.equal(result.resumption.state, "pending");
+  assert.deepEqual(result.settingsConfirmation, { destination: "timeouts", completed, source: "user", verified: false, configurationWritten: false, confirmedAt: result.updatedAt });
+  assert.equal(result.choiceReceipt, undefined); assert.equal(result.activation.state, "not_requested");
+  assert.equal(h.writes, 0); assert.equal(probes, 0); assert.equal(h.repo.getReceipt(view.id, view.revision), undefined);
+  assert.deepEqual(h.repo.listOutbox().map(item => item.kind), ["resume"]);
+  assert.deepEqual(h.repo.listOutbox()[0]?.payload.settingsConfirmation, result.settingsConfirmation);
+  const restarted = new ConfigurationRequestService({ repository: h.repo, registry: h.registry, host: h.host });
+  assert.deepEqual(restarted.get("session", view.id).settingsConfirmation, result.settingsConfirmation);
+  assert.deepEqual(await restarted.confirmSettings("session", view.id, input, "manual-answer"), result);
+  await assert.rejects(restarted.confirmSettings("session", view.id, { ...input, completed: !completed }), { code: "STALE_CONFIGURATION_PREVIEW" });
+  await assert.rejects(restarted.decide("session", view.id, { revision: view.revision, previewDigest: view.previewDigest!, decision: "apply", selectedOptionId: view.selectedOptionId }), { code: "STALE_CONFIGURATION_PREVIEW" });
+  assert.equal(h.repo.listOutbox().length, 1); assert.equal(h.writes, 0);
+  h.db.close();
+});
+
+test("Manual settings confirmation guards destination, stale state, Stop, expiry and archive", async () => {
+  for (const scenario of ["destination", "unknown", "state", "revision", "stopped", "expired", "archive", "terminal"] as const) {
+    const h = harness({ capabilityId: "timeouts.configure" });
+    const view = await h.service.propose("session", { ...proposal, capabilityId: "timeouts.configure", protocolVersion: 3 });
+    const input = { revision: view.revision, stateVersion: view.stateVersion, destination: "timeouts" as const, completed: true };
+    if (scenario === "stopped") h.stop();
+    if (scenario === "archive") h.archive();
+    if (scenario === "state") input.stateVersion++;
+    if (scenario === "revision") input.revision++;
+    if (scenario === "expired" || scenario === "terminal") {
+      const record = h.service.getRecord("session", view.id);
+      if (scenario === "expired") record.view.expiresAt = "2000-01-01T00:00:00.000Z";
+      else record.view.state = "applying";
+      h.repo.save(record, record.view.stateVersion);
+    }
+    const body = scenario === "destination" ? { ...input, destination: "models" as const } : scenario === "unknown" ? { ...input, destination: "__proto__" as never } : input;
+    await assert.rejects(h.service.confirmSettings("session", view.id, body));
+    assert.equal(h.service.get("session", view.id).settingsConfirmation, undefined);
+    assert.equal(h.repo.listOutbox().length, 0); assert.equal(h.writes, 0); h.db.close();
+  }
+  const h = harness(); const view = await h.service.propose("session", proposal);
+  await assert.rejects(h.service.confirmSettings("session", view.id, { revision: view.revision, stateVersion: view.stateVersion, destination: "mcp", completed: false }), { code: "INVALID_CONFIGURATION_INPUT" });
+  h.db.close();
+});
+
+test("Manual settings concurrent opposite answers persist exactly one receipt and resume", async () => {
+  const h = harness({ capabilityId: "timeouts.configure" });
+  const view = await h.service.propose("session", { ...proposal, capabilityId: "timeouts.configure", protocolVersion: 3 });
+  const input = { revision: view.revision, stateVersion: view.stateVersion, destination: "timeouts" as const };
+  const results = await Promise.allSettled([true, false].map(completed => h.service.confirmSettings("session", view.id, { ...input, completed })));
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter(result => result.status === "rejected").length, 1);
+  assert.equal(h.repo.listOutbox().length, 1); assert.equal(h.writes, 0); h.db.close();
 });

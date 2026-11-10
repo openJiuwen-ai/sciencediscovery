@@ -43,6 +43,7 @@ test("CFG-T29/33: server registry keeps domain fields while the model transport 
     "connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select",
     "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure",
     "environment.sources", "runner.assign",
+    "proxy.mcp", "proxy.provider", "proxy.resources",
     "web.configure", "web.credential",
 
     "plugin.json_viewer", "reviewer.enable", "settings.inherit",
@@ -147,8 +148,15 @@ test("CFG-T29/34/35: inspection exposes sources and unsupported domains, never m
   const quotas = JSON.parse((await tools[0]!.execute("search", { action: "search", query: "quotas" })).content[0]!.text);
   assert.ok(quotas.items.some((row: { capabilityId?: string; available?: boolean }) => row.capabilityId === "quotas.configure" && row.available !== false));
   assert.ok(!quotas.items.some((row: { domain?: string }) => row.domain === "quotas"));
-  const unsupported = JSON.parse((await tools[0]!.execute("search-proxy", { action: "search", query: "proxy" })).content[0]!.text);
-  assert.ok(unsupported.items.some((row: { domain: string; available: boolean }) => row.domain === "proxy" && !row.available));
+  const proxy = JSON.parse((await tools[0]!.execute("search-proxy", { action: "search", query: "proxy" })).content[0]!.text);
+  for (const id of ["proxy.mcp", "proxy.provider", "proxy.resources"]) {
+    assert.ok(proxy.items.some((row: { capabilityId?: string; available?: boolean }) => row.capabilityId === id && row.available === true), `Proxy capability not discoverable: ${id}`);
+  }
+  assert.ok(!proxy.items.some((row: { domain?: string }) => row.domain === "proxy" || row.domain === "proxy_resources"),
+    "Registered proxy settings must not also appear as unsupported");
+  const unsupported = JSON.parse((await tools[0]!.execute("search-runner-registration", { action: "search", query: "runner_registration" })).content[0]!.text);
+  assert.ok(unsupported.items.some((row: { domain?: string; available?: boolean }) => row.domain === "runner_registration" && row.available === false),
+    "Runner registration remains unavailable through conversation");
   assert.equal(output.available, false); assert.ok(!output.settingsInventory);
   for (const code of ["NETWORK_ERROR", "TIMEOUT", "RATE_LIMITED", "NO_RESULTS", "UNKNOWN"]) assert.deepEqual(configurationDiagnostic(code).capabilityIds, []);
   assert.deepEqual(configurationDiagnostic("CONNECTOR_DISABLED").capabilityIds, ["connector.enable"]);

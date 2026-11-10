@@ -460,6 +460,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       .catch(() => null),
   });
   const conversationalConfiguration = () => {
+    store.setConfigurationMcpProxySource(() => {
+      const services = new Map<string, { id: string; names: string[]; connectorIds: string[] }>();
+      for (const manifest of mcpRegistry.listManifests()) {
+        const id = manifest.transport.mcpServerId;
+        const service = services.get(id) ?? { id, names: [], connectorIds: [] };
+        service.names.push(manifest.displayName); service.connectorIds.push(manifest.id); services.set(id, service);
+      }
+      return [...services.values()].map(service => ({ id: service.id, name: service.names.sort().join(", "), connectorIds: service.connectorIds.sort() }));
+    });
     store.setConfigurationConnectorRevisionSource((ids?: readonly string[]) => {
       const selected = mcpRegistry.listManifests().filter(manifest => !ids || ids.includes(manifest.id));
       const servers = new Set(selected.map(manifest => manifest.transport.mcpServerId));

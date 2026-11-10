@@ -19,6 +19,7 @@ import type {
   ConfigurationRequestView,
   ConfigurationPreviewInput,
   ConfigurationDecisionInput,
+  ConfigurationSettingsConfirmationInput,
   ConfigurationCredentialInput,
   ConfigurationCredentialDraftView,
   ConfigurationCapabilityId,
@@ -96,6 +97,12 @@ export class SessionsApiClient extends ProjectsApiClient {
 
   decideConfigurationRequest(sessionId: string, requestId: string, input: ConfigurationDecisionInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
     return this.request(this.configurationRequestPath(sessionId, requestId, "decision"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  confirmConfigurationSettings(sessionId: string, requestId: string, input: ConfigurationSettingsConfirmationInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "settings-confirmation"), {
       method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
     });
   }

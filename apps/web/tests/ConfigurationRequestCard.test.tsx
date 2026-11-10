@@ -16,6 +16,34 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03b: a changed opaque proxy credential target clears the local URL before upload", async () => {
+  let latest = request({ capabilityId: "proxy.resources", credentialTargetDigest: "sha256:proxy-a", fields: [
+    { id: "proxyId", kind: "enum", label: "Proxy", choices: [{ id: "a", label: "A" }], value: "a", required: true },
+    { id: "proxyUrl", kind: "credential", label: "Proxy URL", required: true, status: "missing" }] });
+  let renderer: ReactTestRenderer; let uploads = 0;
+  const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, credentialTargetDigest: "sha256:proxy-b" }),
+    credential: async () => { uploads++; return { handle: "must-not-exist", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const draw = () => createElement(ConfigurationRequestCard, { request: latest, actions: api,
+    onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } });
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer!.root.findByProps({ name: "proxyUrl" }).props.onChange({ target: { value: "https://private:password@proxy.invalid" } }));
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads, 0); assert.equal(renderer!.root.findByProps({ name: "proxyUrl" }).props.value, "");
+  assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /private:password/);
+  assert.equal(button(renderer!, "Confirm this change").props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
+
+test("CFG-X03b: editing the selected proxy clears a typed URL immediately", async () => {
+  const renderer = await mount(request({ capabilityId: "proxy.resources", credentialTargetDigest: "sha256:a", fields: [
+    { id: "proxyId", kind: "enum", label: "Proxy", choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }], value: "a", required: true },
+    { id: "proxyUrl", kind: "credential", label: "Proxy URL", required: true, status: "missing" }] }));
+  await act(async () => renderer.root.findByProps({ name: "proxyUrl" }).props.onChange({ target: { value: "belongs-to-a" } }));
+  await act(async () => renderer.root.findByProps({ name: "proxyId" }).props.onChange({ target: { value: "b" } }));
+  assert.equal(renderer.root.findByProps({ name: "proxyUrl" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X02b: changing Web provider clears the typed key and cannot recover it by switching back", async () => {
   const renderer = await mount(request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
     { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }, { id: "exa", label: "Exa" }] },
@@ -917,4 +945,35 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+test("CFG-X03: provider and MCP proxy changes use the shared proxy policy label", async () => {
+  for (const [capabilityId, locale, label] of [
+    ["proxy.provider", "en", "Proxy policy"],
+    ["proxy.mcp", "zh", "代理策略"],
+  ] as const) {
+    const renderer = await mount(request({ capabilityId, changes: [{ field: "proxyPolicy", before: "inherit", after: "proxy:owned" }] }), actions(), () => undefined, locale);
+    const changeLabels = renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(item => item.children.join(""));
+    assert.ok(changeLabels.includes(label), `${capabilityId} ${locale}`);
+    assert.equal(changeLabels.includes("proxyPolicy"), false);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X69-734: shared settings confirmations render durable localized model receipts", async () => {
+  for (const completed of [true, false]) for (const locale of ["en", "zh"] as const) {
+    const view = request({ capabilityId: "model.connect", state: "dismissed", allowedActions: [],
+      settingsConfirmation: { destination: "models", completed, source: "user", verified: false,
+        configurationWritten: false, confirmedAt: "2026-11-10T12:00:00Z" } });
+    for (let mountCount = 0; mountCount < 2; mountCount++) {
+      const renderer = await mount(view, actions(), () => undefined, locale);
+      assert.equal(renderer.root.findByType("details").props.open, false);
+      const rendered = JSON.stringify(renderer.toJSON());
+      assert.match(rendered, locale === "en" ? /Model settings/ : /模型设置/);
+      assert.ok(rendered.includes(locale === "en" ? completed ? "Changed" : "Not changed" : completed ? "已完成修改" : "未完成修改"));
+      assert.doesNotMatch(rendered, /Deployment proxy|部署默认代理/);
+      assert.equal(renderer.root.findAllByType("button").length, 0);
+      await act(async () => renderer.unmount());
+    }
+  }
 });

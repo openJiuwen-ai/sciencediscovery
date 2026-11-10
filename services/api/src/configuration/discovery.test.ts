@@ -52,8 +52,9 @@ test("CFG-Q02: exact PubMed search returns relevant actual readiness without glo
   assert.doesNotMatch(found.raw, /do-not-project-secret|127\.0\.0\.1|arxiv|enabledSkillIds|settingsInventory|providerApiKeys/);
   assert.deepEqual(h.store.getSessionSettings(h.session.id).overrides, before);
   assert.equal(h.framework.service.list(h.session.id).length, 0);
-  const unsupported = await h.query({ action: "search", query: "proxy" });
-  assert.ok(unsupported.items.some((item: { domain: string; available: boolean }) => item.domain === "proxy" && !item.available));
+  const proxies = await h.query({ action: "search", query: "proxy" });
+  assert.ok(proxies.items.some((item: { capabilityId?: string; available: boolean }) => item.capabilityId === "proxy.resources" && item.available));
+  assert.ok(!proxies.items.some((item: { capabilityId: string }) => item.capabilityId === "proxy.default"));
 });
 test("CFG-Q02: task words match literature and ignore ASCII substrings", async context => {
   const h = await fixture(context);

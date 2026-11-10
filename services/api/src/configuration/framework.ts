@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
+import type { ConfigurationSettingsConfirmationInput, ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
   ConfigurationRequestView, SessionRun } from "@sciencediscovery/schema";
 import type { ConfigurationWaitOwner } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
@@ -12,6 +12,9 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createProxyResourceAdapter } from "./proxy-resource-adapter.js";
+import { createProviderProxyAdapter } from "./provider-proxy-adapter.js";
+import { createMcpProxyAdapter } from "./mcp-proxy-adapter.js";
 import { createWebCredentialAdapter } from "./web-credential-adapter.js";
 import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
@@ -118,7 +121,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createProxyResourceAdapter(store), createProviderProxyAdapter(store), createMcpProxyAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -160,7 +163,7 @@ export class ConversationalConfigurationFramework {
         },
         resolvePreviewCredential: input => {
           try {
-            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
+            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: this.credentialField(input.sessionId, input.requestId) });
             return input.credentialHandle;
           } catch (error) {
             if (!(error instanceof Error) || error.message !== "CREDENTIAL_DRAFT_EXPIRED") throw error;
@@ -176,11 +179,20 @@ export class ConversationalConfigurationFramework {
           }
           if (change.credentialHandle) this.credentials.rebind(change.credentialHandle, {
             sessionId: change.sessionId, requestId: change.requestId, revision: change.fromRevision,
-            target: change.oldTarget, fieldId: "apiToken",
+            target: change.oldTarget, fieldId: this.credentialField(change.sessionId, change.requestId),
           }, change.toRevision);
           else if (change.oldTarget !== change.newTarget) this.credentials.clearRequest(change.requestId);
         },
       } });
+  }
+
+  private credentialField(sessionId: string, requestId: string): string {
+    const record = this.repository.get(requestId, sessionId);
+    if (!record) throw new ConfigurationError("CONFIGURATION_REQUEST_NOT_FOUND", "Configuration request not found", 404);
+    const fields = this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialFields;
+    const field = fields?.[0];
+    if (!field || fields?.length !== 1) throw new ConfigurationError("INVALID_CONFIGURATION_CREDENTIAL", "No single registered credential field is available", 400);
+    return field;
   }
 
   private snapshot(sessionId: string, capabilityId: import("@sciencediscovery/schema").ConfigurationCapabilityId, target: string) {
@@ -220,7 +232,7 @@ export class ConversationalConfigurationFramework {
         const baseline = this.snapshot(sessionId, input.capabilityId, target);
         const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
         const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
-          && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
+          && record.view.state === "dismissed" && (record.view.settingsConfirmation || ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? "")));
         if (prior) throw new ConfigurationError("CONFIGURATION_NEED_ALREADY_DECIDED", "This task already received a decision for the same configuration need. Continue using that choice instead of asking again.", 409);
       }
       if (bound?.configurationWait && bound.configurationCheckpoint && this.repository.get(bound.configurationCheckpoint.requestId, sessionId)?.view.state === "expired")
@@ -312,6 +324,23 @@ export class ConversationalConfigurationFramework {
       || !isAutoApplicableConnector(String(record.input.connectorId)) || !record.view.autoApplyAt
       || Date.parse(record.view.autoApplyAt) > Date.now() || record.stopGeneration !== this.store.notifications.generation(session.id))
       throw new ConfigurationError("CONFIGURATION_AUTO_NOT_AUTHORIZED", "Automatic configuration is not authorized or no longer eligible", 409);
+  }
+
+  async confirmSettings(sessionId: string, id: string, input: ConfigurationSettingsConfirmationInput, key?: string): Promise<ConfigurationRequestView> {
+    const prior = this.decisionQueues.get(id) ?? Promise.resolve();
+    const task = prior.catch(() => undefined).then(async () => {
+      await this.reconcileLifecycle(sessionId, id);
+      const record = this.service.getRecord(sessionId, id);
+      if (!this.options.nativeExecutor && record.view.runId && !record.view.settingsConfirmation && !this.liveWaitRunId(sessionId, id))
+        throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting", 409);
+      await this.service.confirmSettings(sessionId, id, input, key);
+      this.credentials.clearRequest(id);
+      await this.settle(sessionId, id);
+      return this.service.get(sessionId, id);
+    });
+    this.decisionQueues.set(id, task);
+    try { return await task; }
+    finally { if (this.decisionQueues.get(id) === task) this.decisionQueues.delete(id); }
   }
 
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string, source: "user" | "auto" = "user"): Promise<ConfigurationRequestView> {

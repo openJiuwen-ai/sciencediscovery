@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
+export type ConfigurationCapabilityId = "web.credential" | "proxy.resources" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "proxy.provider" | "proxy.mcp" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -69,7 +69,26 @@ export type ConfigurationFieldView = {
   | { kind: "multiselect"; value?: string[]; choices: Array<{ id: string; label: string }> }
   | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
 );
+export type ConfigurationSettingsDestination = "models" | "timeouts" | "mcp" | "proxy";
+export interface ConfigurationSettingsConfirmationInput {
+  revision: number;
+  stateVersion: number;
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+}
+/** A user report, never evidence that the adapter wrote or verified settings. */
+export interface ConfigurationSettingsConfirmationReceipt {
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+  source: "user";
+  verified: false;
+  configurationWritten: false;
+  confirmedAt: string;
+}
 export interface ConfigurationRequestView {
+  settingsConfirmation?: ConfigurationSettingsConfirmationReceipt;
+  /** Opaque identity of the registered credential field and resource, never its secret. */
+  credentialTargetDigest?: string;
   endpointAuthorization?: ConfigurationEndpointAuthorization;
   /** Missing means the historical v2 apply/dismiss protocol. */
   protocolVersion?: 3;
@@ -85,8 +104,6 @@ export interface ConfigurationRequestView {
   runId?: string;
   revision: number;
   stateVersion: number;
-  /** Server-owned opaque credential target identity; never a secret. */
-  credentialTargetDigest?: string;
   capabilityId: ConfigurationCapabilityId;
   adapterVersion: number;
   schemaVersion: number;
@@ -99,7 +116,7 @@ export interface ConfigurationRequestView {
   verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
   previewDigest?: string;
   activation: {
-    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "requires_restart";
+    mode: "before_first_run" | "same_run" | "next_run" | "next_connection" | "requires_restart" | "next_request";
     state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
     effectiveRevision?: string;
   };
