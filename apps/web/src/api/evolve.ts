@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { EvolveEventRecord, EvolveGoal, EvolveRun, SearchGraphView } from "@sciencediscovery/schema";
+import type { EvolveDirectionInput, EvolveEventRecord, EvolveGoal, EvolveRun, SearchGraphView } from "@sciencediscovery/schema";
 
 import { translateActive } from "../i18n/index.js";
 import { ApiRequestError } from "./auth.js";
@@ -34,6 +34,12 @@ export interface EvolveStatus {
 }
 
 export class EvolveApiClient extends SkillsApiClient {
+  draftEvolveDirection(sessionId: string, task: string, signal: AbortSignal): Promise<EvolveDirectionInput> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/evolve/draft`, {
+      body: JSON.stringify({ task }), method: "POST", signal,
+    });
+  }
+
   getEvolveStatus(): Promise<EvolveStatus> { return this.request("/api/evolve/status"); }
   initEvolve(): Promise<EvolveStatus> { return this.request("/api/evolve/init", { method: "POST" }); }
 

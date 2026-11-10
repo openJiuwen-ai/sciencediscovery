@@ -29,6 +29,9 @@ import { commitsOnEnter } from "../app/ime-enter.js";
 import type { LandingCategory, LandingSeed } from "../app/landing.js";
 import { skillChoices, skillDraft, skillMark, slashQuery } from "../app/slash.js";
 import { TEXT } from "../text.js";
+import type { EvolveDirectionInput } from "@sciencediscovery/schema";
+import { EvolveCreateDialog, type EvolveCreateDialogProps } from "./evolve/EvolveCreateDialog.js";
+import { evolveCommandAlgorithm, evolveCommandCheckpointMode, evolveCommandGoal, splitEvolveCommand } from "../evolve/command.js";
 import { AttachmentTray } from "./AttachmentTray.js";
 import { EvolveGlyph, EvolveTreeGlyph } from "./evolve/glyphs.js";
 import { filterExperts } from "./expert-catalog.js";
@@ -90,6 +93,9 @@ interface Props {
    *  none. It is a row in 会话设置 rather than a control of its own: the
    *  header no longer carries a second entry point. */
   onEvolve?: () => void;
+  evolveSetup?: Pick<EvolveCreateDialogProps, "archived" | "error" | "initializing" | "onInitialize" | "status">;
+  canConfirmTypedEvolve?: boolean;
+  onGenerateEvolveDirection?: (task: string, signal: AbortSignal) => Promise<EvolveDirectionInput>;
   onOpenSettings: () => void;
   /** A skill whose choice has more to it than its command: the pick is handed
    *  here, and `true` means the surface it opened has taken the draft, so no
@@ -109,7 +115,7 @@ interface Props {
   /** `command` is the seeded token when the draft started from a setup
    *  dialog; the two are one message, but only the caller knows how to join
    *  them. */
-  onSend: (content: string, command?: string) => void;
+  onSend: (content: string, command?: string, direction?: EvolveDirectionInput) => void;
   onStop: () => void;
   onUpload: (files: File[]) => void;
   /** Shown in the landing strip, beside the folder. Absent when the next
@@ -690,6 +696,9 @@ export function Composer({
   onClearCommand,
   onCreateProject,
   onEvolve,
+  evolveSetup,
+  canConfirmTypedEvolve = false,
+  onGenerateEvolveDirection,
   onOpenSettings,
   onPickSkill,
   onRemoveAttachment,
@@ -718,6 +727,7 @@ export function Composer({
    *  initial state as well as in the effect below, so a composer mounted with
    *  a token already in hand draws it on the first frame. */
   const [command, setCommand] = useState<string | undefined>(seededCommand?.command);
+  const [directionDraft, setDirectionDraft] = useState<{ command: string; task: string }>();
   const [menu, setMenu] = useState<Menu>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -880,6 +890,7 @@ export function Composer({
   // session that never asked for one. The sentence stays: it is the reader's,
   // and the only thing the dialog contributed is the flags.
   useEffect(() => {
+    setDirectionDraft(undefined);
     if (seededCommand === undefined) {
       setCommand(undefined);
       return;
@@ -898,17 +909,33 @@ export function Composer({
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [menu]);
 
-  const submit = () => {
-    if (!canSend) return;
-    onSend(text, command);
+  const sendDraft = (content: string, selectedCommand?: string, direction?: EvolveDirectionInput) => {
+    if (direction) onSend(content, selectedCommand, direction);
+    else onSend(content, selectedCommand);
+    setDirectionDraft(undefined);
     setText("");
     setCommand(undefined);
+  };
+
+  const submit = () => {
+    if (!canSend) return;
+    if (evolveSetup && command !== undefined) {
+      setDirectionDraft({ command, task: text.trim() });
+      return;
+    }
+    if (evolveSetup && canConfirmTypedEvolve && evolveCommandGoal(text)) {
+      const draft = splitEvolveCommand(text);
+      setDirectionDraft({ command: draft.command, task: draft.goal });
+      return;
+    }
+    sendDraft(text, command);
   };
 
   /** Drop the dialog's flags and keep the sentence: the reader changed their
    *  mind about the search, not about what they were going to say. */
   const clearCommand = () => {
     setCommand(undefined);
+    setDirectionDraft(undefined);
     onClearCommand?.();
   };
 
@@ -920,7 +947,7 @@ export function Composer({
 
   const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
 
-  return (
+  return <>
     <div
       className={`composer${landing ? " is-landing" : ""}${attachments.length > 0 ? " has-attachments" : ""}`}
       data-guide="composer"
@@ -1176,5 +1203,21 @@ export function Composer({
         </div>
       ) : null}
     </div>
-  );
+    {directionDraft && evolveSetup ? <EvolveCreateDialog
+      {...evolveSetup}
+      initialAlgorithm={evolveCommandAlgorithm(directionDraft.command)}
+      initialCheckpointMode={evolveCommandCheckpointMode(directionDraft.command)}
+      onClose={() => setDirectionDraft(undefined)}
+      onSend={(selectedCommand, direction) => {
+        if (canSend) sendDraft(directionDraft.task, selectedCommand, direction);
+      }}
+      running={running}
+      submission={{
+        allowDirect: /(?:^|\s)--allow-direct(?:\s|$)/.test(directionDraft.command),
+        onGenerate: onGenerateEvolveDirection
+          ? (signal) => onGenerateEvolveDirection(directionDraft.task, signal)
+          : undefined,
+      }}
+    /> : null}
+  </>;
 }

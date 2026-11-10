@@ -219,7 +219,10 @@ class PuctEngine:
         from agentdescent.async_evolve import async_evolve
         from agentdescent.staleness import get_policy
 
+        from .directed_memory import EditMemory, guard_evaluate, guard_tree, redraw_known, watch_events
+
         baseline: Dict[str, float] = {}
+        memory = EditMemory()
         mode = _mode_of(spec)
         if mode == "test_gate":
             from .test_gate_domain import TestGateError, test_gate_domain
@@ -276,6 +279,21 @@ class PuctEngine:
                 baseline_text=spec.baseline_code,
                 baseline=baseline,
             )
+        elif mode == "npu_job":
+            from .npu_job import NpuJobError, npu_client_from_spec, npu_domain
+
+            try:
+                client = npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+            except NpuJobError as error:
+                raise _Refusal(str(error)) from error
+            domain = npu_domain(
+                scorecard=spec.scorecard,
+                baseline_code=spec.baseline_code,
+                client=client,
+                statement=str(spec.statement or ""),
+                should_stop=should_stop,
+                attempt=memory.fault_count,
+            )
         else:
             domain = self._domain_factory(
                 scorecard=spec.scorecard,
@@ -288,14 +306,27 @@ class PuctEngine:
                 should_stop=should_stop,
             )
 
+        from .direction import bound_domain
+
+        direction = spec.scorecard.get("direction")
+        domain = bound_domain(domain, spec.baseline_code, direction)
+        if isinstance(direction, dict) and direction.get("editable"):
+            domain = guard_evaluate(domain, memory)
         tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),
                         prior_exponent=_prior_exponent(spec.options),
                         candidate_limit=spec.expansions)
+        if isinstance(direction, dict) and direction.get("editable"):
+            guard_tree(tree, memory)
         store = CandidateStore(self._store_root)
         usage = _Usage()
         reporter = _Reporter(spec, tree, domain, store, usage, emit)
 
         complete = self._model_call(spec, usage, reporter, should_stop, tree)
+        if isinstance(direction, dict) and direction.get("editable"):
+            complete = redraw_known(
+                complete, memory, lambda message: reporter.emit(events.log("info", message)),
+                direction=direction,
+            )
         tasks = (_tasks(dataset, spec.search_id) if _stages_rows(mode)
                  else _group_tasks(spec))
         # No colon: the engine refuses an artifact id that is not a safe
@@ -311,6 +342,10 @@ class PuctEngine:
             )
             # Seeded here so the root's numbers are what everything after is
             # normalised against — the domain's baseline is empty until now.
+            if isinstance(direction, dict) and direction.get("editable"):
+                aggregator.on_event = watch_events(
+                    aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
+                )
             aggregator.seed()
             baseline.update({
                 key: float(value) for key, value in tree.root().program.metrics.items()
@@ -875,6 +910,22 @@ def _refuse_unrunnable(spec: RunSpec) -> None:
         if not spec.rubric.strip():
             raise _Refusal("this scorecard is graded by a model but was given no rubric")
         return
+    if _mode_of(spec) == "npu_job":
+        # The Runner executes this. The local sandbox is not a substitute, and
+        # an unnamed edit surface would make the search a free rewrite.
+        direction = spec.scorecard.get("direction")
+        editable = direction.get("editable") if isinstance(direction, dict) else None
+        if not isinstance(editable, list) or not editable:
+            raise _Refusal(
+                "an NPU search has to name the editable fields; it does not freely rewrite the program"
+            )
+        from .npu_job import NpuJobError, npu_client_from_spec
+
+        try:
+            npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+        except NpuJobError as error:
+            raise _Refusal(str(error)) from error
+        return
     if spec.packages:
         # Before anything is measured, and refused rather than warned about: a
         # run whose candidates were promised a library and did not get it fails
@@ -951,6 +1002,15 @@ def _group_tasks(spec: RunSpec) -> List[Any]:
     """
     from agentdescent.evolution import Task
 
+    if _mode_of(spec) == "npu_job":
+        # The search library refuses fewer than four tasks, and a hold-out
+        # fraction of 0 or 1. The domain scores a program once and reuses that
+        # result, so these four ids do not mean four trips to the card.
+        return [
+            Task(id=f"{spec.search_id}:npu-{index}", prompt="npu", meta={"shard": index})
+            for index in range(4)
+        ]
+
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if counts["gate"] < 4:
@@ -992,6 +1052,10 @@ def _tasks(dataset: Dataset, search_id: str) -> List[Any]:
 
 
 def _group_held_out_frac(spec: RunSpec) -> float:
+    if _mode_of(spec) == "npu_job":
+        # One of the four ids is held out. The fraction has to sit strictly
+        # between 0 and 1 or the search library will not start.
+        return 0.25
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if not counts["gate"] or not total:

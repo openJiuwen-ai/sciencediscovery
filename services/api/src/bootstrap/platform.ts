@@ -53,7 +53,8 @@ import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import { stopEvolveRunForSession } from "../evolution/stop-run.js";
-import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
+import { readEvolveDirection } from "@sciencediscovery/schema";
+import { isEvolveCommand, evolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -405,9 +406,6 @@ export function createPlatformServices(
    *  `/evolve-design` inherits nothing from an earlier approval. A checkpoint
    *  answer does not move the anchor — it is not a command — so the design
    *  this run belongs to is still the latest one there. */
-  const userApprovedUnisolated = async (sessionId: string) =>
-    latestEvolveCommandApprovesUnisolated(await store.readMessages(sessionId));
-
   const casHasEvolve = async (hash: string) => {
     try {
       await evolveCas.read(hash);
@@ -451,8 +449,18 @@ export function createPlatformServices(
       // it. Accept it only when the session's own `/evolve-design` command
       // carried `--allow-direct`; otherwise drop it and let pre-flight's
       // `unisolated_run_unconfirmed` refusal say what is missing.
+      const messages = await store.readMessages(turn.sessionId);
+      const command = messages.findLast(message => message.role === "user" && isEvolveCommand(message.content));
+      const direction = command ? readEvolveDirection(command.content) : undefined;
+      if (direction === "invalid") return { refusedBecause: "The user-selected JSON or field list is invalid. Reopen the Evolve direction card to confirm it again." };
+      if (direction && input.mode === "test_gate") {
+        return { refusedBecause: "The user selected a JSON baseline. Choose a scoring mode that evaluates it as the candidate." };
+      }
+      const proposal = direction ? {
+        ...input, startingPointPath: undefined, startingPointText: direction.baseline, editableFields: direction.editable,
+      } : input;
       const requested = input.allowUnisolated === true;
-      const approvedUnisolated = requested && await userApprovedUnisolated(turn.sessionId);
+      const approvedUnisolated = requested && command !== undefined && evolveCommandApprovesUnisolated(command.content);
       if (requested && !approvedUnisolated) {
         apiLog.warn("evolve_unisolated_not_confirmed", { sessionId: turn.sessionId });
       }
@@ -464,7 +472,7 @@ export function createPlatformServices(
       // permission prompt gets, for the same reason — the wait is real work.
       const releaseWait = turn.beginExternalWait?.();
       try {
-        const result = await startProposedRun(input, {
+        const result = await startProposedRun(proposal, {
           approvedUnisolated,
           // The create path refuses a second search while one is live. The
           // tool's description asks the agent to stop the running one first;

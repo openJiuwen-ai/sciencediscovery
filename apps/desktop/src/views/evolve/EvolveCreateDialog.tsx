@@ -32,10 +32,11 @@
 import { useEffect, useState } from "react";
 
 import type { EvolveStatus } from "../../api/evolve.js";
-import type { EvolveAlgorithm, EvolveCheckpointMode } from "@sciencediscovery/schema";
+import type { EvolveAlgorithm, EvolveCheckpointMode, EvolveDirectionInput } from "@sciencediscovery/schema";
 import { evolveCommand } from "../../evolve/command.js";
-import { TEXT } from "../../text.js";
+import { getLanguage, TEXT } from "../../text.js";
 import { claimsEscape } from "../dialog-escape.js";
+import { DirectionInput } from "./DirectionInput.js";
 import { EvolveRuntimeDialog } from "./EvolveRuntimeDialog.js";
 
 
@@ -56,9 +57,13 @@ export interface EvolveCreateDialogProps {
   initializing: boolean;
   onClose: () => void;
   onInitialize: () => void;
-  onSend: (command: string) => void;
+  onSend: (command: string, direction?: EvolveDirectionInput) => void;
   running: boolean;
   status: EvolveStatus;
+  submission?: {
+    allowDirect: boolean;
+    onGenerate?: (signal: AbortSignal) => Promise<EvolveDirectionInput>;
+  };
 }
 
 export function EvolveCreateDialog({
@@ -73,11 +78,15 @@ export function EvolveCreateDialog({
   onSend,
   running,
   status,
+  submission,
 }: EvolveCreateDialogProps) {
   const [algorithm, setAlgorithm] = useState<EvolveAlgorithm>(initialAlgorithm ?? "puct");
   // Confirm by default: pausing is the safe pace, and an unattended design
   // spends real model calls before the user has seen a single checkpoint.
   const [confirm, setConfirm] = useState(initialCheckpointMode !== "auto");
+  const [customScope, setCustomScope] = useState(false);
+  const [direction, setDirection] = useState<EvolveDirectionInput>();
+  const chinese = getLanguage() === "zh-CN";
   // The consent to run without a sandbox is asked at the moment it is used,
   // not collected ahead of time: a switch that sits on the form invites the
   // reading "this is a setting", and a setting gets set once and forgotten.
@@ -88,6 +97,7 @@ export function EvolveCreateDialog({
   const [details, setDetails] = useState(false);
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
     const onKey = (event: KeyboardEvent) => {
       if (!claimsEscape(event)) return;
       event.preventDefault();
@@ -120,11 +130,15 @@ export function EvolveCreateDialog({
   const blocked = archived ? TEXT.evolve.create.blockedArchived
     : running ? TEXT.evolve.create.blockedRunning
       : undefined;
-  const canSend = ready && blocked === undefined;
+  const canSend = ready && blocked === undefined && (!customScope || Boolean(direction?.editable.length));
   // The goal now lives in the composer, after the token. A sentence that came
   // through the detour goes back with the command so it is not typed twice.
   const goal = initialGoal ?? "";
-  const command = evolveCommand(algorithm, goal, confirm ? "confirm" : "auto");
+  const send = (allowDirect = false) => {
+    const command = evolveCommand(algorithm, goal, confirm ? "confirm" : "auto", allowDirect);
+    if (customScope) onSend(command, direction);
+    else onSend(command);
+  };
 
   return <>
     <div className="modal-backdrop" onPointerDown={onClose}>
@@ -135,7 +149,9 @@ export function EvolveCreateDialog({
         role="dialog"
       >
         <header className="modal-header">
-          <h2 id="evolve-create-title">{TEXT.evolve.create.title}</h2>
+          <h2 id="evolve-create-title">{submission
+            ? (chinese ? "确认演进设置" : "Confirm evolution settings")
+            : TEXT.evolve.create.title}</h2>
           <button aria-label={TEXT.evolve.create.cancel} className="modal-close" onClick={onClose} type="button">
             ×
           </button>
@@ -148,11 +164,11 @@ export function EvolveCreateDialog({
             if (!canSend) return;
             // The alert owns the last word: the command leaves with the flag
             // only after the user answered it.
-            if (unisolated) {
+            if (unisolated && !submission?.allowDirect) {
               setConfirming(true);
               return;
             }
-            onSend(command);
+            send(unisolated);
           }}
         >
           {/* A runtime that cannot run the search is the first thing to know,
@@ -218,7 +234,22 @@ export function EvolveCreateDialog({
             <p className="evolve-create-confirm-hint">
               {confirm ? TEXT.evolve.create.confirmHint : TEXT.evolve.create.autoHint}
             </p>
+            {submission ? <label className="evolve-create-confirm">
+              <input
+                checked={customScope}
+                onChange={(event) => setCustomScope(event.target.checked)}
+                role="switch"
+                type="checkbox"
+              />
+              <span>{chinese ? "自定义 JSON 与修改范围" : "Custom JSON and edit scope"}</span>
+            </label> : null}
           </div>
+
+          {submission ? <div hidden={!customScope} onKeyDown={(event) => {
+            if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault();
+          }}>
+            <DirectionInput chinese={chinese} onChange={setDirection} onGenerate={submission.onGenerate} />
+          </div> : null}
 
           {blocked === undefined ? null : <p className="evolve-create-blocked">{blocked}</p>}
 
@@ -230,7 +261,7 @@ export function EvolveCreateDialog({
                 the user made stays visible, and the reason sits right above the
                 button that cannot send it. */}
             <button className="evolve-create-submit" disabled={!canSend} type="submit">
-              {TEXT.evolve.create.send}
+              {submission ? (chinese ? "开始演进" : "Start evolution") : TEXT.evolve.create.send}
             </button>
           </footer>
         </form>
@@ -283,7 +314,7 @@ export function EvolveCreateDialog({
           className="evolve-confirm-continue"
           onClick={() => {
             setConfirming(false);
-            onSend(evolveCommand(algorithm, goal, confirm ? "confirm" : "auto", true));
+            send(true);
           }}
           type="button"
         >

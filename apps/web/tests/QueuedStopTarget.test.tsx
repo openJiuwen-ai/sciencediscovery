@@ -5,6 +5,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import { createElement } from "react";
+import { readEvolveDirection } from "@sciencediscovery/schema";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import { ComposerRunButton } from "../src/composer/model.js";
@@ -258,6 +259,68 @@ for (const mode of ["missing-terminal", "late-refresh"] as const) test(`Stop rec
   } finally {
     releaseRefresh();
     await act(async () => { view?.unmount(); });
+    globalThis.fetch = previousFetch;
+    browser.restore();
+  }
+});
+
+test("Web Evolve submits the selected algorithm and JSON scope from its confirmation card", async () => {
+  const browser = installBrowserStubs();
+  const previousFetch = globalThis.fetch;
+  const messages: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const path = url.split("?")[0];
+    if (path === "/api/evolve/status") return jsonResponse({ state: "ready", sandbox: "bwrap" });
+    if (path === "/api/sessions/session-1/idea-tree/research") return jsonResponse({ items: [] });
+    if (path === "/api/sessions/session-1/idea-tree/graph") return jsonResponse({ graph: null, hasIdeaTreeRun: false, treeIds: [] });
+    if (path === "/api/sessions/session-1/messages" && init?.method === "POST") {
+      messages.push((JSON.parse(String(init.body)) as { content: string }).content);
+      return new Response('{"error":"stop after capturing the submitted message"}', {
+        status: 409, headers: { "content-type": "application/json" },
+      });
+    }
+    return jsonResponse(startupBody(url));
+  }) as typeof fetch;
+
+  const baseline = '{"fixed":32,"weight":1}';
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      view = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(App, { initialToken: "test-token" })));
+    });
+    await settle();
+    const root = view!.root;
+    const composer = root.findByType("textarea");
+    await act(async () => composer.props.onChange({ target: { value: "/evolve-design --algorithm puct --no-confirm Tune policy" } }));
+    await act(async () => root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    const dialog = root.findByType("dialog");
+    const start = dialog.findAllByType("button").find(button => button.children.join("") === "Start evolution")!;
+    await act(async () => dialog.findByProps({ role: "switch" }).props.onChange({ target: { checked: true } }));
+    assert.equal(start.props.disabled, true);
+    assert.deepEqual(messages, []);
+
+    const file = new File([baseline], "scope.json", { type: "application/json" });
+    const upload = dialog.findByProps({ type: "file", "aria-label": "Upload JSON" });
+    await act(async () => upload.props.onChange({ currentTarget: { files: [file], value: file.name } }));
+    const weight = dialog.findByProps({ "aria-label": "Allow edits weight" });
+    assert.equal(weight.props.checked, false);
+    assert.equal(dialog.findByProps({ "aria-label": "Allow edits fixed" }).props.checked, false);
+    assert.equal(start.props.disabled, true);
+
+    const openEvolve = dialog.findAllByProps({ role: "option" })
+      .find(option => option.findByProps({ className: "evolve-algorithm-option-name" }).children.join("") === "OpenEvolve")!;
+    await act(async () => openEvolve.props.onClick());
+    await act(async () => weight.props.onChange({ target: { checked: true } }));
+    assert.equal(start.props.disabled, false);
+    await act(async () => start.props.onClick());
+    await settle();
+
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!, /^\/evolve-design --algorithm openevolve --no-confirm Tune policy\n/u);
+    assert.deepEqual(readEvolveDirection(messages[0]!), { baseline, editable: ["weight"] });
+  } finally {
+    await act(async () => view?.unmount());
     globalThis.fetch = previousFetch;
     browser.restore();
   }

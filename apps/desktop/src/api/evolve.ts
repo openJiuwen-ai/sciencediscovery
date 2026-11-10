@@ -40,6 +40,13 @@ export interface EvolveStatus {
   state: "error" | "installing" | "not_initialized" | "ready";
 }
 
+export function draftEvolveDirection(client: ApiClient, sessionId: string, task: string, signal: AbortSignal) {
+  return client.request<import("@sciencediscovery/schema").EvolveDirectionInput>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/evolve/draft`,
+    { body: JSON.stringify({ task }), method: "POST", signal },
+  );
+}
+
 export function getEvolveStatus(client: ApiClient): Promise<EvolveStatus> {
   return client.request<EvolveStatus>("/api/evolve/status");
 }
