@@ -1422,6 +1422,7 @@ export class SessionStore {
       projects,
       providers,
       proxyDefaultPolicy,
+      ...(typeof saved.proxyNoProxy === "string" ? { proxyNoProxy: saved.proxyNoProxy } : {}),
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
@@ -2597,7 +2598,7 @@ export class SessionStore {
       settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
       models: version([this.catalog.models, this.catalog.providers]), credentials: version(secretRows),
       connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
-      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
+      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers, this.catalog.proxyNoProxy]),
       autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
       skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource()]),
       reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
@@ -2651,7 +2652,7 @@ export class SessionStore {
         this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
     }
     const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
-    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers, this.catalog.proxyNoProxy,
       this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
     if (capabilityId === "web.credential") systemVersions = {
       webSettings: version(this.catalog.webSettings),
@@ -3054,7 +3055,8 @@ export class SessionStore {
   /** Resolve a module policy (undefined behaves like "inherit") into the
    *  transport-agnostic instruction consumed by outbound callers. */
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy {
-    return resolveProxyPolicy(policy, this.proxyRegistryView());
+    const resolved = resolveProxyPolicy(policy, this.proxyRegistryView());
+    return this.catalog.proxyNoProxy !== undefined ? { ...resolved, noProxy: this.catalog.proxyNoProxy } : resolved;
   }
 
   /**
@@ -3101,6 +3103,7 @@ export class SessionStore {
     const environment = proxyEnvironmentDetails(resolveProxyEnvironment());
     return {
       defaultPolicy: this.catalog.proxyDefaultPolicy,
+      ...(this.catalog.proxyNoProxy !== undefined ? { noProxy: this.catalog.proxyNoProxy } : {}),
       servers: this.catalog.proxyServers
         .map((server) => this.proxyServerSettingsView(server, environment))
         .toSorted((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
@@ -3118,6 +3121,15 @@ export class SessionStore {
   async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
     const defaultPolicy = normalizeProxyDefaultPolicy(isRecord(input) ? input.defaultPolicy : undefined);
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
+    const noProxyInput = isRecord(input) ? input.noProxy : undefined;
+    if (noProxyInput !== undefined) {
+      if (typeof noProxyInput !== "string" || noProxyInput.length > 4000 || /[\r\n]/.test(noProxyInput)) throw new Error("Invalid proxy bypass list");
+      // An emptied field stores nothing rather than "", so the process's own
+      // NO_PROXY applies again instead of being overridden by an empty list.
+      const noProxy = noProxyInput.trim();
+      if (noProxy) this.catalog.proxyNoProxy = noProxy;
+      else delete this.catalog.proxyNoProxy;
+    }
     this.catalog.proxyDefaultPolicy = defaultPolicy;
     await this.saveCatalog();
     return this.getProxySettings();

@@ -315,12 +315,15 @@ importers:
       '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../memory
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.12.2
-        version: 8.12.2
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -484,6 +487,9 @@ importers:
 
   packages/model:
     dependencies:
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
@@ -491,12 +497,18 @@ importers:
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.12.2
-        version: 8.12.2
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+
+  packages/network:
+    dependencies:
+      undici:
+        specifier: 8.12.4
+        version: 8.12.4
 
   packages/operational-logging:
     devDependencies:
@@ -812,6 +824,9 @@ importers:
       '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../../packages/model
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -870,8 +885,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 8.12.2
-        version: 8.12.2
+        specifier: 8.12.4
+        version: 8.12.4
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -916,6 +931,9 @@ importers:
       '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../../packages/cas
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -2772,8 +2790,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.12.2:
-    resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.4.0:
@@ -4929,7 +4947,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@8.12.2: {}
+  undici@8.12.4: {}
 
   unicorn-magic@0.4.0: {}
 

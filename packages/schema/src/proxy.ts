@@ -38,7 +38,7 @@ export type ProxyEnvironmentStatus = "configured" | "unconfigured" | "invalid";
 /** An authenticated-settings view of one effective proxy environment slot.
  *  `names` lists the lowercase/uppercase candidates in runtime precedence
  *  order; `effectiveName` identifies the candidate the process actually read.
- *  Valid effective values are intentionally returned in full on this surface. */
+ *  Credentials and query parameters are redacted on this surface. */
 export interface ProxyEnvironmentVariableDetails {
   effectiveName?: string;
   effectiveValue?: string;
@@ -91,10 +91,12 @@ export type ProxyDefaultPolicy = Exclude<ProxyPolicy, "inherit">;
 
 export interface UpdateProxySettingsRequest {
   defaultPolicy: ProxyDefaultPolicy;
+  noProxy?: string;
 }
 
 export interface ProxySettingsDetails {
   defaultPolicy: ProxyDefaultPolicy;
+  noProxy?: string;
   servers: ProxyServer[];
 }
 
@@ -106,9 +108,9 @@ export interface ProxySettingsDetails {
  * - "url": route through one explicit proxy URL.
  */
 export type ResolvedProxy =
-  | { mode: "direct" }
-  | { mode: "environment" }
-  | { mode: "url"; url: string };
+  | { mode: "direct"; noProxy?: string }
+  | { mode: "environment"; noProxy?: string }
+  | { mode: "url"; url: string; noProxy?: string };
 
 /** Per MCP server proxy policies keyed by gateway server id. */
 export type McpProxyPolicies = Record<string, ProxyPolicy>;

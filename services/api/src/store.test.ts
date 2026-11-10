@@ -1342,6 +1342,58 @@ test("SessionStore manages registry defaults and independent module policies", a
   );
 });
 
+test("proxy bypass settings survive reload and reject invalid input", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `proxy-bypass-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const defaultPolicy = store.getProxySettings().defaultPolicy;
+  await store.updateProxySettings({ defaultPolicy, noProxy: "internal.test,[::1]" });
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.equal(reloaded.getProxySettings().noProxy, "internal.test,[::1]");
+  assert.equal(reloaded.resolveProxy().noProxy, "internal.test,[::1]");
+  await assert.rejects(reloaded.updateProxySettings({ defaultPolicy, noProxy: "host\ninvalid" }));
+  assert.equal(reloaded.getProxySettings().noProxy, "internal.test,[::1]");
+  // An emptied field means "nothing stored", so the process's own NO_PROXY applies
+  // again — an empty string would otherwise win over it and disable every bypass.
+  await reloaded.updateProxySettings({ defaultPolicy, noProxy: "   " });
+  assert.equal(reloaded.getProxySettings().noProxy, undefined);
+  assert.equal(reloaded.resolveProxy().noProxy, undefined);
+});
+
+test("proxy bypass edits rotate the configuration approval fingerprints", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `proxy-fingerprint-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Proxy fingerprint");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+
+  const before = store.configurationSnapshot(session.id, "model.select", "model");
+  const beforeWeb = store.configurationSnapshot(session.id, "web.credential", "web");
+  const beforePolicies = before.resourceVersions.policies;
+  const beforeWebProxy = beforeWeb.resourceVersions.webProxy;
+
+  // Editing only the bypass list changes no default policy and no server, but
+  // it decides which destinations skip the proxy, so every fingerprint that
+  // vouches for proxy routing must rotate with it.
+  await store.updateProxySettings({ defaultPolicy: "none", noProxy: "internal.test" });
+  const after = store.configurationSnapshot(session.id, "model.select", "model");
+  const afterWeb = store.configurationSnapshot(session.id, "web.credential", "web");
+  assert.notEqual(after.resourceVersions.policies, beforePolicies, "policies fingerprint must rotate on a noProxy edit");
+  assert.notEqual(afterWeb.resourceVersions.webProxy, beforeWebProxy, "webProxy fingerprint must rotate on a noProxy edit");
+
+  // An identical re-save keeps the fingerprints stable: only real changes rotate.
+  await store.updateProxySettings({ defaultPolicy: "none", noProxy: "internal.test" });
+  const again = store.configurationSnapshot(session.id, "model.select", "model");
+  const againWeb = store.configurationSnapshot(session.id, "web.credential", "web");
+  assert.equal(again.resourceVersions.policies, after.resourceVersions.policies);
+  assert.equal(againWeb.resourceVersions.webProxy, afterWeb.resourceVersions.webProxy);
+});
+
 test("SessionStore migrates legacy web proxy modes into the authenticated settings projection", async (context) => {
   for (const mode of ["environment", "direct", "custom"] as const) {
     const tempRoot = resolve(process.cwd(), ".tmp", `proxy-migration-${mode}-${Date.now()}-${process.pid}`);
@@ -1439,6 +1491,20 @@ test("proxy settings project supported authenticated URLs while catalog and SQLi
       && !error.message.includes("leak-user")
       && !error.message.includes("leak-password"),
   );
+  // A path or query is never sent by any consumer, so saving one would store a
+  // setting the proxy never sees.
+  for (const [url, message] of [
+    ["http://leak-user:leak-password@proxy.example.test:8080/path", "The proxy URL cannot contain a path"],
+    ["http://leak-user:leak-password@proxy.example.test:8080/?token=private", "The proxy URL cannot contain a query"],
+  ] as const) {
+    await assert.rejects(
+      store.createProxyServer({ kind: "custom_url", name: "Invalid", url }),
+      (error: Error) => error.message === message
+        && !error.message.includes("leak-user")
+        && !error.message.includes("leak-password")
+        && !error.message.includes("private"),
+    );
+  }
 });
 
 test("recovering a large run stream does not load the whole file into the heap", { timeout: 120_000 }, async (context) => {

@@ -40,6 +40,8 @@ import { EnvironmentAccess } from "./environment-access.js";
 // [windows-desktop] win-64 binary name (.exe), conda interpreter layout
 // and rename retry live in the platform adaptation layer ().
 import { environmentInterpreterPath, environmentShellPath, environmentShellUtilityPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { withProxyFetch, proxyProcessEnvironment, redactNetworkError, type NetworkProxy } from "@sciencediscovery/network";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -212,10 +214,11 @@ export function withPackageInstallGuidance(error: unknown): unknown {
 
 export async function installManagedMicromamba(
   destination: string,
-  fetcher: typeof fetch = fetch,
+  fetcher?: typeof fetch,
   architecture: string = process.arch,
   platform: string = process.platform,
 ): Promise<void> {
+  if (!fetcher) return withProxyFetch({ mode: "environment" }, fetcher => installManagedMicromamba(destination, fetcher, architecture, platform));
   const release = managedMicromambaRelease(architecture, platform);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MANAGED_PROVISIONER_TIMEOUT_MS);
@@ -352,11 +355,19 @@ export class EnvironmentStore {
   private mutationTail: Promise<void> = Promise.resolve();
   private readonly runtimeAccess = new EnvironmentAccess();
   private lastSetupError?: string;
+  private starterUpgradeNotice?: string;
+  private readonly proxyContext = new AsyncLocalStorage<NetworkProxy>();
+  private get networkProxy(): NetworkProxy { return this.proxyContext.getStore() ?? { mode: "environment" }; }
+
+  /** Snapshot per operation, including background setup; never persist credentials. */
+  withNetworkProxy<T>(proxy: NetworkProxy | undefined, action: () => T): T {
+    return this.proxyContext.run(proxy ?? { mode: "environment" } as const, action);
+  }
 
   constructor(
     private readonly config: EnvironmentStoreConfig,
     provisioner?: ProvisionerExecutor,
-    provisionerInstaller: ProvisionerInstaller = installManagedMicromamba,
+    provisionerInstaller?: ProvisionerInstaller,
   ) {
     this.catalogPath = resolve(config.root, "catalog.json");
     this.revisionsRoot = resolve(config.root, "revisions");
@@ -382,10 +393,13 @@ export class EnvironmentStore {
         config.enabled ? "micromamba is waiting to be checked or installed" : "micromamba is disabled by configuration",
       ),
     };
-    this.provisionerInstaller = provisionerInstaller;
+    this.provisionerInstaller = provisionerInstaller ?? ((destination) => withProxyFetch(this.networkProxy,
+      fetcher => installManagedMicromamba(destination, fetcher)));
     this.provisioner = provisioner ?? (async (provisionerPath, arguments_, _jobId, environment) => {
+      // Same bounded runner as every other external command: micromamba, conda and
+      // pip have to fail before the gateway's idle deadline instead of hanging.
       return executeEnvironmentCommand(provisionerPath, arguments_, {
-        ...(environment ?? process.env),
+        ...(environment ?? proxyProcessEnvironment(this.networkProxy)),
         MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
         ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
       });
@@ -426,7 +440,9 @@ export class EnvironmentStore {
       error: this.lastSetupError ?? null,
       ...(this.lastSetupError ? { lastError: this.lastSetupError } : {}),
       managedProvisioner: !this.config.provisionerPath,
-      message: this.setupMessage,
+      message: this.starterUpgradeNotice
+        ? `${this.setupMessage} (${this.starterUpgradeNotice})`
+        : this.setupMessage,
       networkPolicy: this.config.packageCacheDir ? "offline-cache" : "allowed-channels",
       phase: this.setupPhase,
       provisioner: this.setupComponents.micromamba.state === "ready" ? basename(this.provisionerPath) : null,
@@ -481,7 +497,7 @@ export class EnvironmentStore {
         this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
         component = "conda";
         this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base", { started: true });
-        await this.upgradeStarterPackages("python");
+        await this.upgradeStarterPackagesBestEffort("python");
         await this.validateStarter("python");
         this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
         this.updateSetup("ready", "complete", "Python base environment is ready", { completed: true });
@@ -546,7 +562,7 @@ export class EnvironmentStore {
       }
       this.updateSetup("installing", "verifying-python-base", "Verifying the managed Python base environment");
       this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base environment", { started: true });
-      if (pythonStarterExisted) await this.upgradeStarterPackages("python");
+      if (pythonStarterExisted) await this.upgradeStarterPackagesBestEffort("python");
       await this.validateStarter("python");
       this.initialized = true;
       this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
@@ -780,6 +796,9 @@ export class EnvironmentStore {
           ...normalizedPackages,
         ], `install-${revisionId}`);
       } else if (manager === "pip") {
+        // A SOCKS-routed pip needs PySocks; older task environments were
+        // cloned before the starter contract included it.
+        await this.ensurePipProxyDependency(prefix, `pip-${revisionId}`);
         const pipArguments = ["-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-input"];
         if (this.config.packageCacheDir) {
           pipArguments.push("--no-index", "--find-links", this.config.packageCacheDir);
@@ -1105,6 +1124,33 @@ export class EnvironmentStore {
     return this.config.packageCacheDir ? ["--offline"] : [];
   }
 
+  /** pip reaches a SOCKS route through requests/urllib3, which needs PySocks —
+   * a starter-package contract newer task environments were cloned without.
+   * Install it into the target prefix before pip runs, so the child's own
+   * proxy resolution cannot fail on "Missing dependencies for SOCKS support".
+   * The check is a cheap interpreter probe, so unproxied installs pay one
+   * short-lived process; offline caches skip it (the seeded cache is expected
+   * to carry the starter contract). */
+  private async ensurePipProxyDependency(prefix: string, jobId: string): Promise<void> {
+    if (this.config.packageCacheDir) return;
+    const proxy = proxyProcessEnvironment(this.networkProxy);
+    const routed = [proxy.all_proxy, proxy.ALL_PROXY].find((value) => typeof value === "string" && value.startsWith("socks5:"));
+    if (!routed) return;
+    const interpreter = environmentInterpreterPath(prefix, "python");
+    const probe = await this.provisioner(
+      interpreter,
+      ["-I", "-c", "import socks"],
+      `socks-probe-${jobId}`.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 128),
+      proxy,
+    ).then(() => true, () => false);
+    if (probe) return;
+    await this.runProvisioner([
+      "install", "--yes", "--strict-channel-priority", "--override-channels", "--prefix", prefix,
+      ...this.config.allowedChannels.flatMap((channel) => ["--channel", channel]),
+      "pysocks",
+    ], `socks-dep-${jobId}`);
+  }
+
   private async ensureManagedProvisioner(): Promise<void> {
     const release = managedMicromambaRelease();
     let installed: string | undefined;
@@ -1144,8 +1190,10 @@ export class EnvironmentStore {
 
   /** Bring a persisted starter forward when the product's required package
    * contract grows. The prefix is updated in place, while the new inventory is
-   * recorded as a distinct audit revision just like an ordinary task update. */
-  private async upgradeStarterPackages(language: ScientificLanguage): Promise<void> {
+   * recorded as a distinct audit revision just like an ordinary task update.
+   * `bestEffort` restores the starter to its prior ready state instead of
+   * marking it failed when the upgrade cannot run (see the caller). */
+  private async upgradeStarterPackages(language: ScientificLanguage, bestEffort = false): Promise<void> {
     const environment = this.requiredEnvironment(`starter-${language}`);
     const previousRevision = this.currentRevision(environment.id);
     const installedNames = new Set(previousRevision.packages
@@ -1176,8 +1224,38 @@ export class EnvironmentStore {
       environment.updatedAt = new Date().toISOString();
       await this.saveCatalog();
     } catch (error) {
+      if (bestEffort) {
+        // The prefix still runs; the upgrade is a forward-only convenience.
+        // Keeping it "failed" would close the whole capability over a prefix
+        // that works — the exact outcome this path exists to avoid.
+        environment.currentRevisionId = previousRevision.id;
+        environment.status = "ready";
+        delete environment.error;
+        environment.updatedAt = new Date().toISOString();
+        await this.saveCatalog();
+        throw error;
+      }
       await this.failUpdate(environment, previousRevision.id);
       throw withPackageInstallGuidance(error);
+    }
+  }
+
+  /** The starter-package upgrade is a forward-only convenience for persisted
+   * starters: the existing prefix stays usable even when the upgrade cannot
+   * run (an offline cache not yet re-seeded with a newly contracted package,
+   * a temporarily unreachable channel). Failing the whole setup here would
+   * close the entire environment capability over a prefix that works, so the
+   * error is surfaced as the setup message instead and startup continues.
+   * validateStarter below still gates on a prefix that cannot run Python. */
+  private async upgradeStarterPackagesBestEffort(language: ScientificLanguage): Promise<void> {
+    try {
+      await this.upgradeStarterPackages(language, true);
+      this.starterUpgradeNotice = undefined;
+    } catch (error) {
+      // Recorded as a notice: the success paths that follow must not erase it,
+      // and the setup getter appends it to the final message.
+      const reason = error instanceof Error ? error.message : String(error);
+      this.starterUpgradeNotice = `Starter package upgrade skipped: ${reason}`;
     }
   }
 
@@ -1234,7 +1312,7 @@ export class EnvironmentStore {
   }
 
   private failSetup(error: unknown, component: keyof ScientificEnvironmentSetup["components"]): void {
-    this.lastSetupError = error instanceof Error ? error.message : "Scientific environment setup failed";
+    this.lastSetupError = redactNetworkError(error);
     const micromambaFailure = component === "micromamba";
     const message = micromambaFailure ? "micromamba setup failed" : "Conda environment setup failed";
     const action = micromambaFailure
@@ -1276,11 +1354,18 @@ export class EnvironmentStore {
       this.provisionerPath,
       ["--no-rc", ...arguments_],
       jobId.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 128),
+      proxyProcessEnvironment(this.networkProxy),
     );
   }
 
   private async runManagedCommand(executable: string, arguments_: string[], jobId: string): Promise<string> {
-    const environment: NodeJS.ProcessEnv = { ...process.env, PIP_DEFAULT_TIMEOUT: process.env.PIP_DEFAULT_TIMEOUT || "20", PIP_RETRIES: process.env.PIP_RETRIES || "1" };
+    // The scoped proxy decides routing; the pip resilience defaults are unrelated
+    // to it and stay, so a flaky mirror retries instead of failing at once.
+    const environment: NodeJS.ProcessEnv = {
+      ...proxyProcessEnvironment(this.networkProxy),
+      PIP_DEFAULT_TIMEOUT: process.env.PIP_DEFAULT_TIMEOUT || "20",
+      PIP_RETRIES: process.env.PIP_RETRIES || "1",
+    };
     delete environment.PYTHONHOME;
     delete environment.PYTHONPATH;
     delete environment.PYTHONUSERBASE;

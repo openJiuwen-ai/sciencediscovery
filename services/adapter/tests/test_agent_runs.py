@@ -58,7 +58,9 @@ async def test_bridge_client_does_not_reuse_idle_tool_call_sockets():
     app = create_app(SETTINGS)
     async with app.router.lifespan_context(app):
         bridge = app.state.bridge
-        pool = bridge._transport._pool  # httpx.AsyncHTTPTransport's configured pool
+        # Bridge calls go to loopback URLs, which InternalClient routes through
+        # its always-present direct client; assert that pool keeps no idle sockets.
+        pool = bridge.direct._transport._pool  # httpx.AsyncHTTPTransport's configured pool
         assert pool._max_keepalive_connections == 0
 
 
