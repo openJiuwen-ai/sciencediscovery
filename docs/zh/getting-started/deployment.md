@@ -52,12 +52,12 @@ Anthropic、Google Gemini、SiliconFlow、OpenRouter、Ollama 等）；如果要
 
 ![自定义服务商](../../images/install/win-10-provider-custom.png)
 
-### 连接成功
+### 基础连接检查通过
 
-测试通过后窗口会显示 **连接成功** 和耗时。点击 **开始使用** 进入主界面；
-如果失败，先核对 API Key、基础 URL 和模型名称，再点 **重新测试**。
+测试通过后窗口会显示 **基础检查通过** 和耗时，并注明该基础检查仅确认服务商可应答最小请求，不验证完整会话执行路径、
+思考或工具调用。点击 **开始使用** 进入主界面；如果失败，先核对 API Key、基础 URL 和模型名称，再点 **重新测试**。
 
-![连接成功](../../images/install/win-11-connected.png)
+![基础连接检查通过](../../images/install/win-11-connected.png)
 
 ![主界面](../../images/install/win-12-home.png)
 

@@ -252,6 +252,9 @@ for (const locale of ['zh-CN', 'en'] as const) test(`a successful basic probe is
   assert.match(detail, locale === 'zh-CN' ? /不验证完整会话执行路径、思考或工具调用/ : /does not verify the full session run path, thinking, or tool use/);
   assert.doesNotMatch(label, locale === 'zh-CN' ? /^可用/ : /^Ready\b/);
   assert.doesNotMatch(detail, locale === 'zh-CN' ? /连接成功，耗时/ : /^Connection succeeded/);
+  // The caveat is visible text, not tooltip-only (issue #824 review).
+  const rendered = JSON.stringify(renderer!.toJSON());
+  assert.match(rendered, locale === 'zh-CN' ? /仅基础检查：一次最小请求/ : /Basic check only: one minimal request/);
   await act(async () => renderer!.unmount());
 });
 
@@ -265,5 +268,6 @@ test('a successful full compatibility check gets its own verdict without claimin
   await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
   assert.match(buttonText(renderer!), /兼容性检查完成 · 42 ms/);
   assert.match(renderer!.root.findByType('button').props.title, /均不能证明会话可完整运行/);
+  assert.match(JSON.stringify(renderer!.toJSON()), /仅为各协议观察结果，不能证明会话可完整运行/);
   await act(async () => renderer!.unmount());
 });
