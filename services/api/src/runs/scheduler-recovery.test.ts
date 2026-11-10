@@ -72,8 +72,12 @@ async function fixture(context: TestContext) {
       undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
       undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
       undefined as never, session.id, undefined as never, null, undefined, { sandboxed: async () => true });
-    tasks.push(task);
-    return task;
+    // The real API's listening socket keeps recovery alive. This unit fixture
+    // owns a handle while awaiting the scheduler's deliberately unref'ed timers.
+    const keepAlive = setInterval(() => {}, 60_000);
+    const completion = task.finally(() => clearInterval(keepAlive));
+    tasks.push(completion);
+    return completion;
   };
   return { store, session, run, start, enableTimers };
 }
@@ -100,19 +104,17 @@ test("a rejected run event is contained, broadcast without storage, and persiste
     if (args[3] === "running") starts += 1;
     return transition(...args);
   });
-  start();
+  const task = start();
   await until(() => chunks.some((chunk) => chunk.includes('"status":"interrupted"')));
   assert.equal(attempts, 1, "the live error does not attempt another persistence write");
   assert.match(chunks.join(""), /EPERM/);
   assert.equal(ended, true, "the live terminal diagnostic closes the subscription");
-  await until(async () => (await store.getSessionRun(session.id, run.id))?.status === "interrupted");
-  await settle();
+  await task;
   assert.equal(starts, 1, "the failed turn must not execute again");
   const persisted = await store.getSessionRun(session.id, run.id);
   assert.match(persisted?.error ?? "", /disk space.*permissions/);
   assert.ok(persisted?.finishedAt);
-  await until(async () => (await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "interrupted"));
-  await settle();
+  assert.ok((await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "interrupted"));
 });
 
 test("persistent transition and recovery failures back off, retain ownership, and recover after a long outage", async (context) => {
@@ -126,7 +128,7 @@ test("persistent transition and recovery failures back off, retain ownership, an
     if (!available) throw refusal();
     return transition(...args);
   });
-  start();
+  const task = start();
   await until(() => attempts === 1 && timers.mock.callCount() === 1);
   start();
   await settle();
@@ -156,8 +158,8 @@ test("persistent transition and recovery failures back off, retain ownership, an
   }
   available = true;
   context.mock.timers.tick(30000);
-  await until(async () => (await store.getSessionRun(session.id, run.id))?.status === "interrupted");
-  await settle();
+  await task;
+  assert.equal((await store.getSessionRun(session.id, run.id))?.status, "interrupted");
   assert.equal(attempts, 10, "recovery continues beyond five failures without replaying execution");
 });
 
@@ -172,14 +174,14 @@ test("a final queue re-read failure is retried instead of silently abandoning sc
     if (reads === 2) throw refusal();
     return list(sessionId);
   });
-  start();
+  const task = start();
   await until(() => reads === 2 && timers.mock.callCount() === 1);
   context.mock.timers.tick(499);
   await settle();
   assert.equal(reads, 2);
   context.mock.timers.tick(1);
-  await until(() => reads === 4);
-  await settle();
+  await task;
+  assert.equal(reads, 4);
   assert.equal((await store.getSessionRun(session.id, run.id))?.status, "completed");
 });
 
@@ -195,9 +197,8 @@ test("a persisted terminal result survives a subsequent event write failure", as
     }
     return append(...args);
   });
-  start();
-  await until(async () => (await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "completed"));
-  await settle();
+  await start();
+  assert.ok((await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "completed"));
   assert.equal((await store.getSessionRun(session.id, run.id))?.status, "completed");
 });
 
@@ -205,29 +206,37 @@ test("an old scheduler's final read failure cannot clear a newer scheduler's own
   const { store, session, run, start } = await fixture(context);
   await store.updateSessionRunStatus(session.id, run.id, "completed");
   const list = store.listSessionRuns.bind(store);
-  let rejectOld: (error: Error) => void = () => assert.fail("old read has not started");
-  let releaseNew: () => void = () => assert.fail("new read has not started");
+  const oldRead = Promise.withResolvers<void>();
+  const newRead = Promise.withResolvers<void>();
   let reads = 0;
   context.mock.method(store, "listSessionRuns", async (sessionId: string) => {
     reads += 1;
-    if (reads === 2) await new Promise<void>((_resolve, reject) => { rejectOld = reject; });
-    if (reads === 3) await new Promise<void>((resolve) => { releaseNew = resolve; });
+    if (reads === 2) await oldRead.promise;
+    if (reads === 3) await newRead.promise;
     return list(sessionId);
   });
-  start();
-  await until(() => reads === 2);
-  start();
-  await until(() => reads === 3);
-  rejectOld(refusal());
-  await settle();
-  start();
-  await settle();
-  assert.equal(reads, 3, "the old owner's catch/finally must not unlock the new scheduler");
-  releaseNew();
-  await settle();
-  start();
-  await until(() => reads === 6);
-  await settle();
+  const oldTask = start();
+  let newTask: Promise<void> | undefined;
+  try {
+    await until(() => reads === 2);
+    newTask = start();
+    await until(() => reads === 3);
+    oldRead.reject(refusal());
+    await oldTask;
+    await start();
+    assert.equal(reads, 3, "the old owner's catch/finally must not unlock the new scheduler");
+    newRead.resolve();
+    // Releasing the read only makes the new scheduler runnable. Its promise,
+    // rather than a number of event-loop turns, proves it released ownership.
+    await newTask;
+    await start();
+    assert.equal(reads, 6, "a subsequent scheduler starts after the new owner finishes");
+  } finally {
+    oldRead.resolve();
+    newRead.resolve();
+    await oldTask;
+    await newTask;
+  }
 });
 
 test("recovery does not overwrite a cancellation that wins the status transition", async (context) => {
@@ -245,9 +254,8 @@ test("recovery does not overwrite a cancellation that wins the status transition
     }
     return transition(...args);
   });
-  start();
-  await until(async () => (await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "cancelled"));
-  await settle();
+  await start();
+  assert.ok((await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "cancelled"));
   assert.equal((await store.getSessionRun(session.id, run.id))?.status, "cancelled");
 });
 
