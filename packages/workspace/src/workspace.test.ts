@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, findWindowsReservedDeviceSegment, isWindowsReservedDeviceName, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import { MCP_MODEL_RESULT_MAX_BYTES } from "./mcp-result-view.js";
 import {
@@ -2689,4 +2689,34 @@ test("the workspace scan skips tooling directories so its budget goes to the Age
   const scan = await scanWorkspaceWithStatus(root);
   assert.deepEqual(scan.files.map((file) => file.path), ["results/figure.png"]);
   assert.equal(scan.truncated, false);
+});
+
+test("isWindowsReservedDeviceName names the devices and nothing else", () => {
+  // Windows resolves these in every directory with any extension, so a file with
+  // that name is never created there, whatever the platform that asks.
+  for (const segment of [
+    "CON", "con.csv", "nul.txt", "AUX", "PRN.dat", "COM1.log", "lpt9.dat", "conin$.txt", "conout$",
+    "CON .csv", "nul.", "COM\u00b9.txt", "com\u00b2.csv", "LPT\u00b3.log", "nul:stream", "con:$DATA",
+  ]) {
+    assert.equal(isWindowsReservedDeviceName(segment), true, segment);
+  }
+  // A stem that merely begins with a reserved word, a two-digit port, and a colon
+  // in front of an ordinary stem are ordinary names on every platform.
+  for (const segment of [
+    "conifer.csv", "console.log", "auxiliary.csv", "com10.csv", "lpt0.csv", "report:2024.csv",
+  ]) {
+    assert.equal(isWindowsReservedDeviceName(segment), false, segment);
+  }
+});
+
+test("findWindowsReservedDeviceSegment walks a path on both separators", () => {
+  const root = resolve("./ws-device-" + Date.now());
+  const at = (relativePath: string): string => resolve(root, relativePath);
+  // A backslash is a separator on Windows and an ordinary character on POSIX, so a
+  // path written that way is one segment there and a nested device path on Windows.
+  assert.equal(findWindowsReservedDeviceSegment(root, at("CON\\notes.txt")), "CON");
+  assert.equal(findWindowsReservedDeviceSegment(root, at("notes\\CON.txt")), "CON.txt");
+  assert.equal(findWindowsReservedDeviceSegment(root, at("CON/notes.txt")), "CON");
+  assert.equal(findWindowsReservedDeviceSegment(root, at("nul.dir/x.csv")), "nul.dir");
+  assert.equal(findWindowsReservedDeviceSegment(root, at("notes/conifer.csv")), undefined);
 });

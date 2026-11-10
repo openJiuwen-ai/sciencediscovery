@@ -576,6 +576,42 @@ export interface WorkspaceToolOptions {
   toolPolicy?: ToolFilterPolicy;
 }
 
+/**
+ * Names Windows resolves to a device in every directory, whatever the extension:
+ * a file called `CON.csv` or `nul.txt` is never created there — opening the path
+ * targets the device instead, so the write fails with EPERM, or, for `CON`, is sent
+ * to the console. COM0 and LPT0 are not reserved, and the naming document counts
+ * the superscript digits 1-3 as port numbers as well.
+ * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
+ */
+const WINDOWS_RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$)$/i;
+
+/**
+ * Whether one path segment names a Windows device instead of a file.
+ *
+ * The extension is irrelevant (`nul.txt` is `nul`), Windows ignores a trailing dot
+ * or space (`nul.`, `CON `), and the named-stream syntax addresses the same device
+ * (`NUL:x`, `CON:$DATA`), so only the part before the first colon and the first dot
+ * is tested — a colon in front of an ordinary stem (`report:2024.csv`) is a legal
+ * name. Callers pass one segment, never a whole path.
+ */
+export function isWindowsReservedDeviceName(segment: string): boolean {
+  const stem = (segment.split(":")[0] ?? "").split(".")[0] ?? "";
+  return WINDOWS_RESERVED_DEVICE_NAME.test(stem.replace(/[. ]+$/, ""));
+}
+
+/**
+ * The first segment of `target` under `workspaceRoot` that Windows would resolve to
+ * a device instead of a file, or `undefined` for an ordinary path.
+ *
+ * Splits on both separators: `CON\notes.txt` is one segment on POSIX and a nested
+ * path on Windows, and the rule has to answer the same way on every host.
+ */
+export function findWindowsReservedDeviceSegment(workspaceRoot: string, target: string): string | undefined {
+  const root = resolve(workspaceRoot);
+  return relative(root, target).split(/[\\/]+/).find((segment) => isWindowsReservedDeviceName(segment));
+}
+
 function assertWorkspacePath(workspaceRoot: string, path: string): string {
   // An absolute path naming this workspace (JiuwenSwarm tells the model its host path) is taken as relative.
   const named = isAbsolute(path) ? workspaceRelativeCwd(workspaceRoot, path) : path;
