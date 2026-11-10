@@ -2288,7 +2288,12 @@ export class SessionStore {
       // the retry.
       await replaceFile(temporaryPath, path);
     } finally {
-      await rm(temporaryPath, { force: true });
+      // The cleanup must not replace the failure that brought us here: when a
+      // scanner holds the freshly written file, the rename is refused and so is
+      // deleting it, and that bare EPERM would hide the errno and the syscall of
+      // the step that actually failed. The leftover file is inert — every array
+      // read goes to its exact path and nothing enumerates this directory.
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
   }
 
