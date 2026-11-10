@@ -398,24 +398,30 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
         pmcid = f"PMC{linked}"
     if not re.fullmatch(r"PMC\d{1,12}", pmcid):
         raise ValueError("PDF preparation requires a PMID or PMCID")
-    locator = await _get_text(
-        external_url("data_sources.ncbi.pmc_oa"),
-        params={"id": pmcid},
+    # PMC retired the OA Web Service (oa.fcgi) in 2026; the service that replaced
+    # it is the PMC OA package bucket. Ask it for this record's keys instead of
+    # asking a locator that no longer answers, so a provider retirement degrades
+    # into "this record has no package" rather than "the download tool is gone".
+    bucket = external_url("data_sources.ncbi.pmc_oa_package_bucket").rstrip("/") + "/"
+    listing = await _get_text(
+        bucket,
+        params={"prefix": pmcid, "max-keys": "40"},
         accept="application/xml",
     )
-    root = ET.fromstring(locator)
-    error = root.find(".//error")
-    if error is not None:
-        raise ValueError(f"PMC OA PDF is unavailable ({error.attrib.get('code', 'unknown reason')})")
-    record = root.find(".//record")
-    pdf = root.find(".//link[@format='pdf']")
-    href = pdf.attrib.get("href") if pdf is not None else None
-    if not href:
+    root = ET.fromstring(listing)
+    # The listing is S3 XML, so its elements carry the S3 namespace; match on the
+    # local name to stay independent of the exact namespace URI.
+    keys = [key.text.strip() for key in root.findall(".//{*}Contents/{*}Key") if key.text]
+    pdf_keys = sorted(key for key in keys if re.fullmatch(rf"{pmcid}\.\d+/[A-Za-z0-9._-]+\.pdf", key))
+    if not pdf_keys:
         raise ValueError("PMC OA record does not provide a PDF")
-    href = re.sub(r"^ftp://", "https://", href)
-    if not href.startswith(external_url("data_sources.ncbi.pmc_ftp_https_prefix")):
+    # Take the newest package version: keys sort as PMC<id>.<n>/... and n is the
+    # bucket's own monotonic revision counter for that record.
+    key = pdf_keys[-1]
+    href = bucket + key
+    if not href.startswith(bucket):
         raise ValueError("PMC OA PDF URL escaped its fixed host allowlist")
-    license_name = record.attrib.get("license", "NCBI PMC open-access article license") if record is not None else "NCBI PMC open-access article license"
+    license_name = "NCBI PMC open-access article license"
     return _result(source, "prepare_paper_download", [], artifacts=[{
         "attribution": "Open-access article PDF provided by PubMed Central.",
         "format": "pdf",

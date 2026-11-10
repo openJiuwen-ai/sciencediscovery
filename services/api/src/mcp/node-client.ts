@@ -262,10 +262,14 @@ export function sourceHttpFailure(message: string): (NonNullable<McpAttempt["ups
   } catch { return undefined; }
 }
 
-function errorCodeFor(status: McpAttemptStatus, message: string): string {
+function errorCodeFor(status: McpAttemptStatus, message: string, failureScope?: "endpoint" | "request" | "unknown"): string {
   const lowered = message.toLowerCase();
   if (message.startsWith("RESPONSE_TOO_LARGE:")) return "RESPONSE_TOO_LARGE";
   if (lowered.includes("401") || lowered.includes("unauthorized")) return "UNAUTHORIZED";
+  // A provider that classifies the failure as endpoint-wide is saying the
+  // configured service is gone, not that the requested record is absent. Say so
+  // instead of deriving NOT_FOUND from the status digits in the message (#1049).
+  if (failureScope === "endpoint") return "ENDPOINT_UNAVAILABLE";
   if (lowered.includes("404") || lowered.includes("not found")) return "NOT_FOUND";
   return status.toUpperCase().replaceAll("-", "_");
 }
@@ -672,7 +676,7 @@ export class McpNodeClient {
           const level = finalStatus === "semantic-error" ? "debug" : "warn";
           this.logger[level]("mcp_invocation_attempt_failed", {
             attempt: attemptNumber,
-            errorCode: errorCodeFor(finalStatus, finalError),
+            errorCode: errorCodeFor(finalStatus, finalError, upstream?.failureScope),
             errorMessage: finalError,
             ...(upstream ? { endpoint: upstream.endpoint, statusCode: upstream.statusCode, failureScope: upstream.failureScope } : {}),
             retryDecision: request.execution.retryPolicy.maxAttempts === 1 ? "return-to-broker" : "policy",
@@ -693,7 +697,7 @@ export class McpNodeClient {
       attempts.push({
         attempt: attemptNumber,
         durationMs: Date.now() - attemptStarted,
-        errorCode: errorCodeFor(finalStatus, finalError),
+        errorCode: errorCodeFor(finalStatus, finalError, upstream?.failureScope),
         errorMessage: finalError.slice(0, 1_000),
         ...(upstream ? { upstream } : {}),
         finishedAt: new Date().toISOString(),

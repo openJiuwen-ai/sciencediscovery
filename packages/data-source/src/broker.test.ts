@@ -31,7 +31,7 @@ import assert from "node:assert/strict";
 import type { CasStore } from "@sciencediscovery/cas";
 import type { McpRecord } from "@sciencediscovery/schema";
 
-import { extractRawTexts, mcpRecordToProduct } from "./broker.js";
+import { extractRawTexts, mcpRecordToProduct, upstreamError } from "./broker.js";
 
 test("get_page single-page payload exposes one body to every record", () => {
   // get_page returns { content: "..." } — one text shared across all records.
@@ -210,4 +210,30 @@ test("a code product on the MCP mirror path throws instead of becoming a DbRecor
     () => mcpRecordToProduct(RECORD, "code", undefined, stubCas()),
     /code-producing tool is registered on the MCP mirror path/,
   );
+});
+
+test("a provider that reports the endpoint as gone is not flattened into NOT_FOUND", () => {
+  // #1049: PMC retired the OA locator, so the provider answers 404 for records
+  // that exist. Deriving NOT_FOUND from that told agents the literature was
+  // silent, and a dead integration was recorded as a gap in the evidence.
+  const failure = upstreamError({
+    attempts: [{
+      errorCode: "ENDPOINT_UNAVAILABLE",
+      errorMessage: "HTTP 404 from https://www.ncbi.nlm.nih.gov",
+      status: "semantic-error",
+    }],
+    content: [],
+  });
+  assert.equal(failure.code, "UPSTREAM_UNAVAILABLE");
+  assert.equal(failure.retryable, false);
+  assert.equal(failure.upstreamCode, "ENDPOINT_UNAVAILABLE");
+  assert.match(failure.guidance ?? "", /unavailable, not the record/u);
+});
+
+test("a record-scoped 404 keeps NOT_FOUND", () => {
+  const failure = upstreamError({
+    attempts: [{ errorCode: "NOT_FOUND", errorMessage: "record not found", status: "semantic-error" }],
+    content: [],
+  });
+  assert.equal(failure.code, "NOT_FOUND");
 });

@@ -53,7 +53,7 @@
       "eutils_efetch": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
       "pubmed_article_template": "https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
       "accounts_help": "https://www.ncbi.nlm.nih.gov/accounts/",
-      "pmc_oa": "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
+      "pmc_oa_package_bucket": "https://pmc-oa-opendata.s3.amazonaws.com/",
       "pmc_ftp_https_prefix": "https://ftp.ncbi.nlm.nih.gov/",
       "clinvar_variation_template": "https://www.ncbi.nlm.nih.gov/clinvar/variation/{variation_id}/",
       "geo_accession_template": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}",
@@ -142,13 +142,15 @@
       "eutils.ncbi.nlm.nih.gov",
       "pubmed.ncbi.nlm.nih.gov",
       "www.ncbi.nlm.nih.gov",
-      "ftp.ncbi.nlm.nih.gov"
+      "ftp.ncbi.nlm.nih.gov",
+      "pmc-oa-opendata.s3.amazonaws.com"
     ],
     "europe_pmc": [
       "www.ebi.ac.uk",
       "europepmc.org",
       "www.ncbi.nlm.nih.gov",
-      "ftp.ncbi.nlm.nih.gov"
+      "ftp.ncbi.nlm.nih.gov",
+      "pmc-oa-opendata.s3.amazonaws.com"
     ],
     "biorxiv": [
       "api.biorxiv.org",

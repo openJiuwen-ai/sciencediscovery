@@ -42,7 +42,16 @@ def raise_for_status(response: httpx.Response) -> None:
     if retry_ms is not None:
         message += f" (retry-after: {retry_ms / 1000:g})"
     failure_scope = "unknown"
-    if response.status_code == 406:
+    if response.status_code in (404, 405, 410):
+        # The URL comes from the configured service table, never from a
+        # caller-supplied one, so "gone" / "method not allowed" / "permanently
+        # gone" describe the *configured endpoint*, not the record that was
+        # asked about: a retired path answers 404 here even for records that
+        # exist. Classifying it as `unknown` let the client turn a dead
+        # endpoint into NOT_FOUND, which reads to an agent as "this literature
+        # does not exist" (#1049).
+        failure_scope = "endpoint"
+    elif response.status_code == 406:
         # Only a generic edge rejection is evidence of endpoint health. Query
         # validation errors (and unrecognized bodies) remain request-specific.
         body = response.text[:8192].lower()
