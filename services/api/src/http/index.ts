@@ -3802,6 +3802,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionProvenanceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/provenance$/);
       if (artifactVersionProvenanceMatch && request.method === "GET") {
+        // The same answer the sibling content route gives: a version id that does not
+        // exist is a missing resource, not a server fault. The helper throws a plain
+        // Error for it, which the catch-all cannot classify, so it would answer 500 and
+        // log an unclassified_request_error for a stale link.
+        if (!store.getArtifactVersion(artifactVersionProvenanceMatch[1]!, artifactVersionProvenanceMatch[2]!)) {
+          return sendError(response, 404, "Artifact version not found");
+        }
         sendJson(response, 200, await artifactVersionProvenance(
           store,
           provenanceRecorder,
@@ -3813,12 +3820,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionDiffMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/diff$/);
       if (artifactVersionDiffMatch && request.method === "GET") {
+        // Both ids on this route name a version: the one being described and the
+        // `against` comparison base. Neither is a server fault when it does not exist,
+        // and the helper's plain Error for them reaches the catch-all as a 500.
+        const described = store.getArtifactVersion(artifactVersionDiffMatch[1]!, artifactVersionDiffMatch[2]!);
+        if (!described) return sendError(response, 404, "Artifact version not found");
+        const against = url.searchParams.get("against") ?? undefined;
+        // `against` is resolved inside the described artifact's own version list, so an
+        // id from another artifact, or one retention removed, is missing here as well.
+        if (against && !store.listArtifactVersions(artifactVersionDiffMatch[1]!, described.artifactId)
+          .some((version) => version.id === against)) {
+          return sendError(response, 404, "Artifact version not found");
+        }
         sendJson(response, 200, await artifactVersionDiff(
           store,
           provenanceRecorder,
           artifactVersionDiffMatch[1]!,
           artifactVersionDiffMatch[2]!,
-          url.searchParams.get("against") ?? undefined,
+          against,
         ));
         return;
       }

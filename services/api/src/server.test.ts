@@ -3906,6 +3906,73 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
 });
 
+test("ART-001 a missing artifact version answers 404 on provenance and diff like content", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-missing-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Missing artifact version" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Missing artifact version" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+  // Two writes of one path give the artifact versions 1 and 2, so the routes below have
+  // a real version to describe and to compare against while the ids under test do not exist.
+  for (const content of ["# Result\n\nOriginal value.\n", "# Result\n\nCorrected value.\n"]) {
+    const saved = await fetch(`${origin}/api/sessions/${session.body.id}/files`, {
+      body: JSON.stringify({ content, path: "report.md" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    });
+    assert.equal(saved.status, 201);
+  }
+  const artifacts = await jsonRequest<ScientificArtifact[]>(
+    `${origin}/api/sessions/${session.body.id}/artifacts`,
+    { headers: authorization },
+  );
+  const artifact = artifacts.body.find((item) => item.logicalName === "report.md")!;
+  const versions = await jsonRequest<ScientificArtifactVersion[]>(
+    `${origin}/api/sessions/${session.body.id}/artifacts/${artifact.id}/versions`,
+    { headers: authorization },
+  );
+  assert.deepEqual(versions.body.map((version) => version.version), [1, 2]);
+
+  const answer = async (suffix: string) => {
+    const response = await fetch(`${origin}/api/sessions/${session.body.id}/artifact-versions/${suffix}`, { headers: authorization });
+    const body = await response.json() as { error?: string };
+    return { error: body.error, status: response.status };
+  };
+  const notFound = { error: "Artifact version not found", status: 404 };
+  // A stale version link is the caller's own bad id on every artifact route, and the
+  // provenance and diff routes must not answer it as an internal fault.
+  assert.deepEqual(await answer("missing/content"), notFound);
+  assert.deepEqual(await answer("missing/provenance"), notFound);
+  assert.deepEqual(await answer("missing/diff"), notFound);
+  // The comparison base is a version id too: one that this artifact does not have, or
+  // one retention removed, is missing rather than a server error.
+  assert.deepEqual(await answer(`${versions.body[1]!.id}/diff?against=missing`), notFound);
+  assert.deepEqual(await answer(`${versions.body[1]!.id}/diff?against=${versions.body[0]!.id + "-gone"}`), notFound);
+
+  // A version that exists keeps its answers.
+  const provenance = await jsonRequest<ArtifactVersionProvenance>(
+    `${origin}/api/sessions/${session.body.id}/artifact-versions/${versions.body[1]!.id}/provenance`,
+    { headers: authorization },
+  );
+  assert.equal(provenance.response.status, 200);
+  const diff = await jsonRequest<ArtifactVersionDiff>(
+    `${origin}/api/sessions/${session.body.id}/artifact-versions/${versions.body[1]!.id}/diff`,
+    { headers: authorization },
+  );
+  assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value."));
+});
+
 test("Agent-created Skill stays in draft until review publishes it to a Skill Library", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
