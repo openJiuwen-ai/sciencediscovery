@@ -17,7 +17,7 @@ const record = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 type Ports = Pick<SessionStore, "getProject" | "getSession" | "getProjectSettings" | "getSessionSettings" |
-  "dataDir" | "replaceProjectSettings" | "replaceSessionSettings" | "createSession" | "deleteSession" | "commitPluginSettings" | "getSessionRun" | "listRunStreamEvents">;
+  "dataDir" | "replaceProjectSettings" | "replaceSessionSettings" | "createSession" | "deleteSession" | "commitPluginSettings" | "getSessionRun" | "listRunStreamEventsOfType">;
 interface Composition {
   projectId: string; revision: string; settings: RuntimeSettingsDetails;
   plugins: typeof installedPlugins;
@@ -116,9 +116,11 @@ export class PluginControl {
             if (!scope.sessionId) throw new BridgeError("invalid", "Session scope is required");
             const runId = record(input).runId;
             if (typeof runId !== "string") throw new BridgeError("invalid", "runId is required");
-            const events = await this.ports.listRunStreamEvents(scope.sessionId, runId, MAIN_RUN_STREAM);
+            // Keep only the plan snapshots while reading, instead of building
+            // every delta of the run just to discard it here (#1011).
             // Historical state stays readable even if the plugin is now disabled.
-            return events.filter((entry) => entry.event.type === "plan.updated").map((entry) => entry.event);
+            const events = await this.ports.listRunStreamEventsOfType(scope.sessionId, runId, MAIN_RUN_STREAM, "plan.updated");
+            return events.map((entry) => entry.event);
           },
         } : {}),
       },
