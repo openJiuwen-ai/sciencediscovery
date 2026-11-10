@@ -19,6 +19,7 @@ import { dirname, resolve } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
+import { exportEvolveRuns, restoreEvolveRuns } from "./evolution/package.js";
 import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
@@ -43,7 +44,7 @@ import { sessionTrajectory } from "./trajectory.js";
 import { emptyPackageTrajectory, importedTrajectoryAccess, remapPackageTrajectory, validatePackageTrajectory, writePackageTrajectory, type PackageTrajectory } from "./research-package-trajectory.js";
 import { casHashes, versionRefs, remapRunEvent, remapRunStreamId, remapReferences, remapMessages, exportHistory, ResearchPackageIds, restoreHistory, restoreEvidenceItems, remapMemorySnapshot, remapWorkspaceProvenance, type PackageHistory } from "./research-package-history.js";
 
-type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder">;
+type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder" | "evolutionStore">;
 type PreviewSizing = {
   objectSizes: Map<string, number>; additionalRecordBytes: number;
   hashes: Set<string>; refs: Map<string, ObjectRef>;
@@ -194,12 +195,29 @@ function summarizeScientificMemory(graph: MemoryGraphSnapshot | undefined): Scie
  * import receipt should report the missing searches, rather than reporting it
  * for every package (#1019 review F1).
  */
+/** The run entries a package carries for one source session. A malformed
+ *  package degrades to "nothing to restore" rather than to a failed import. */
+export function packageEvolveRunsFor(payload: unknown, sourceSessionId: string | undefined): unknown[] {
+  const container = typeof payload === "object" && payload !== null ? payload as { runs?: unknown } : {};
+  const runs = Array.isArray(container.runs) ? container.runs : [];
+  return runs.filter((entry) => {
+    const run = typeof entry === "object" && entry !== null ? (entry as { run?: unknown }).run : undefined;
+    const owner = typeof run === "object" && run !== null ? (run as { sessionId?: unknown }).sessionId : undefined;
+    return typeof owner !== "string" || owner === sourceSessionId;
+  });
+}
+
+/** Whether the package actually carries evolve runs. */
+export function packagedEvolveRuns(payload: unknown): boolean {
+  return packageEvolveRunsFor(payload, undefined).length > 0;
+}
+
 export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefined): boolean {
   return (artifacts ?? []).some((artifact) =>
     typeof artifact.name === "string" && artifact.name.startsWith("evolve/"));
 }
 
-export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
+export function createResearchSnapshots({ store, evolutionStore, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
   const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
   const previewDependencies = new Map<string, Set<string>>();
   const previewRevision = async (projectId: string, sessionId?: string): Promise<string> => {
@@ -396,6 +414,16 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
       try { memoryGraph = await memoryGraphClient.exportSnapshot(sessions.map((session) => session.id)); }
       catch { omissions.push("Scientific memory could not be exported because the memory graph service is unavailable."); }
     }
+    // Evolve runs are part of the session's content, not derived data: without
+    // them an imported session shows the candidate files with no search behind
+    // them (#1019). A broken run store must not abort an export, so it costs the
+    // runs only — the same way an unavailable memory graph costs the graph.
+    let evolveRuns: Awaited<ReturnType<typeof exportEvolveRuns>> = [];
+    try {
+      evolveRuns = await exportEvolveRuns(evolutionStore, sessions.map((session) => session.id));
+    } catch {
+      omissions.push("Evolution (evolve) search runs could not be read while exporting; the package does not carry them.");
+    }
     const inheritedMemorySummary = sessions.map((session) => session.researchSnapshot?.scientificMemorySummary).find((summary): summary is ScientificMemorySummary => Boolean(summary));
     const availableMemoryGraph = memoryGraph?.nodes.length === 0 && inheritedMemorySummary ? undefined : memoryGraph;
 
@@ -540,6 +568,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
         exportLevel: level, exportProfile,
         project: { ...project, settingsOverrides: undefined }, sessions: selectedSessionRecords, artifacts: selectedArtifacts,
         environmentRevisions, versionObjects: [...versionObjects.values()],
+        ...(evolveRuns.length ? { evolve: { runs: evolveRuns } } : {}),
         ...(packageMemoryGraph ? { memoryGraph: packageMemoryGraph } : {}),
         ...(memoryGraphSummary ? { memoryGraphSummary } : {}),
       },
@@ -679,6 +708,7 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
           sessions?: PackageSessionRecord[];
           artifacts?: PackageArtifact[];
           environmentRevisions?: EnvironmentRevision[];
+          evolve?: unknown;
           memoryGraph?: MemoryGraphSnapshot;
           memoryGraphSummary?: ScientificMemorySummary;
           versionObjects?: ReturnType<typeof versionRefs>;
@@ -692,8 +722,9 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
         // to report the searches themselves as not carried: a package from a
         // session that never ran one has no such loss, and saying so for every
         // import would make the omission list untrustworthy (#1019 review F1).
+        const carriedEvolveRuns = packagedEvolveRuns(records.evolve);
         const ranEvolve = packageRanEvolve(records.artifacts);
-        if (ranEvolve && !omissions.some((item) => item.includes("does not carry evolution (evolve) search runs"))) {
+        if (ranEvolve && !carriedEvolveRuns && !omissions.some((item) => item.includes("does not carry evolution (evolve) search runs"))) {
           omissions.push("This package does not carry evolution (evolve) search runs: their candidate trees, scores and budgets are not restored. Re-run the search at the source, or export again from a version that includes them.");
         }
         if (!records.memoryGraph && !records.memoryGraphSummary) omissions.push("This package contains no scientific memory snapshot; export it again from the source with the updated version to restore scientific memory.");
@@ -806,6 +837,11 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
             }, { kind: "research-package-import" });
           }
           if (source) await restoreHistory(store, target.id, source, ids);
+          const packedEvolve = packageEvolveRunsFor(records.evolve, source?.session?.id);
+          if (packedEvolve.length) {
+            const restoredEvolve = await restoreEvolveRuns(evolutionStore, { projectId, sessionId: target.id }, { runs: packedEvolve });
+            omissions.push(...restoredEvolve.omissions);
+          }
         }
 
         const artifactIdMap = new Map<string, string>();
