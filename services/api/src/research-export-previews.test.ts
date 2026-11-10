@@ -228,6 +228,33 @@ test("busy default previews expose a retryable API status", async () => {
   } finally { await previews.close(); }
 });
 
+test("default previews expose a retryable status when a run races file publication", async () => {
+  let busy = false;
+  const previews = new ResearchExportPreviews(async () => "running", async () => {
+    busy = true;
+    const error = new Error("trajectory is not published yet") as NodeJS.ErrnoException;
+    error.code = "ENOENT";
+    throw error;
+  }, async () => !busy);
+  const options = { projectId: "p", sessionId: "s", level: "necessary" as const, includeFullTrajectory: false };
+  try {
+    await assert.rejects(previews.get(options, true), statusError(409, "EXPORT_PREVIEW_PENDING"));
+  } finally { await previews.close(); }
+});
+
+test("explicit previews preserve missing-file errors", async () => {
+  const previews = new ResearchExportPreviews(async () => "r1", async () => {
+    const error = new Error("trajectory is not published yet") as NodeJS.ErrnoException;
+    error.code = "ENOENT";
+    throw error;
+  });
+  const options = { projectId: "p", sessionId: "s", level: "necessary" as const, includeFullTrajectory: false };
+  try {
+    await assert.rejects(previews.get(options), (error: unknown) =>
+      error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT");
+  } finally { await previews.close(); }
+});
+
 test("failed and stale calculations are retried instead of caching an obsolete size", async () => {
   let revision = "r1", calls = 0, fail = true;
   const previews = new ResearchExportPreviews(async () => revision, async (_options, current) => {

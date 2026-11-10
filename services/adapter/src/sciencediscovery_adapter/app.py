@@ -57,6 +57,12 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
         # connection instead of racing the server's idle close. Keep extra
         # headroom for the parallel reads in a session refresh.
         legacy_limits = httpx.Limits(max_connections=200, keepalive_expiry=2.0)
+        # The bridge serves request-scoped tool calls from the API process. A
+        # call can wait for a repair card longer than Node's idle keep-alive
+        # timeout, leaving a pooled socket that the next recovered call cannot
+        # reuse. Tool calls may have side effects, so retrying a ReadError is
+        # unsafe; avoid the stale pool instead.
+        bridge_limits = httpx.Limits(max_keepalive_connections=0)
         # Bypass environment proxies only for the local service addresses.
         # Keep trust_env enabled for remote proxies and custom CA certificates.
         mounts = loopback_mounts(settings.legacy_url)
@@ -65,7 +71,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
             # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
             httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
                               follow_redirects=False, limits=legacy_limits, mounts=mounts) as legacy,
-            httpx.AsyncClient(timeout=timeout, mounts=mounts) as bridge,
+            httpx.AsyncClient(timeout=timeout, limits=bridge_limits, mounts=mounts) as bridge,
             # Model routes are external destinations and must retain proxy
             # support, including SOCKS configured through the environment.
             httpx.AsyncClient(timeout=timeout, trust_env=True, mounts=mounts) as models,

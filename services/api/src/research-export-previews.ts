@@ -17,6 +17,9 @@ export type DefaultExportPreviews = {
 type WarmMemo = { revision?: string; allowed?: boolean; pendingRevision?: string; pending?: Promise<boolean> };
 const WATCH_IDLE_MS = 30_000;
 
+const isMissingPreviewFile = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
+
 /** A sibling Session changed this preview's dependency set; its own scope survives. */
 class ExportPreviewInvalidatedError extends ApiStatusError {
   constructor() { super(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING"); }
@@ -99,6 +102,13 @@ export class ResearchExportPreviews {
     for (let attempt = 0; ; attempt++) {
       try { return await this.getAttempt(options, deferWhileRunning, memo); }
       catch (error) {
+        // Default previews are background-safe reads. A run can begin after
+        // admission but before trajectory/CAS files are published; expose that
+        // transient missing-file state through the existing pending contract.
+        // Explicit previews keep the original error semantics.
+        if (deferWhileRunning && isMissingPreviewFile(error)) {
+          throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
+        }
         // Recompute once for a surviving scope after a sibling was deleted.
         // Repeated invalidation uses the existing pending HTTP/polling contract.
         if (!(error instanceof ExportPreviewInvalidatedError) || attempt >= 1) throw error;

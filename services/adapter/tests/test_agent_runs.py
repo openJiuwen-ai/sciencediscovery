@@ -53,6 +53,15 @@ async def test_keepalive_does_not_cancel_pending_tool_or_fabricate_progress():
     assert closed.is_set()
 
 
+async def test_bridge_client_does_not_reuse_idle_tool_call_sockets():
+    """A repair wait can outlive Node's keep-alive timeout; bridge calls must open fresh sockets."""
+    app = create_app(SETTINGS)
+    async with app.router.lifespan_context(app):
+        bridge = app.state.bridge
+        pool = bridge._transport._pool  # httpx.AsyncHTTPTransport's configured pool
+        assert pool._max_keepalive_connections == 0
+
+
 async def test_closing_keepalive_cancels_pending_source_and_finalizes_it():
     closed = asyncio.Event()
 

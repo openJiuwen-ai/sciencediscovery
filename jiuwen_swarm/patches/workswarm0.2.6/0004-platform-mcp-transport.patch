@@ -18,7 +18,7 @@ diff --git a/jiuwenswarm/server/runtime/mcp/sci_http_client.py b/jiuwenswarm/ser
 new file mode 100644
 --- /dev/null
 +++ b/jiuwenswarm/server/runtime/mcp/sci_http_client.py
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,281 @@
 +# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 +# Licensed under the Apache License, Version 2.0 (the "License");
 +# you may not use this file except in compliance with the License.
@@ -202,8 +202,14 @@ new file mode 100644
 +            # Enter and exit all SDK/anyio contexts in this same task. Other
 +            # tasks may issue requests, but never own or close these scopes.
 +            async with AsyncExitStack() as stack:
++                # The platform endpoint is stateless and may close an idle
++                # keep-alive socket between runs. Reusing that socket can turn
++                # the next otherwise-valid tool call into an httpx.ReadError.
++                # Disable only idle pooling; max connections remain unlimited
++                # and each request keeps its own transport/error boundary.
 +                client = await stack.enter_async_context(httpx.AsyncClient(
 +                    timeout=httpx.Timeout(connect=limit, read=None, write=limit, pool=limit),
++                    limits=httpx.Limits(max_keepalive_connections=0),
 +                    headers=self._auth_headers, params=self._auth_query_params,
 +                ))
 +                read, write = await stack.enter_async_context(platform_http_client(
