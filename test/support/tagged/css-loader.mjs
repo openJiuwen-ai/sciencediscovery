@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/** The loader half of `css-stub.mjs`: resolve a stylesheet to an empty module. */
+/** A stylesheet import carries no value for a node test.
+ *
+ * `apps/desktop` views import their CSS for the side effect of loading it into a
+ * browser bundle, so a component test that mounts such a view hits
+ * `ERR_UNKNOWN_FILE_EXTENSION` before any assertion runs. The collector and the
+ * worker both import test modules, so the loader is registered once by
+ * `node.mjs` rather than by each suite. Styles themselves are covered by the
+ * visual/E2E runs, not by a unit test.
+ */
 export async function load(url, context, next) {
   if (url.endsWith(".css")) {
     return { format: "module", shortCircuit: true, source: "export default {};\n" };
