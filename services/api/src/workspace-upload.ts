@@ -16,7 +16,7 @@ import { access, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } 
 import type { IncomingMessage } from "node:http";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { isWindowsReservedDeviceName, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { sha256, sha256File } from "@sciencediscovery/cas";
 import type { WorkspaceFile } from "@sciencediscovery/schema";
 
@@ -62,31 +62,6 @@ export function parseConflictPolicy(value: string | null | undefined): Workspace
   if (!normalized || normalized === "rename") return "rename";
   if (normalized === "overwrite" || normalized === "reject") return normalized;
   throw new Error("conflict must be one of rename, overwrite, or reject");
-}
-
-/**
- * Names Windows resolves to a device in every directory, with or without an
- * extension: an upload called `CON.csv` or `nul.txt` never reaches the file
- * system there — `open()` targets the device, so the write fails with EPERM, or,
- * for CON, is sent to the console. COM0 and LPT0 are not reserved, and the naming
- * document counts the superscript digits 1-3 as port numbers as well.
- * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
- */
-const WINDOWS_RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$)$/i;
-
-/**
- * Whether a basename names a Windows device instead of a file.
- *
- * The extension is irrelevant (`nul.txt` is `nul`), Windows ignores a trailing dot
- * or space (`nul.`, `CON `), and the stream syntax addresses the same device
- * (`NUL:x`, `CON:$DATA`), so only the part before the colon and the first dot is
- * tested: a colon in front of an ordinary stem (`report:2024.csv`) is a legal name
- * elsewhere, and refusing it would trade this bug for a portability one.
- */
-function isWindowsReservedDeviceName(name: string): boolean {
-  const beforeStream = name.split(":")[0] ?? "";
-  const stem = (beforeStream.split(".")[0] ?? "").replace(/[. ]+$/, "");
-  return WINDOWS_RESERVED_DEVICE_NAME.test(stem);
 }
 
 export function sanitizeUploadFilename(filename: string): string {

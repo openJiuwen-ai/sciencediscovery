@@ -105,7 +105,7 @@ import {
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { findWindowsReservedDeviceSegment, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
@@ -4245,9 +4245,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (filesMatch && request.method === "POST") {
         store.assertSessionWritable(filesMatch[1]!);
         const body = await readJson<UploadFileRequest>(request);
-        const target = resolveWorkspaceFile(store.workspacePath(filesMatch[1]!), body.path ?? "");
+        const workspaceRoot = store.workspacePath(filesMatch[1]!);
+        const target = resolveWorkspaceFile(workspaceRoot, body.path ?? "");
+        // A segment named for a Windows device is not a file there: the write
+        // targets the device, fails, or, for CON, goes to the console. The rule is
+        // checked on every host and on both separators, so the answer does not
+        // depend on which platform serves the request.
+        const deviceSegment = findWindowsReservedDeviceSegment(workspaceRoot, target);
+        if (deviceSegment) {
+          return sendError(
+            response,
+            400,
+            `Workspace path names the reserved Windows device "${deviceSegment}"; rename it before writing`,
+          );
+        }
         if (Buffer.byteLength(body.content ?? "") > 1_000_000) return sendError(response, 413, "File exceeds 1 MB");
-        await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(filesMatch[1]!), async () => {
+        await withWorkspaceMutation(new VersionStore(store.dataDir), workspaceRoot, async () => {
           await mkdir(dirname(target), { recursive: true });
           await writeFile(target, body.content ?? "", "utf8");
           await provenanceRecorder.registerWorkspaceArtifact({
@@ -4255,7 +4268,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             originMeta: { uploadedFilename: body.path },
             path: body.path,
             sessionId: filesMatch[1]!,
-            workspaceRoot: store.workspacePath(filesMatch[1]!),
+            workspaceRoot,
           });
         }, { kind: "user-file-write" });
         sendJson(response, 201, (await listWorkspaceFiles(store, filesMatch[1]!)).find((file) => file.path === body.path));

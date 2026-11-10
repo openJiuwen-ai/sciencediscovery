@@ -7618,6 +7618,52 @@ test("WSP-004 a reserved device name in an upload answers 400 and names the file
   assert.deepEqual(listed.body, []);
 });
 
+test("WSP-005 a reserved device name on the file-write route answers 400 and writes nothing", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `wsp-device-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Reserved device name write" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Reserved device name write" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+  const write = async (path: string) => jsonRequest<{ error?: string }>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    {
+      body: JSON.stringify({ content: "x", path }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    },
+  );
+  // Refused on every host: the plain device name, the extension form, the trailing
+  // space Windows ignores, the named-stream syntax, and the backslash spelling that
+  // is one segment on POSIX but a nested device path on Windows.
+  for (const path of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul:stream", "con:$DATA", "CON\\notes.txt", "notes\\CON.txt"]) {
+    const refused = await write(path);
+    assert.equal(refused.response.status, 400, path);
+    assert.match(refused.body.error ?? "", /reserved Windows device/, path);
+  }
+  const named = await write("CON");
+  assert.match(named.body.error ?? "", /"CON"/);
+  // A name that merely begins with a reserved word is an ordinary file.
+  const accepted = await write("conifer.csv");
+  assert.equal(accepted.response.status, 201);
+  // Nothing landed under a refused name.
+  const listed = await jsonRequest<WorkspaceFile[]>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    { headers: authorization },
+  );
+  assert.deepEqual(listed.body.map((file) => file.path), ["conifer.csv"]);
+});
+
 test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
