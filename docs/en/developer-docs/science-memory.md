@@ -159,6 +159,7 @@ Key differences from `get_chain`:
 - Reaches `max_hops` (default 8) without reaching the target → `truncated:true` + `broken:false` (chain not broken, just not fully walked; distinct from a broken chain)
 - Start node does not exist → HTTP 404 (artifact has no memory at all, worse than broken)
 - Graph unreachable → `broken:true` + `reason:"memory_graph_unreachable"`, HTTP 200 (degrades without crashing, consistent with all read endpoints)
+- Sidecar refuses the query (non-2xx, e.g. HTTP 503 `memory_graph_query_limit` when the local work budget is exhausted) → `broken:true`, HTTP 200 to the browser, and `reason` carries the sidecar's `detail.code`; `memory_graph_unreachable` is reserved for a network failure, so a healthy-but-busy graph is not misreported as down
 
 The reviewer derives `decision` from the returned `broken`: `broken:false` → `ACCEPT_AND_PROCEED`; `broken:true` or `truncated:true` → `REVISE_AND_RETRY`. **The endpoint only outputs `broken`, not verdict/decision** — the latter is the reviewer agent's internal business, preserving the "only the endpoint, not the specialist's decision logic" boundary.
 

@@ -898,8 +898,10 @@ export class MemoryGraphClient {
 
   /** Shape the sidecar's trace response (snake_case → camelCase), and
    * translate ``postJson``'s degraded-empty shell (``{reason, no chain}``,
-   * produced on a network failure) into ``broken:true`` so a down graph
-   * surfaces as "needs manual verification" rather than an intact chain. */
+   * produced on a network failure or a non-2xx, where ``reason`` is the
+   * sidecar's ``detail.code`` when present) into ``broken:true`` so a down or
+   * refusing graph surfaces as "needs manual verification" rather than an
+   * intact chain. */
   private toTraceResult(body: unknown): MemoryGraphTraceResult {
     const r = (body ?? {}) as Record<string, unknown>;
     // postJson returns {hits:[], total:0, truncated:false, reason} on failure
@@ -1165,8 +1167,20 @@ export class MemoryGraphClient {
       return { hits: [], total: 0, truncated: false, reason: "memory_graph_unreachable" };
     }
     if (!response.ok) {
-      mgLog.warn("postJson %s not ok: memory-graph returned HTTP %s", path, response.status);
-      return { hits: [], total: 0, truncated: false, reason: "memory_graph_unreachable" };
+      // FastAPI's HTTPException detail is the sidecar's {code, message} object
+      // (``_error``, and the budget handler's memory_graph_query_limit). Carry
+      // that business code into ``reason`` so a resource limit is not reported
+      // as an unreachable service; a detail without a code (e.g. a bare
+      // string) still degrades to memory_graph_unreachable.
+      const respBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      const detail = respBody?.detail;
+      const code = detail !== null && typeof detail === "object"
+        ? (detail as Record<string, unknown>).code
+        : undefined;
+      const reason = typeof code === "string" ? code : "memory_graph_unreachable";
+      mgLog.warn("postJson %s not ok: memory-graph returned HTTP %s code=%s",
+        path, response.status, reason);
+      return { hits: [], total: 0, truncated: false, reason };
     }
     return response.json();
   }
