@@ -63,7 +63,7 @@ test("the first-run wizard tests a real provider before unlocking the workspace"
 
   await page.getByRole("button", { name: "测试并继续" }).click();
 
-  await expect(page.getByText("✓ 连接成功", { exact: false })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("✓ 基础检查通过", { exact: false })).toBeVisible({ timeout: 60_000 });
   await expect(finish).toBeVisible();
 
   await finish.click();

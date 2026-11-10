@@ -305,8 +305,11 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
 
   // Success alert is visible, reports the count and the new default
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /模型已连接并保存/);
+  assert.match(extractText(successAlert), /基础连接检查通过/);
   assert.match(extractText(successAlert), /登记 2 个模型；listed-model-first 已设为全局默认任务模型/);
+  // The pass is a qualified basic check, never an unqualified task-readiness claim.
+  assert.match(extractText(successAlert), /不验证完整会话执行路径、思考或工具调用/);
+  assert.doesNotMatch(extractText(successAlert), /模型已连接并保存|已成功连接/);
   assert.match(extractText(successAlert), /88 ms/);
 });
 
@@ -1226,7 +1229,7 @@ test("same preset can be added again with its own name and key; the existing row
 
   // Success alert shows for the new connection.
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /模型已连接并保存/);
+  assert.match(extractText(successAlert), /基础连接检查通过/);
 });
 
 /** Mount the wizard in zh-CN, enter a key, and expand the advanced area. */
@@ -1789,10 +1792,10 @@ test("the first model merges into the settings read at save time when no callbac
   }]);
 });
 
-for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'budget', 'auth', 'empty'] as const) test(`${locale} mounted wizard setup result ${kind} is honest and preserves rollback`, async () => {
+for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'auth', 'empty'] as const) test(`${locale} mounted wizard setup result ${kind} is honest and preserves rollback`, async () => {
   const deleted: string[] = []; let saved = false, probes = 0, renderer: ReactTestRenderer;
-  const outcome: ModelConnectivityTestResult = kind === 'valid' ? successResult : kind === 'auth' ? { ...authFailResult, inconclusiveReason: 'output_limit' }
-    : { ...successResult, ok: false, category: 'invalid_response', ...(kind === 'budget' ? { inconclusiveReason: 'output_limit' as const } : {}) };
+  const outcome: ModelConnectivityTestResult = kind === 'valid' ? successResult
+    : { ...successResult, ok: false, category: 'invalid_response' };
   const client = createMockClient({ testModel: async () => { probes++; return outcome; }, deleteModel: async id => { deleted.push('model'); return { deleted: id }; }, deleteProvider: async id => { deleted.push('provider'); return { deleted: id }; } });
   await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS, onSuccess: () => { saved = true; } }))); });
   try {
@@ -1801,7 +1804,14 @@ for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'bud
     await act(async () => { renderer!.root.findByProps({ className: 'primary-button wizard-submit-button' }).props.onClick(); const end = Date.now()+2000; while (!saved && deleted.length < 2 && Date.now()<end) await new Promise(r => setTimeout(r,10)); });
     assert.equal(probes, 1);
     if (kind === 'auth' || kind === 'empty') { assert.equal(saved, false); assert.deepEqual(deleted, ['model','provider']); }
-    else { assert.equal(saved, true); assert.deepEqual(deleted, []); }
-    if (kind === 'budget') { const rendered = extractText(renderer!.toJSON()); assert.match(rendered, locale === 'en' ? /compatibility unconfirmed/ : /兼容性未确认/); assert.doesNotMatch(rendered, /Connected —|已成功连接/); }
+    else {
+      assert.equal(saved, true); assert.deepEqual(deleted, []);
+      const rendered = extractText(renderer!.toJSON());
+      // A pass is announced as the qualified basic check it is, not as proof
+      // the model can run tasks (issue #824).
+      assert.match(rendered, locale === 'en' ? /Basic connection check passed/ : /基础连接检查通过/);
+      assert.match(rendered, locale === 'en' ? /does not verify the full session run path/ : /不验证完整会话执行路径/);
+      assert.doesNotMatch(rendered, /Connected —|已成功连接/);
+    }
   } finally { await act(async () => renderer!.unmount()); }
 });

@@ -61,14 +61,14 @@ test("a workspace with no model cannot be used until the wizard's test passes", 
 
   // The test wrote the provider and its profile, and only then did the
   // continuation appear.
-  await expect(page.getByText("✓ 连接成功", { exact: false })).toBeVisible();
+  await expect(page.getByText("✓ 基础检查通过", { exact: false })).toBeVisible();
   await expect(finish).toBeVisible();
   expect(mock.state.models.map((entry) => entry.model)).toEqual(["demo-model"]);
 
   // 测试 already saved this profile and got the provider's answer, so the click
   // that continues has nothing left to verify: it writes the default onto that
   // record. Asking again would put the reader through the same wait twice, with
-  // the same 连接成功 line at the end of it.
+  // the same 基础检查通过 line at the end of it.
   const connectivityTests = () => mock.calls.filter(
     (call) => call.method === "POST" && /\/api\/models\/[^/]+\/test$/u.test(call.path),
   );

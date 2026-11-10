@@ -778,7 +778,7 @@ test.describe("模型", () => {
     await modal.getByLabel("API key").fill("sk-test");
     await modal.getByPlaceholder("例如 deepseek-chat").fill("deepseek-chat");
     await modal.getByRole("button", { name: "测试连接" }).click();
-    await expect(modal.locator(".test-result")).toContainText("✓ 连接成功（12 ms）");
+    await expect(modal.locator(".test-result")).toContainText("✓ 基础检查通过（12 ms）");
 
     await modal.getByRole("button", { name: "保存", exact: true }).click();
     await expect(modal).toBeHidden();

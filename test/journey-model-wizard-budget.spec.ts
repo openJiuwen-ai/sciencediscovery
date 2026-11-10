@@ -80,9 +80,9 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
         // The reasoning fixture spends the probe's eight tokens on reasoning
         // and ends at `finish_reason: length` with no final text. The endpoint
         // took the key, answered on the chosen protocol and stopped at a limit
-        // the probe itself wrote, so the check passes — and the wizard says so
-        // rather than marking the capability unconfirmed.
-        if (kind === 'reasoning-limit') await expect(wizard).toContainText(locale === 'en' ? 'Model connected and saved' : '模型已连接并保存');
+        // the probe itself wrote, so the check passes — and the wizard names
+        // the pass as the basic check it is (issue #824).
+        if (kind === 'reasoning-limit') await expect(wizard).toContainText(locale === 'en' ? 'Basic connection check passed' : '基础连接检查通过');
         const providers = (await call('/api/providers')).providers.filter((p: any) => p.name === name); expect(providers).toHaveLength(failed ? 0 : 1);
         if (!failed) expect(providers[0].apiProtocol).toBe(protocol);
         expect(requests).toHaveLength(1);

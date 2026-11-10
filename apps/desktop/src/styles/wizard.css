@@ -518,6 +518,8 @@
 .test-result.is-ok { background: var(--success-soft); color: var(--success); }
 .test-result.is-fail { background: var(--danger-soft); color: var(--danger); }
 .test-result.is-busy { background: var(--surface-soft); color: var(--text-secondary); }
+/* The scope caveat under a passed basic check: smaller, same color, own line. */
+.test-result .test-result-note { display: block; margin-top: 2px; font-size: 11px; opacity: 0.85; }
 
 /* a label's optional marker: a preset that works without a token (Ollama) must
    not look like a field the user skipped. */

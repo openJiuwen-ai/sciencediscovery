@@ -526,7 +526,10 @@ export const EN: Text = {
     retest: "Test again",
     finish: "Start using",
     testing: "Testing…",
-    testOk: (latency: number) => `✓ Connected (${latency} ms)`,
+    testOk: (latency: number) => `✓ Basic check passed (${latency} ms)`,
+    // A pass proves the provider answers one minimal request — nothing about
+    // the session run path, thinking, or tool use (issue #824).
+    basicCheckNotice: "Basic check only: it does not verify the full session run path, thinking, or tool use.",
     missingKey: "Enter an API key first.",
     missingModel: "Choose or enter a model name first.",
     testCategories: {
@@ -580,7 +583,8 @@ export const EN: Text = {
       defaultFailed: "Could not make this the default model. Try again.",
       test: "Test connection",
       testFailed: (message: string) => `✕ ${message}`,
-      testOk: (latency: number) => `✓ Available (${latency} ms)`,
+      testOk: (latency: number) => `✓ Basic check passed (${latency} ms)`,
+      testOkNotice: "Basic check only: it does not verify the full session run path, thinking, or tool use.",
       delete: "Delete",
       deleteConfirm: (name: string) => `Delete the model "${name}"?`,
       deleteBody: "Sessions explicitly using this model will need a new selection. Historical runs are preserved.",
