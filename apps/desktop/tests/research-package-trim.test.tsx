@@ -134,6 +134,11 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     assert.ok(markup.includes("100.0 KiB"), "the last known estimate stays visible");
     assert.ok(markup.includes(t.recalculating), "the size line says it is recalculating");
     assert.equal(markup.includes(t.calculating), false, "the dialog is not replaced by the calculating state");
+    // A // line inside the fragment's children is text, not a comment: it renders
+    // into the session view where the removed entry point used to be, so the render
+    // must not contain it (#1057).
+    assert.equal(markup.includes("A ready copy is reachable through"), false,
+      "no explanation comment leaks into the rendered view");
     await act(async () => { await Promise.resolve(); });
     assert.ok(rendered(view).includes(t.recalculating) === false || true, "estimate settles");
   });
@@ -192,4 +197,5 @@ test("a ready copy renders no text and no open affordance", () => {
   assert.equal(copyStatusLine(undefined, t), undefined);
   assert.equal("ready" in t, false, "the ready string is gone from both locales");
   assert.equal("open" in t, false, "the open label is gone from both locales");
+
 });

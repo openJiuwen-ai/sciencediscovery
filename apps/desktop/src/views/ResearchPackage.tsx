@@ -318,11 +318,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const excludedWorkspaceFiles = preview
     ? preview.files.filter(item => files ? !files.includes(item.path) : item.selected === false).length
     : 0;
+  // A ready copy is reached through 继续聊天, which navigates as soon as the copy
+  // exists; a second permanent "open" entry point only duplicated it (#1057).
   return <>
     {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
-    // A ready copy is reachable through 继续聊天, which navigates as soon as the copy
-    // exists; a second permanent "open" entry point only duplicated it (#1057).
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
     {activeFlash ? <div className={`research-package-flash is-${activeFlash.tone}`} role="status"><span>{activeFlash.message}</span>{activeFlash.savedToken ? <button onClick={() => void openLocation(activeFlash.savedToken!)} type="button">{t.openLocation}</button> : null}</div> : null}
