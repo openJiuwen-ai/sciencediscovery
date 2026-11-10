@@ -36,24 +36,34 @@ async function fixture(
   options: {
     beforeCommand?: (arguments_: string[]) => Promise<void> | void;
     listOutput?: "array" | "micromamba";
+    root?: string;
   } = {},
 ) {
-  const root = resolve(process.cwd(), ".tmp", `environment-store-${process.pid}-${Date.now()}-${Math.random()}`);
+  const root = options.root ?? resolve(process.cwd(), ".tmp", `environment-store-${process.pid}-${Date.now()}-${Math.random()}`);
   const provisionerPath = resolve(root, "micromamba-test");
   await mkdir(root, { recursive: true });
   await writeFile(provisionerPath, "#!/bin/sh\nexit 0\n");
   await chmod(provisionerPath, 0o755);
-  context.after(() => rm(root, { force: true, recursive: true }));
+  if (!options.root) context.after(() => rm(root, { force: true, recursive: true }));
 
   const installed = new Map<string, string[]>();
   const pipInstalled = new Map<string, Array<{ name: string; version: string; installer: string }>>();
   const commands: string[][] = [];
+  const timeline: string[] = [];
   const executions: Array<{ arguments: string[]; environment?: NodeJS.ProcessEnv; executable: string }> = [];
-  const executor: ProvisionerExecutor = async (actualProvisionerPath, arguments_, _jobId, environment) => {
+  const executor: ProvisionerExecutor = async (actualProvisionerPath, arguments_, jobId, environment) => {
+    if (jobId) timeline.push(jobId);
     executions.push({ arguments: arguments_, environment, executable: actualProvisionerPath });
     if (actualProvisionerPath !== provisionerPath) {
       assert.match(actualProvisionerPath, /[\\/]bin[\\/](?:python|R)$/);
       const prefix = dirname(dirname(actualProvisionerPath));
+      // A real interpreter fails `import socks` unless the package was
+      // provisioned; simulate that contract for the PySocks probe.
+      if (arguments_.includes("import socks")) {
+        const known = new Set((installed.get(prefix) ?? []).map((value) => value.split(/[<>=!~]/, 1)[0]!.toLowerCase()));
+        if (!known.has("pysocks")) throw new Error("ModuleNotFoundError: No module named 'socks'");
+        return "";
+      }
       if (arguments_.includes("import importlib.metadata as m,json; print(json.dumps(sorted([{'name':d.metadata['Name'],'version':d.version,'installer':(d.read_text('INSTALLER') or '').strip()} for d in m.distributions()],key=lambda d:d['name'] or '')))")) {
         return JSON.stringify(pipInstalled.get(prefix) ?? []);
       }
@@ -114,8 +124,38 @@ async function fixture(
     root: resolve(root, "envs"),
     runnerVersion: "test-runner",
   }, executor);
-  return { commands, executions, executor, provisionerPath, root, store };
+  return { commands, executions, executor, installed, provisionerPath, root, store, timeline };
 }
+
+/** Drop a package from the fake provisioner's recorded prefix state — the
+ * in-memory record stands in for the environment the prefix actually holds,
+ * so tests can rewind a package the starter contract grew after the clone. */
+function removeRecordedPackage(installed: Map<string, string[]>, environmentId: string, packageName: string): void {
+  for (const [prefix, packages] of installed) {
+    if (prefix.split(/[\\/]/).includes(environmentId)) {
+      installed.set(prefix, packages.filter((value) => !value.startsWith(packageName)));
+    }
+  }
+}
+
+test("environment operations apply scoped proxy policy without changing process environment", async (context) => {
+  const { store, executions } = await fixture(context);
+  const original = process.env.HTTPS_PROXY;
+  await store.initialize();
+  await store.withNetworkProxy({ mode: "url", url: "http://proxy.example.test:8080", noProxy: "internal.test" }, () => store.setupManagedEnvironments());
+  assert.ok(executions.length > 0);
+  assert.ok(executions.every(item => item.environment?.HTTPS_PROXY === "http://proxy.example.test:8080"));
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("localhost")));
+  // Consumers match NO_PROXY against a bare hostname, so the bracket form the URL
+  // uses would never match and IPv6 loopback traffic would keep using the proxy.
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("::1") && !item.environment?.NO_PROXY?.includes("[::1]")));
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("internal.test")));
+  executions.length = 0;
+  await store.withNetworkProxy({ mode: "direct" }, () => store.createTask("direct-task", "python"));
+  assert.ok(executions.length > 0);
+  assert.ok(executions.every(item => item.environment?.HTTPS_PROXY === undefined));
+  assert.equal(process.env.HTTPS_PROXY, original);
+});
 
 test("scientific environment lifecycle advances immutable revisions only after success", async (context) => {
   const { store } = await fixture(context);
@@ -809,4 +849,70 @@ test("runtime pip defaults to the configured mirror and explicit sources still w
 test("an unresponsive external environment command is terminated within its bounded wait", async () => {
   await assert.rejects(executeEnvironmentCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], process.env, 50),
     (error: any) => error.killed === true && error.signal === "SIGTERM");
+});
+
+test("a SOCKS-routed pip install first provisions PySocks into a task environment cloned without it", async (context) => {
+  const { commands, installed, store, timeline } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  // The task was cloned before pysocks entered the starter contract: remove
+  // it from the recorded starter revision so the clone carries no pysocks
+  // (the fake provisioner's clone copies the source's recorded packages).
+  removeRecordedPackage(installed, "starter-python", "pysocks");
+  const task = await store.createTask("socks-pip", "python");
+  // The first SOCKS-routed pip install must provision the dependency first.
+  await store.withNetworkProxy({ mode: "url", url: "socks5://proxy.example.test:1080" },
+    () => store.install(task.id, ["openpyxl"], undefined, "pip"));
+  const socksDep = commands.find(command => command[1] === "install" && command.some(argument => argument.startsWith("pysocks")));
+  assert.ok(socksDep, "expected a PySocks provisioning command before pip ran");
+  const depIndex = timeline.findIndex(job => job.startsWith("socks-dep-"));
+  const pipIndex = timeline.findIndex(job => job.startsWith("pip-"));
+  assert.ok(depIndex >= 0 && pipIndex > depIndex, `PySocks is provisioned before pip runs (timeline: ${timeline.join(" | ")})`);
+});
+
+test("a direct-routed pip install skips the PySocks probe entirely", async (context) => {
+  const { store, timeline } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("direct-pip", "python");
+  await store.install(task.id, ["openpyxl"], undefined, "pip");
+  assert.ok(timeline.every(job => !job.startsWith("socks-dep-") && !job.startsWith("socks-probe-")));
+});
+
+test("an offline starter-package upgrade failure no longer fails the whole setup", async (context) => {
+  // initialize() only upgrades a *persisted* starter, so bootstrap one first
+  // with a working executor, then reopen the same root with an executor whose
+  // upgrade command fails (an offline cache missing the newly contracted
+  // package) — the second initialize must stay ready and show the skip.
+  const root = resolve(process.cwd(), ".tmp", `environment-store-offline-${process.pid}-${Date.now()}`);
+  await mkdir(resolve(root, "envs"), { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+
+  const bootstrap = await fixture(context, { root });
+  await bootstrap.store.initialize();
+  await bootstrap.store.setupManagedEnvironments();
+  // The first store must have reached a ready starter before the reopen.
+  assert.equal(bootstrap.store.setup.state, "ready");
+
+  // Drop pysocks from the recorded revision so the starter contract reads as
+  // missing it and the reopened store attempts the (failing) upgrade.
+  const catalogPath = resolve(root, "envs", "catalog.json");
+  const persisted = JSON.parse(await readFile(catalogPath, "utf8"));
+  const starter = persisted.environments.find((environment: { id: string }) => environment.id === "starter-python");
+  const revision = persisted.revisions.find((revision: { id: string }) => revision.id === starter.currentRevisionId);
+  revision.packages = revision.packages.filter((specification: string) => !specification.startsWith("pysocks"));
+  await writeFile(catalogPath, JSON.stringify(persisted));
+
+  const { commands, store } = await fixture(context, {
+    beforeCommand: (arguments_) => {
+      // The upgrade install targets the starter prefix with the missing
+      // package; jobId is not part of the arguments the executor sees.
+      if (arguments_[1] === "install" && arguments_.some((argument) => argument.startsWith("pysocks"))) throw new Error("offline cache is missing pysocks");
+    },
+    root,
+  });
+  await store.initialize();
+  const setup = store.setup;
+  assert.equal(setup.state, "ready");
+  assert.match(setup.message, /Starter package upgrade skipped: offline cache is missing pysocks/);
+  assert.ok(store.capability.available);
+  assert.ok(commands.some((command) => command[1] === "install" && command.some((argument) => argument.startsWith("pysocks"))));
 });

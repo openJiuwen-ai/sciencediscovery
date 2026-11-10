@@ -428,6 +428,10 @@ export function normalizeProxyUrl(value: string): string {
     throw new Error("The proxy URL must use http, https, or socks5");
   }
   if (parsed.hash) throw new Error("The proxy URL cannot contain a fragment");
+  // Only scheme://host:port is used when connecting; accepting a path or query
+  // would store something the proxy never receives.
+  if (parsed.search) throw new Error("The proxy URL cannot contain a query");
+  if (parsed.pathname !== "" && parsed.pathname !== "/") throw new Error("The proxy URL cannot contain a path");
   return parsed.toString();
 }
 

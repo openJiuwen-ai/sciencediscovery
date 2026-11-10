@@ -19,6 +19,7 @@ import { resolve } from "node:path";
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { SourceOutages } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { isLoopback } from "@sciencediscovery/network";
 import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
 import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
@@ -157,7 +158,7 @@ export function createPlatformServices(
     uploadMaxRequestBytes: config.workspaceUpload.maxRequestBytes,
   }, config.memoryGraph.neo4jPassword, config.memoryGraph.available !== false);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
-  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken, () => store.resolveProxy());
   // Execution router: registry + capability probing (reuses the runner's
   // /execution-capability and /health, no new wire format). Providers B/C are
   // stubs at this stage; refresh re-probes via POST /api/execution-provider.
@@ -602,6 +603,16 @@ export function createPlatformServices(
         // provisioner themselves; this installation keeps one per architecture
         // and hands it over when it deploys their Runner.
         provisionerCacheDir: resolve(config.dataDir, "provisioners"),
+        // The Runner cannot reach a proxy that lives on this machine only: forwarded as-is
+        // it would aim every outbound request at itself. A loopback proxy stays local to
+        // the API process and the remote Runner keeps its own environment instead.
+        environmentProxy: () => {
+          const proxy = store.resolveProxy();
+          if (proxy.mode === "url" && isLoopback(proxy.url)) {
+            throw new Error("The global proxy uses localhost on this machine and cannot be forwarded to a remote Runner. Point the proxy at an address the remote machine can reach, or choose environment mode so the Runner uses its own proxy settings.");
+          }
+          return proxy;
+        },
       },
     ),
     runnerClient,
