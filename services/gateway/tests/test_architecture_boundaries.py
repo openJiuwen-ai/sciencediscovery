@@ -208,17 +208,17 @@ def _process_started_at(pid: int) -> float | None:
 def _remove_stale_probes(root: Path, pattern: str) -> None:
     """Delete probes a dead run left, never one a live shard is still writing.
 
-    Same pid is skipped outright. Otherwise a dead pid means the file is garbage; a
-    live pid is judged by its own start time (so a recycled pid cannot keep an old
-    probe alive), and hosts without /proc fall back to pid liveness plus
-    PROBE_STALE_AGE_S.
+    A dead pid means the file is garbage. A live pid is judged by its own start time
+    (so a recycled pid cannot keep an old probe alive), and hosts without /proc fall
+    back to pid liveness plus PROBE_STALE_AGE_S. Our own pid is judged the same way:
+    the start-time rule already keeps a probe this process wrote, while a leftover
+    from a killed run that held this pid before the namespace recycled it is older
+    than our start and gets swept.
     """
     for stale in root.glob(pattern):
         try:
             owner = int(stale.stem.rsplit("-", 1)[1])
         except (IndexError, ValueError):
-            continue
-        if owner == os.getpid():
             continue
         try:
             os.kill(owner, 0)
@@ -428,8 +428,9 @@ class StaleProbeSweepTests(unittest.TestCase):
     """The sweep runs before any test walks the tree, and never touches a live shard.
 
     A probe planted by this class is visible to `_node_boundary_failures()`, so these
-    cases exist to pin when it may be deleted: a dead owner, or a file older than the
-    live owner's own start, but never this process and never a young sibling.
+    cases exist to pin when it may be deleted: a dead owner, a file older than the
+    live owner's own start, or a leftover from a killed run whose pid we now hold —
+    but never a probe a young or live owner just wrote.
     """
 
     def write_probe(self, pid: int) -> Path:
