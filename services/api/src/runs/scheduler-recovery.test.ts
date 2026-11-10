@@ -51,12 +51,31 @@ async function fixture(context: TestContext) {
   const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
   const run = await store.createSessionRun({ sessionId: session.id, prompt: "Run once",
     settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
-  context.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
-  const start = () => scheduleSessionRuns(store, undefined as never, undefined as never, undefined as never,
-    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
-    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
-    undefined as never, session.id, undefined as never, null, undefined, { sandboxed: async () => true });
-  return { store, session, run, start };
+  const tasks: Promise<void>[] = [];
+  let fakeTimers = false;
+  const enableTimers = () => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    fakeTimers = true;
+    return context.mock.method(globalThis, "setTimeout");
+  };
+  context.after(async () => {
+    // A persisted status is visible before its event append and final queue
+    // reads finish. Drain the actual tasks before closing/removing their store.
+    context.mock.restoreAll();
+    if (fakeTimers) context.mock.timers.tick(30_000);
+    await Promise.all(tasks);
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const start = () => {
+    const task = scheduleSessionRuns(store, undefined as never, undefined as never, undefined as never,
+      undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+      undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+      undefined as never, session.id, undefined as never, null, undefined, { sandboxed: async () => true });
+    tasks.push(task);
+    return task;
+  };
+  return { store, session, run, start, enableTimers };
 }
 
 test("a rejected run event is contained, broadcast without storage, and persisted as interrupted without replay", async (context) => {
@@ -97,8 +116,8 @@ test("a rejected run event is contained, broadcast without storage, and persiste
 });
 
 test("persistent transition and recovery failures back off, retain ownership, and recover after a long outage", async (context) => {
-  const { store, session, run, start } = await fixture(context);
-  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const { store, session, run, start, enableTimers } = await fixture(context);
+  const timers = enableTimers();
   const transition = store.updateSessionRunStatusIfCurrent.bind(store);
   let available = false;
   let attempts = 0;
@@ -108,8 +127,7 @@ test("persistent transition and recovery failures back off, retain ownership, an
     return transition(...args);
   });
   start();
-  await until(() => attempts === 1);
-  await settle();
+  await until(() => attempts === 1 && timers.mock.callCount() === 1);
   start();
   await settle();
   assert.equal(attempts, 1, "another wake must not bypass the backoff");
@@ -134,8 +152,7 @@ test("persistent transition and recovery failures back off, retain ownership, an
     await settle();
     assert.equal(attempts, before, "recovery must not spin between retries");
     context.mock.timers.tick(1);
-    await until(() => attempts === before + 1);
-    await settle();
+    await until(() => attempts === before + 1 && timers.mock.callCount() === before + 1);
   }
   available = true;
   context.mock.timers.tick(30000);
@@ -145,9 +162,9 @@ test("persistent transition and recovery failures back off, retain ownership, an
 });
 
 test("a final queue re-read failure is retried instead of silently abandoning scheduling", async (context) => {
-  const { store, session, run, start } = await fixture(context);
+  const { store, session, run, start, enableTimers } = await fixture(context);
   await store.updateSessionRunStatus(session.id, run.id, "completed");
-  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const timers = enableTimers();
   const list = store.listSessionRuns.bind(store);
   let reads = 0;
   context.mock.method(store, "listSessionRuns", async (sessionId: string) => {
@@ -156,8 +173,7 @@ test("a final queue re-read failure is retried instead of silently abandoning sc
     return list(sessionId);
   });
   start();
-  await until(() => reads === 2);
-  await settle();
+  await until(() => reads === 2 && timers.mock.callCount() === 1);
   context.mock.timers.tick(499);
   await settle();
   assert.equal(reads, 2);
@@ -233,4 +249,33 @@ test("recovery does not overwrite a cancellation that wins the status transition
   await until(async () => (await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "cancelled"));
   await settle();
   assert.equal((await store.getSessionRun(session.id, run.id))?.status, "cancelled");
+});
+
+test("scheduler completion waits for the recovery event after interrupted status is already readable", async (context) => {
+  const { store, session, run, start, enableTimers } = await fixture(context);
+  const timers = enableTimers();
+  const append = store.appendSessionRunEvent.bind(store);
+  let releaseEvent: () => void = () => {};
+  const eventGate = new Promise<void>((resolve) => { releaseEvent = resolve; });
+  let appends = 0;
+  context.mock.method(store, "appendSessionRunEvent", async (...args: Parameters<typeof append>) => {
+    appends += 1;
+    if (appends === 1) throw refusal();
+    await eventGate;
+    return append(...args);
+  });
+  let completed = false;
+  const task = start().then(() => { completed = true; });
+  try {
+    await until(() => timers.mock.callCount() === 1);
+    context.mock.timers.tick(500);
+    await until(() => appends === 2);
+    assert.equal((await store.getSessionRun(session.id, run.id))?.status, "interrupted");
+    assert.equal(completed, false, "readable terminal state does not mean the scheduler has finished writing");
+    assert.equal((await store.listSessionRunEvents(session.id, run.id)).length, 0);
+  } finally {
+    releaseEvent();
+    await task;
+  }
+  assert.ok((await store.listSessionRunEvents(session.id, run.id)).some(({ event }) => event.type === "run.status" && event.status === "interrupted"));
 });
