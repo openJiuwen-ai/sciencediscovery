@@ -11,10 +11,11 @@
  * pure so the outcomes are testable without a timer or a fetch.
  */
 
+import { isLegacyUnavailableError } from "../api/auth.js";
+
 export type ExportPollResult =
   | { ok: true; status: "queued" | "running" | "completed" | "failed" | "canceled"; error?: string }
   | { ok: false; reason: unknown };
-
 export interface ExportPollOutcome {
   /** Consecutive transport/interim failures for this task. */
   failures: number;
@@ -70,9 +71,10 @@ function statusOf(reason: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
-/** The adapter's 502 `legacy_unavailable` is a transient service outage. */
+/** The adapter's 502 `legacy_unavailable` is a transient service outage. The
+ *  rule lives in `api/auth.ts` so the web and desktop clients cannot drift. */
 function legacyUnavailable(reason: unknown): boolean {
-  return reason instanceof Error && reason.message === "legacy_unavailable";
+  return isLegacyUnavailableError(reason);
 }
 
 export function exportPollStep(

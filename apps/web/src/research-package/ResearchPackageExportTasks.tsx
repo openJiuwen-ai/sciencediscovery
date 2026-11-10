@@ -47,6 +47,12 @@ function removeResearchPackageExport(taskId: string): void {
  *  monitor stays mounted at app scope. */
 const failures = new Map<string, number>();
 
+/** The archive download's own budget. It cannot share `failures`: the status
+ *  poll's count has to survive a `completed` answer to be useful there, and a
+ *  download that inherited four status failures would drop a finished export
+ *  after a single attempt. */
+const downloadFailures = new Map<string, number>();
+
 const POLL_TEXT = () => ({
   exportCanceled: translateActive("researchPackage.exportCanceled"),
   exportDownloadFailed: translateActive("researchPackage.exportDownloadFailed"),
@@ -80,7 +86,10 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
           try {
             const status = await client.getResearchPackageExport(task.projectId, task.id);
             if (!active) return;
-            const step = exportPollStep(failures.get(task.id) ?? 0, { ok: true, status: status.status }, POLL_TEXT());
+            // The status step still owes the user the server's reason when the
+            // export failed; without it a `failed` export only ever shows the
+            // generic retry line, which the base and the desktop do not do.
+            const step = exportPollStep(failures.get(task.id) ?? 0, { ok: true, status: status.status, ...(status.error ? { error: status.error } : {}) }, POLL_TEXT());
             if (status.status === "completed") {
               // The status route answered; the archive still has to be fetched.
               // This branch keeps its own budget: publishing `completed` does not
@@ -90,14 +99,16 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
                 if (!active) return;
                 downloadBlob(blob, status.filename || task.filename);
                 failures.delete(task.id);
+                downloadFailures.delete(task.id);
                 removeResearchPackageExport(task.id);
                 onToast("success", translateActive("researchPackage.exportComplete"), translateActive("researchPackage.exportDownloaded", { filename: status.filename || task.filename }));
               } catch (reason) {
                 if (!active) return;
-                const save = exportCompletionStep(failures.get(task.id) ?? 0, { ok: false, reason }, POLL_TEXT());
-                failures.set(task.id, save.failures);
+                const save = exportCompletionStep(downloadFailures.get(task.id) ?? 0, { ok: false, reason }, POLL_TEXT());
+                downloadFailures.set(task.id, save.failures);
                 if (save.drop) {
                   failures.delete(task.id);
+                  downloadFailures.delete(task.id);
                   removeResearchPackageExport(task.id);
                   if (save.notice) onToast(save.notice.tone, save.notice.title, save.notice.detail);
                 }
@@ -107,6 +118,7 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
             failures.set(task.id, step.failures);
             if (!step.drop) continue;
             failures.delete(task.id);
+            downloadFailures.delete(task.id);
             removeResearchPackageExport(task.id);
             if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
           } catch (reason) {
@@ -121,6 +133,7 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
               continue;
             }
             failures.delete(task.id);
+            downloadFailures.delete(task.id);
             removeResearchPackageExport(task.id);
             if (step.notice) onToast(step.notice.tone, step.notice.title, step.notice.detail);
           }
