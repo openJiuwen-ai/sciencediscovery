@@ -174,6 +174,88 @@ test("a write that fails during the drain is reported, not rethrown, and leaves 
   assert.equal(await pending, "injected write failure", "the failure still reaches the write's own caller");
 });
 
+for (const kind of ["array", "subagent", "workspace"] as const) {
+  test(`shutdown drains queued ${kind} mutations and their follow-up writes`, async (context) => {
+    const root = resolve(process.cwd(), ".tmp", `queued-write-drain-${kind}-${randomUUID()}`);
+    const store = new SessionStore(root); await store.load();
+    context.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+    const first = resolve(root, "first.json"), followUpPath = resolve(root, "follow-up.json");
+    let entered!: () => void, release!: () => void;
+    const inMutation = new Promise<void>((done) => { entered = done; });
+    const gate = new Promise<void>((done) => { release = done; });
+    const mutate = (path: string, operation: () => Promise<void>): Promise<void> => {
+      if (kind === "array") return store["mutateArray"]<string, void>(path, async (values) => {
+        await operation(); values.push(kind);
+      });
+      const write = async () => { await operation(); await writeFile(path, JSON.stringify([kind])); };
+      return kind === "subagent" ? store["withSubagentMutation"](path, write) : store["withWorkspaceFileMutation"](path, write);
+    };
+    let followUp: Promise<void> | undefined;
+    const pending = mutate(first, async () => {
+      entered(); await gate;
+      followUp = mutate(followUpPath, async () => {});
+    });
+    await inMutation;
+    let settled = false;
+    const draining = store.whenWritesSettle().then((result) => { settled = true; return result; });
+    try {
+      // Flush ready continuations without waiting a fixed amount of wall time.
+      await new Promise<void>((done) => setImmediate(done));
+      assert.equal(settled, false, "shutdown must wait even before a mutation starts its file write");
+      release();
+      assert.equal(await draining, true);
+      assert.deepEqual(JSON.parse(await readFile(first, "utf8")), [kind]);
+      assert.deepEqual(JSON.parse(await readFile(followUpPath, "utf8")), [kind]);
+    } finally {
+      release(); await pending; await followUp; await draining;
+    }
+  });
+}
+
+test("shutdown drains catalog saves queued while the previous catalog save settles", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `catalog-write-drain-${randomUUID()}`);
+  const store = new SessionStore(root); await store.load();
+  context.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  let releaseFirst!: () => void, releaseSecond!: () => void, queued!: () => void;
+  const firstGate = new Promise<void>((done) => { releaseFirst = done; });
+  const secondGate = new Promise<void>((done) => { releaseSecond = done; });
+  const followUpQueued = new Promise<void>((done) => { queued = done; });
+  let followUp: Promise<unknown> | undefined;
+  store["saveQueue"] = firstGate.then(() => {
+    store["saveQueue"] = secondGate;
+    followUp = store.replaceGlobalSettings({ enabledConnectorIds: ["uniprot"] });
+    queued();
+  });
+  let settled = false;
+  const draining = store.whenWritesSettle().then((result) => { settled = true; return result; });
+  try {
+    releaseFirst(); await followUpQueued;
+    await new Promise<void>((done) => setImmediate(done));
+    assert.equal(settled, false, "a catalog save chained during the final await must also finish");
+    releaseSecond();
+    assert.equal(await draining, true);
+    const reopened = new SessionStore(root);
+    try {
+      await reopened.load();
+      assert.deepEqual(reopened.getGlobalSettings().effective.enabledConnectorIds, ["uniprot"]);
+    } finally { reopened.close(); }
+  } finally {
+    releaseFirst(); releaseSecond(); await followUp; await draining;
+  }
+});
+
+test("a blocked catalog save keeps the shutdown deadline", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `catalog-write-bound-${randomUUID()}`);
+  const store = new SessionStore(root); await store.load();
+  context.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  let release!: () => void;
+  store["saveQueue"] = new Promise<void>((done) => { release = done; });
+  const pending = store.replaceGlobalSettings({ enabledConnectorIds: ["pubmed"] });
+  try {
+    assert.equal(await store.whenWritesSettle(20), false, "catalog writes share the same shutdown deadline");
+  } finally { release(); await pending; }
+});
+
 test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
