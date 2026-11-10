@@ -57,6 +57,9 @@ function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
 /** A world where every gate passes, so a test can isolate one that does not. */
 function deps(over: Partial<ProposalDeps> = {}) {
   const stored: Array<{ content?: string; path?: string }> = [];
+  // What each ref holds, so `readText` answers with the bytes that were just
+  // stored — the same thing the real control plane reads back.
+  const blobs = new Map<string, string>();
   const base: ProposalDeps = {
     approvedUnisolated: true,
     casHas: async () => true,
@@ -67,11 +70,18 @@ function deps(over: Partial<ProposalDeps> = {}) {
       sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
       start: async () => ({ id: "run-1", status: "running" }),
     } as never,
+    readText: async (hash) => {
+      const text = blobs.get(hash);
+      assert.notEqual(text, undefined, `no stored text for ${hash}`);
+      return text!;
+    },
     sessionId: "s1",
     thinkingSupported: true,
     store: async (input) => {
       stored.push(input);
-      return `sha256:${"a".repeat(64)}`;
+      const hash = `sha256:${String(stored.length).padStart(64, "a")}`;
+      blobs.set(hash, input.content ?? `contents of ${input.path}`);
+      return hash;
     },
     ...over,
   };
@@ -380,6 +390,12 @@ test("a refusal names what to change, because its reader is the designer", async
     [{ split: { ...SPLIT, gateShards: 2 } }, /cannot tell an improvement/],
     [{ mode: "custom_script", evaluatorSource: undefined }, /needs an evaluator script/],
     [{ mode: "custom_script", evaluatorSource: "print(1)" }, /SCIENCE_AGENT_SHARDS/],
+    // Two ways to say the same thing is a choice the control plane should not
+    // make for the designer: one of them would silently lose.
+    [
+      { mode: "custom_script", evaluatorPath: "e.py", evaluatorSource: "print(1)" },
+      /not both/,
+    ],
     [{ mode: "llm_judge", rubric: undefined }, /needs a rubric/],
     [{ mode: "test_gate", testCmd: "pytest -q", frozenGlobs: [] }, /must freeze the test paths/],
     // A judged prior and its rubric are one thing in two fields; either alone
@@ -393,6 +409,70 @@ test("a refusal names what to change, because its reader is the designer", async
     const result = await startProposedRun(proposal(over), d);
     assert.match(result.refusedBecause ?? "", expected, JSON.stringify(over));
   }
+});
+
+test("an evaluator too large to write inline can be pointed at, and its bytes are what runs", async () => {
+  const source = 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n';
+  const calls: Array<{ content?: string; path?: string }> = [];
+  let captured: { frozen: string[] } | undefined;
+  const { deps: d } = deps({
+    // The file's contents, not anything about its path, are what the run gets.
+    readText: async () => source,
+    store: async (input) => {
+      calls.push(input);
+      return `sha256:${"b".repeat(64)}`;
+    },
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "x", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async (input: { goal: { frozen: string[] } }) => {
+        captured = input.goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+
+  const result = await startProposedRun(proposal({
+    evaluatorPath: "/workspace/evaluator.py",
+    evaluatorSource: undefined,
+    mode: "custom_script",
+  }), d);
+
+  assert.equal(result.refusedBecause, undefined);
+  assert.deepEqual(calls.filter((call) => call.path === "evaluator.py"), [{ path: "evaluator.py" }]);
+  assert.deepEqual(captured?.frozen, [`sha256:${"b".repeat(64)}`]);
+});
+
+test("a file's own contents are held to the inline contract", async () => {
+  // A path skips the tool's `maxLength`, so the ceiling is re-applied here to
+  // what the file holds. And the markers are checked on the bytes, not on the
+  // path: passing a path used to fail the marker scan, which reads as "you
+  // never mentioned the shard list" to an author who did.
+  const cases: Array<[string, RegExp]> = [
+    ["", /is empty/],
+    ["print(1)\n", /SCIENCE_AGENT_SHARDS/],
+    [`${"# padding\n".repeat(20_001)}os.environ["SCIENCE_AGENT_SHARDS"] os.environ["SCIENCE_AGENT_RESULT"]`, /200000-character/],
+  ];
+  for (const [source, expected] of cases) {
+    const { deps: d } = deps({ readText: async () => source });
+    const result = await startProposedRun(proposal({
+      evaluatorPath: "evaluator.py", evaluatorSource: undefined, mode: "custom_script",
+    }), d);
+    assert.match(result.refusedBecause ?? "", expected, source.slice(0, 40));
+  }
+});
+
+test("an evaluator path that cannot be read is a refusal naming the field", async () => {
+  const { deps: d } = deps({
+    store: async (input) => {
+      if (input.path === "missing.py") throw new Error("no such file");
+      return `sha256:${"a".repeat(64)}`;
+    },
+  });
+  const result = await startProposedRun(proposal({
+    evaluatorPath: "missing.py", evaluatorSource: undefined, mode: "custom_script",
+  }), d);
+  assert.match(result.refusedBecause ?? "", /evaluatorPath points at missing\.py, which cannot be read/);
 });
 
 test("nothing is stored until the shape is known good", async () => {
