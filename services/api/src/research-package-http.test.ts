@@ -21,7 +21,7 @@ import type { ServerConfig } from "./bootstrap/config.js";
 import type { ArtifactVersionProvenance, WorkspaceFileProvenance, SessionRun, AgentShellExecution, SessionRunEvent, ArtifactReviewRun, Claim, EvidenceItem, EvidenceLink } from "@sciencediscovery/schema";
 import type { SessionDetail, ResearchContinuationOperation } from "@sciencediscovery/schema";
 
-async function fixture(context: TestContext, graphAvailable = false) {
+async function fixture(context: TestContext, graphAvailable = false, sampleSession = false) {
   const root = await mkdtemp(resolve(tmpdir(), "research-package-http-"));
   const snapshots: ReturnType<typeof researchHistoryFixture>["records"]["memoryGraph"][] = [];
   let graphExports = 0;
@@ -46,7 +46,7 @@ async function fixture(context: TestContext, graphAvailable = false) {
   });
   await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
   const config: ServerConfig = {
-    authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
+    sampleSession, authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
     gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0,
     modelCatalogPath: resolve(root, "absent.json"), paperPythonPath: resolve(root, "no-python"), paperWorkerPath: resolve(root, "no-worker"),
     permissionWaitTimeoutMs: 0, runnerExecTimeoutMs: 0, runnerMaxOutputBytes: 1_000_000, runnerMaxWorkspaceBytes: 10_737_418_240,
@@ -95,6 +95,48 @@ test("pending export previews return HTTP 409 for single and default profiles", 
     assert.equal(response.status, 409);
     assert.equal((await response.json() as { code: string }).code, "EXPORT_PREVIEW_PENDING");
   }
+});
+
+test("async preview clients receive accepted pending state and recover for single and default profiles", async (context) => {
+  const { rawRequest, project } = await fixture(context);
+  const target = await project();
+  let pending = true;
+  let unavailable = false;
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => {
+    if (unavailable) throw new ApiStatusError(503, "Export storage unavailable", "EXPORT_STORAGE_UNAVAILABLE");
+    if (pending) throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
+    return { revision: "settled", estimatedBytes: 42, files: [], omissions: [] };
+  });
+  const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}`;
+  for (const query of ["&level=complete", "&defaults=1"]) {
+    pending = true;
+    const response = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
+    assert.equal(response.status, 202);
+    assert.equal(response.headers.get("preference-applied"), "respond-async");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json() as { code: string }).code, "EXPORT_PREVIEW_PENDING");
+    pending = false;
+    const ready = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json() as { revision: string }).revision, "settled");
+  }
+  unavailable = true;
+  const failed = await rawRequest(`${endpoint}&level=complete`, { headers: { Prefer: "respond-async" } });
+  assert.equal(failed.status, 503);
+  assert.equal((await failed.json() as { code: string }).code, "EXPORT_STORAGE_UNAVAILABLE");
+});
+
+test("the first-install sample supports all five preview profiles without unshipped state objects", async (context) => {
+  const f = await fixture(context, false, true);
+  const projects = await (await f.request("/api/projects")).json() as { id: string }[];
+  const projectId = projects[0]!.id;
+  const sessions = await (await f.request(`/api/projects/${projectId}/sessions`)).json() as { id: string }[];
+  const response = await f.rawRequest(`/api/projects/${projectId}/research-package/preview?sessionId=${sessions[0]!.id}&defaults=1`, { headers: { Prefer: "respond-async" } });
+  assert.equal(response.status, 200);
+  const previews = await response.json() as { revision: string; complete: { estimatedBytes: number }; completeWithTrajectory: { estimatedBytes: number } };
+  assert.ok(previews.revision);
+  assert.ok(previews.complete.estimatedBytes > 0);
+  assert.ok(previews.completeWithTrajectory.estimatedBytes > previews.complete.estimatedBytes, "the recorded trajectory remains in the complete preview");
 });
 
 test("viewing a conversation prewarms default sizes and workspace changes invalidate the cached evidence revision", async (context) => {
@@ -154,10 +196,11 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
-function evidencePackage(legacy = false) {
+function evidencePackage(legacy = false, withEvolve = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
   const notebook = Buffer.from('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}');
+  const evolveSource = Buffer.from("print(1)\n");
   const version = (id: string, index: number, object: Buffer) => ({
     id, artifactId: "artifact-source", sessionId: "source-one", projectId: "source-project", version: index,
     createdAt: date, content: { hash: sha256(object), size: object.length }, mediaType: "text/csv", sourcePath: "results/result.csv",
@@ -170,8 +213,28 @@ function evidencePackage(legacy = false) {
       workspace: [{ path: "results/result.csv", objectPath: sha256(latest), size: latest.length, modifiedAt: date }, { path: "analysis.ipynb", objectPath: sha256(notebook), size: notebook.length, modifiedAt: date }],
       validations: { reviews: [{ id: "review-source", sessionId: "source-one", kind: "integrity", status: "passed", turnId: "run-source", createdAt: date, finishedAt: date, findings: [] }], artifactReviews: [{ id: "artifact-review-source", sessionId: "source-one", artifactId: "artifact-source", artifactVersionId: "version-two", artifactContentHash: sha256(latest), artifactLogicalName: "results/result.csv", checkpointId: "checkpoint-source", decision: "ACCEPT_AND_PROCEED", createdAt: date, finishedAt: date, findings: [], reviewerSpecialistVersion: "1", status: "completed" }] },
     }, { session: { id: "source-two", title: "分支会话", specialistId: "unavailable-specialist" }, messages: [{ id: "branch-prompt", role: "user", content: "分支研究", createdAt: date }], workspace: [] }],
-    artifacts: [{ id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] }],
-  }, objects: [first, latest, notebook].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
+    artifacts: [
+      { id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] },
+      // A run's result is published as `evolve/<run>/<entrypoint>` with
+      // `kind: "other"` and `origin: "llm_declared"` (see `evolveArtifactName`
+      // and the publisher in `bootstrap/platform.ts`); mirror that exactly or the
+      // import rejects the kind as unsupported.
+      ...(withEvolve ? [{
+        id: "artifact-evolve", projectId: "source-project", createdInSessionId: "source-one",
+        createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/83cbb6de/main.py",
+        logicalName: "evolve/83cbb6de/main.py", kind: "other", origin: "llm_declared", currentVersion: 1,
+        createdAt: date, updatedAt: date,
+        versions: [{
+          id: "version-evolve", artifactId: "artifact-evolve", sessionId: "source-one",
+          projectId: "source-project", version: 1, createdAt: date,
+          content: { hash: sha256(evolveSource), size: evolveSource.length },
+          mediaType: "text/plain; charset=utf-8",
+          sourcePath: "evolve/83cbb6de/main.py", inputArtifactVersionIds: [], executionRunIds: [],
+          turnId: "run-source", ...(legacy ? {} : { objectPath: sha256(evolveSource) }),
+        }],
+      }] : []),
+    ],
+  }, objects: [first, latest, notebook, ...(withEvolve ? [evolveSource] : [])].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
 }
 
 test("complete package restores conversations, files, versions and reviews across projects without leaking into sibling sessions", async (context) => {
@@ -230,6 +293,30 @@ test("complete package restores conversations, files, versions and reviews acros
   const secondPrompt = detail.messages.find((message) => message.content === "第二轮科研问题")!;
   const markdown = await (await request(`/api/sessions/${targetId}/conversation-export?format=markdown&scope=custom&messageId=${encodeURIComponent(secondPrompt.id)}`)).text();
   assert.ok(markdown.includes("第二轮结论")); assert.ok(!markdown.includes("第一轮结论"));
+});
+
+test("a package carrying an evolve result reports that the searches themselves were not carried", async (context) => {
+  // #1019: the gate is evidence-based, so this is the only shape that may report
+  // the loss — and the receipt must actually receive the line, not just the
+  // predicate returning true.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage(false, true)),
+  })).json() as { artifactCount: number; omissions: string[] };
+  assert.equal(receipt.artifactCount, 2);
+  assert.ok(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")),
+    "the receipt names the searches it could not carry");
+});
+
+test("a package without an evolve artifact reports no such loss", async (context) => {
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage()),
+  })).json() as { omissions: string[] };
+  assert.equal(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")), false,
+    "a session that never ran a search must not report a loss that never happened");
 });
 
 test("legacy v1 packages restore CAS-backed artifact content without explicit objectPath", async (context) => {

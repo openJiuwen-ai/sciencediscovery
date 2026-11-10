@@ -29,6 +29,7 @@ import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
   EvolveGoal, EvolveRunProposal, ModelsDevPayload, ResolvedProxy,
 } from "@sciencediscovery/schema";
+import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -51,6 +52,7 @@ import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { stopEvolveRunForSession } from "../evolution/stop-run.js";
 import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
@@ -464,6 +466,12 @@ export function createPlatformServices(
       try {
         const result = await startProposedRun(input, {
           approvedUnisolated,
+          // The create path refuses a second search while one is live. The
+          // tool's description asks the agent to stop the running one first;
+          // this is what holds when it does not.
+          activeRuns: async () => (await evolutionStore.listRuns(turn.sessionId))
+            .filter((run) => isEvolveRunActive(run.status))
+            .map((run) => ({ id: run.id, status: run.status })),
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
@@ -526,6 +534,18 @@ export function createPlatformServices(
         ? { ...summary, bestSource: source.slice(0, BEST_SOURCE_LIMIT), bestSourceTruncated: { chars: source.length }, resultArtifact }
         : { ...summary, bestSource: source, resultArtifact };
     },
+    // Stopping is the one evolve action the agent could not take, so changing a
+    // scoring formula mid-search meant starting a second run beside the first:
+    // two searches, two frozen formulas, one budget. The route the desktop uses
+    // already existed; this is the same capability behind a tool, scoped to the
+    // session that is asking so a run id from elsewhere cannot be stopped.
+    stopEvolveRun: (runId: string) => stopEvolveRunForSession(runId, {
+      sessionId: turn.sessionId,
+      readRun: (id) => evolutionStore.readRun(id),
+      listRuns: (sessionId) => evolutionStore.listRuns(sessionId),
+      stop: (id) => evolveOrchestrator.stop(id),
+      isActive: isEvolveRunActive,
+    }),
   });
 
   return {

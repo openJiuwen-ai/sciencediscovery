@@ -18,6 +18,8 @@ import assert from "node:assert/strict";
 
 
 import { ApiClient } from "../src/api.js";
+import { ApiRequestError } from "../src/api/auth.js";
+import { ExportPreviewCache } from "../src/research-package/export-preview-cache.js";
 
 test("Drop files routes PDFs by MIME type or extension to paper intake and keeps CSV as a workspace attachment", async () => {
   const previousFetch = globalThis.fetch;
@@ -491,4 +493,37 @@ test("MCP catalog reload posts authenticated request and propagates HTTP failure
     fail = true;
     await assert.rejects(client.reloadMcpSources(), /reload failed/);
   } finally { globalThis.fetch = previous; }
+});
+
+test("Export preview pending responses stay out of the cache, recover, and preserve real errors", async () => {
+  const previousFetch = globalThis.fetch;
+  let status = 202;
+  const preview = { revision: "settled", estimatedBytes: 42, files: [], omissions: [] };
+  const defaults = { revision: "settled", necessary: preview, complete: preview, completeWithTrajectory: preview, completeWithMemoryGraph: preview, completeWithTrajectoryAndMemoryGraph: preview };
+  globalThis.fetch = async (input, init) => {
+    assert.equal((init?.headers as Record<string, string>).Prefer, "respond-async");
+    if (status === 202 || status === 409) return Response.json({ code: "EXPORT_PREVIEW_PENDING", error: "Export preview is pending" }, { status });
+    if (status === 503) return Response.json({ code: "EXPORT_STORAGE_UNAVAILABLE", error: "Export storage unavailable" }, { status });
+    return Response.json(String(input).includes("defaults=1") ? defaults : preview);
+  };
+  try {
+    const client = new ApiClient("test-token");
+    const cache = new ExportPreviewCache(client);
+    for (const pendingStatus of [202, 409]) {
+      status = pendingStatus;
+      await assert.rejects(cache.refreshDefaults("project", "session"), (error: unknown) => error instanceof ApiRequestError && error.status === pendingStatus && error.code === "EXPORT_PREVIEW_PENDING");
+      assert.equal(cache.peekDefaults("project", "session"), undefined);
+      await assert.rejects(cache.get("project", "session", "complete"), (error: unknown) => error instanceof ApiRequestError && error.code === "EXPORT_PREVIEW_PENDING");
+    }
+    status = 200;
+    assert.deepEqual(await cache.get("project", "session", "complete"), preview);
+    assert.deepEqual(await cache.refreshDefaults("project", "session"), defaults);
+    assert.deepEqual(cache.peekDefaults("project", "session"), defaults);
+    status = 503;
+    for (const request of [() => client.previewResearchPackage("project", "session", "complete"), () => client.getResearchPackagePreviews("project", "session")]) {
+      await assert.rejects(request(), (error: unknown) => error instanceof ApiRequestError && error.status === 503 && error.code === "EXPORT_STORAGE_UNAVAILABLE");
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });

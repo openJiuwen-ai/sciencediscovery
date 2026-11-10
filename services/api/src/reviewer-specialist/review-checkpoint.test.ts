@@ -190,6 +190,60 @@ test("Quick checkpoint skips graph-linked checks when the graph is disabled", as
   assert.equal(result.reviews[0]?.decision, "ACCEPT_AND_PROCEED");
   assert.deepEqual(result.reviews[0]?.checks, ["citation"]);
   assert.deepEqual(result.reviews[0]?.findings, []);
+  // #669 C1: the pass is a format pass, and the record says which claim check it
+  // did not run rather than leaving "No findings" to be read as verification.
+  const gaps = result.reviews[0]?.notChecked ?? [];
+  assert.deepEqual(gaps.map((gap) => gap.check), ["claim_support", "computation"]);
+  assert.match(gaps[0]!.reason, /no source was read to confirm the claims/u);
+  assert.match(gaps[1]!.reason, /memory graph is disabled/u);
+  const record = reviewerCheckpointPromptContent(result.reviews);
+  assert.match(record, /Not checked: claim support —/u);
+  assert.doesNotMatch(record, /^Status: PASSED$/mu);
+});
+
+test("a narrative report with no citation at all still declares the claim gap", async () => {
+  // #669's own failure mode: nothing about claim support was examined, and this
+  // is precisely the case where the citation precheck returns SKIPPED. Keeping
+  // the gap conditional on a parsed citation would leave the worst case silent.
+  const { cas, store } = fixture("分析结果支持该结论。\n");
+  const result = await runReviewerCheckpoint({ cas, parentRunId: "run-1", reason: "Quick review", sessionId: "session-1", store });
+
+  const review = result.reviews[0];
+  assert.equal(review?.decision, "SKIPPED", "nothing applicable ran, so the review claims nothing");
+  assert.deepEqual(review?.checks, []);
+  const claimGap = review?.notChecked?.find((gap) => gap.check === "claim_support");
+  assert.ok(claimGap, "an uncited narrative report declares what was not checked");
+  assert.match(claimGap.reason, /no citation this review could parse/u);
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Not checked: claim support —/u);
+});
+
+test("a Deep review that issued no citation task keeps the claim gap", async () => {
+  // #669 review F9: `completed` does not mean a claim was compared with a
+  // source. A report with no parsable citation runs zero citation tasks, both
+  // inconclusive flags stay false, and the stage still reports `completed` — so
+  // dropping the gap there would make an uncited report read as claim-checked.
+  const { cas, store } = fixture("分析结果支持该结论。\n");
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Deep review",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      modelIdentity: "model-1",
+      execute: async () => JSON.stringify({ citation: { findings: [], status: "COMPLETED" }, computation: { findings: [], status: "COMPLETED" } }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = result.reviews[0];
+  assert.equal(review?.reviewLevel, "deep");
+  assert.deepEqual(review?.citationTasks ?? [], [], "no citation produced a task");
+  const claimGap = review?.notChecked?.find((gap) => gap.check === "claim_support");
+  assert.ok(claimGap, "a Deep review that compared nothing still declares the claim gap");
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Not checked: claim support —/u);
 });
 
 test("Reviewer checkpoint excludes Artifacts and versions created by another Session in the same Project", async () => {
@@ -372,6 +426,60 @@ test("Reviewer checkpoint failure is context, not an Artifact defect", () => {
   assert.match(content, /Do not treat this failure as an Artifact defect/);
 });
 
+test("a citation-format Quick review declares the claim check it did not perform", () => {
+  // #669 workstream C1: a format/provenance-only Quick review must present
+  // itself as partial and disclose the skipped claim checks with a reason. The
+  // record used to say only "No findings", which the main Agent read as "the
+  // claims were verified".
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "literature-report.md",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    checks: ["citation" as const],
+    createdAt: "2026-08-05T00:00:00.000Z",
+    decision: "ACCEPT_AND_PROCEED" as const,
+    findings: [],
+    finishedAt: "2026-08-05T00:00:01.000Z",
+    id: "review-1",
+    notChecked: [{ check: "claim_support" as const, reason: "Quick review parses citation format only." }],
+    reviewerSpecialistVersion: "quick",
+    reviewLevel: "quick" as const,
+    sessionId: "session-1",
+    status: "completed" as const,
+  } satisfies ArtifactReviewRun;
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.match(content, /Not checked: claim support — Quick review parses citation format only\./u);
+  // The pass must not be reported as an unqualified PASSED alongside it.
+  assert.doesNotMatch(content, /^Status: PASSED$/mu);
+  assert.match(content, /^Status: SCOPE_LIMITED$/mu);
+});
+
+test("a review that performed every check still reports a plain pass", () => {
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "analysis.json",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    checks: ["structure" as const],
+    completeness: { required: [], source: "brief" as const, status: "complete" as const },
+    createdAt: "2026-08-05T00:00:00.000Z",
+    decision: "ACCEPT_AND_PROCEED" as const,
+    findings: [],
+    finishedAt: "2026-08-05T00:00:01.000Z",
+    id: "review-1",
+    reviewerSpecialistVersion: "quick",
+    reviewLevel: "quick" as const,
+    sessionId: "session-1",
+    status: "completed" as const,
+  } satisfies ArtifactReviewRun;
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.doesNotMatch(content, /Not checked:/u);
+  assert.match(content, /^Status: PASSED$/mu);
+});
+
 test("Reviewer checkpoint keeps an operationally incomplete Deep stage out of main-Agent feedback", () => {
   const review = {
     artifactContentHash: "hash",
@@ -436,6 +544,54 @@ test("Deep computation accepts a generated Artifact claim only with issued E4 lo
   assert.equal(result.reviews[0]?.smartStatus, "completed");
   assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.assessment.assessment, "SUPPORTED");
   assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.claim.requiredEvidenceLevel, "E4");
+  // The Deep stages read the source; the Quick pass's claim gap must not be
+  // inherited, or a review that did the work is reported as partial.
+  const gaps = result.reviews[0]?.notChecked ?? [];
+  assert.equal(gaps.some((gap) => gap.check === "claim_support"), false);
+});
+
+test("a Deep review that only recorded a source assessment still closes the claim gap", async () => {
+  // The relaxation that followed F9: `completed` alone proves nothing, but a persisted
+  // source assessment does — the computation stage compared a numeric claim with its E4
+  // evidence while the report issued no citation task at all. Closing the gap here is
+  // what keeps a Deep review that did the work from being reported as partial.
+  const { cas, store, version } = fixture("Response rate was 42% [artifact1].");
+  version.references = [{ id: "generated-data-1", kind: "artifact", label: "artifact1", version: 1 }];
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Deep computation evidence",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      execute: async (request) => JSON.stringify({ computation: {
+        assessment: "SUPPORTED",
+        findings: [],
+        locatorIds: [...request.prompt.matchAll(/locator:[a-f0-9]+/gu)].map((match) => match[0]),
+        rationale: "The output data records 42%.",
+        status: "COMPLETED",
+      } }),
+      modelIdentity: "model-1",
+      probeComputation: async () => ({
+        materials: [
+          { content: "response_rate,42%", locator: { executionId: "execution-1", field: "artifact_content", outputPath: "outputs/result.csv" }, sourceId: "artifact-version:data-1", sourceType: "artifact" },
+          { content: "print('42%')", locator: { executionId: "execution-1", field: "source_code" }, sourceId: "execution:execution-1", sourceType: "code" },
+          { content: "42%", locator: { executionId: "execution-1", field: "stdout" }, sourceId: "execution:execution-1", sourceType: "execution" },
+        ],
+        status: "available" as const,
+      }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = result.reviews[0];
+  assert.equal(review?.smartStatus, "completed");
+  assert.deepEqual(review?.citationTasks ?? [], [], "the report produced no citation task");
+  assert.equal(review?.sourceAssessments?.[0]?.assessment.assessment, "SUPPORTED", "the assessment is the comparison");
+  assert.equal(review?.notChecked?.some((gap) => gap.check === "claim_support"), false,
+    "a claim was compared with a source, so the Quick gap is closed");
 });
 
 test("Deep checkpoint reuses an identical locked Artifact without rereading CAS or graph", async () => {
@@ -720,6 +876,9 @@ test("Deep Citation rejects an E1 verdict for a numeric claim that requires E3 e
   assert.equal(record?.claim.requiredEvidenceLevel, "E3");
   assert.equal(record?.assessment.assessment, "INCONCLUSIVE");
   assert.match(record?.assessment.rationale ?? "", /No issued E3 source locator/u);
+  // The other half of the same rule: an assessment that compared nothing must not close
+  // the gap, or a Deep review that read no usable source would read as claim-checked.
+  assert.equal(result.reviews[0]?.notChecked?.some((gap) => gap.check === "claim_support"), true);
   assert.equal(executions, 0);
 });
 

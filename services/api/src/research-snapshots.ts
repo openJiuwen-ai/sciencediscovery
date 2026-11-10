@@ -168,6 +168,20 @@ function summarizeScientificMemory(graph: MemoryGraphSnapshot | undefined): Scie
   };
 }
 
+/**
+ * True when the package proves its source session ran an evolution search.
+ *
+ * `evolveArtifactName` publishes a run's result as `evolve/<run>/<entrypoint>`,
+ * so the presence of such an artifact is the only evidence the package carries;
+ * the run records themselves are not in the format. Used to decide whether the
+ * import receipt should report the missing searches, rather than reporting it
+ * for every package (#1019 review F1).
+ */
+export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefined): boolean {
+  return (artifacts ?? []).some((artifact) =>
+    typeof artifact.name === "string" && artifact.name.startsWith("evolve/"));
+}
+
 export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
   const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
   const previewDependencies = new Map<string, Set<string>>();
@@ -623,6 +637,16 @@ export function createResearchSnapshots({ store, memoryGraphClient, memoryGraphE
         const sourceSessions = Array.isArray(records.sessions) ? records.sessions : [];
         const targetBySource = new Map<string, string>();
         const omissions = [...imported.receipt.omissions];
+        // A run's result is published as `evolve/<run>/<entrypoint>` (see
+        // `evolveArtifactName`), so an evolve artifact in the package is the
+        // evidence that the source session ran a search. Only then is it honest
+        // to report the searches themselves as not carried: a package from a
+        // session that never ran one has no such loss, and saying so for every
+        // import would make the omission list untrustworthy (#1019 review F1).
+        const ranEvolve = packageRanEvolve(records.artifacts);
+        if (ranEvolve && !omissions.some((item) => item.includes("does not carry evolution (evolve) search runs"))) {
+          omissions.push("This package does not carry evolution (evolve) search runs: their candidate trees, scores and budgets are not restored. Re-run the search at the source, or export again from a version that includes them.");
+        }
         if (!records.memoryGraph && !records.memoryGraphSummary) omissions.push("This package contains no scientific memory snapshot; export it again from the source with the updated version to restore scientific memory.");
         else if (!records.memoryGraph && records.memoryGraphSummary) omissions.push("This package contains a scientific memory summary, not the full graph; its nodes and relationships cannot be restored.");
         const ids = new ResearchPackageIds();

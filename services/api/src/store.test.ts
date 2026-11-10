@@ -84,6 +84,96 @@ test("CFG connector proposals require a user decision and preserve inherited con
   } finally { db.close(); }
 });
 
+test("shutdown drains an in-flight array write before the data directory goes away", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Drain test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  // Gate the window that actually races teardown - inside the write, between
+  // writing the temp file and renaming it - and drive it through a DIRECT
+  // writeArray caller (`appendMessage`), not a mutateArray one: the direct
+  // callers are the majority of array writers and a queue keyed on the mutating
+  // caller would miss every one of them.
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+    arrayMutationQueues: Map<string, Promise<void>>;
+  };
+  const writeArrayFile = store$.writeArrayFile.bind(store);
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  store$.writeArrayFile = async (path, values) => { entered(); await gate; return writeArrayFile(path, values); };
+  const pending = store.appendMessage(session.id, "user", "hello");
+  await inWrite;
+  assert.equal(store$.arrayMutationQueues.size, 0, "a direct caller registers nothing in the mutating-caller queue");
+  let settled = false;
+  const waiting = store$.whenWritesSettle().then((drained) => { settled = true; return drained; });
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(settled, false, "the drain must not resolve while a write is between its two steps");
+  release();
+  await pending;
+  assert.equal(await waiting, true, "the drain reports a clean wait once the write lands");
+  assert.equal(settled, true);
+  const leftovers = (await readdir(dirname(resolve(tempRoot, "messages", `${session.id}.json`))))
+    .filter((name) => name.endsWith(".tmp"));
+  assert.deepEqual(leftovers, [], "the write-temp-then-rename step leaves no temp behind");
+});
+
+test("a write that never finishes is reported rather than hanging shutdown", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-bound-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Bound test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  const writeArrayFile = store$.writeArrayFile.bind(store);
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  store$.writeArrayFile = async (path, values) => { entered(); await gate; return writeArrayFile(path, values); };
+  const pending = store.appendMessage(session.id, "user", "hello");
+  await inWrite;
+  assert.equal(await store$.whenWritesSettle(20), false, "an unbounded writer must not hold shutdown open");
+  release();
+  await pending;
+});
+
+test("a write that fails during the drain is reported, not rethrown, and leaves no timer armed", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `write-drain-failing-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const store = new SessionStore(tempRoot); await store.load();
+  const project = await store.createProject("Failing write test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const store$ = store as unknown as {
+    writeArrayFile(path: string, values: unknown[]): Promise<void>;
+    whenWritesSettle(timeoutMs?: number): Promise<boolean>;
+  };
+  let entered!: () => void;
+  const inWrite = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+  store$.writeArrayFile = async () => {
+    entered();
+    await new Promise((done) => setTimeout(done, 50));
+    throw Object.assign(new Error("injected write failure"), { code: "ENOENT" });
+  };
+  const pending = store.appendMessage(session.id, "user", "boom").catch((error: Error) => error.message);
+  await inWrite;
+  const startedAt = Date.now();
+  // A rejection inside the race would skip the timer cleanup, and the timer is
+  // deliberately not unref'd, so a leaked one would hold the process for the
+  // whole bound. Resolving well before it is the observable half of that.
+  assert.equal(await store$.whenWritesSettle(5_000), true, "the drain reports on a failed write instead of rejecting");
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed < 2_000, `the drain returned when the write settled (${elapsed}ms), not at the bound`);
+  assert.equal(await pending, "injected write failure", "the failure still reaches the write's own caller");
+});
+
 test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));

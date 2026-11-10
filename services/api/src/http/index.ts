@@ -1282,11 +1282,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const selectedFiles = url.searchParams.get("customFiles") === "1" ? new Set(url.searchParams.getAll("filePath")) : undefined;
           if (selectedFiles && !sessionId) return sendError(response, 400, "File selection requires a session");
           if (researchPackageMatch[2] === "preview") {
-            if (sessionId && url.searchParams.get("defaults") === "1") {
-              exportPreviews.watch(projectId, sessionId);
-              return sendJson(response, 200, await exportPreviews.defaults(projectId, sessionId, true));
+            try {
+              if (sessionId && url.searchParams.get("defaults") === "1") {
+                exportPreviews.watch(projectId, sessionId);
+                return sendJson(response, 200, await exportPreviews.defaults(projectId, sessionId, true));
+              }
+              return sendJson(response, 200, await previewResearchPackage(projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph));
+            } catch (error) {
+              // Pending is expected while a run changes evidence. Opt-in clients can
+              // wait without turning that state into a browser resource error.
+              const preferAsync = [request.headers.prefer].flat().join(",").split(",").some((preference) => preference.trim().toLowerCase() === "respond-async");
+              if (preferAsync && error instanceof ApiStatusError && error.code === "EXPORT_PREVIEW_PENDING") {
+                response.setHeader("Preference-Applied", "respond-async");
+                return sendError(response, 202, error.message, error.code, error.details);
+              }
+              throw error;
             }
-            return sendJson(response, 200, await previewResearchPackage(projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph));
           }
           const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, undefined, includeFullTrajectory, includeFullMemoryGraph);
           const result = await createResearchPackageAsync(input);
@@ -4421,7 +4432,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     } catch (error) {
       apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
     }
-  })().finally(() => store.close());
+  })().finally(async () => {
+    // Array writes are write-temp-then-rename, and closing the store does not
+    // stop them (they never touch SQLite). Drain them last, after every other
+    // teardown step above has had its chance to write, so a caller removing the
+    // data directory right after cannot turn a rename still between its two
+    // steps into an ENOENT.
+    await store.whenWritesSettle().catch(() => false);
+    store.close();
+  });
   server.once("listening", () => { hasListened = true; });
   server.once("close", () => {
     hasClosed = true;

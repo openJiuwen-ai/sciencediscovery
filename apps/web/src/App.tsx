@@ -2143,6 +2143,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setPendingAnnotations([]);
       return;
     }
+    const refreshRunSnapshot = sessionRunSnapshots.current.get(sessionId);
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
     const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems, connectorConfigurationResult, researchPackageImportEligibility, sessionArtifacts] = await Promise.all([
       client.getSession(sessionId),
@@ -2202,6 +2203,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     for (const [runId, records] of childStreamEvents) {
       childEventsByRun[runId] = [...(childEventsByRun[runId] ?? []), ...records];
     }
+    // A run event or a newer refresh may have completed while replay/artifacts
+    // were loading. Never restore its old running state or resume that old run.
+    if (sessionRunSnapshots.current.get(sessionId) !== refreshRunSnapshot) return refreshSession(sessionId);
+    syncSessionRunActivity(sessionId, sessionRunItems);
     if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
     const refreshedDetail = mergeRefreshedSessionDetail(
       detail,
@@ -2224,7 +2229,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setExecutionRuns(executionRunItems);
     setSessionRuns(sessionRunItems);
     setArtifactOutputs(artifactOutputItems);
-    syncSessionRunActivity(sessionId, sessionRunItems);
     setDerivations(artifactDerivations);
     setPromptManifests(manifests);
     setArtifactReviews(artifactReviewRuns);
@@ -3396,7 +3400,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         await client.deleteProject(deletionTarget.id);
         const remaining = projects.filter((project) => project.id !== deletionTarget.id);
         setProjects(remaining);
-        setActiveProjectId(selectAfterRemoval(projects, deletionTarget.id, activeProjectId));
+        const nextProjectId = selectAfterRemoval(projects, deletionTarget.id, activeProjectId);
+        if (nextProjectId !== activeProjectId) setActiveSessionId(undefined);
+        setActiveProjectId(nextProjectId);
       } else {
         await client.deleteSession(deletionTarget.id);
         latestSessionSummaries.current.delete(deletionTarget.id);
@@ -4037,6 +4043,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     await requestRunStop({
       cancelRun: (target) => client.cancelCurrentRun(target),
       controllers: runAbortControllers.current,
+      onStreamAbort: (target) => {
+        void refreshSession(target).catch((reason: Error) => {
+          if (shouldApplySessionScopedUpdate(target, activeSessionIdRef.current)) setError(reason);
+        });
+      },
       sessionId,
     });
   }
@@ -4804,6 +4815,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     className={project.id === activeProjectId ? "nav-item active" : "nav-item"}
                     onClick={() => {
                       setOpenSubagentId(undefined);
+                      // The selected Session belongs to the Project being left,
+                      // so drop it before the new Project's list resolves:
+                      // scope-aware consumers would otherwise pair the new
+                      // Project with the old Session and be rejected.
+                      if (project.id !== activeProjectId) setActiveSessionId(undefined);
                       setActiveProjectId(project.id);
                       setSidebarDrawerOpen(false);
                       setOpenProjectMenuId(undefined);
@@ -5962,7 +5978,25 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setArtifactSessions(allItems);
           setArtifactSessionCatalogProjectId(projectId);
           const currentSessionId = activeSessionIdRef.current;
-          if (currentSessionId && importedSessionIds.includes(currentSessionId)) await refreshSession(currentSessionId);
+          // The import wrote into the session the user was already looking at
+          // (the dialog imports into the current session when it can): there is
+          // nothing to open, and switching away from it would hide the history
+          // that was just restored into it.
+          if (currentSessionId && importedSessionIds.includes(currentSessionId)) {
+            await refreshSession(currentSessionId);
+            return;
+          }
+          // A separate read-only copy was created. Open it: the import has just
+          // told the user this package is a locked snapshot, and leaving the
+          // previous writable session on screen is what made one import look
+          // like two open sessions — with the writable one the only place to
+          // type. A writable continuation is still created only on request.
+          const imported = importedSessionIds.find((id) => items.some((item) => item.id === id));
+          if (!imported) return;
+          setWorkspaceView("session");
+          setOpenSubagentId(undefined);
+          setMessage("");
+          setActiveSessionId(imported);
         }}
         target={researchPackageDialog}
       />

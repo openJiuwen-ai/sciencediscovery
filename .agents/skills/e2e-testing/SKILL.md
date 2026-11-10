@@ -222,9 +222,9 @@ pnpm ci:run -- --case e2e.mocked
 
 Every catalog case declares `arch:*`, `llm:*`, `npu:*`, and `sandbox:*` plus
 layer/container/network tags. Repeated `--tag` clauses mean AND; comma-separated
-tags within one clause mean OR; `--exclude` removes matches. Keep `e2e.mocked`,
-`e2e.real`, and `e2e.legacy` aligned with the Playwright projects below whenever
-their requirements change. Never reclassify an unaudited dependency as safe:
+tags within one clause mean OR; `--exclude` removes matches. Keep `e2e.mocked`
+and `e2e.real` aligned with the Playwright projects below whenever their
+requirements change. Never reclassify an unaudited dependency as safe:
 use an `unreviewed` tag or keep the case unsupported until evidence exists.
 
 The catalog chooses a CI-capability group; it no longer decides which journeys
@@ -237,7 +237,7 @@ file/title-level discovery while writing a spec.
 Run from `.e2e/` after synchronizing and installing the committed environment:
 
 ```bash
-npm run check:meta                    # validate metadata, tags, quarantine
+npm run check:meta                    # validate metadata and tags
 npm run test:list                     # list only @mocked (safe default)
 npm test                              # run only @mocked (same as below)
 npm run test:mocked                   # run only @mocked
@@ -270,13 +270,6 @@ Grouping is enforced by the Playwright projects in
   it is a smoke check that a real user can express the goal naturally and
   reach the outcome, not a duplicate deterministic matrix. Assert stable user
   invariants, never exact model wording or a single incidental tool sequence.
-- `legacy` — untagged specs listed in `LEGACY` in
-  `test/check-e2e-meta.mjs`. They are quarantined because their external
-  behavior has not been audited. Use `npm run test:legacy:list` to inventory;
-  run `npm run test:legacy` only with explicit approval and the same caution as
-  real tests. During initial adoption, only pre-existing unaudited specs from
-  the base branch may enter `LEGACY`; never place a newly written journey there.
-  Migrate the list incrementally without making old specs undiscoverable.
 
 `test:real` and `test:mixed` are execution opt-ins, not discovery commands.
 Before using either, inspect E2E-META, confirm credentials/endpoints/costs and
@@ -288,8 +281,7 @@ into PASS.
 
 Each `test()` carries an `E2E-META` comment directly above it and a matching
 `{ tag: "@mocked" }` or `{ tag: "@real" }` option. `node test/check-e2e-meta.mjs`
-enforces the fields and tag consistency (legacy files are warned until
-migrated; new files must comply). Template:
+enforces the fields and tag consistency for every spec. Template:
 
 ```ts
 /**
@@ -478,8 +470,8 @@ without credentials still produces a report whose first step reads
 
 ### Migration pace for existing specs
 
-Specs quarantined in `LEGACY` may adopt this incrementally; they are not
-blocked on it. **A new file has no grace period**: any spec added as
+Every existing spec has adopted this contract, so there is no quarantined
+set left to migrate. **A new file has no grace period**: any spec added as
 `journey-*.spec.ts` complies on its first commit, and a non-journey spec that
 grows into a full user flow should be renamed and converted rather than kept as
 an untracked exception.
@@ -512,8 +504,8 @@ an untracked exception.
   base) is asserted with `expect`, and a failure there is an isolation bug in
   the layer, not a reason to decline the journey. A precondition the layer
   genuinely cannot own belongs to another group: give the spec the tag that
-  says so (`@model:real`, `@status:legacy`, `@status:external`,
-  `@status:unreviewed`) with a comment explaining why, and it leaves the shared
+  says so (`@model:real`, `@status:external`, `@status:unreviewed`) with a
+  comment explaining why, and it leaves the shared
   selector instead of skipping inside it. The gates below still apply to
   `@real` journeys, which are outside that plan.
 
@@ -544,7 +536,7 @@ an untracked exception.
 
 Keep score collection separate from diagnostics. Use
 `node .ci/prepare-real-e2e-results.mjs` to stage `real-e2e-results`: only exact
-`benchmark-metrics.json`, `team-metrics.json`, `evolve-metrics.json` basenames
+`benchmark-metrics.json`, `team-metrics.json`, `evolve-metrics.json`, `case-metrics.json` basenames
 and `e2e-real/tagged/{plan,summary,preflight}.json` are allowed. Preserve their
 relative paths. The staging script projects metrics to score/status/duration
 fields and removes free-form tagged errors; prompts and raw model output stay

@@ -65,7 +65,6 @@
         "reviewed",
         "external",
         "quarantined",
-        "legacy",
         "unreviewed"
       ],
       "default": "reviewed"

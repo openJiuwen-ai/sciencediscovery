@@ -161,7 +161,17 @@ try {
       SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_SAMPLE_SESSION: '0',
       SCIENCE_AGENT_MODEL_CATALOG_PATH: resolve(root, 'absent-catalog'), SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED: '0', SCIENTIFIC_ENVS: '0',
     }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
-    assert.equal((await fetch(origin + '/health')).status, 200);
+    // Listening precedes framework initialization. Only the documented startup
+    // state may be pending; other failures must still fail this journey.
+    await until(async () => {
+      const health = await fetch(origin + '/health');
+      if (health.status === 503) {
+        assert.equal((await health.json()).status, 'starting');
+        return false;
+      }
+      assert.equal(health.status, 200);
+      return true;
+    });
     model = await api('/api/models', { name: 'Synthetic DeepSeek', model: 'synthetic', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiProtocol: 'openai-chat-completions', apiVariant: 'deepseek', apiToken: providerKey, proxyPolicy: 'none', thinkingMode: 'enabled', thinkingEffort: 'high' });
     project = await api('/api/projects', { name: 'Evolution thinking journey' });
     return 'Owned services healthy; local provider saved without calls';

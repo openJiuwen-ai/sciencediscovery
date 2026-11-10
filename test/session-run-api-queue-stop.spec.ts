@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 import type { SessionRunEvent } from "@sciencediscovery/schema";
 
+import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { HANG_MODEL_ID, installStubModels, type StubModels } from "./support/stub-models.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("session-run-api-queue-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("session-run-api-queue-stop.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@status:reviewed", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 const API_BASE = apiBaseUrl();
 const AUTH = authorizationHeader();
@@ -65,12 +67,42 @@ async function waitForRunEvent(
   throw new Error(`Timed out waiting for run event on ${runId}`);
 }
 
-test("runs API queues a follow-up while preserving current cancel and replay sequence", async () => {
+let stubs: StubModels | undefined;
+
+test.beforeAll(async () => {
+  stubs = await installStubModels();
+});
+
+test.afterAll(async () => {
+  await stubs?.dispose();
+});
+
+/**
+ * E2E-META
+ * Purpose: 通过 REST API 验证运行队列：第二个 run 排队、事件序列可重放、取消当前 run 后队列继续、再次取消幂等。
+ * Steps:
+ *   1. 注册桩模型并创建项目与会话。
+ *   2. POST 第一个 run，等待 running 事件。
+ *   3. POST 第二个 run 断言 queued，并核对事件序列单调且可重放。
+ *   4. 取消当前 run，断言 cancelled=true 且第一个 run 进入 cancelled。
+ *   5. 断言第二个 run 开始，再次取消并断言其进入 cancelled。
+ *   6. finally 删除项目。
+ * Environment: 隔离本地栈；不启动浏览器；本 spec 自行注册 127.0.0.1 上的 hang-model 桩模型。
+ * Type: mocked
+ * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none — 所有请求均指向 127.0.0.1。
+ * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+ * CostSideEffects: none；项目与桩模型在 finally/afterAll 中清理。
+ */
+test("runs API queues a follow-up while preserving current cancel and replay sequence", { tag: "@mocked" }, async () => {
   let projectId: string | undefined;
   try {
     const models = await apiJson<Array<{ id: string; model: string; name: string }>>("/api/models");
-    const hangingModel = models.find((model) => `${model.name} ${model.model}`.includes("hang-model"));
-    expect(hangingModel, "preconfigured hanging model is required").toBeTruthy();
+    const hangingModel = models.find((model) => model.model === HANG_MODEL_ID);
+    expect(hangingModel, "the suite's hanging stub model is required").toBeTruthy();
 
     const project = await apiJson<{ id: string }>("/api/projects", {
       body: JSON.stringify({ name: `Queue Stop API E2E ${Date.now()}` }),

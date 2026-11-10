@@ -64,3 +64,61 @@ test("the complete payload gate still rejects exact build roots even in approved
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** #1006's acceptance case: a payload whose only `/home/runner` hits are the two
+ *  approved SBOM references must pass *both* checks — the payload scan above and
+ *  the assembled-artifact scan here. Drives the real function out of
+ *  `package-binary-release.sh` so a later edit cannot quietly drop either half.
+ *
+ *  The needles are fixed build paths rather than this checkout's own: they are
+ *  what the gate compares against, and a host path can carry a drive letter or a
+ *  space the shell escaping is not written for. */
+test("the assembled-artifact gate passes approved SBOM references and still fails real build roots", () => {
+  const root = mkdtempSync(join(tmpdir(), "release-scan-test-"));
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const source = readFileSync(join(repository, "scripts/package-binary-release.sh"), "utf8");
+  const start = source.indexOf("assert_no_release_build_paths() {");
+  assert.notEqual(start, -1, "package-binary-release.sh must define the final-artifact gate");
+  const fn = source.slice(start, source.indexOf("\n}\n", start) + 3);
+  // Written to its own script rather than inlined into `bash -c`, so the
+  // function's own sed escaping reaches sed exactly as it does in production.
+  const gate = join(root, "gate.sh");
+  // HOME is pinned in the script alongside the other two needles, not inherited:
+  // the function reads `${HOME:-}`, so a test that left the ambient HOME in place
+  // would only pin the HOME-removal half on a runner whose HOME already is
+  // /home/runner, and a contributor who re-added the needle would still see green.
+  writeFileSync(gate, [
+    "set -euo pipefail",
+    "repository_root=/build/sciencediscovery",
+    "output_dir=/build/out",
+    "HOME=/home/runner",
+    fn,
+    'assert_no_release_build_paths "$1"',
+    "",
+  ].join("\n"));
+  const artifact = join(root, "ScienceDiscovery-linux-x86_64").replace(/\\/g, "/");
+  const run = () => spawnSync("bash", [gate.replace(/\\/g, "/"), artifact], { encoding: "utf8" });
+  const scan = (contents) => { writeFileSync(artifact, contents); return run(); };
+  try {
+    // Both approved upstream SBOM regions, plus bytes that name no machine.
+    assert.equal(scan([
+      `{"ref":"${ref}","dependencies":[{"ref":"${ref}"}]}`,
+      '{"ref":"path+file:///home/runner/work/watchfiles/watchfiles#watchfiles_rust_notify@1.2.0"}',
+      '"/roots/list_changed"',
+    ].join("\n")).status, 0, "approved SBOM references must not fail the final gate");
+    assert.equal(scan("no build paths here").status, 0);
+
+    // A path unique to this build is still a leak at this level.
+    assert.notEqual(scan("#!/bin/sh: /build/sciencediscovery/node_modules").status, 0,
+      "the repository root must fail");
+    assert.notEqual(scan("/build/out/.payload-x86_64").status, 0, "the output directory must fail");
+
+    // The coverage this change removes, stated as a test: the final artifact is
+    // no longer scanned for HOME at all, so a private /home/runner path passes
+    // here and is caught only by the payload scan above.
+    assert.equal(scan('{"private":"/home/runner/private/key"}').status, 0,
+      "HOME is deliberately not scanned on the assembled artifact");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

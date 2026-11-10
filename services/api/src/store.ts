@@ -301,6 +301,11 @@ export { MAIN_RUN_STREAM } from "./store/run-streams.js";
 const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
 const NEWLINE_BYTE = 0x0a;
 
+/** How long shutdown waits for in-flight array writes before it says it gave up.
+ *  Far longer than a write takes, far shorter than a person's patience with a
+ *  hung quit. */
+const WRITE_DRAIN_TIMEOUT_MS = 10_000;
+
 const SESSION_DATA_CATEGORIES = [
   "messages",
   "execution records",
@@ -2147,6 +2152,46 @@ export class SessionStore {
     await this.deletionWork;
   }
 
+  /** Resolves once every in-flight array write (session-runs, messages, artifact
+   *  plans, …) and every append-only stream write has finished. `closeApiServer`
+   *  awaits this immediately before closing the store so that a caller removing
+   *  the data directory right after cannot race a write-temp-then-rename that is
+   *  still between its two steps.
+   *
+   *  Bounded: a run that was never cancelled can keep writing status, and a
+   *  shutdown must not hang on it. The wait is capped and reports the writes it
+   *  abandoned, so a shutdown never claims a cleanliness it did not get. */
+  async whenWritesSettle(timeoutMs = WRITE_DRAIN_TIMEOUT_MS): Promise<boolean> {
+    const drained = (async () => {
+      // Both sets shrink as their writes finish, so re-reading them each pass
+      // terminates once the writers stop.
+      while (this.arrayWrites.size > 0 || this.streamAppendQueues.size > 0) {
+        await Promise.all([...this.arrayWrites, ...this.streamAppendQueues.values()]);
+      }
+      return true;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Not unref'd: the race's other arm is a promise the event loop does not
+    // hold, so an unref'd timer would let the process exit mid-shutdown instead
+    // of reaching this bound. It is cleared as soon as the race settles.
+    const timedOut = new Promise<false>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout(false), timeoutMs);
+    });
+    // Cleared on every exit path: the timer is not unref'd (see above), so one
+    // left armed by a throw would keep the process alive for the whole bound.
+    let settled: boolean;
+    try {
+      settled = await Promise.race([drained, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!settled) {
+      const abandoned = this.arrayWrites.size + this.streamAppendQueues.size;
+      console.warn(`Store shutdown stopped waiting for ${abandoned} in-flight write(s) after ${timeoutMs}ms`);
+    }
+    return settled;
+  }
+
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
     try {
       await rm(operation.root, { force: true, recursive: true });
@@ -2210,7 +2255,29 @@ export class SessionStore {
     }
   }
 
+  /** Every array write in flight, registered where the write happens rather than
+   *  at the caller: `writeArray` is reached both through `mutateArray` and
+   *  directly by ~20 sites (messages, artifact plans, prompt manifests, claims,
+   *  evidence, …), so a queue keyed on the mutating caller would cover only a
+   *  minority of the writes that race teardown. */
+  private readonly arrayWrites = new Set<Promise<void>>();
+
   private async writeArray(path: string, values: unknown[]): Promise<void> {
+    const work = this.writeArrayFile(path, values);
+    // The set holds an error-swallowing barrier, not `work` itself: the drain
+    // races it against a timeout, and a rejection inside that race would skip
+    // the timer cleanup and the abandoned-write report below. The failure still
+    // reaches this method's caller through `await work`.
+    const barrier = work.then(() => undefined, () => undefined);
+    this.arrayWrites.add(barrier);
+    try {
+      await work;
+    } finally {
+      this.arrayWrites.delete(barrier);
+    }
+  }
+
+  private async writeArrayFile(path: string, values: unknown[]): Promise<void> {
     const directory = dirname(path);
     const temporaryPath = resolve(directory, `.state-${process.pid}-${randomUUID()}.tmp`);
     await mkdir(directory, { recursive: true });
@@ -4440,7 +4507,10 @@ export class SessionStore {
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
     await this.writeArray(this.messagesPath(session.id), []);
     await mkdir(resolve(this.dataDir, "session-runs"), { recursive: true });
-    await writeFile(this.sessionRunsPath(session.id), "[]\n", "utf8");
+    // Through writeArray, not a bare writeFile: everything that lands in this
+    // directory has to be visible to whenWritesSettle, and "[]\n" is exactly
+    // what writeArray produces for an empty array.
+    await this.writeArray(this.sessionRunsPath(session.id), []);
     await mkdir(resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), { recursive: true });
     this.catalog.permissionEpochs.push(permissionEpoch);
     this.catalog.sessions.push(session);

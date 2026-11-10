@@ -90,25 +90,23 @@ export default defineConfig({
     },
   },
   projects: [
-    // Only explicitly tagged, fully stubbed specs run by default. Untagged
-    // legacy specs stay quarantined because their external behavior has not
-    // yet been audited against the E2E-META contract.
+    // Only explicitly tagged, fully stubbed specs run by default. A spec must
+    // declare @mocked or @real to be collected by either project.
     {
       name: "mocked",
       grep: planGrep ?? /@mocked/,
       // A run driving a frozen plan executes that plan and nothing else. The
-      // shared selector takes only `status:reviewed`, so a quarantined journey
-      // is deselected here rather than running and reporting a skip — which
-      // Playwright exits 0 on and the plan would have to count as a journey
-      // that did not execute. Collection (SCIENCE_TAG_PW_CATALOG) keeps seeing
-      // it, so the migration ledger still knows it exists.
+      // shared selector takes only `status:reviewed`, so a journey it did not
+      // take is deselected here rather than running and reporting a skip —
+      // which Playwright exits 0 on and the plan would have to count as a
+      // journey that did not execute. Collection (SCIENCE_TAG_PW_CATALOG)
+      // keeps seeing it, so the migration ledger still knows it exists.
       ...(process.env.SCIENCE_TAG_PW_REPORT
-        ? { grepInvert: /@status:(external|legacy|unreviewed)\b/ }
+        ? { grepInvert: /@status:(external|unreviewed)\b/ }
         : {}),
       use: { ...devices["Desktop Chrome"], serviceWorkers: "block" },
     },
     { name: "real", grep: planGrep ?? /@real/, use: { ...devices["Desktop Chrome"] } },
-    { name: "legacy", grepInvert: /@(mocked|real)/, use: { ...devices["Desktop Chrome"] } },
   ],
   expect: {
     timeout: 10000,

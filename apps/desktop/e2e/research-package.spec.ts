@@ -232,9 +232,25 @@ test("hover import defaults to no project and allows an existing project", async
       const dialog = page.getByRole("dialog", { name: "导入会话" });
       await expect(dialog.getByLabel("项目归属")).toHaveValue("");
       if (project === "project-1") await dialog.getByLabel("项目归属").selectOption(project);
-      await dialog.locator("input[type=file]").setInputFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
-      await expect(dialog).toContainText("恢复的研究");
+      // Open the picker the way a user does, so the hand-drawn trigger this PR
+      // added is actually exercised instead of being bypassed by setInputFiles.
+      const chooser = page.waitForEvent("filechooser");
+      await dialog.locator(".research-package-upload-trigger").click();
+      await (await chooser).setFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
+      // The review pane describes the package, not where it came from: the
+      // filename, the object count and the read-only hint. The source session's
+      // title is deliberately not rendered any more.
+      await expect(dialog.locator(".research-import-meta")).toContainText("study.sdresearch");
+      await expect(dialog.locator(".research-import-meta")).toContainText("2 个内容对象");
+      await expect(dialog.locator(".research-import-review")).not.toContainText("恢复的研究");
       await dialog.getByRole("button", { name: "确认导入" }).click();
+      // Import opens the read-only snapshot; it does not auto-create a writable copy.
+      await expect(page.locator(".task-head-title")).toHaveText("恢复的研究");
+      await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("恢复的研究");
+      await expect(page.locator("#composer-textarea")).toHaveCount(0);
+      await expect(page.locator(".research-package-notice")).toContainText("只读");
+      // The explicit continue action creates and opens the writable research copy.
+      await page.getByRole("button", { name: "继续聊天", exact: true }).click();
       await expect(page.locator(".task-head-title")).toHaveText("可继续的研究");
       await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("可继续的研究");
       await expect(page.locator("#composer-textarea")).toBeVisible();
@@ -242,7 +258,7 @@ test("hover import defaults to no project and allows an existing project", async
     });
   }
   expect(targets).toEqual(["inbox-1", "project-1"]);
-  await info.attach("journey-report", { body: "Hover-only import, unchanged create actions, no-project default and optional project assignment verified; history restored into a writable conversation.", contentType: "text/plain" });
+  await info.attach("journey-report", { body: "Hover-only import, unchanged create actions, no-project default and optional project assignment verified; import opens the read-only snapshot and the explicit continue action creates the writable research copy.", contentType: "text/plain" });
 });
 
 test("reply menu branches at the selected reply without its later conversation", async ({ page }, info) => {

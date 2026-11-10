@@ -242,6 +242,20 @@ export interface ArtifactReviewRun {
   checkpointId: string;
   /** Checks completed by this run. Older persisted MVP reviews omit it. */
   checks?: Array<"structure" | "citation" | "computation" | "completeness">;
+  /**
+   * Checks this run did NOT perform, each with the reason, so a partial review
+   * cannot read as a complete one.
+   *
+   * A Quick review parses citation format and links provenance; it never reads
+   * a source to decide whether a claim is supported. Without this field the
+   * record said only "citation: passed" and "No findings", which readers and
+   * the main Agent alike took as "the claims were checked" (#669). Declaring the
+   * gap is the difference between a format pass and a claim-fidelity pass.
+   */
+  notChecked?: Array<{
+    check: "claim_support" | "citation_identity" | "computation";
+    reason: string;
+  }>;
   createdAt: string;
   /**
    * Deterministic delivery-completeness verdict for the task this report
@@ -352,6 +366,20 @@ export function reviewUnverifiedDelivery(
 ): boolean {
   if (review.completeness) return review.completeness.status !== "complete";
   return !isStructureOnlyReview(review);
+}
+
+/**
+ * True when the review itself declared a check it did not perform.
+ *
+ * The Reviewer panel's verdict, its counters and the main-Agent record all have
+ * to agree about the same review; this is the one predicate they read, so a
+ * gap-bearing review cannot be labelled "passed" on the card while the record
+ * says `SCOPE_LIMITED` (#669 review F3).
+ */
+export function reviewDeclaredGap(
+  review: Pick<ArtifactReviewRun, "notChecked">,
+): boolean {
+  return (review.notChecked?.length ?? 0) > 0;
 }
 
 /** A review that only parsed the file: no citation, computation or delivery claim. */

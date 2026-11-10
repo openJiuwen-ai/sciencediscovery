@@ -86,6 +86,15 @@ export interface ProposalDeps {
    *  reasoning nobody sees. Required: a caller that cannot answer must not
    *  silently inherit the quiet ceiling. */
   thinkingSupported: boolean;
+  /** Searches already running on this session, if the caller can answer.
+   *
+   *  One search owns the session's budget and its frozen scoring, so a second
+   *  one started beside it is the failure #997 records: two live panels, two
+   *  formulas, and no way for the user to say which result counts. Checked
+   *  before anything is spent — the probe alone runs two real evaluations.
+   *  Optional so a caller without the store still works; the composition root
+   *  always supplies it. */
+  activeRuns?: () => Promise<Array<{ id: string; status: string }>>;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
@@ -164,6 +173,22 @@ export async function startProposedRun(
 ): Promise<EvolveRunProposalResult> {
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
+
+  // One search at a time per session. This is the guard behind the create
+  // tool's wording: the description asks the agent to stop the running search
+  // first, and this refuses the second start when it does not. Refused as data
+  // so the agent can recover by calling stop_evolve_run, not as an exception
+  // that reads like a broken tool.
+  const active = deps.activeRuns ? await deps.activeRuns() : [];
+  if (active.length) {
+    const named = active.slice(0, 4).map((run) => `${run.id}（${run.status}）`).join("、");
+    return {
+      refusedBecause: `this session already has a search running: ${named}. One search owns `
+        + "the session's budget and its frozen scoring, so a second one beside it would split the "
+        + "budget and score against a different formula. Call stop_evolve_run on it, report that it "
+        + "stopped, and then propose this search again.",
+    };
+  }
 
   // Probed before the goal is assembled, not after: whether this search runs
   // unconfined is a property of what the goal records, and a stray

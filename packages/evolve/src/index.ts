@@ -45,6 +45,14 @@ import type {
 } from "@sciencediscovery/schema";
 import type { AgentTool } from "@sciencediscovery/tools";
 
+/** Outcome of asking to stop a search. `stopping` is true only when the run was
+ *  still active; an already-finished run comes back with its final status. */
+export interface EvolveRunStopResult {
+  runId: string;
+  status: string;
+  stopping: boolean;
+}
+
 export {
   evolveCommandApprovesUnisolated,
   isEvolveCommand,
@@ -64,6 +72,9 @@ export interface EvolveToolRuntime {
   getEvolveBudget(input: { thinking?: ModelThinkingMode; thinkingEffort?: ModelThinkingEffort }): Promise<EvolveBudgetPlan>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
+  /** Ask the orchestrator to stop a running search. Optional so a deployment
+   *  that cannot stop a run simply does not offer the tool. */
+  stopEvolveRun?(runId: string): Promise<EvolveRunStopResult>;
   getIdeaResearch?(researchId?: string): Promise<unknown>;
   createIdeaResearch?(input: {objective: string; materials: string}): Promise<unknown>;
 }
@@ -369,6 +380,44 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: evolveParameters,
   };
   tools.push(createEvolveRun);
+  // Captured once so the tool body calls a local binding: reading the optional
+  // member inside the closure would need a non-null assertion that the compiler
+  // already considers redundant.
+  const stopRuntime = runtime.stopEvolveRun;
+  if (stopRuntime) {
+    const stopParameters = Type.Object({
+      runId: Type.String({
+        description: "The id create_evolve_run returned for the search to stop (a UUID). "
+          + "Required: stopping is destructive, so there is no \"most recent\" default.",
+        maxLength: 200, minLength: 1,
+      }),
+    });
+    const stopEvolveRun: AgentTool<typeof stopParameters> = {
+      description:
+        "Stop a running evolution search. The search keeps spending the run's budget and keeps "
+        + "its frozen scoring until it is stopped, so call this whenever the user changes the "
+        + "target — a different scoring formula, a corrected evaluator, a different starting "
+        + "point — **before** proposing the replacement. Never start a second search alongside "
+        + "a running one: two searches on the same session split the budget, score against "
+        + "different formulas and leave the user with two live panels and no way to say which "
+        + "result counts. Stop first, report that it stopped, then create the new one. Ending "
+        + "an already-finished search is harmless and returns its final status. Do not call "
+        + "this to make a search you just started finish faster: it discards the work done "
+        + "so far.",
+      execute: async (_toolCallId, params) => {
+        const result = await stopRuntime(params.runId);
+        const text = result.stopping
+          ? [`Stopping search ${result.runId}.`, "Report that to the user, then propose the replacement search if that is what they asked for."]
+          : [`Search ${result.runId} is not running any more (status: ${result.status}).`, "Nothing was stopped; read it with get_evolve_run if the outcome matters."];
+        return { content: [{ type: "text", text: text.join("\n") }], details: result };
+      },
+      label: "Stop evolution run",
+      name: "stop_evolve_run",
+      parameters: stopParameters,
+      requiredArguments: ["runId"],
+    };
+    tools.push(stopEvolveRun);
+  }
   if (runtime.createIdeaResearch) {
     const parameters = Type.Object({
       objective: Type.String({minLength: 1, maxLength: 16000, description: "Research task and all user constraints."}),
