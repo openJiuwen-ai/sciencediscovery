@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -1557,4 +1557,55 @@ test("parentSubagentId threads through executeShell and declareWorkspaceArtifact
   } finally {
     await new Promise<void>((r) => fake.close(() => r()));
   }
+});
+
+test("a repeated settled shell receipt leaves execution-runs bytes, inode and timestamps untouched", async context => {
+  const dataDir = resolve(process.cwd(), ".tmp", `settled-shell-receipt-${process.pid}-${Date.now()}`);
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  context.after(async () => { await store.shellExecutions.close(); await rm(dataDir, { force: true, recursive: true }); });
+  const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+  const project = await store.createProject("Settled shell receipt");
+  const session = await store.createSession(project.id, "Receipt", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const contextFor = (executionId: string, toolCallId: string) => ({
+    agentId: "main", code: "echo done", executionId, sessionId: session.id, turnId: "turn-1",
+    toolCallId, runnerId: "runner-1", workspaceRoot, permissionEpoch,
+  });
+  const resultFor = (executionId: string) => ({
+    cgroupMode: "none", createdFiles: [], modifiedFiles: [],
+    environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, environmentVariables: { LANG: "C.UTF-8" },
+    executionId, exitCode: 0, finishedAt: timestamp, startedAt: timestamp, kernelId: `ephemeral:${executionId}`,
+    kernelMode: "ephemeral", language: "shell", networkPolicy: "none", runnerVersion: "test",
+    sandbox: "bubblewrap", stdout: "done\n", stderr: "", workingDirectory: "/workspace",
+  } as ShellExecutionResult);
+  // No environment is named, so the recorder never calls the Runner.
+  const reader = {
+    async listEnvironments() { throw new Error("unexpected environment fetch"); },
+    async listEnvironmentRevisions() { throw new Error("unexpected environment fetch"); },
+    async environmentSnapshot() { throw new Error("unexpected environment fetch"); },
+  };
+  const recorder = new ProvenanceRecorder(dataDir, store);
+  await recorder.commitExistingShellExecutionResult(contextFor("execution-1", "tool-call-1"), resultFor("execution-1"), reader);
+  const ledger = resolve(dataDir, "execution-runs", `${session.id}.json`);
+  const before = await stat(ledger);
+  const beforeBytes = await readFile(ledger);
+  // A retry with the same immutable receipt must not replace the ledger: the
+  // bytes, inode, mtime and ctime all have to stay exactly as committed.
+  await new ProvenanceRecorder(dataDir, store)
+    .commitExistingShellExecutionResult(contextFor("execution-1", "tool-call-1"), resultFor("execution-1"), reader);
+  const after = await stat(ledger);
+  assert.deepEqual(await readFile(ledger), beforeBytes, "a duplicate append must not alter the ledger bytes");
+  assert.equal(after.ino, before.ino, "a duplicate append must not replace the ledger file");
+  assert.equal(after.mtimeMs, before.mtimeMs, "a duplicate append must not move the ledger mtime");
+  assert.equal(after.ctimeMs, before.ctimeMs, "a duplicate append must not move the ledger ctime");
+  // Control: a genuinely new run in the same session still lands on disk.
+  await recorder.commitExistingShellExecutionResult(contextFor("execution-2", "tool-call-2"), resultFor("execution-2"), reader);
+  const grown = await stat(ledger);
+  assert.notEqual(grown.ino, before.ino, "a new run must still write the ledger");
+  assert.deepEqual((await store.listExecutionRuns(session.id)).map(run => run.id).sort(), ["execution-1", "execution-2"]);
 });

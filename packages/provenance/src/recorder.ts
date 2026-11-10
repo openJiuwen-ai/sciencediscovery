@@ -1018,6 +1018,15 @@ export class ProvenanceRecorder {
     if (existing?.resultDigest && existing.resultDigest !== resultDigest) {
       throw executionResultConflict("EXECUTION_RESULT_CONFLICT: existing result digest differs");
     }
+    // A retry of a finalization that already committed this immutable receipt
+    // would append the identical run row, and the store rewrites
+    // execution-runs/<sessionId>.json even for a no-op append (a temporary
+    // file replaces the same bytes: new inode, new mtime/ctime). A session
+    // whose content is static must not look like it keeps changing, so skip
+    // only that duplicate append. The environment/artifact sync below and the
+    // observation record still run: they are the tail a failed attempt left
+    // unfinished, which is why the receipt is retried at all.
+    const runAlreadyCommitted = Boolean(existing?.resultDigest);
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {
       throw new Error("Shell environment package spec hash is inconsistent");
@@ -1039,39 +1048,41 @@ export class ProvenanceRecorder {
       }
       await this.store.replaceScientificEnvironmentCatalog(environments, revisions, options.runnerId);
     }
-    await this.store.appendExecutionRun({
-      cgroupMode: result.cgroupMode,
-      code,
-      createdFiles: options.explicitHandoff ? [] : result.createdFiles,
-      environmentRevisionId: result.environmentRevisionId,
-      envSnapshot: await this.putEnvSnapshot(result.environmentVariables),
-      exitCode: result.exitCode,
-      finishedAt: result.finishedAt,
-      id: executionId,
-      kernelId: result.kernelId,
-      kernelMode: result.kernelMode,
-      language: "shell",
-      modifiedFiles: options.explicitHandoff ? [] : result.modifiedFiles,
-      ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
-      networkPolicy: result.networkPolicy,
-      permissionEpochId: options.permissionEpoch.id,
-      ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
-      ...(options.runnerId ? { runnerId: options.runnerId } : {}),
-      resultDigest,
-      runnerVersion: result.runnerVersion,
-      sandbox: result.sandbox,
-      ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
-      sessionId: options.sessionId,
-      startedAt: result.startedAt,
-      status,
-      stderr,
-      stdout,
-      tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
-      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
-      toolVersion: "1.1.0",
-      turnId: options.turnId,
-      workingDirectory: result.workingDirectory,
-    });
+    if (!runAlreadyCommitted) {
+      await this.store.appendExecutionRun({
+        cgroupMode: result.cgroupMode,
+        code,
+        createdFiles: options.explicitHandoff ? [] : result.createdFiles,
+        environmentRevisionId: result.environmentRevisionId,
+        envSnapshot: await this.putEnvSnapshot(result.environmentVariables),
+        exitCode: result.exitCode,
+        finishedAt: result.finishedAt,
+        id: executionId,
+        kernelId: result.kernelId,
+        kernelMode: result.kernelMode,
+        language: "shell",
+        modifiedFiles: options.explicitHandoff ? [] : result.modifiedFiles,
+        ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
+        networkPolicy: result.networkPolicy,
+        permissionEpochId: options.permissionEpoch.id,
+        ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
+        ...(options.runnerId ? { runnerId: options.runnerId } : {}),
+        resultDigest,
+        runnerVersion: result.runnerVersion,
+        sandbox: result.sandbox,
+        ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
+        sessionId: options.sessionId,
+        startedAt: result.startedAt,
+        status,
+        stderr,
+        stdout,
+        tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
+        ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+        toolVersion: "1.1.0",
+        turnId: options.turnId,
+        workingDirectory: result.workingDirectory,
+      });
+    }
 
     const paths = [...new Set([...result.createdFiles, ...result.modifiedFiles])];
     // 远端 runner 的产出留在远端 workspace，只有模型显式 pull 回来才登记。

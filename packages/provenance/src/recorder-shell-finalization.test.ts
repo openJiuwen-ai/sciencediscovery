@@ -23,8 +23,11 @@ function storeFixture() {
   const outputs = new Map<string, WorkspaceFileRevision>();
   let environmentRevisions: EnvironmentRevision[] = [];
   let failDerivationAcknowledgement = false;
+  let failRevisionAcknowledgement = false;
+  const appendCount = { value: 0 };
   const store: ProvenanceStore = {
     async appendExecutionRun(run) {
+      appendCount.value += 1;
       const existing = runs.get(run.id);
       if (existing) assert.equal(canonical(run), canonical(existing));
       else runs.set(run.id, structuredClone(run));
@@ -43,6 +46,10 @@ function storeFixture() {
     },
     async listArtifactDerivations() { return [...derivations.values()]; },
     async recordWorkspaceFileRevisions(sessionId, inputs) {
+      if (failRevisionAcknowledgement) {
+        failRevisionAcknowledgement = false;
+        throw new Error("lost workspace revision acknowledgement");
+      }
       return inputs.map((input) => {
         const key = `${input.executionRunId}:${input.path}`;
         const existing = outputs.get(key);
@@ -63,7 +70,9 @@ function storeFixture() {
     async createArtifactVersion() { throw new Error("implicit artifact creation is forbidden"); },
     updateArtifactVersionReferences() { throw new Error("unexpected artifact mutation"); },
   };
-  return { store, runs, derivations, outputs, loseNextDerivationAcknowledgement() { failDerivationAcknowledgement = true; } };
+  return { store, runs, derivations, outputs, appendCount,
+    loseNextDerivationAcknowledgement() { failDerivationAcknowledgement = true; },
+    loseNextRevisionAcknowledgement() { failRevisionAcknowledgement = true; } };
 }
 
 async function fixture(t: TestContext) {
@@ -190,6 +199,27 @@ test("shell output retry after lost commit acknowledgement preserves immutable d
   assert.equal(f.outputs.size, 1);
   assert.equal(f.derivations.size, 1);
   assert.equal([...f.derivations.values()][0]!.content.hash, hash("original"));
+});
+
+test("a retry after a failure before the derivation write still finishes the artifact sync", async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.context.workspaceRoot, "result.txt"), "original");
+  const snapshot = await snapshotWorkspace(new VersionStore(f.root), f.context.workspaceRoot);
+  const result = { ...f.result, createdFiles: ["result.txt"], workspaceSnapshot: snapshot };
+  // The run row is committed, but the attempt fails before the artifact
+  // derivation is written — exactly the tail a retry exists to finish.
+  f.loseNextRevisionAcknowledgement();
+  await assert.rejects(f.recorder.commitExistingShellExecutionResult(f.context, result, f.reader), /lost workspace revision/);
+  assert.equal(f.runs.size, 1);
+  assert.equal(f.derivations.size, 0);
+  assert.equal(f.outputs.size, 0);
+  const returned = await new ProvenanceRecorder(f.root, f.store).commitExistingShellExecutionResult(f.context, result, f.reader);
+  assert.deepEqual(returned, result);
+  assert.equal(f.appendCount.value, 1, "the retry must not append the already-committed run row again");
+  assert.equal(f.runs.size, 1);
+  assert.equal(f.outputs.size, 1);
+  assert.equal(f.derivations.size, 1);
+  assert.equal([...f.derivations.values()][0]!.path, "result.txt");
 });
 
 test("cache changes finalize with ordinary outputs and recover without reexecuting the command", async (t) => {
