@@ -99,10 +99,24 @@ test('an unauthorized, rate-limited or semantic failure is never a transient gat
   assert.equal(detectProviderFault('Test timeout of 240000ms exceeded.'), null);
 });
 
-test('one unrelated line cannot turn a product failure into an outage', () => {
-  assert.equal(detectProviderFaultFromErrors([GATEWAY_500, 'Expected: "passed", Received: "failed"']), null);
+test('an assertion beside a gateway outage does not hide the outage', () => {
+  // Playwright appends the failed expect() to the error it saw, so the case
+  // records the gateway's 503 and `Expected:/Received:` together. The
+  // assertion line must not veto the fault (#813).
+  const mixed = detectProviderFaultFromErrors([GATEWAY_503, 'Expected: "completed", Received: "failed"']);
+  assert.equal(mixed.code, 'provider-server-error');
+  assert.equal(mixed.status, 503);
   assert.equal(detectProviderFaultFromErrors([GATEWAY_500]).code, 'provider-server-error');
+  // A delivery miss is the product's own verdict and still outranks the
+  // gateway text recorded beside it.
+  assert.equal(detectProviderFaultFromErrors([GATEWAY_500, DELIVERY_MISS]), null);
   assert.equal(detectProviderFaultFromErrors([]), null);
+});
+
+test('one text holding the gateway error and the assertion block is still the outage', () => {
+  const mixed = `${GATEWAY_503}\nexpect(received).toBe(expected) // Object.is equality\nExpected: "completed"\nReceived: "failed"`;
+  assert.equal(detectProviderFault(mixed).status, 503);
+  assert.equal(detectProviderFault(mixed).code, 'provider-server-error');
 });
 
 test('a product failure that quotes a provider status is never soft-classified', () => {
@@ -137,6 +151,19 @@ test('the reporter records a live-model gateway fault apart from a product failu
   assert.equal(verdict.failed, 0);
   assert.equal(verdict.passed, 0);
   assert.equal(verdict.providerFaults, 1);
+});
+
+test('a live-model case that carries the assertion block with the 503 counts as a fault', t => {
+  const mixed = `${GATEWAY_503}\nexpect(received).toBe(expected) // Object.is equality\nExpected: "completed"\nReceived: "failed"`;
+  const { plan, written } = report(t, {
+    title: 'L3-cancel', tags: realCaseTags, status: 'failed', errors: [mixed], duration: 14_400,
+  });
+  assert.equal(written.results[0].outcome, PROVIDER_FAULT);
+  assert.deepEqual(written.results[0].providerFault, { code: 'provider-server-error', status: 503 });
+  const verdict = verifyResults(plan, written.results);
+  assert.equal(verdict.providerFaults, 1);
+  assert.equal(verdict.failed, 0);
+  assert.ok(!verdict.problems.some(problem => problem.startsWith('FAIL:')));
 });
 
 test('a product failure stays a hard failure with no provider class', t => {
