@@ -118,7 +118,7 @@ export async function restoreEvolveRuns(
     const status = typeof run?.status === "string" && STATUSES.has(run.status) ? run.status as EvolveRunStatus : "failed";
     try {
       await store.createRun({
-        goal: goal as EvolveRun["goal"],
+        goal: goal as unknown as EvolveRun["goal"],
         id,
         ...(target.projectId ? { projectId: target.projectId } : {}),
         sessionId: target.sessionId,
