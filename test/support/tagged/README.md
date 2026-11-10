@@ -134,10 +134,15 @@ Direct `node --test` on a file that imports `node.mjs` intentionally fails with 
 usage error rather than reporting a misleading zero-test success. A file that
 imports `compat.mjs` runs normally there, on plain `node:test`, which is how each
 package keeps its own `pnpm test`. The one thing that path does with the tags is
-decline to register a file whose `os`/`arch` name another machine — it has no
-plan and no target, so there is nothing for it to run. The shared plan is
-unaffected: it reads the tags and never the host, so the same file is in a macOS
-plan and out of a Linux one wherever either is created.
+handle a file whose `os`/`arch` name another machine: it has no plan and no
+target, so there is nothing to run, and it registers a single skipped
+`platform-inapplicable` case whose reason names the host and the declared tags
+instead of registering nothing. Registering nothing was the earlier behaviour,
+and it was indistinguishable from a pass — the runner counts the file itself as
+one test, so `# tests 1 / # pass 1 / # skipped 0` covered both "excluded here"
+and "ran and passed". The shared plan is unaffected: it reads the tags and never
+the host, so the same file is in a macOS plan and out of a Linux one wherever
+either is created.
 TypeScript source execution can use an explicit `--import tsx` after installing
 the repository's existing dependencies.
 
