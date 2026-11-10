@@ -1,4 +1,4 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+﻿// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1052,6 +1052,82 @@ test("SessionStore appends run events losslessly and survives reload", async (co
     retained,
     "replay records survive a Store reload",
   );
+});
+
+test("a cursor read returns only the tail of a run stream, and a typed read only its type", async (context) => {
+  // #1011: both readers used to build every record of the stream before
+  // discarding what the caller did not ask for. The visible contract is
+  // unchanged, so this pins the contract plus the two new read shapes.
+  const tempRoot = resolve(process.cwd(), ".tmp", `run-stream-cursor-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Cursor reads");
+  const session = await store.createSession(project.id, "Cursor", model.id);
+  const run = await store.createSessionRun({
+    prompt: "Stream a long run",
+    sessionId: session.id,
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+
+  // Thirty deltas with three plan snapshots spread through them: the typed read
+  // has to skip most of the stream, and the cursor read has to return exactly
+  // the records after it.
+  const planSequences: number[] = [];
+  for (let turn = 0; turn < 30; turn += 1) {
+    await store.appendSessionRunEvent(session.id, run.id, { delta: `chunk ${turn}`, type: "assistant.delta" });
+    if (turn % 10 === 4) {
+      const event = await store.appendSessionRunEvent(session.id, run.id, {
+        plan: {
+          agentId: "main",
+          explanation: `step ${turn}`,
+          items: [{ status: "in_progress", step: `work ${turn}` }],
+          toolCallId: `call-${turn}`,
+          turn,
+          updatedAt: "2026-11-10T00:00:00.000Z",
+        },
+        type: "plan.updated",
+      });
+      planSequences.push(event.sequence);
+    }
+  }
+
+  const all = await store.listSessionRunEvents(session.id, run.id);
+  assert.equal(all.length, 33);
+  assert.deepEqual(all.map((record) => record.sequence), Array.from({ length: 33 }, (_, index) => index + 1));
+
+  const tail = await store.listSessionRunEvents(session.id, run.id, 29);
+  assert.deepEqual(tail.map((record) => record.sequence), [30, 31, 32, 33], "only records after the cursor");
+  assert.deepEqual(tail, all.slice(29), "the tail is identical to the matching slice of the full read");
+
+  assert.deepEqual(await store.listSessionRunEvents(session.id, run.id, 33), [], "a cursor at the end returns nothing");
+
+  const plans = await store.listRunStreamEventsOfType(session.id, run.id, "main", "plan.updated");
+  assert.deepEqual(plans.map((record) => record.sequence), planSequences);
+  assert.deepEqual(plans, all.filter((record) => record.event.type === "plan.updated"),
+    "the typed read returns the same envelopes as the full read");
+  assert.deepEqual(await store.listRunStreamEventsOfType(session.id, run.id, "main", "run.history.truncated"), []);
+
+  // A non-main stream takes the same path and keeps the same envelope.
+  await store.appendRunStreamEvent(session.id, run.id, "tool-call-1", { trace: { id: "call-1", name: "run_shell", status: "running" }, type: "tool.started" });
+  await store.appendRunStreamEvent(session.id, run.id, "tool-call-1", { trace: { id: "call-1", name: "run_shell", status: "completed" }, type: "tool.completed" });
+  const toolCompleted = await store.listRunStreamEventsOfType(session.id, run.id, "tool-call-1", "tool.completed");
+  assert.equal(toolCompleted.length, 1);
+  assert.equal(toolCompleted[0]?.event.type, "tool.completed");
+
+  // The package export keeps its contract: every stream, every event, ascending.
+  const exported = await store.exportRunStreams(session.id, run.id);
+  const main = exported.find((stream) => stream.streamId === "main");
+  assert.deepEqual(main?.events, all, "the exported main stream is the full ordered history");
+  assert.ok(exported.some((stream) => stream.streamId === "tool-call-1" && stream.events.length === 2));
 });
 
 test("SessionStore serializes concurrent model usage writes without losing records", async (context) => {
@@ -2532,14 +2608,14 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
 });
 
 test("SessionStore tolerates a legacy neo4jBolt key without wedging boot", () => {
-  // Regression: a catalog row written before the Bolt→HTTP rename carries a
+  // Regression: a catalog row written before the Bolt鈫扝TTP rename carries a
   // `neo4jBolt` key (and no `neo4jHttp`). normalizeMemoryGraphSettings must
   // drop the unknown key silently (not throw "Unknown memory-graph setting")
   // so the API still boots; the current `neo4jHttp` field falls back to its
   // default until re-configured in the UI. The stale bolt value is NOT used.
   const settings = normalizeMemoryGraphSettings({
     enabled: true,
-    neo4jBolt: "bolt://127.0.0.1:7687",  // legacy key — must be ignored
+    neo4jBolt: "bolt://127.0.0.1:7687",  // legacy key 鈥?must be ignored
     neo4jUser: "graph",
   });
   assert.equal(settings.enabled, true);
@@ -2552,7 +2628,7 @@ test("SessionStore seeds the memory-graph password from env on first load only",
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
-  // First load with an env password seed → store picks it up.
+  // First load with an env password seed 鈫?store picks it up.
   const seeded = new SessionStore(tempRoot, undefined, undefined, "env-seed-password");
   await seeded.load();
   assert.equal(seeded.getMemoryGraphSettings().hasNeo4jPassword, true);
@@ -2562,7 +2638,7 @@ test("SessionStore seeds the memory-graph password from env on first load only",
   assert.equal(seeded.getMemoryGraphSettings().backend, "neo4j");
 
   // Second load, env seed removed (simulating the user migrating to the UI):
-  // the store retains the previously-seeded password — env is one-time only.
+  // the store retains the previously-seeded password 鈥?env is one-time only.
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
   assert.equal(reopened.getMemoryGraphSettings().hasNeo4jPassword, true);
@@ -2924,8 +3000,8 @@ test("SessionStore persists project description edits and clears without changin
   const original = structuredClone(project);
   assert.equal(project.description, "Original research");
 
-  const updated = await store.updateProject(project.id, { description: "  Updated RNA-seq note\n肿瘤与正常样本  " });
-  assert.deepEqual(updated, { ...original, description: "Updated RNA-seq note\n肿瘤与正常样本" });
+  const updated = await store.updateProject(project.id, { description: "  Updated RNA-seq note\n鑲跨槫涓庢甯告牱鏈? " });
+  assert.deepEqual(updated, { ...original, description: "Updated RNA-seq note\n鑲跨槫涓庢甯告牱鏈? });
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
   assert.deepEqual(reopened.getProject(project.id), updated);
@@ -2950,7 +3026,7 @@ test("SessionStore validates project description before mutation and shares crea
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const store = new SessionStore(tempRoot);
   await store.load();
-  const maxDescription = "研".repeat(2000);
+  const maxDescription = "鐮?.repeat(2000);
   const project = await store.createProject("Limit project", {}, [], undefined, `  ${maxDescription}  `);
   assert.equal(project.description, maxDescription);
   assert.equal((await store.updateProject(project.id, { description: `  ${maxDescription}  ` })).description, maxDescription);
@@ -4102,8 +4178,8 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
 // Regression coverage: [evidence1]/[artifact1] alias tokens in a final assistant
 // report must not render as plain text in the conversation transcript. The
 // report Artifact version already carries the chip references (drained from
-// declare_claim), but the assistant message did not — so the message-render
-// path (used when a run has no replayable timeline) had no alias→node map and
+// declare_claim), but the assistant message did not 鈥?so the message-render
+// path (used when a run has no replayable timeline) had no alias鈫抧ode map and
 // left tokens as text. These tests pin the store helpers the run calls to
 // mirror the report's references onto the message.
 async function seedReportSession() {
@@ -4145,7 +4221,7 @@ test("latestReportReferences returns the chip references on the newest report ve
   );
   // Non-destructive: a second read still returns the full list.
   assert.equal(store.latestReportReferences(session.id).length, reportRefs.length);
-  // No report version → empty, never undefined.
+  // No report version 鈫?empty, never undefined.
   const bareStore = new SessionStore(resolve(tempRoot, "bare"));
   bareStore.setAvailableSkillIds([]);
   await bareStore.load();
@@ -4352,7 +4428,7 @@ test("model providers: custom provider persistence and token-optional runs", asy
     apiProtocol: "openai-chat-completions",
     apiVariant: "qwen",
     baseUrl: "http://127.0.0.1:8000/v1",
-    name: "本地网关",
+    name: "鏈湴缃戝叧",
     tokenOptional: true,
   });
   assert.equal(custom.presetId, undefined);
@@ -4363,7 +4439,7 @@ test("model providers: custom provider persistence and token-optional runs", asy
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
   const reProvider = reopened.listProviders()[0]!;
-  assert.equal(reProvider.name, "本地网关");
+  assert.equal(reProvider.name, "鏈湴缃戝叧");
   assert.equal(reProvider.tokenOptional, true);
   assert.equal(reProvider.modelDiscovery, "openai-models",
     "every provider asks its own endpoint for the model list");
@@ -4387,10 +4463,10 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
     apiVariant: "deepseek",
     baseUrl: "https://api.example/v1",
     model: "deepseek-v4-pro",
-    name: "示例模型",
+    name: "绀轰緥妯″瀷",
   });
   const project = await store.createProject("thinking");
-  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+  const session = await store.createSession(project.id, "浼氳瘽", { modelId: model.id });
 
   await store.replaceSessionSettings(session.id, {
     modelId: model.id,
@@ -4419,7 +4495,7 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
     /thinkingEffort must be/,
   );
 
-  // Clearing the override falls back to unset — the profile default applies.
+  // Clearing the override falls back to unset 鈥?the profile default applies.
   await store.replaceSessionSettings(session.id, { modelId: model.id });
   const cleared = store.getSessionSettings(session.id);
   assert.equal(cleared.effective.thinkingMode, undefined);
@@ -4434,17 +4510,17 @@ test("a Session reports its model's thinking choices and resolves the Reviewer e
   const store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
-    apiToken: "tok", apiVariant: "deepseek", baseUrl: "https://api.example/v1", model: "deepseek-v4-pro", name: "示例模型",
+    apiToken: "tok", apiVariant: "deepseek", baseUrl: "https://api.example/v1", model: "deepseek-v4-pro", name: "绀轰緥妯″瀷",
   });
   const plain = await store.createModel({
     apiToken: "tok", apiVariant: "openai", baseUrl: "https://api.example/v1", model: "plain-chat", name: "Plain",
   });
   const project = await store.createProject("reviewer-effort");
-  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+  const session = await store.createSession(project.id, "浼氳瘽", { modelId: model.id });
 
   // The CLI checks --effort against these before writing anything.
   assert.deepEqual(store.getSessionThinkingControls(session.id), {
-    efforts: ["high", "max"], modelId: model.id, modelName: "示例模型", modes: ["auto", "enabled", "disabled"], supported: true,
+    efforts: ["high", "max"], modelId: model.id, modelName: "绀轰緥妯″瀷", modes: ["auto", "enabled", "disabled"], supported: true,
   });
   await store.updateSession(session.id, { modelId: plain.id });
   assert.deepEqual(store.getSessionThinkingControls(session.id), {
@@ -4981,7 +5057,7 @@ test("a catalog that stored the removed catalog-only mode is migrated to asking 
         createdAt: now,
         id: "provider-zhipu",
         modelDiscovery: "manual",
-        name: "智谱 GLM",
+        name: "鏅鸿氨 GLM",
         presetId: "zhipu",
         proxyPolicy: "inherit",
         updatedAt: now,
@@ -5379,7 +5455,7 @@ test("the recent-sessions Project is created once, hidden from user listings, an
   await assert.rejects(store.deleteProject(inbox.id, inbox.id), conflict);
   assert.ok(store.getProject(inbox.id));
 
-  // 设置 › 远程 configures whichever Project the open Session belongs to, so
+  // 璁剧疆 鈥?杩滅▼ configures whichever Project the open Session belongs to, so
   // the inbox's runner allowlist has to stay writable.
   assert.deepEqual((await store.updateProject(inbox.id, { runnerIds: ["local"] })).runnerIds, ["local"]);
 
@@ -5419,7 +5495,7 @@ test("an assistant message does not name an untitled Session", async (context) =
   const project = await store.createProject("Naming project");
   const session = await store.createSession(project.id, "", {}, {}, { allowUnconfiguredModel: true });
 
-  await store.appendMessage(session.id, "assistant", "已启动 Idea Tree 研究。");
+  await store.appendMessage(session.id, "assistant", "宸插惎鍔?Idea Tree 鐮旂┒銆?);
   assert.equal(store.getSession(session.id)?.title, UNTITLED_SESSION_TITLE);
   // A rename is not undone by the next message either.
   await store.updateSession(session.id, { title: "My own name" });
