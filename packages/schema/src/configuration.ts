@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
+export type ConfigurationCapabilityId = "memory.enable" | "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "provider.connection" | "provider.credential" | "provider.remove_credential" | "model.api_identity" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer" | "mcp.metadata" | "mcp.timeout" | "mcp.remove_header" | "mcp.remove_env" | "mcp.header_credential" | "mcp.availability" | "mcp.delete" | "proxy.resources" | "proxy.provider" | "proxy.mcp";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -69,7 +69,26 @@ export type ConfigurationFieldView = {
   | { kind: "multiselect"; value?: string[]; choices: Array<{ id: string; label: string }> }
   | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
 );
+export type ConfigurationSettingsDestination = "models" | "timeouts" | "mcp" | "proxy";
+export interface ConfigurationSettingsConfirmationInput {
+  revision: number;
+  stateVersion: number;
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+}
+/** A user report, never evidence that the adapter wrote or verified settings. */
+export interface ConfigurationSettingsConfirmationReceipt {
+  destination: ConfigurationSettingsDestination;
+  completed: boolean;
+  source: "user";
+  verified: false;
+  configurationWritten: false;
+  confirmedAt: string;
+}
 export interface ConfigurationRequestView {
+  settingsConfirmation?: ConfigurationSettingsConfirmationReceipt;
+  /** Opaque identity of the registered credential field and resource, never its secret. */
+  credentialTargetDigest?: string;
   endpointAuthorization?: ConfigurationEndpointAuthorization;
   /** Missing means the historical v2 apply/dismiss protocol. */
   protocolVersion?: 3;
@@ -85,8 +104,6 @@ export interface ConfigurationRequestView {
   runId?: string;
   revision: number;
   stateVersion: number;
-  /** Server-owned opaque credential target identity; never a secret. */
-  credentialTargetDigest?: string;
   capabilityId: ConfigurationCapabilityId;
   adapterVersion: number;
   schemaVersion: number;
@@ -99,7 +116,7 @@ export interface ConfigurationRequestView {
   verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
   previewDigest?: string;
   activation: {
-    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "requires_restart";
+    mode: "before_first_run" | "same_run" | "next_run" | "next_invocation" | "next_connection" | "requires_restart" | "next_request";
     state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
     effectiveRevision?: string;
   };
@@ -134,12 +151,17 @@ export interface ConfigurationCredentialInput {
 export interface ConfigurationCredentialDraftView { handle: string; expiresAt: string; }
 export interface ConfigurationEndpointAuthorization {
   endpointTarget: string;
+  /** Server-derived recipients shown together for a shared-resource acknowledgement. */
+  destinations?: Array<{ label: string; url: string }>;
   host: string;
   classification: "trusted_preset" | "public_https" | "loopback" | "private_network" | "public_http";
   status: "required" | "confirmed" | "trusted" | "blocked";
   revision: number;
 }
 export interface ConfigurationEndpointConsentInput { revision: number; endpointTarget: string; }
+export function isPublicPlaintextEndpoint(classification: ConfigurationEndpointAuthorization["classification"] | undefined): boolean {
+  return classification === "public_http";
+}
 export interface ConfigurationCapabilityView {
   id: ConfigurationCapabilityId;
   adapterVersion: number;

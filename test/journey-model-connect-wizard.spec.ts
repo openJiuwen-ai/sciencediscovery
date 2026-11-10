@@ -23,7 +23,9 @@ import { requireFirstRunState } from "./helpers/journeys.ts";
 // Static suite metadata is inherited by each framework-expanded journey.
 test.describe("journey-model-connect-wizard.spec", { tag: ["@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
-test.use({ locale: "zh-CN" });
+// Keep the laptop layout explicit: the project device otherwise overrides the
+// global viewport. Real CJK glyphs must fit without scrolling at this size.
+test.use({ locale: "zh-CN", viewport: { width: 1280, height: 720 } });
 
 /**
  * E2E-META
@@ -40,13 +42,14 @@ test.use({ locale: "zh-CN" });
  * Steps:
  *   1. 打开模型注册表：空态下连接模型默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
  *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
- *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
- *   4. 成功路径与重复添加：模型标识留空测通后全量登记该服务商模型；系统首个模型才设全局默认；同一服务商改名换 Key 再连一次得到第二行且默认不变。
- *   5. 保护已有配置：对已有服务商填入坏 Key，本次新建整体回滚，两行已有 Provider 与 Token 未被破坏、默认模型未变。
- *   6. 主区手选：不开高级配置即可获取模型列表（预览不创建服务商）、两项默认全勾、去掉一个后「保存并连接」只登记所选，行显示已添加 1/2。
- *   7. 高级配置手填：「添加模型」展开手动表单，填 ID/名称/上下文后加入列表，「保存并连接」只登记该手填模型，事实随之保存。
- *   8. 注册表内改全局默认任务模型，与全局默认值页读写同一项、显示同步。
- *   9. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
+ *   3. 窄屏重新排版：在 390px 下滚动阅读费用同意说明与完整操作按钮，再返回笔记本视口继续配置。
+ *   4. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
+ *   5. 成功路径与重复添加：模型标识留空测通后全量登记该服务商模型；系统首个模型才设全局默认；同一服务商改名换 Key 再连一次得到第二行且默认不变。
+ *   6. 保护已有配置：对已有服务商填入坏 Key，本次新建整体回滚，两行已有 Provider 与 Token 未被破坏、默认模型未变。
+ *   7. 主区手选：不开高级配置即可获取模型列表（预览不创建服务商）、两项默认全勾、去掉一个后「保存并连接」只登记所选，行显示已添加 1/2。
+ *   8. 高级配置手填：「添加模型」展开手动表单，填 ID/名称/上下文后加入列表，「保存并连接」只登记该手填模型，事实随之保存。
+ *   9. 注册表内改全局默认任务模型，与全局默认值页读写同一项、显示同步。
+ *   10. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
  * LLM: none — 使用旅程自带的本地 HTTP stub，无外部调用。
@@ -222,14 +225,16 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(keyInput).toBeVisible();
         await expect(submitBtn).toBeVisible();
         await expect(manualBtn).toBeVisible();
-
+        await page.evaluate(() => document.fonts.ready);
         const footerBox = await dialog.locator(".system-config-footer").boundingBox();
-        const submitBox = await submitBtn.boundingBox();
-        const keyBox = await keyInput.boundingBox();
-        if (footerBox && submitBox && keyBox) {
-          expect(submitBox.y + submitBox.height).toBeLessThan(footerBox.y);
-          expect(keyBox.y + keyBox.height).toBeLessThan(footerBox.y);
+        expect(footerBox).not.toBeNull();
+        for (const control of [keyInput, submitBtn, manualBtn, wizardSection.locator(".wizard-probe-consent"), wizardSection.locator(".wizard-key-link")]) {
+          const box = await control.boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.y + box!.height).toBeLessThan(footerBox!.y);
+          await expect(control).toBeInViewport({ ratio: 1 });
         }
+        expect(await dialog.locator(".settings-group-detail").evaluate(element => element.scrollTop)).toBe(0);
       },
     );
 
@@ -274,6 +279,43 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(keyLink).toContainText("前往 智谱 GLM 获取 API Key");
       },
     );
+
+    await journey.step(
+      "窄屏保留完整费用说明与可达操作",
+      "390px 下说明与按钮正常换行，可滚动阅读完整费用同意说明并访问保存与高级配置，页面不横向溢出。",
+      async () => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.evaluate(() => document.fonts.ready);
+        const wizardSection = page.locator(".model-connect-wizard");
+        const revealForReading = async (selector: string) => {
+          const target = wizardSection.locator(selector);
+          const before = await target.boundingBox();
+          // Nearest-edge scrolling can leave a fractional CSS pixel clipped
+          // after scrollTop rounding. Read in the middle of the scrollport;
+          // keep the full-visibility assertion rather than relaxing its ratio.
+          await target.evaluate(element => element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }));
+          journey.note(`390px ${selector}: ${JSON.stringify({
+            before, after: await target.boundingBox(),
+            scrollport: await page.locator(".settings-group-detail").boundingBox(),
+            footer: await page.locator(".system-config-footer").boundingBox(),
+            scrollTop: await page.locator(".settings-group-detail").evaluate(element => element.scrollTop),
+          })}`);
+        };
+        const consent = wizardSection.locator(".wizard-probe-consent");
+        await revealForReading(".wizard-probe-consent");
+        await expect(consent).toBeInViewport({ ratio: 1 });
+        await expect(consent).toContainText("我同意发送一次");
+        await consent.locator("input").click({ trial: true });
+        await revealForReading(".wizard-actions");
+        await expect(wizardSection.locator(".wizard-submit-button")).toBeInViewport({ ratio: 1 });
+        await expect(wizardSection.getByRole("button", { name: "高级配置" })).toBeInViewport({ ratio: 1 });
+        await wizardSection.getByRole("button", { name: "高级配置" }).click({ trial: true });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      },
+    );
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.locator(".settings-group-detail").evaluate(element => element.scrollTo(0, 0));
+    await page.evaluate(() => document.fonts.ready);
 
     await journey.step(
       "失败路径：测试坏 Key，验证可读报错、输入保留、临时对象回滚与默认模型不变",

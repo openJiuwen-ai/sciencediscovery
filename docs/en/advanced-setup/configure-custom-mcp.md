@@ -90,6 +90,14 @@ Enable the MCP in the target Session's connector selection. Global server enable
 
 The Agent decides whether a task needs a tool, so selection does not force a call on every message. Manual Inspector execution does not change the Session's connector selection or authorize its Agent to use every tool.
 
+## Rollback to an older build
+
+An ordinary save that does not record a configuration operation leaves `<data-dir>/custom-mcp-servers.enc` as a plain map of `custom-<12 hex>` server entries. Older builds can read that file.
+
+The first journaled MCP settings change rewrites the file as an encrypted v2 envelope (`sciencediscovery-custom-mcp-v2`). The first deletion rewrites it as v3 (`sciencediscovery-custom-mcp-v3`). After that first deletion the store keeps the newer format permanently, even when no deletion is still pending. Older builds cannot read either envelope: loading the file fails and the API does not start.
+
+There is no automatic downgrade. To run an older build again, restore the pre-upgrade `custom-mcp-servers.enc` file, or start from an empty store and add the servers again.
+
 ## Troubleshooting
 
 | Symptom | Check |

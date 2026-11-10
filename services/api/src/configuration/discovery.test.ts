@@ -52,8 +52,9 @@ test("CFG-Q02: exact PubMed search returns relevant actual readiness without glo
   assert.doesNotMatch(found.raw, /do-not-project-secret|127\.0\.0\.1|arxiv|enabledSkillIds|settingsInventory|providerApiKeys/);
   assert.deepEqual(h.store.getSessionSettings(h.session.id).overrides, before);
   assert.equal(h.framework.service.list(h.session.id).length, 0);
-  const unsupported = await h.query({ action: "search", query: "proxy" });
-  assert.ok(unsupported.items.some((item: { domain: string; available: boolean }) => item.domain === "proxy" && !item.available));
+  const proxies = await h.query({ action: "search", query: "proxy" });
+  assert.ok(proxies.items.some((item: { capabilityId?: string; available: boolean }) => item.capabilityId === "proxy.resources" && item.available));
+  assert.ok(!proxies.items.some((item: { capabilityId: string }) => item.capabilityId === "proxy.default"));
 });
 test("CFG-Q02: task words match literature and ignore ASCII substrings", async context => {
   const h = await fixture(context);
@@ -132,4 +133,14 @@ test("CFG-Q03: Idea Tree current values expose only supported runtime controls",
   assert.equal(value.current.maxTokensPerCall, saved.maxTokensPerCall);
   assert.equal(value.current.maxDepth, saved.maxDepth);
   assert.equal(value.current.maxNodes, saved.maxNodes);
+});
+
+test("CFG-Q02: deferred Neo4j credentials are not discoverable or describable", async context => {
+  const h = await fixture(context);
+  for (const query of ["neo4j password", "记忆图谱密码"]) {
+    const found = await h.query({ action: "search", query });
+    assert.ok(found.items.every((item: { capabilityId?: string }) => item.capabilityId !== "memory.credential"));
+  }
+  assert.equal(h.framework.service.registry.lookup("memory.credential"), undefined);
+  assert.throws(() => h.framework.service.registry.get("memory.credential"), { code: "CONFIGURATION_CAPABILITY_UNAVAILABLE" });
 });

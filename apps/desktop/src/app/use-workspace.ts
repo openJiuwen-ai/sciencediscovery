@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DesktopConfigurationRequest } from "../api/configuration.js";
 
 import { artifactName } from "./artifact-labels.js";
 import {
@@ -221,6 +222,8 @@ export interface WorkspaceActions {
   renameSession: (session: Session, title: string) => Promise<void>;
   /** Re-read the model catalog after the wizard or settings changed it. */
   refreshCatalog: () => Promise<void>;
+  /** Reconcile a saved card and follow its server-created continuation. */
+  refreshConfiguration: (request: DesktopConfigurationRequest) => void;
   /** Re-read session rows after research import, continuation or branching. */
   refreshSessions: () => Promise<void>;
   /** Take one card out of the composer. The file stays in the workspace: the
@@ -331,6 +334,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [selectedModelId, setSelectedModelId] = useState<string>();
   const [run, setRun] = useState<RunStreamState>(emptyRunStream);
   const [running, setRunning] = useState(false);
+  const pendingConfigurationRefresh = useRef<DesktopConfigurationRequest | undefined>(undefined);
+  const configurationRefreshEpoch = useRef(0);
+  const configurationRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const followedConfigurationRuns = useRef(new Set<string>());
   const [pendingMessage, setPendingMessage] = useState<PendingMessage>();
   const [replays, setReplays] = useState<RunReplay[]>([]);
   const [outputs, setOutputs] = useState<SessionArtifactOutput[]>([]);
@@ -1130,41 +1137,124 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** Follow an already-existing run. `live` marks it as unfinished, which is
    *  what puts the composer into 停止 state. */
   const follow = useCallback(
-    async (target: string, runId: string, live: boolean) => {
+    async (target: string, runId: string, live: boolean, quiet = false) => {
       const controller = new AbortController();
+      const view = viewEpoch.current;
+      let outcome: "completed" | "interrupted" | "cancelled" | "denied" = "interrupted";
       abortRef.current = controller;
       if (live) {
         runningRef.current = true;
         setRunning(true);
       }
       try {
-        await subscribeRunEvents(client, target, runId, 0, applyEvent(target), controller.signal, {
+        const receive = applyEvent(target);
+        await subscribeRunEvents(client, target, runId, 0, (event, sequence) => {
+          if (view !== viewEpoch.current || controller.signal.aborted) return;
+          if (event?.type === "run.status" && isTerminalRunStatus(event.status)) outcome = "completed";
+          receive(event, sequence);
+        }, controller.signal, {
           // One low-key notice for the whole stream, and only when something
           // was actually missing: the run went on, so this is not an error.
           onSkippedFrames: (count) => toast(TEXT.conversation.malformedFrames(count), "info"),
         });
       } catch (reason) {
         if (isAuthFailure(reason)) {
+          outcome = "denied";
           onAuthRejected();
-        } else if (!isAbortError(reason)) {
+        } else if (!isAbortError(reason) && !quiet) {
           toast(TEXT.conversation.streamEnded);
         }
       } finally {
-        if (abortRef.current === controller) abortRef.current = undefined;
+        const ownsWire = abortRef.current === controller;
+        if (ownsWire) abortRef.current = undefined;
         // Leaving the Session aborts this wire but not the wait: by the time
         // the finally lands, `running` and the live run describe whichever
         // Session is on screen. Clearing them here would stop a run this view
         // no longer owns — `clearSession` has already cleared them for the
         // Session being left.
-        if (sessionRef.current === target) {
+        if (ownsWire && view === viewEpoch.current && sessionRef.current === target) {
           runningRef.current = false;
           setRunning(false);
           updateRun(closeRunStream);
         }
       }
+      return controller.signal.aborted ? "cancelled" : outcome;
     },
     [applyEvent, client, onAuthRejected, toast, updateRun],
   );
+
+  /** Saving a card does not send the prompt again. The server owns continuation;
+   * this client only reads its run and follows it, once the previous wire ends. */
+  const refreshConfiguration = useCallback(function retryConfiguration(request: DesktopConfigurationRequest, retry = false): void {
+    const target = request.sessionId;
+    if (target !== sessionRef.current || (!["applied", "dismissed", "cancelled", "expired"].includes(request.state)
+      && !(request.state === "stale" && !("capabilityId" in request))
+      && !("resumption" in request && ["pending", "queued", "started"].includes(request.resumption.state)))) return;
+    clearTimeout(configurationRetryTimer.current);
+    configurationRetryTimer.current = undefined;
+    const epoch = ++configurationRefreshEpoch.current;
+    pendingConfigurationRefresh.current = request;
+    if (request.state === "applied") void refreshModels(true);
+    if (runningRef.current) return;
+    pendingConfigurationRefresh.current = undefined;
+    const view = viewEpoch.current;
+    const sent = sendEpoch.current;
+    const current = () => target === sessionRef.current && view === viewEpoch.current && sent === sendEpoch.current
+      && epoch === configurationRefreshEpoch.current;
+    const scheduleRetry = () => {
+      pendingConfigurationRefresh.current = request;
+      configurationRetryTimer.current = setTimeout(() => {
+        if (!current() || pendingConfigurationRefresh.current !== request) return;
+        configurationRetryTimer.current = undefined;
+        retryConfiguration(request, true);
+      }, 2_000);
+    };
+    void (async () => {
+      try {
+        const [fresh, runs] = await Promise.all([getSession(client, target), listRuns(client, target)]);
+        const batch = await buildReplays(target, runs);
+        if (target !== sessionRef.current || view !== viewEpoch.current || sent !== sendEpoch.current
+          || epoch !== configurationRefreshEpoch.current || runningRef.current) return;
+        rememberBounded(detailsBySession.current, target, fresh);
+        setDetail(fresh);
+        commitReplays(target, batch);
+        resetRun();
+        const live = runs.filter(entry => isActiveRun(entry.status)).at(-1);
+        if (live && !followedConfigurationRuns.current.has(live.id)) {
+          followedConfigurationRuns.current.add(live.id);
+          void follow(target, live.id, true, retry).then(outcome => {
+            if (target !== sessionRef.current || view !== viewEpoch.current || sent !== sendEpoch.current) return;
+            // Deduplicate completed runs, not broken subscriptions. EOF without
+            // a terminal event is also a disconnect, even if fetch succeeded.
+            if (outcome === "interrupted") followedConfigurationRuns.current.delete(live.id);
+            if (!current() || outcome === "cancelled" || outcome === "denied") return;
+            if (outcome === "interrupted") scheduleRetry();
+            else {
+              // Reconcile through the same view/send/refresh guards. An older
+              // settle must not erase a newer card's continuation stream.
+              retryConfiguration(request, true);
+              void refreshPanel(target);
+            }
+          });
+        }
+        void refreshSessionLists();
+      } catch (reason) {
+        if (target !== sessionRef.current || view !== viewEpoch.current || sent !== sendEpoch.current
+          || epoch !== configurationRefreshEpoch.current) return;
+        if (!retry || isAuthFailure(reason)) report(reason);
+        if (isAuthFailure(reason)) return;
+        // The card intentionally does not notify on identical poll snapshots.
+        // Retain this refresh separately and retry one read at a time, without
+        // sending a prompt or requiring a new configuration state transition.
+        scheduleRetry();
+      }
+    })();
+  }, [buildReplays, client, commitReplays, follow, refreshModels, refreshPanel, refreshSessionLists, report, resetRun]);
+
+  useEffect(() => {
+    const pending = pendingConfigurationRefresh.current;
+    if (!running && pending && !configurationRetryTimer.current) refreshConfiguration(pending);
+  }, [running, refreshConfiguration]);
 
   // ── sending ──────────────────────────────────────────────────────────────
   const send = useCallback(
@@ -1174,6 +1264,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // Any settle still reading belongs to the turn before this message; it
       // must not write its snapshot — or clear this pending message — over it.
       sendEpoch.current += 1;
+      clearTimeout(configurationRetryTimer.current);
+      configurationRetryTimer.current = undefined;
+      pendingConfigurationRefresh.current = undefined;
+      configurationRefreshEpoch.current += 1;
       // Shown from the press, before the Session exists: the composer clears
       // its box on submit, and a message that disappears for the length of a
       // create request reads as a press that was dropped.
@@ -1273,6 +1367,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   // ── session lifecycle ────────────────────────────────────────────────────
   const clearSession = useCallback(() => {
+    clearTimeout(configurationRetryTimer.current);
+    configurationRetryTimer.current = undefined;
+    pendingConfigurationRefresh.current = undefined;
+    followedConfigurationRuns.current.clear();
+    configurationRefreshEpoch.current += 1;
     abortRef.current?.abort();
     abortRef.current = undefined;
     // The stream whose wire was just cut will not clear these itself — it
@@ -1849,9 +1948,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // that ends the work itself.
   useEffect(
     () => () => {
+      clearTimeout(configurationRetryTimer.current);
+      configurationRetryTimer.current = undefined;
+      pendingConfigurationRefresh.current = undefined;
+      followedConfigurationRuns.current.clear();
+      configurationRefreshEpoch.current += 1;
       abortRef.current?.abort();
     },
-    [],
+    [client],
   );
 
   // What the sidebar lists: the raw listing keeps the drafts as well, because
@@ -1973,6 +2077,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           },
         }),
       refreshCatalog,
+      refreshConfiguration,
       refreshSessions: async () => { await refreshSessionLists(); },
       removeAttachment,
       retryAttachment,
@@ -2005,6 +2110,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       openFile,
       openSession,
       refreshCatalog,
+      refreshConfiguration,
       refreshSessionLists,
       removeAttachment,
       report,

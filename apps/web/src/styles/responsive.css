@@ -121,6 +121,7 @@
   .wizard-manual-item { grid-template-columns: minmax(0, 1fr) auto; }
   .wizard-manual-item em { grid-column: 1; }
   .wizard-footer-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .wizard-fetch-side { flex: 0 1 auto; }
   .wizard-actions { width: 100%; justify-content: flex-end; }
   .config-backdrop { padding: 12px; }
   .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }

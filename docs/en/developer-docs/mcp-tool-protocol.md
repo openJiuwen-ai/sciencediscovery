@@ -92,6 +92,8 @@ Connection state (`untested / ready / error / disabled`) is separate from OAuth 
 
 Configuration is encrypted in `custom-mcp-servers.enc` in the data directory; OAuth credentials are encrypted in `mcp-oauth.enc`, using the existing `model-secrets.key`. Writes use queues, temporary files, and rename, with file creation mode `0600`. This protects stored data at rest, not against an administrator controlling the backend host.
 
+Until a configuration operation is recorded, the file stays a plain map of server entries, which older builds can read. The first journaled settings change stores a `sciencediscovery-custom-mcp-v2` envelope, and the first deletion stores `sciencediscovery-custom-mcp-v3`. After that first deletion the newer format is permanent, including when no deletion is pending. Older builds cannot read either envelope and will not start while the upgraded file is present. There is no automatic downgrade: restore the pre-upgrade `custom-mcp-servers.enc` file, or start from an empty store and add the servers again. One unreadable journal row is ignored so the saved servers still load; a row whose operation identity is readable stays fenced and is not applied again. The user-facing rollback steps are in [Configure custom MCP servers](../advanced-setup/configure-custom-mcp.md#rollback-to-an-older-build).
+
 List responses retain env/header keys but replace values with `null`. Saved OAuth Client Secrets are not returned in plaintext either, and access/refresh tokens are not sent to the frontend. The env/header update contract is:
 
 | Submitted value | Persistence meaning |

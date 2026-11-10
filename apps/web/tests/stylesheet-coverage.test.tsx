@@ -90,3 +90,17 @@ test("every evolve class in the markup still has a rule in the stylesheet", () =
     + `another wholesale replacement swallowed them: ${missing.join(", ")}`,
   );
 });
+
+test("model wizard copy can shrink beside actions and reset its basis in the narrow column", () => {
+  const settings = readFileSync(join(src, "styles/settings.css"), "utf-8");
+  const responsive = readFileSync(join(src, "styles/responsive.css"), "utf-8");
+  // This guards the sizing chain only. Actual CJK geometry and reachable
+  // controls are checked by journey-model-connect-wizard with real fonts.
+  assert.match(settings, /\.wizard-header-desc\s*\{[^}]*flex:\s*1 1 20rem;[^}]*min-width:\s*0;/);
+  assert.match(settings, /\.wizard-fetch-side\s*\{[^}]*flex:\s*1 1 18rem;[^}]*max-width:\s*100%;/);
+  assert.match(settings, /\.wizard-actions\s*\{[^}]*flex:\s*0 0 auto;/);
+  assert.match(settings, /\.wizard-footer-row\s*\{[^}]*flex-wrap:\s*wrap;[^}]*align-items:\s*flex-start;/);
+  assert.match(responsive, /\.wizard-footer-row\s*\{[^}]*flex-direction:\s*column;/);
+  // A horizontal flex basis must not turn into an 18rem height on phones.
+  assert.match(responsive, /\.wizard-fetch-side\s*\{[^}]*flex:\s*0 1 auto;/);
+});

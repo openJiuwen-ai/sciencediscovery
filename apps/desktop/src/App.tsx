@@ -24,7 +24,7 @@ import {
 import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
-import { getSubagent } from "./api/sessions.js";
+import { cancelRun, getSubagent } from "./api/sessions.js";
 import type {
   ComposerReference,
   PermissionDecision,
@@ -43,6 +43,7 @@ import { useFileDrop } from "./app/use-file-drop.js";
 import { useLanguage } from "./app/use-language.js";
 import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
+import { useConfigurationRequests } from "./app/use-configuration-requests.js";
 import { formatByteLimit } from "./app/upload.js";
 import {
   composeEvolveMessage,
@@ -591,7 +592,15 @@ export function App({ initialToken }: Props) {
    *  empty transcript: the composer sits centred with the wordmark, rather
    *  than pinned to the bottom of a page with nothing above it. A run that is
    *  still going keeps the transcript, even before its first event lands. */
-  const landing = !state.loadingSession && !state.running && isEmptyTranscript(state);
+  // Poll the selected Session even while it still has no messages: an API-
+  // created configuration request must not disappear behind the welcome page.
+  const configuration = useConfigurationRequests({
+    client, sessionId: state.detail?.id, active: state.running,
+    refreshKey: `${state.detail?.updatedAt ?? ""}:${state.detail?.messages.map(message => message.id).join(",") ?? ""}:${state.run.status ?? ""}:${state.run.turns.flatMap(turn => turn.tools.map(tool => `${tool.id}:${tool.trace.status}`)).join(",")}`,
+    onChange: actions.refreshConfiguration,
+  });
+  const landing = !state.loadingSession && !state.running && isEmptyTranscript(state)
+    && !configuration.requests.length && !configuration.legacyRequests.length && !configuration.loading && !configuration.error;
 
   useEffect(() => {
     pageRef.current = { landing, running: state.running };
@@ -996,8 +1005,12 @@ export function App({ initialToken }: Props) {
           ) : (
             <>
               <Conversation
+                onOpenConfigurationSettings={openSettings}
                 client={client}
                 detail={state.detail}
+                configuration={configuration}
+                onConfigurationChange={actions.refreshConfiguration}
+                configurationReadOnly={isEvidenceSessionReadOnly(state.detail) || state.detail?.archivedAt !== undefined}
                 // A search keeps running after the turn that started it, so its
                 // card is the last thing the conversation produced. It draws
                 // nothing at all for a session that has no searches.

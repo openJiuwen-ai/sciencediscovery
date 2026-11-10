@@ -23,6 +23,15 @@
 import type { Text } from "./zh.js";
 
 export const EN: Text = {
+  configurationLegacy: {
+    title: "Enable connector", awaiting: "Awaiting confirmation", change: "Change", scope: "Scope", session: "This session only",
+    continuation: "Original task", noTask: "No task was submitted", recorded: "Continuation recorded by the server", serverOwned: "Continuation is managed by the server",
+    enable: (name: string) => `Enable ${name}`, userReason: (name: string) => `You requested access to ${name}.`, taskReason: (name: string) => `The original task requested ${name}.`,
+    confirm: "Confirm and enable", decline: "Not now", saving: "Saving…", saved: "Saved", dismissed: "Not configured", stale: "Request out of date",
+    dismissedDetail: "This connector was not enabled by this request.", staleDetail: "The settings or original task changed. This request cannot be applied.",
+    countdown: (seconds: number) => `Previously authorized automatic configuration is due in ${seconds}s.`, due: "Waiting for the server to review the previously authorized automatic change.",
+    waitRun: "Wait for the current task to reach a safe pause before deciding.", failed: "The decision could not be confirmed. Refresh its status before trying again.", refresh: "Refresh status",
+  },
   researchPackage: {
     continueUnavailable: "This imported record is not fully restored and cannot be continued. Check the import omissions, restore missing services and import again.", sourceUnavailable: "The conversation or its project no longer exists. Refresh the session list and try again.",
     projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.", necessaryContents: "Conversation · Current files and artifacts · Dependencies", completeContents: "Conversation · File and artifact versions · Research history",
@@ -172,10 +181,13 @@ export const EN: Text = {
   },
 
   conversation: {
+    configurationRefreshFailed: "Configuration requests could not refresh. The displayed state may be out of date; retry before confirming.",
+    retryConfiguration: "Retry",
     copyAnswer: "Copy answer",
     copied: "Copied",
     notices: {
       timeout_notice: "Timeout",
+      configuration_notice: "Configuration update",
     },
     cancelledReason: "The run was cancelled",
     thinking: "Reasoning",

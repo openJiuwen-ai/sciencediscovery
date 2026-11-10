@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
+import type { ConfigurationSettingsConfirmationInput, ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
   ConfigurationRequestView, SessionRun } from "@sciencediscovery/schema";
 import type { ConfigurationWaitOwner } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
@@ -12,6 +12,19 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createMemoryEnableAdapter } from "./memory-enable-adapter.js";
+import { createProviderKeyRemovalAdapter } from "./provider-key-removal-adapter.js";
+import { createProviderCredentialAdapter } from "./provider-credential-adapter.js";
+import { createProviderConnectionAdapter } from "./provider-connection-adapter.js";
+import { createModelApiIdentityAdapter } from "./model-api-identity-adapter.js";
+import { createMcpEnvironmentRemovalAdapter, type McpEnvironmentRemovalPort } from "./mcp-env-removal-adapter.js";
+import { createMcpHeaderRemovalAdapter, type McpHeaderRemovalPort } from "./mcp-header-removal-adapter.js";
+import { createMcpAvailabilityAdapter, type McpAvailabilityPort } from "./mcp-availability-adapter.js";
+import { createMcpTimeoutAdapter, type McpTimeoutPort } from "./mcp-timeout-adapter.js";
+import { createMcpMetadataAdapter, type McpMetadataPort } from "./mcp-metadata-adapter.js";
+import { createProxyResourceAdapter } from "./proxy-resource-adapter.js";
+import { createProviderProxyAdapter } from "./provider-proxy-adapter.js";
+import { createMcpProxyAdapter } from "./mcp-proxy-adapter.js";
 import { createWebCredentialAdapter } from "./web-credential-adapter.js";
 import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
@@ -20,6 +33,7 @@ import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
+import { ConfigurationExternalCommitCoordinator } from "./external-commit.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
 import { randomUUID } from "node:crypto";
@@ -30,7 +44,17 @@ import { CONFIGURATION_PENDING_STATES, configurationDecisionReady } from "./inte
 import { ModelDestinationAuthorizer } from "./model-destination.js";
 import type { ConfigurationConnectorRegistration } from "./connector-directory.js";
 
+import { createMcpDeletionAdapter, type McpDeletionPort } from "./mcp-delete-adapter.js";
+import { createMcpHeaderCredentialAdapter, type McpHeaderCredentialPort } from "./mcp-header-credential-adapter.js";
+
 export interface ConfigurationFrameworkOptions {
+  mcpDeletion?: McpDeletionPort;
+  mcpHeaderCredential?: McpHeaderCredentialPort;
+  mcpMetadata?: McpMetadataPort;
+  mcpTimeout?: McpTimeoutPort;
+  mcpHeaderRemoval?: McpHeaderRemovalPort;
+  mcpEnvironmentRemoval?: McpEnvironmentRemovalPort;
+  mcpAvailability?: McpAvailabilityPort;
   connectors?(sessionId: string): readonly ConfigurationConnectorRegistration[];
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
   nativeExecutor: boolean;
@@ -45,7 +69,7 @@ export function configurationFramework(store: SessionStore, options?: Configurat
   if (!current) {
     current = new ConversationalConfigurationFramework(store, options ?? { connector: () => undefined, nativeExecutor: false });
     frameworks.set(store, current);
-  } else if (options) current.options = options;
+  } else if (options) current.configure(options);
   return current;
 }
 
@@ -118,7 +142,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createProxyResourceAdapter(store), createProviderProxyAdapter(store), createMcpProxyAdapter(store), createMemoryEnableAdapter(store), createProviderConnectionAdapter(store, this.destinations), createProviderCredentialAdapter(store, this.credentials, this.destinations), createProviderKeyRemovalAdapter(store), createModelApiIdentityAdapter(store, this.destinations), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -160,7 +184,8 @@ export class ConversationalConfigurationFramework {
         },
         resolvePreviewCredential: input => {
           try {
-            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
+            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: this.credentialField(input.sessionId, input.requestId),
+              normalization: this.credentialNormalization(input.sessionId, input.requestId) });
             return input.credentialHandle;
           } catch (error) {
             if (!(error instanceof Error) || error.message !== "CREDENTIAL_DRAFT_EXPIRED") throw error;
@@ -176,11 +201,69 @@ export class ConversationalConfigurationFramework {
           }
           if (change.credentialHandle) this.credentials.rebind(change.credentialHandle, {
             sessionId: change.sessionId, requestId: change.requestId, revision: change.fromRevision,
-            target: change.oldTarget, fieldId: "apiToken",
+            target: change.oldTarget, fieldId: this.credentialField(change.sessionId, change.requestId), normalization: this.credentialNormalization(change.sessionId, change.requestId),
           }, change.toRevision);
           else if (change.oldTarget !== change.newTarget) this.credentials.clearRequest(change.requestId);
         },
       } });
+    this.attachMcpMetadata();
+  }
+
+  configure(options: ConfigurationFrameworkOptions): void {
+    this.options = { ...options, mcpHeaderCredential: options.mcpHeaderCredential ?? this.options.mcpHeaderCredential, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval, mcpEnvironmentRemoval: options.mcpEnvironmentRemoval ?? this.options.mcpEnvironmentRemoval, mcpAvailability: options.mcpAvailability ?? this.options.mcpAvailability, mcpDeletion: options.mcpDeletion ?? this.options.mcpDeletion };
+    this.attachMcpMetadata();
+  }
+
+  private attachMcpMetadata(): void {
+    const headersCredential = this.options.mcpHeaderCredential;
+    if (headersCredential && !this.service.registry.list().some(adapter => adapter.id === "mcp.header_credential")) {
+      this.store.setConfigurationMcpHeaderCredentialSource(target => headersCredential.configurationHeaderCredential(target));
+      this.service.registry.register(createMcpHeaderCredentialAdapter(headersCredential, this.credentials, context => {
+        const record = this.repository.get(context.requestId, context.sessionId);
+        if (!record || record.view.revision !== context.revision) { throw new ConfigurationError("STALE_ENDPOINT_CONSENT", "Review the current saved MCP recipient", 409, "serverId"); }
+        this.destinations.assert(record, true);
+      }));
+    }
+    const deletion = this.options.mcpDeletion;
+    if (deletion && !this.service.registry.list().some(adapter => adapter.id === "mcp.delete")) {
+      this.store.setConfigurationMcpDeletionSource(id => deletion.configurationDeletion(id));
+      this.service.registry.register(createMcpDeletionAdapter(deletion));
+    }
+    const environment = this.options.mcpEnvironmentRemoval;
+    if (environment && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_env")) {
+      this.store.setConfigurationMcpEnvironmentRemovalSource(target => environment.configurationEnvironmentRemoval(target));
+      this.service.registry.register(createMcpEnvironmentRemovalAdapter(environment));
+    }
+    const headers = this.options.mcpHeaderRemoval;
+    if (headers && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_header")) {
+      this.store.setConfigurationMcpHeaderRemovalSource(target => headers.configurationHeaderRemoval(target));
+      this.service.registry.register(createMcpHeaderRemovalAdapter(headers));
+    }
+    const availability = this.options.mcpAvailability;
+    if (availability && !this.service.registry.list().some(adapter => adapter.id === "mcp.availability")) {
+      this.store.setConfigurationMcpAvailabilitySource(id => availability.configurationMetadata(id));
+      this.service.registry.register(createMcpAvailabilityAdapter(availability));
+    }
+    const timeout = this.options.mcpTimeout;
+    if (timeout && !this.service.registry.list().some(adapter => adapter.id === "mcp.timeout")) {
+      this.store.setConfigurationMcpTimeoutSource(id => timeout.configurationTimeout(id));
+      this.service.registry.register(createMcpTimeoutAdapter(timeout));
+    }
+    const port = this.options.mcpMetadata;
+    if (!port || this.service.registry.list().some(adapter => adapter.id === "mcp.metadata")) return;
+    // Pin one authority to the framework lifetime; option refreshes cannot move
+    // an already submitted operation into a different authority's journal.
+    this.store.setConfigurationMcpMetadataSource(id => port.configurationMetadata(id));
+    this.service.registry.register(createMcpMetadataAdapter(port));
+  }
+
+  private credentialField(sessionId: string, requestId: string): string {
+    const record = this.repository.get(requestId, sessionId);
+    if (!record) throw new ConfigurationError("CONFIGURATION_REQUEST_NOT_FOUND", "Configuration request not found", 404);
+    const fields = this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialFields;
+    const field = fields?.[0];
+    if (!field || fields?.length !== 1) throw new ConfigurationError("INVALID_CONFIGURATION_CREDENTIAL", "No single registered credential field is available", 400);
+    return field;
   }
 
   private snapshot(sessionId: string, capabilityId: import("@sciencediscovery/schema").ConfigurationCapabilityId, target: string) {
@@ -206,7 +289,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.api_identity" || ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.header_credential", "mcp.availability", "mcp.delete", "provider.connection", "provider.credential", "provider.remove_credential"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
@@ -220,7 +303,7 @@ export class ConversationalConfigurationFramework {
         const baseline = this.snapshot(sessionId, input.capabilityId, target);
         const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
         const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
-          && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
+          && record.view.state === "dismissed" && (record.view.settingsConfirmation || ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? "")));
         if (prior) throw new ConfigurationError("CONFIGURATION_NEED_ALREADY_DECIDED", "This task already received a decision for the same configuration need. Continue using that choice instead of asking again.", 409);
       }
       if (bound?.configurationWait && bound.configurationCheckpoint && this.repository.get(bound.configurationCheckpoint.requestId, sessionId)?.view.state === "expired")
@@ -275,6 +358,11 @@ export class ConversationalConfigurationFramework {
     return this.service.get(sessionId, id);
   }
 
+  private credentialNormalization(sessionId: string, id: string): "trim" | "exact" {
+    const record = this.service.getRecord(sessionId, id);
+    return this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialNormalization ?? "trim";
+  }
+
   async provideCredential(sessionId: string, id: string, input: ConfigurationCredentialInput, key?: string) {
     object(input, ["expectedRevision", "fieldId", "secret"], "credential"); integer(input.expectedRevision, "expectedRevision");
     string(input.fieldId, "fieldId", 100);
@@ -292,7 +380,7 @@ export class ConversationalConfigurationFramework {
       this.destinations.assert(record, true);
       if (record.stopGeneration !== this.store.notifications.generation(sessionId)) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped", 409);
       return this.credentials.provide({ sessionId, requestId: id, revision: input.expectedRevision,
-        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target) }, input.secret, key);
+        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target), normalization: this.credentialNormalization(sessionId, id) }, input.secret, key);
     });
   }
 
@@ -314,6 +402,23 @@ export class ConversationalConfigurationFramework {
       throw new ConfigurationError("CONFIGURATION_AUTO_NOT_AUTHORIZED", "Automatic configuration is not authorized or no longer eligible", 409);
   }
 
+  async confirmSettings(sessionId: string, id: string, input: ConfigurationSettingsConfirmationInput, key?: string): Promise<ConfigurationRequestView> {
+    const prior = this.decisionQueues.get(id) ?? Promise.resolve();
+    const task = prior.catch(() => undefined).then(async () => {
+      await this.reconcileLifecycle(sessionId, id);
+      const record = this.service.getRecord(sessionId, id);
+      if (!this.options.nativeExecutor && record.view.runId && !record.view.settingsConfirmation && !this.liveWaitRunId(sessionId, id))
+        throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting", 409);
+      await this.service.confirmSettings(sessionId, id, input, key);
+      this.credentials.clearRequest(id);
+      await this.settle(sessionId, id);
+      return this.service.get(sessionId, id);
+    });
+    this.decisionQueues.set(id, task);
+    try { return await task; }
+    finally { if (this.decisionQueues.get(id) === task) this.decisionQueues.delete(id); }
+  }
+
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string, source: "user" | "auto" = "user"): Promise<ConfigurationRequestView> {
     const prior = this.decisionQueues.get(id) ?? Promise.resolve();
     const task = prior.catch(() => undefined).then(() => this.decideSerial(sessionId, id, input, key, source));
@@ -329,6 +434,9 @@ export class ConversationalConfigurationFramework {
     await this.reconcileLifecycle(sessionId, id);
     if (source === "auto") this.assertAutoAuthorized(this.service.getRecord(sessionId, id));
     const deciding = this.service.getRecord(sessionId, id);
+    if (input.decision === "apply" && ["provider.connection", "provider.credential"].includes(deciding.view.capabilityId)) this.destinations.assert(deciding, true);
+    if (input.decision === "apply" && deciding.view.capabilityId === "model.api_identity")
+      this.destinations.assert(deciding, this.store.getModel(deciding.target)?.hasApiToken !== false);
     if (!this.options.nativeExecutor && deciding.view.runId && !["applied", "dismissed"].includes(deciding.view.state)
       && !this.liveWaitRunId(sessionId, id))
       throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting; do not replay this proposal", 409);
@@ -346,9 +454,10 @@ export class ConversationalConfigurationFramework {
       }
     });
     const result = await this.service.decide(sessionId, id, input, key);
-    if (result.state === "applied" || result.state === "dismissed") {
-      this.credentials.clearRequest(id);
+    if (result.state === "applied" || result.state === "dismissed" || result.state === "applying") {
+      if (result.state !== "applying") this.credentials.clearRequest(id);
       await this.settle(sessionId, id);
+      if (["applied", "dismissed", "cancelled", "expired"].includes(this.service.get(sessionId, id).state)) this.credentials.clearRequest(id);
     }
     if (result.state === "expired" || result.state === "cancelled") await this.reconcileLifecycle(sessionId, id);
     return this.service.get(sessionId, id);
@@ -423,7 +532,11 @@ export class ConversationalConfigurationFramework {
   }
 
   private async settleSerial(sessionId: string, id: string): Promise<ConfigurationRequestView> {
-    const record = this.service.getRecord(sessionId, id);
+    let record = this.service.getRecord(sessionId, id);
+    if (record.view.state === "applying") {
+      await new ConfigurationExternalCommitCoordinator(this.store, this.repository, this.service.registry).settle(sessionId, id);
+      record = this.service.getRecord(sessionId, id);
+    }
     if (!["applied", "dismissed"].includes(record.view.state)) return this.service.get(sessionId, id);
     const stopped = record.stopGeneration !== this.store.notifications.generation(sessionId) || !this.store.notifications.canWake(sessionId);
     if (stopped && record.view.runId) {

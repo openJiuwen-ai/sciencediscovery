@@ -1,0 +1,407 @@
+{
+  "source": {
+    "repository": "openJiuwen-ai/sciencediscovery",
+    "pullRequest": 773,
+    "commit": "6ad1c2f16060f5a76698abdeb2912d6f283294b7",
+    "normalization": "Generated IDs, timestamps and digests only; full framework proposals, no apply."
+  },
+  "cases": [
+    {
+      "kind": "deleteCollecting",
+      "view": {
+        "protocolVersion": 3,
+        "options": [
+          {
+            "id": "persist",
+            "kind": "persisted_apply",
+            "label": "Apply configuration",
+            "description": "Save the reviewed configuration using its declared scope and activation mode.",
+            "available": true
+          },
+          {
+            "id": "dismiss",
+            "kind": "dismiss",
+            "label": "Not now",
+            "description": "Do not change this configuration.",
+            "available": true
+          }
+        ],
+        "selectedOptionId": "persist",
+        "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "id": "cfg-deleteCollecting",
+        "sessionId": "session",
+        "projectId": "project",
+        "revision": 1,
+        "stateVersion": 1,
+        "capabilityId": "mcp.delete",
+        "adapterVersion": 1,
+        "schemaVersion": 1,
+        "state": "collecting_input",
+        "reason": {
+          "code": "CONFIGURATION_REQUIRED",
+          "message": "A configuration change is required"
+        },
+        "scope": {
+          "kind": "global"
+        },
+        "fields": [
+          {
+            "id": "serverId",
+            "label": "Existing custom MCP server",
+            "required": true,
+            "kind": "enum",
+            "value": "custom-000000000001",
+            "choices": [
+              {
+                "id": "custom-000000000001",
+                "label": "Owned HTTP MCP · http · custom-000000000001"
+              },
+              {
+                "id": "custom-000000000002",
+                "label": "Owned STDIO MCP · stdio · custom-000000000002"
+              }
+            ]
+          },
+          {
+            "id": "confirmDelete",
+            "label": "Delete this shared server and its saved references",
+            "required": true,
+            "kind": "boolean",
+            "value": false
+          }
+        ],
+        "changes": [],
+        "impact": {
+          "resourceLocation": "Encrypted custom MCP configuration and local OAuth/reference stores",
+          "effectiveScope": "Every Global, Project, Session and Specialist reference to this custom server",
+          "message": "Independent manual confirmation required. Delete this custom server, its local OAuth state and saved selection references. Other servers remain. The deletion journal recovers interrupted local cleanup without replaying tools. This action has no automatic undo and does not revoke remote credentials. Saving performs no discovery, MCP/network request or process start/stop. Existing connections or already running work may continue until later ordinary catalog/reconnect cleanup; future calls cannot use this removed server. A bound original configuration wait may continue normally; no old tool/task is replayed."
+        },
+        "verificationPlan": {
+          "targets": [],
+          "actions": [],
+          "maxRequests": 0,
+          "mayCharge": false
+        },
+        "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "activation": {
+          "mode": "next_invocation",
+          "state": "not_requested"
+        },
+        "resumption": {
+          "state": "not_requested"
+        },
+        "allowedActions": [
+          "preview",
+          "dismiss"
+        ],
+        "createdAt": "2026-11-10T00:00:00.000Z",
+        "updatedAt": "2026-11-10T00:00:00.000Z",
+        "expiresAt": "2026-11-10T01:00:00.000Z"
+      }
+    },
+    {
+      "kind": "deleteReady",
+      "view": {
+        "protocolVersion": 3,
+        "options": [
+          {
+            "id": "persist",
+            "kind": "persisted_apply",
+            "label": "Apply configuration",
+            "description": "Save the reviewed configuration using its declared scope and activation mode.",
+            "available": true
+          },
+          {
+            "id": "dismiss",
+            "kind": "dismiss",
+            "label": "Not now",
+            "description": "Do not change this configuration.",
+            "available": true
+          }
+        ],
+        "selectedOptionId": "persist",
+        "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "id": "cfg-deleteReady",
+        "sessionId": "session",
+        "projectId": "project",
+        "revision": 2,
+        "stateVersion": 2,
+        "capabilityId": "mcp.delete",
+        "adapterVersion": 1,
+        "schemaVersion": 1,
+        "state": "awaiting_confirmation",
+        "reason": {
+          "code": "CONFIGURATION_REQUIRED",
+          "message": "A configuration change is required"
+        },
+        "scope": {
+          "kind": "global"
+        },
+        "fields": [
+          {
+            "id": "serverId",
+            "label": "Existing custom MCP server",
+            "required": true,
+            "kind": "enum",
+            "value": "custom-000000000001",
+            "choices": [
+              {
+                "id": "custom-000000000001",
+                "label": "Owned HTTP MCP · http · custom-000000000001"
+              },
+              {
+                "id": "custom-000000000002",
+                "label": "Owned STDIO MCP · stdio · custom-000000000002"
+              }
+            ]
+          },
+          {
+            "id": "confirmDelete",
+            "label": "Delete this shared server and its saved references",
+            "required": true,
+            "kind": "boolean",
+            "value": true
+          }
+        ],
+        "changes": [
+          {
+            "field": "serverId",
+            "before": "Owned HTTP MCP · custom-000000000001",
+            "after": "Deleted, including local OAuth state and saved references; no automatic undo"
+          }
+        ],
+        "impact": {
+          "resourceLocation": "Encrypted custom MCP configuration and local OAuth/reference stores",
+          "effectiveScope": "Every Global, Project, Session and Specialist reference to this custom server",
+          "message": "Independent manual confirmation required. Delete this custom server, its local OAuth state and saved selection references. Other servers remain. The deletion journal recovers interrupted local cleanup without replaying tools. This action has no automatic undo and does not revoke remote credentials. Saving performs no discovery, MCP/network request or process start/stop. Existing connections or already running work may continue until later ordinary catalog/reconnect cleanup; future calls cannot use this removed server. A bound original configuration wait may continue normally; no old tool/task is replayed."
+        },
+        "verificationPlan": {
+          "targets": [],
+          "actions": [],
+          "maxRequests": 0,
+          "mayCharge": false
+        },
+        "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "activation": {
+          "mode": "next_invocation",
+          "state": "not_requested"
+        },
+        "resumption": {
+          "state": "not_requested"
+        },
+        "allowedActions": [
+          "preview",
+          "apply",
+          "dismiss"
+        ],
+        "createdAt": "2026-11-10T00:00:00.000Z",
+        "updatedAt": "2026-11-10T00:00:00.000Z",
+        "expiresAt": "2026-11-10T01:00:00.000Z"
+      }
+    },
+    {
+      "kind": "headerReady",
+      "view": {
+        "protocolVersion": 3,
+        "options": [
+          {
+            "id": "persist",
+            "kind": "persisted_apply",
+            "label": "Apply configuration",
+            "description": "Save the reviewed configuration using its declared scope and activation mode.",
+            "available": true
+          },
+          {
+            "id": "dismiss",
+            "kind": "dismiss",
+            "label": "Not now",
+            "description": "Do not change this configuration.",
+            "available": true
+          }
+        ],
+        "selectedOptionId": "persist",
+        "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "id": "cfg-headerReady",
+        "sessionId": "session",
+        "projectId": "project",
+        "revision": 1,
+        "stateVersion": 1,
+        "capabilityId": "mcp.remove_header",
+        "adapterVersion": 1,
+        "schemaVersion": 1,
+        "state": "awaiting_confirmation",
+        "reason": {
+          "code": "CONFIGURATION_REQUIRED",
+          "message": "A configuration change is required"
+        },
+        "scope": {
+          "kind": "global"
+        },
+        "fields": [
+          {
+            "id": "serverId",
+            "label": "Existing HTTP/SSE custom MCP server",
+            "required": true,
+            "kind": "enum",
+            "value": "custom-000000000001",
+            "choices": [
+              {
+                "id": "custom-000000000001",
+                "label": "Owned HTTP MCP · http · custom-000000000001"
+              }
+            ]
+          },
+          {
+            "id": "headerName",
+            "label": "Saved header name to remove",
+            "required": true,
+            "kind": "enum",
+            "value": "authorization",
+            "choices": [
+              {
+                "id": "authorization",
+                "label": "authorization · 1 stored name(s)"
+              }
+            ]
+          }
+        ],
+        "changes": [
+          {
+            "field": "headerName",
+            "before": "authorization · 1 configured name(s); values hidden",
+            "after": "All case aliases removed; no replacement value"
+          }
+        ],
+        "impact": {
+          "resourceLocation": "Encrypted custom MCP configuration",
+          "effectiveScope": "This shared HTTP/SSE server's saved header-name group",
+          "message": "Remove every stored case alias of this one existing header name. Old values are never shown or sent, and no empty replacement credential is stored. Other headers, OAuth credentials, transport, enabled state, timeout and Session/tool/network permissions remain separate. Saving starts no network request or discovery. Old discovery/tools are invalidated, not certified usable with the changed credentials. Later calls may be unauthenticated or fail; a changed connection may interrupt old in-flight work. Reconnect/testing is a separate action. A bound original configuration wait may continue normally; no old tool/task is replayed."
+        },
+        "verificationPlan": {
+          "targets": [],
+          "actions": [],
+          "maxRequests": 0,
+          "mayCharge": false
+        },
+        "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "activation": {
+          "mode": "next_invocation",
+          "state": "not_requested"
+        },
+        "resumption": {
+          "state": "not_requested"
+        },
+        "allowedActions": [
+          "preview",
+          "apply",
+          "dismiss"
+        ],
+        "createdAt": "2026-11-10T00:00:00.000Z",
+        "updatedAt": "2026-11-10T00:00:00.000Z",
+        "expiresAt": "2026-11-10T01:00:00.000Z"
+      }
+    },
+    {
+      "kind": "envReady",
+      "view": {
+        "protocolVersion": 3,
+        "options": [
+          {
+            "id": "persist",
+            "kind": "persisted_apply",
+            "label": "Apply configuration",
+            "description": "Save the reviewed configuration using its declared scope and activation mode.",
+            "available": true
+          },
+          {
+            "id": "dismiss",
+            "kind": "dismiss",
+            "label": "Not now",
+            "description": "Do not change this configuration.",
+            "available": true
+          }
+        ],
+        "selectedOptionId": "persist",
+        "needKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "id": "cfg-envReady",
+        "sessionId": "session",
+        "projectId": "project",
+        "revision": 1,
+        "stateVersion": 1,
+        "capabilityId": "mcp.remove_env",
+        "adapterVersion": 1,
+        "schemaVersion": 1,
+        "state": "awaiting_confirmation",
+        "reason": {
+          "code": "CONFIGURATION_REQUIRED",
+          "message": "A configuration change is required"
+        },
+        "scope": {
+          "kind": "global"
+        },
+        "fields": [
+          {
+            "id": "serverId",
+            "label": "Existing STDIO custom MCP server",
+            "required": true,
+            "kind": "enum",
+            "value": "custom-000000000002",
+            "choices": [
+              {
+                "id": "custom-000000000002",
+                "label": "Owned STDIO MCP · stdio · custom-000000000002"
+              }
+            ]
+          },
+          {
+            "id": "envName",
+            "label": "Saved environment override to remove",
+            "required": true,
+            "kind": "enum",
+            "value": "OWNED_TOKEN",
+            "choices": [
+              {
+                "id": "OWNED_TOKEN",
+                "label": "OWNED_TOKEN · 1 stored name(s)"
+              }
+            ]
+          }
+        ],
+        "changes": [
+          {
+            "field": "envName",
+            "before": "OWNED_TOKEN · 1 configured name(s); values hidden",
+            "after": "Stored override removed; no replacement value"
+          }
+        ],
+        "impact": {
+          "resourceLocation": "Encrypted custom MCP configuration",
+          "effectiveScope": "This shared STDIO server's saved override · case-sensitive POSIX names",
+          "message": "Remove only this existing standard variable override, including its Windows case aliases when applicable. The launcher does not inherit this name by default. Old values are never shown or sent. Command, arguments, working directory, other environment overrides, timeout, enabled state and Session/tool/network permissions stay unchanged. Saving starts, restarts and stops no process and performs no discovery or network request. Existing child processes keep their launch environment. Later ordinary testing/reconnect may replace the process and interrupt old work. Old discovery/tools are invalidated, not certified usable. This is not external secret revocation. A bound original configuration wait may continue normally; no old tool/task is replayed."
+        },
+        "verificationPlan": {
+          "targets": [],
+          "actions": [],
+          "maxRequests": 0,
+          "mayCharge": false
+        },
+        "previewDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "activation": {
+          "mode": "next_invocation",
+          "state": "not_requested"
+        },
+        "resumption": {
+          "state": "not_requested"
+        },
+        "allowedActions": [
+          "preview",
+          "apply",
+          "dismiss"
+        ],
+        "createdAt": "2026-11-10T00:00:00.000Z",
+        "updatedAt": "2026-11-10T00:00:00.000Z",
+        "expiresAt": "2026-11-10T01:00:00.000Z"
+      }
+    }
+  ]
+}

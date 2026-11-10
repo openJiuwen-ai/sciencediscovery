@@ -9,6 +9,8 @@ export interface ConfigurationCredentialBinding {
   revision: number;
   target: string;
   fieldId: string;
+  /** Trusted adapter policy; never supplied by the credential HTTP payload. */
+  normalization?: "trim" | "exact";
 }
 interface DraftRow { ciphertext: string; expires_at: number; lease_until: number; lease_id: string | null; revoked: number; }
 const TTL = 30 * 60_000;
@@ -31,6 +33,7 @@ export class ConfigurationCredentialBridge {
     const columns = new Set((database.prepare("PRAGMA table_info(configuration_credential_drafts)").all() as unknown as Array<{ name: string }>).map(row => row.name));
     if (!columns.has("lease_id")) database.exec("ALTER TABLE configuration_credential_drafts ADD COLUMN lease_id TEXT");
     if (!columns.has("revoked")) database.exec("ALTER TABLE configuration_credential_drafts ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0");
+    if (!columns.has("normalization")) database.exec("ALTER TABLE configuration_credential_drafts ADD COLUMN normalization TEXT NOT NULL DEFAULT 'trim'");
     database.exec(`CREATE TABLE IF NOT EXISTS configuration_credential_uploads (
       request_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, session_id TEXT NOT NULL,
       payload_ciphertext TEXT NOT NULL, response_json TEXT NOT NULL,
@@ -44,15 +47,16 @@ export class ConfigurationCredentialBridge {
     catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
   private binding(binding: ConfigurationCredentialBinding): void {
-    if (!binding || typeof binding !== "object" || binding.fieldId !== "apiToken" || !Number.isSafeInteger(binding.revision) || binding.revision < 1 ||
+    if (!binding || typeof binding !== "object" || !["apiToken", "proxyUrl"].includes(binding.fieldId) || ![undefined, "trim", "exact"].includes(binding.normalization) || !Number.isSafeInteger(binding.revision) || binding.revision < 1 ||
       [binding.sessionId, binding.requestId, binding.target].some(value => typeof value !== "string" || !value || value.length > 4096)) throw new Error("INVALID_CONFIGURATION_CREDENTIAL");
   }
   provide(binding: ConfigurationCredentialBinding, secret: unknown, key?: string): { handle: string; expiresAt: string } {
     this.binding(binding);
     if (typeof secret !== "string" || !secret.trim() || secret.length > 16_384) throw new Error("INVALID_CONFIGURATION_CREDENTIAL");
     if (key !== undefined && (typeof key !== "string" || !key || key.length > 200)) throw new Error("INVALID_IDEMPOTENCY_KEY");
+    const normalization = binding.normalization ?? "trim", value = normalization === "exact" ? secret : secret.trim();
     const payload = JSON.stringify({ sessionId: binding.sessionId, requestId: binding.requestId, revision: binding.revision,
-      target: binding.target, fieldId: binding.fieldId, secret: secret.trim() });
+      target: binding.target, fieldId: binding.fieldId, secret: value, ...(normalization === "exact" ? { normalization } : {}) });
     const idempotencyContext = `configuration-upload:${binding.requestId}:${key ?? ""}`;
     return this.transaction(() => {
       if (key) {
@@ -69,14 +73,14 @@ export class ConfigurationCredentialBridge {
       const handle = randomUUID(); const timestamp = this.now(); const expiresAt = timestamp + TTL;
       // Encrypt before modifying any previous draft. The surrounding transaction
       // also protects standalone callers from a failed upload/idempotency insert.
-      const ciphertext = this.cipher.encrypt(`configuration-draft:${handle}`, secret.trim());
+      const ciphertext = this.cipher.encrypt(`configuration-draft:${handle}`, value);
       this.database.prepare("UPDATE configuration_credential_drafts SET revoked=1 WHERE session_id=? AND request_id=? AND field_id=?")
         .run(binding.sessionId, binding.requestId, binding.fieldId);
       this.database.prepare("DELETE FROM configuration_credential_drafts WHERE session_id=? AND request_id=? AND field_id=? AND lease_until<=?")
         .run(binding.sessionId, binding.requestId, binding.fieldId, timestamp);
       this.database.prepare(`INSERT INTO configuration_credential_drafts
-        (handle,session_id,request_id,revision,target,field_id,ciphertext,expires_at) VALUES(?,?,?,?,?,?,?,?)`)
-        .run(handle, binding.sessionId, binding.requestId, binding.revision, binding.target, binding.fieldId, ciphertext, expiresAt);
+        (handle,session_id,request_id,revision,target,field_id,ciphertext,expires_at,normalization) VALUES(?,?,?,?,?,?,?,?,?)`)
+        .run(handle, binding.sessionId, binding.requestId, binding.revision, binding.target, binding.fieldId, ciphertext, expiresAt, normalization);
       const response = { handle, expiresAt: new Date(expiresAt).toISOString() };
       if (key) this.database.prepare("INSERT INTO configuration_credential_uploads(request_id,idempotency_key,session_id,payload_ciphertext,response_json) VALUES(?,?,?,?,?)")
         .run(binding.requestId, key, binding.sessionId, this.cipher.encrypt(idempotencyContext, payload), JSON.stringify(response));
@@ -87,8 +91,8 @@ export class ConfigurationCredentialBridge {
     this.binding(binding);
     if (typeof handle !== "string" || handle.length > 200) throw new Error("CREDENTIAL_DRAFT_EXPIRED");
     const row = this.database.prepare(`SELECT ciphertext,expires_at,lease_until,lease_id,revoked FROM configuration_credential_drafts
-      WHERE handle=? AND session_id=? AND request_id=? AND revision=? AND target=? AND field_id=?`)
-      .get(handle, binding.sessionId, binding.requestId, binding.revision, binding.target, binding.fieldId) as DraftRow | undefined;
+      WHERE handle=? AND session_id=? AND request_id=? AND revision=? AND target=? AND field_id=? AND normalization=?`)
+      .get(handle, binding.sessionId, binding.requestId, binding.revision, binding.target, binding.fieldId, binding.normalization ?? "trim") as DraftRow | undefined;
     if (!row || row.revoked || row.expires_at <= this.now()) throw new Error("CREDENTIAL_DRAFT_EXPIRED");
     return row;
   }
@@ -100,8 +104,8 @@ export class ConfigurationCredentialBridge {
     this.binding(binding);
     if (!Number.isSafeInteger(revision) || revision < binding.revision || revision > binding.revision + 1) throw new Error("STALE_CONFIGURATION_CREDENTIAL");
     if (revision === binding.revision) { this.row(handle, binding); return; }
-    const alreadyBound = this.database.prepare("SELECT 1 FROM configuration_credential_drafts WHERE handle=? AND session_id=? AND request_id=? AND revision=? AND target=? AND field_id=? AND expires_at>? AND revoked=0")
-      .get(handle, binding.sessionId, binding.requestId, revision, binding.target, binding.fieldId, this.now());
+    const alreadyBound = this.database.prepare("SELECT 1 FROM configuration_credential_drafts WHERE handle=? AND session_id=? AND request_id=? AND revision=? AND target=? AND field_id=? AND normalization=? AND expires_at>? AND revoked=0")
+      .get(handle, binding.sessionId, binding.requestId, revision, binding.target, binding.fieldId, binding.normalization ?? "trim", this.now());
     if (alreadyBound) return;
     const current = this.row(handle, binding);
     if (current.lease_until > this.now()) throw new Error("CREDENTIAL_DRAFT_BUSY");

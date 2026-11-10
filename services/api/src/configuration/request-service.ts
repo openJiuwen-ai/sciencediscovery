@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { randomUUID } from "node:crypto";
-import type { ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScope } from "@sciencediscovery/schema";
+import type { ConfigurationSettingsConfirmationInput, ConfigurationDecisionInput, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScope } from "@sciencediscovery/schema";
 import type { ConfigurationAdapter, ConfigurationAdapterContext, ConfigurationApplyReceipt, ConfigurationHost, ConfigurationPlan, ConfigurationProposalInput, ConfigurationRecord, ConfigurationSnapshot } from "./types.js";
 import { ConfigurationRepository } from "./repository.js";
 import { ConfigurationRegistry } from "./registry.js";
@@ -140,7 +140,7 @@ export class ConfigurationRequestService {
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) invalid("Verification target cannot contain credentials or query data");
       return url.href;
     });
-    if (!["before_first_run", "same_run", "next_run", "next_request", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
+    if (!["before_first_run", "same_run", "next_run", "next_invocation", "next_connection", "requires_restart", "next_request"].includes(source.activationMode)) invalid("Invalid activation mode");
     const maxRequests = integer(verification.maxRequests, "maxRequests", 0);
     if (maxRequests > 10 || typeof source.ready !== "boolean") invalid("Verification budget exceeds the supported limit");
     return { fields, changes, disposition: source.disposition ?? (source.ready ? "change" : "missing_input"),
@@ -155,6 +155,7 @@ export class ConfigurationRequestService {
       ...(record.view.protocolVersion === 3 ? { protocolVersion: 3, options: record.view.options, selectedOptionId: record.view.selectedOptionId, needKey: record.view.needKey } : {}) });
   }
   private actions(record: ConfigurationRecord): ConfigurationRequestView["allowedActions"] {
+    if (!this.registry.lookup(record.view.capabilityId)) return ["query"];
     const view = record.view;
     if (view.state === "collecting_input" || view.state === "needs_fix" || view.state === "stale" || view.state === "failed") return ["preview", "dismiss"];
     if (view.state === "awaiting_confirmation") return ["preview", "apply", "dismiss"];
@@ -165,10 +166,14 @@ export class ConfigurationRequestService {
   /** Every field below is an explicit whitelist; internal record extensions stay server-only. */
   private project(record: ConfigurationRecord): ConfigurationRequestView {
     const view = record.view;
+    const adapter = this.registry.lookup(view.capabilityId);
     const endpointAuthorization = this.host.projectEndpointAuthorization?.(record);
     return structuredClone({
       ...(view.protocolVersion === 3 ? { protocolVersion: 3 as const, options: normalizeChoices(view.options ?? []), selectedOptionId: view.selectedOptionId, needKey: view.needKey,
         ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
+      ...(view.settingsConfirmation ? { settingsConfirmation: { destination: view.settingsConfirmation.destination,
+        completed: view.settingsConfirmation.completed, source: "user" as const, verified: false as const,
+        configurationWritten: false as const, confirmedAt: view.settingsConfirmation.confirmedAt } } : {}),
       id: view.id, sessionId: view.sessionId, projectId: view.projectId,
       ...(view.runId ? { runId: view.runId } : {}), revision: view.revision, stateVersion: view.stateVersion,
       ...(view.fields.some(field => field.kind === "credential") ? { credentialTargetDigest: digest([view.capabilityId, record.plan.data?.credentialTarget ?? record.target, view.fields.filter(field => field.kind === "credential").map(field => field.id)]) } : {}),
@@ -178,14 +183,15 @@ export class ConfigurationRequestService {
       ...(view.decisionSource ? { decisionSource: view.decisionSource } : {}),
       reason: { code: view.reason.code, message: view.reason.message },
       scope: view.scope.kind === "global" ? { kind: "global" } : { kind: view.scope.kind, id: view.scope.id },
-      fields: normalizeConfigurationFields(view.fields, this.registry.get(view.capabilityId).fieldPolicy),
+      fields: normalizeConfigurationFields(view.fields, adapter?.fieldPolicy),
       changes: view.changes.map(({ field, before, after }) => ({ field, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) })),
       impact: { resourceLocation: view.impact.resourceLocation, effectiveScope: view.impact.effectiveScope, message: view.impact.message },
       verificationPlan: { targets: [...view.verificationPlan.targets], actions: [...view.verificationPlan.actions], maxRequests: view.verificationPlan.maxRequests, mayCharge: view.verificationPlan.mayCharge },
       ...(view.previewDigest ? { previewDigest: view.previewDigest } : {}),
       activation: { mode: view.activation.mode, state: view.activation.state, ...(view.activation.effectiveRevision ? { effectiveRevision: view.activation.effectiveRevision } : {}) },
       resumption: { state: view.resumption.state, ...(view.resumption.runId ? { runId: view.resumption.runId } : {}) },
-      ...(view.error ? { error: { code: view.error.code, message: view.error.message, ...(view.error.field ? { field: view.error.field } : {}), retryable: view.error.retryable } } : {}),
+      ...(!adapter ? { error: { code: "CONFIGURATION_BACKEND_UNAVAILABLE", message: "This capability is unavailable in the current backend. Its historical record remains read-only.", retryable: false } }
+        : view.error ? { error: { code: view.error.code, message: view.error.message, ...(view.error.field ? { field: view.error.field } : {}), retryable: view.error.retryable } } : {}),
       allowedActions: this.actions(record), createdAt: view.createdAt, updatedAt: view.updatedAt,
       ...(view.expiresAt ? { expiresAt: view.expiresAt } : {}),
     });
@@ -202,7 +208,7 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    if (["proxy.mcp", "proxy.provider", "proxy.resources", "mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.header_credential", "mcp.availability", "mcp.delete", "memory.enable", "skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "provider.connection", "provider.credential", "provider.remove_credential", "model.api_identity", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);
@@ -296,6 +302,45 @@ export class ConfigurationRequestService {
     return { sessionId: record.view.sessionId, requestId: record.view.id, revision: record.view.revision, input: record.input, plan: record.plan, snapshot, scope: record.view.scope,
       ...(record.view.runId ? { runId: record.view.runId } : {}), ...(record.view.previewDigest ? { previewDigest: record.view.previewDigest } : {}),
       ...(selectedChoice(record) ? { selectedOption: selectedChoice(record) } : {}), ...(record.credentialHandle ? { credentialHandle: record.credentialHandle } : {}) };
+  }
+  async confirmSettings(sessionId: string, id: string, input: ConfigurationSettingsConfirmationInput, key?: string): Promise<ConfigurationRequestView> {
+    object(input, ["revision", "stateVersion", "destination", "completed"], "settings confirmation");
+    integer(input.revision, "revision"); integer(input.stateVersion, "stateVersion");
+    if (typeof input.completed !== "boolean") invalid("A completed yes/no answer is required");
+    const destinations: Record<string, string[]> = {
+      models: ["model.connect"],
+      timeouts: ["timeouts.configure"],
+      mcp: ["mcp.header_credential", "mcp.metadata", "mcp.timeout", "mcp.delete", "mcp.remove_header", "mcp.remove_env"],
+    };
+    if (typeof input.destination !== "string" || !Object.hasOwn(destinations, input.destination)) invalid("Unknown settings destination");
+    await this.reconcileLifecycle(sessionId, id);
+    const scope = `${sessionId}:${id}:settings-confirmation`;
+    return this.transact(sessionId, () => {
+      const replay = this.replay(scope, key, input, sessionId); if (replay) return replay;
+      const record = this.getRecord(sessionId, id);
+      this.assertLifecycle(record);
+      if (!destinations[input.destination]!.includes(record.view.capabilityId)) invalid("Settings destination does not match this capability");
+      if (record.view.revision !== input.revision || record.view.stateVersion !== input.stateVersion
+        || !["collecting_input", "awaiting_confirmation", "needs_fix"].includes(record.view.state))
+        throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Refresh this settings confirmation", 409);
+      // Manual edits are expected to change resource versions. Still enforce Stop,
+      // expiry, archive and adapter identity, without verifying or applying settings.
+      this.guard(record, this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId), false);
+      const version = record.view.stateVersion;
+      record.view.settingsConfirmation = { destination: input.destination, completed: input.completed,
+        source: "user", verified: false, configurationWritten: false, confirmedAt: this.now() };
+      record.view.state = "dismissed";
+      record.view.decisionSource = "user";
+      record.view.stateVersion++; record.view.updatedAt = this.now();
+      record.approvedRevision = record.view.revision; record.approvedDigest = record.view.previewDigest;
+      delete record.view.autoApplyAt; delete record.view.error; delete record.view.choiceReceipt;
+      record.view.activation.state = "not_requested";
+      if (record.view.runId) { record.view.resumption.state = "pending"; this.enqueue(record, "resume", { decision: "dismiss", settingsConfirmation: record.view.settingsConfirmation }); }
+      this.repository.save(record, version);
+      this.repository.reserveIdempotency(scope, key, input, id);
+      const result = this.project(record); this.repository.finishIdempotency(scope, key, result);
+      return result;
+    });
   }
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string): Promise<ConfigurationRequestView> {
     object(input, ["revision", "previewDigest", "decision", "selectedOptionId"], "decision"); integer(input.revision, "revision"); string(input.previewDigest, "previewDigest", 100);
@@ -413,7 +458,12 @@ export class ConfigurationRequestService {
         record.view.state = "failed";
         record.view.stateVersion++;
         record.view.updatedAt = this.now();
-        record.view.error = { code: "CONFIGURATION_APPLY_FAILED", message: "The change could not be saved. Review the preview before trying again.", retryable: true };
+        // This one domain error contains only names of saved references. Raw
+        // errors from adapters may contain URLs or credentials and stay private.
+        record.view.error = record.view.capabilityId === "proxy.resources"
+          && error instanceof ConfigurationError && error.code === "PROXY_RESOURCE_IN_USE"
+          ? { code: error.code, message: error.message, retryable: false }
+          : { code: "CONFIGURATION_APPLY_FAILED", message: "The change could not be saved. Review the preview before trying again.", retryable: true };
         this.repository.save(record, version);
         const result = this.project(record);
         this.repository.finishIdempotency(idempotencyScope, key, result);
@@ -427,7 +477,7 @@ export class ConfigurationRequestService {
   }
   private enqueue(record: ConfigurationRecord, kind: "activate" | "resume" | "external_submit", extra: Record<string, unknown>): void {
     const now = this.now();
-    const option = selectedChoice(record);
+    const option = record.view.settingsConfirmation ? undefined : selectedChoice(record);
     this.repository.enqueueOutbox({ id: `${record.view.id}:${record.view.revision}:${kind}`, requestId: record.view.id, revision: record.view.revision, sessionId: record.view.sessionId, kind, state: "pending", payload: { ...extra, activationMode: record.view.activation.mode, ...(record.view.runId ? { runId: record.view.runId } : {}), stopGeneration: record.stopGeneration, previewDigest: record.view.previewDigest,
       ...(option ? { selectedOptionId: option.id, choiceKind: option.kind, ...(option.alternativeId ? { alternativeId: option.alternativeId } : {}), needKey: record.view.needKey } : {}) }, createdAt: now, updatedAt: now });
   }

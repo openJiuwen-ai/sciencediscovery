@@ -19,6 +19,7 @@ import type {
   ConfigurationRequestView,
   ConfigurationPreviewInput,
   ConfigurationDecisionInput,
+  ConfigurationSettingsConfirmationInput,
   ConfigurationCredentialInput,
   ConfigurationCredentialDraftView,
   ConfigurationCapabilityId,
@@ -87,6 +88,14 @@ export class SessionsApiClient extends ProjectsApiClient {
     });
   }
 
+  /** Requires the independently deployed security-policy backend; never falls back to endpoint consent. */
+  consentConfigurationSecurity(sessionId: string, requestId: string,
+    input: { revision: number; targetDigest: string; acknowledged: true }, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "security-consent"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
   /** Credentials use a separate authenticated channel, never message/run input. */
   submitConfigurationCredential(sessionId: string, requestId: string, input: ConfigurationCredentialInput, idempotencyKey: string): Promise<ConfigurationCredentialDraftView> {
     return this.request(this.configurationRequestPath(sessionId, requestId, "credentials"), {
@@ -96,6 +105,12 @@ export class SessionsApiClient extends ProjectsApiClient {
 
   decideConfigurationRequest(sessionId: string, requestId: string, input: ConfigurationDecisionInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
     return this.request(this.configurationRequestPath(sessionId, requestId, "decision"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  confirmConfigurationSettings(sessionId: string, requestId: string, input: ConfigurationSettingsConfirmationInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "settings-confirmation"), {
       method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
     });
   }

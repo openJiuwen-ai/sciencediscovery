@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
+import { settingsConfirmationInstruction } from "../configuration/settings-confirmation.js";
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -589,13 +590,17 @@ export function skillAuthoringCommandPrompt(content: string): string | undefined
   ].join("\n\n");
 }
 
-function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: string, run: SessionRun): string {
+export function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: string, run: SessionRun): string {
   const resume = run.configurationResume!;
   const record = nativeConfigurationChoiceRecord(store, sessionId, resume.requestId);
+  if (record?.view.settingsConfirmation) return settingsConfirmationInstruction(record.view.settingsConfirmation);
   const choice = record?.view.choiceReceipt;
   if (record && record.view.capabilityId !== "connector.enable") {
+    const savedEffect = record.plan.activationMode === "next_connection"
+      ? "the saved route is used by later connections of this task as well"
+      : `the saved change applies to future tasks${record.plan.activationMode === "requires_restart" ? " after the required restart" : ""}`;
     const outcome = resume.decision === "dismiss" ? "The user declined the configuration; no change was saved."
-      : `The user approved and saved ${record.view.capabilityId}. Activation mode: ${record.plan.activationMode}. This task keeps its original frozen settings; the saved change applies to future tasks${record.plan.activationMode === "requires_restart" ? " after the required restart" : ""}.`;
+      : `The user approved and saved ${record.view.capabilityId}. Activation mode: ${record.plan.activationMode}. This task keeps its original frozen settings; ${savedEffect}.`;
     return `${outcome} The pending configuration interaction is resolved. Continue the original task from this committed checkpoint, or finish reporting the configuration result if that was the original task. Do not repeat completed actions or request this same decision again (needKey=${record.view.needKey ?? resume.requestId}). Earlier pending tool results are historical. This is not a new user request.`;
   }
   const result = choice?.kind === "alternative"

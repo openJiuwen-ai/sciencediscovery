@@ -57,6 +57,7 @@ export function normalizeConfigurationFields(source: unknown, policy: Configurat
       ...(candidate.placeholder !== undefined ? { placeholder: string(candidate.placeholder, "field.placeholder", 500) } : {}),
       ...(candidate.help !== undefined ? { help: help(candidate.help, policy) } : {}) };
     if (candidate.kind === "credential") {
+      if (policy.credentialFields && !policy.credentialFields.includes(id)) invalid("Credential placeholder does not match registered fields", id);
       if (candidate.value !== undefined || candidate.choices !== undefined || candidate.placeholder !== undefined) invalid("Credential fields cannot contain values", id);
       if (!["missing", "provided", "expired"].includes(String(candidate.status))) invalid("Invalid credential status", id);
       return { ...base, kind: "credential", status: candidate.status as "missing" | "provided" | "expired" };

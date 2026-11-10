@@ -156,7 +156,11 @@ test("CFG HTTP: invalid connection previews return a safe baseUrl field error be
 test("CFG HTTP: first connection is preview-only until confirmation, applies once, and establishes the global default", async (context) => {
   const f = await fixture(context);
   const capabilities = await f.ok<{ items: Array<{ id: string }>; executor: string }>(`/api/sessions/${f.session.id}/configuration/capabilities`);
-  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
+  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "mcp.availability", "mcp.delete", "mcp.header_credential", "mcp.metadata", "mcp.remove_env", "mcp.remove_header", "mcp.timeout", "memory.enable", "model.api_identity", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "provider.connection", "provider.credential", "provider.remove_credential", "proxy.mcp", "proxy.provider", "proxy.resources", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
+  assert.equal(new Set(capabilities.items.map(item => item.id)).has("memory.credential"), false, "Deferred Neo4j credential configuration must not be exposed");
+  const deferred = await f.call(f.path(), { protocolVersion: 3, capabilityId: "memory.credential", values: { operation: "replace" } });
+  assert.equal(deferred.status, 409);
+  assert.equal(deferred.body.code, "CONFIGURATION_CAPABILITY_UNAVAILABLE");
   assert.equal(capabilities.executor, "native");
   const initial = await f.proposal("model.connect");
   assert.equal(initial.state, "collecting_input");
@@ -330,4 +334,36 @@ test("CFG HTTP: capability entry, ownership, revision, resource versions and arc
   assert.equal(archived.status, 409);
   assert.deepEqual((await f.ok<RuntimeSettingsDetails>(`/api/sessions/${f.session.id}/settings`)).overrides, beforeArchive.overrides);
   assert.equal(f.probes.length, 0, "Rejected proposals and archived/stale decisions cannot make a model call");
+});
+
+for (const completed of [true, false]) test(`Manual settings HTTP ${completed}: strict receipt survives reload without probe or apply`, async context => {
+  const f = await fixture(context);
+  const card = await f.proposal("model.connect", f.values);
+  const input = { revision: card.revision, stateVersion: card.stateVersion, destination: "models", completed };
+  assert.equal((await f.call(f.path(card, "settings-confirmation", f.sibling.id), input)).status, 404);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, destination: "timeouts" })).status, 400);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, stateVersion: card.stateVersion + 1 })).status, 409);
+  const answer = await f.call<ConfigurationRequestView>(f.path(card, "settings-confirmation"), input, "POST", "manual-http");
+  assert.equal(answer.status, 200, answer.text);
+  assert.equal(answer.body.settingsConfirmation?.completed, completed);
+  assert.equal(answer.body.settingsConfirmation?.verified, false);
+  assert.equal(answer.body.settingsConfirmation?.configurationWritten, false);
+  assert.equal(answer.body.activation.state, "not_requested");
+  assert.deepEqual((await f.ok<ConfigurationRequestView>(f.path(card))).settingsConfirmation, answer.body.settingsConfirmation);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), input, "POST", "manual-http")).status, 200);
+  assert.equal((await f.call(f.path(card, "settings-confirmation"), { ...input, completed: !completed })).status, 409);
+  assert.deepEqual(await f.ok<ModelProfile[]>("/api/models"), []); assert.equal(f.probes.length, 0);
+});
+
+test("CFG-X03a: removed security-consent route is unavailable", async context => {
+  const h = await fixture(context);
+  const card = await h.proposal("model.connect", h.values);
+  const response = await h.call(h.path(card, "security-consent"), {
+    revision: card.revision, targetDigest: "sha256:removed", acknowledged: true,
+  });
+  assert.equal(response.status, 404);
+  const current = await h.ok<ConfigurationRequestView>(h.path(card));
+  assert.equal(current.revision, card.revision);
+  assert.equal(current.stateVersion, card.stateVersion);
+  assert.deepEqual(current.endpointAuthorization, card.endpointAuthorization);
 });

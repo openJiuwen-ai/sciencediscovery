@@ -107,3 +107,46 @@ test("CFG-T06: draft replacement rolls back if encrypted idempotency persistence
   assert.throws(() => bridge.provide(h.binding, "replacement", "key"));
   assert.equal(h.bridge.read(initial.handle, h.binding), "original"); assert.equal(h.rows().length, 1);
 });
+
+test("CFG-XBUG-12: exact drafts preserve surrounding characters and bind upload replay to them", async () => {
+  const h = harness(), binding = { ...h.binding, normalization: "exact" as const }, password = " \towned-password\u00a0 ";
+  const draft = h.bridge.provide(binding, password, "exact-upload");
+  assert.ok(h.bridge.read(draft.handle, binding) === password);
+  assert.deepEqual(h.bridge.provide(binding, password, "exact-upload"), draft);
+  assert.throws(() => h.bridge.provide(binding, password.trim(), "exact-upload"), /IDEMPOTENCY_MISMATCH/);
+  assert.throws(() => h.bridge.read(draft.handle, h.binding), /EXPIRED/);
+  await h.bridge.withLease(draft.handle, binding, async value => { assert.ok(value === password); });
+  h.bridge.rebind(draft.handle, binding, 2); h.bridge.rebind(draft.handle, binding, 2);
+  assert.ok(h.bridge.read(draft.handle, { ...binding, revision: 2 }) === password);
+  assert.throws(() => h.bridge.rebind(draft.handle, { ...h.binding, revision: 2 }, 2), /EXPIRED/);
+  assert.equal(JSON.stringify([...h.rows(), ...h.database.prepare("SELECT * FROM configuration_credential_uploads").all()]).includes("owned-password"), false);
+  assert.throws(() => h.bridge.provide(binding, " \t\u00a0 "), /INVALID_CONFIGURATION_CREDENTIAL/);
+  h.advance(30 * 60_000); assert.throws(() => h.bridge.read(draft.handle, { ...binding, revision: 2 }), /EXPIRED/);
+});
+
+test("CFG-XBUG-12: legacy drafts migrate as trim and cannot be relabeled exact; model tokens still trim", () => {
+  const h = harness(), draft = h.bridge.provide(h.binding, "  owned-token  ", "legacy-upload");
+  h.database.exec("ALTER TABLE configuration_credential_drafts DROP COLUMN normalization");
+  const migrated = new ConfigurationCredentialBridge(h.database, h.cipher);
+  assert.equal(migrated.read(draft.handle, h.binding), "owned-token");
+  assert.deepEqual(migrated.provide(h.binding, "\towned-token ", "legacy-upload"), draft);
+  const exact = { ...h.binding, normalization: "exact" as const };
+  assert.throws(() => migrated.read(draft.handle, exact), /EXPIRED/);
+  assert.throws(() => migrated.rebind(draft.handle, exact, 2), /EXPIRED/);
+  const fresh = migrated.provide(exact, "  fresh-password  ");
+  assert.ok(migrated.read(fresh.handle, exact) === "  fresh-password  ");
+  assert.throws(() => migrated.read(draft.handle, h.binding), /EXPIRED/);
+});
+
+test("CFG-X03b: proxy URL drafts retain exact field, target and revision isolation", async () => {
+  const h = harness(); const binding = { ...h.binding, target: "proxy.resources:registered-target", fieldId: "proxyUrl" };
+  const draft = h.bridge.provide(binding, "https://fixture:password@proxy.invalid", "proxy-upload");
+  assert.throws(() => h.bridge.read(draft.handle, { ...binding, fieldId: "apiToken" }), /EXPIRED/);
+  assert.throws(() => h.bridge.provide({ ...binding, fieldId: "arbitrarySecret" }, "secret"));
+  h.bridge.rebind(draft.handle, binding, 2);
+  await h.bridge.withLease(draft.handle, { ...binding, revision: 2 }, async url => assert.match(url, /^https:/));
+  assert.throws(() => h.bridge.read(draft.handle, binding), /EXPIRED/);
+  assert.throws(() => h.bridge.read(draft.handle, { ...binding, revision: 2, target: "another-proxy" }), /EXPIRED/);
+  h.advance(30 * 60_000); assert.throws(() => h.bridge.read(draft.handle, { ...binding, revision: 2 }), /EXPIRED/);
+  assert.doesNotMatch(JSON.stringify(h.rows()), /fixture:password/);
+});

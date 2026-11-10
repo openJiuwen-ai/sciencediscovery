@@ -1141,7 +1141,7 @@ export function Composer({
             title={running ? TEXT.composer.pillLocked : TEXT.composer.modelSelect}
             type="button"
           >
-            <span className="model-name">
+            <span className="model-name" title={selectedName}>
               {selectedName ?? (unavailableModel ? TEXT.errors.modelUnavailable : TEXT.errors.modelRequired)}
             </span>
             <Chevron down={menu !== "model"} />
