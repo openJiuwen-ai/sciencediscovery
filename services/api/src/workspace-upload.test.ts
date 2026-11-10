@@ -55,6 +55,27 @@ test("sanitizeUploadFilename rejects absolute and traversal names", () => {
   assert.throws(() => sanitizeUploadFilename(".."), /plain basename|invalid/);
 });
 
+test("sanitizeUploadFilename rejects Windows reserved device names", () => {
+  // On a Windows workspace these names never reach the file system: the OS maps
+  // them, with any extension, to a device, so the upload passes the rest of the
+  // guard and only fails later, at write time, with a raw EPERM or ENOENT.
+  for (const name of [
+    "CON", "con.csv", "nul.txt", "AUX", "PRN.dat", "COM1.log", "lpt9.dat", "conin$.txt", "conout$",
+    "CON .csv", "nul.", "COM\u00b9.txt", "com\u00b2.csv", "LPT\u00b3.log",
+  ]) {
+    assert.throws(() => sanitizeUploadFilename(name), /reserved device name/, name);
+  }
+  // The stream syntax addresses the same device, so it is the same reservation.
+  for (const name of ["nul:stream", "con:$DATA"]) {
+    assert.throws(() => sanitizeUploadFilename(name), /reserved device name/, name);
+  }
+  // A name that merely begins with a reserved word, or uses a two-digit port,
+  // is an ordinary file and keeps working.
+  for (const name of ["conifer.csv", "console.log", "auxiliary.csv", "com10.csv", "lpt0.csv", "report:2024.csv"]) {
+    assert.equal(sanitizeUploadFilename(name), name);
+  }
+});
+
 test("parseConflictPolicy defaults to rename", () => {
   assert.equal(parseConflictPolicy(undefined), "rename");
   assert.equal(parseConflictPolicy("overwrite"), "overwrite");
