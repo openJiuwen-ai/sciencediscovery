@@ -10,6 +10,7 @@ import { runInNewContext } from 'node:vm';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
+import { profiles } from '../test/support/tagged/profiles.mjs';
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { caseExecutionSummary, compactTokens, executionMeasurements, renderCaseExecution } from './case-execution.mjs';
 import { caseIdentity, collectCaseMeasurements, sessionUsageTokens } from '../test/helpers/case-measurements.mjs';
@@ -120,9 +121,33 @@ test('optional cells cannot change a passing gate; missing/duplicate evidence st
   assert.equal(caseExecutionSummary(plan, root, verdict).table.rows.find(row => row.case === 'DRB-58').duration_min, 'n/a');
 });
 
-test('merge/pr never produce a table or either publication file', t => {
+test('L3/L4/L5 publish their own selected identities, counts and producer-declared group', t => {
+  const tiers = catalog.map(entry => ({ ...entry, tags: entry.tags.map(tag => tag === 'tier:l4'
+    ? entry.source.includes('basic-real') ? 'tier:l3' : entry.source.includes('biomnibench') ? 'tier:l5' : 'tier:l4' : tag) }));
+  for (const [profile, level, expected] of [['merge', 'L3', 1], ['daily', 'L4', 5], ['release', 'L5', 6]]) {
+    const root = workspace(t);
+    const plan = createPlan(tiers, { revision: 'candidate', profile, selector: profiles[profile].selector,
+      targets: profiles[profile].targets, execution: { backend: 'jiuwenswarm' } });
+    assert.equal(plan.entries.length, expected);
+    const verdict = verifyResults(plan, plan.entries.slice(1).map(e => ({ key: e.key, outcome: 'PASS', actualTarget: e.target, actualBackend: e.backend })));
+    const summary = caseExecutionSummary(plan, root, verdict);
+    assert.deepEqual(summary.table.group, { key: profile, label: `${level} · ${profile}` });
+    assert.deepEqual([summary.tests, summary.passed, summary.failed, summary.table.rows.length], [expected, expected - 1, 1, expected]);
+    assert.deepEqual(new Set(summary.table.rows.map(row => row.case)), new Set(plan.entries.map(entry =>
+      decodeURIComponent(entry.id).match(/\b(?:DRB-\d+|TC-E2E-01|PUCT-COMPRESS)\b/)?.[0]
+      ?? (entry.source.includes('biomnibench') ? 'da-1-3' : entry.id))));
+    save(join(root, 'plan.json'), plan); save(join(root, 'verdict.json'), verdict);
+    const output = join(root, 'published');
+    const run = spawnSync(process.execPath, [join(repository, '.ci/case-execution.mjs'), join(root, 'plan.json'), root, output]);
+    assert.equal(run.status, 0, run.stderr?.toString());
+    assert.deepEqual(JSON.parse(readFileSync(join(output, 'dashboard-summary.json'))), summary);
+    assert.match(readFileSync(join(output, 'case-execution-details.md'), 'utf8'), new RegExp(`${level} · ${profile}`));
+  }
+});
+
+test('pr never produces a real-case table or either publication file', t => {
   const root = workspace(t);
-  for (const profile of ['merge', 'pr']) {
+  for (const profile of ['pr']) {
     const plan = planFor(profile); save(join(root, 'plan.json'), plan);
     assert.equal(caseExecutionSummary(plan, root, {}), undefined);
     const output = join(root, profile);
@@ -141,7 +166,7 @@ test('workflows publish after staging, upload through existing results, and show
   for (const step of [generate, upload]) {
     const expression = step.match(/if: (.+)/)[1];
     for (const profile of ['daily', 'release', 'merge', 'pr']) {
-      assert.equal(runInNewContext(expression, { always: () => true, inputs: { profile } }), ['daily', 'release'].includes(profile));
+      assert.equal(runInNewContext(expression, { always: () => true, inputs: { profile } }), ['merge', 'daily', 'release'].includes(profile));
     }
   }
   assert.ok(job.indexOf('Stage combined real E2E scores') < job.indexOf('Summarize case execution'));

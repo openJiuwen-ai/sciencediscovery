@@ -476,14 +476,18 @@ consumers, with a single suite-level plan/summary and namespaced per-case scores
 continues to contain complete HTML, linked screenshots and results. Keep large
 diagnostic traces separate if that artifact exceeds the dashboard limit.
 
-For `daily` and `release`, real accounting also publishes a **case execution**
+For `merge` (L3), `daily` (L4) and `release` (L5), real accounting also publishes a **case execution**
 table in its job summary and in `case-execution-details.md`. Nightly copies the
 same Markdown into its outcome summary. The combined `real-e2e-results` artifact
 contains both that file and `dashboard-summary.json`, whose optional generic
-`table` declares ordered columns and producer-formatted string cells. Its count
+`table` declares ordered columns, producer-formatted string cells and a generic
+`group: {key, label}` identifying the frozen profile (for example,
+`{"key":"daily","label":"L4 · daily"}`). Its count
 fields partition the selected plan; cases without a verified pass or skip count
 as failed. The existing gate verdict, slice summary, PUCT review and Biomni
-suite report remain separate. `pr` and `merge` do not publish this table.
+suite report remain separate. Each table contains only its own profile's
+selected identities and counts; L3, L4 and L5 are never added together.
+`pr` does not run real E2E and does not publish this table.
 
 Rows include every selected identity, ordered by recorded `started_at`, then
 untimed cases by case ID. Score uses only `evaluation.overall_score`,
