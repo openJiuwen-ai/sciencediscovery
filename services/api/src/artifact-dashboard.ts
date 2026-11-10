@@ -148,9 +148,10 @@ export type ArtifactPreviewPayload =
        */
       clippedCells: number;
       /**
-       * The file's own column count and the count the preview shows. They differ
-       * only when a line is wider than MAX_PREVIEW_COLUMNS; the viewer names both
-       * rather than quietly showing a narrower table.
+       * The header's column count and how many named columns the preview shows.
+       * They differ when the header itself is wider than MAX_PREVIEW_COLUMNS; a
+       * data line past the header is a wide row, so the cells it loses are
+       * reported through clippedCells instead of widening this count.
        */
       clippedColumns: { total: number; shown: number };
       /**
@@ -387,22 +388,29 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   }
   const header = lines[0] ?? [];
   const totalRows = Math.max(0, lines.length - 1);
-  // The width is the widest line of the whole file, capped by a constant, and
-  // never a function of how many rows the caller asked for: maxRows is a client
-  // query parameter, and the same file must show the same columns at maxRows=1
-  // and maxRows=1000. A wide line past the window therefore still sets the width
-  // and the returned rows are padded to it, because the renderer prints one <th>
-  // per column and one <td> per cell.
   const widest = lines.reduce((widestLine, line) => Math.max(widestLine, line.length), 0);
-  const totalColumns = Math.max(header.length, widest);
-  const width = Math.min(totalColumns, MAX_PREVIEW_COLUMNS);
+  // The file's column count is a property of its header: a data line with more
+  // fields is a wide row, not a wider schema, and announcing it as one renders a
+  // two-column table as a thousand-column grid of empty cells.
+  const totalColumns = header.length;
+  // A ragged file may still have unnamed surplus columns beside its named ones, so
+  // a wider line widens the grid — but only by the cap the CSV importer uses,
+  // min(16, max(2, header.length)): one outlier line must not decide the width.
+  // The header's own columns are never capped by this, and MAX_PREVIEW_COLUMNS
+  // stays the absolute limit on the payload. The width is never a function of how
+  // many rows the caller asked for: maxRows is a client query parameter, and the
+  // same file must show the same columns at maxRows=1 and maxRows=1000.
+  const surplusLimit = Math.min(16, Math.max(2, header.length));
+  const surplus = Math.min(Math.max(0, widest - totalColumns), surplusLimit);
+  const width = Math.min(totalColumns + surplus, MAX_PREVIEW_COLUMNS);
   // The row count is bounded by its own constant, so the payload stays inside
   // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
   const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
   // Columns past the width leave the preview: the header keeps its first names
   // and the payload says how many columns the file had, so a cut table is never
-  // mistaken for a narrow one.
-  const clippedColumns = { shown: width, total: totalColumns };
+  // mistaken for a narrow one. `shown` counts named columns, so it never exceeds
+  // the header: the unnamed surplus columns are padding, not part of the schema.
+  const clippedColumns = { shown: Math.min(totalColumns, width), total: totalColumns };
   let clippedCells = 0;
   const paddedRows = rows.map((row) => {
     if (row.length === width) return row;
@@ -418,6 +426,18 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   }
   if (clippedCells > 0) {
     warnings.push(`${clippedCells} cells past the preview width are not shown.`);
+  }
+  // The width can come from a line this call does not return. The column set must
+  // not depend on how many rows a caller asks for, so the width stays file-wide,
+  // but the padding must not look like data either: name the columns that exist
+  // only for an unseen line.
+  const widestReturned = rows.reduce((widestRow, row) => Math.max(widestRow, row.length), 0);
+  const paddingColumns = Math.max(0, width - Math.max(totalColumns, widestReturned));
+  if (paddingColumns > 0) {
+    warnings.push(
+      `The preview pads ${paddingColumns} unnamed ${paddingColumns === 1 ? "column" : "columns"} `
+      + "for a wider line outside the returned rows.",
+    );
   }
   return {
     clippedCells,
