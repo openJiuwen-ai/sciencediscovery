@@ -15,6 +15,10 @@
 // Thin declaration adapter for node:test on the repository's Node 22 baseline.
 // Framework execution stays in node:test; this module never executes test bodies.
 import { fileURLToPath } from 'node:url';
+// A view module may import its stylesheet; node has no loader for .css, so
+// the collector and the worker would fail before any case is registered.
+import { register } from "node:module";
+register(new URL("./css-loader.mjs", import.meta.url));
 import { relative, resolve, isAbsolute } from 'node:path';
 import { readFileSync, realpathSync } from 'node:fs';
 import { normalizeTags, inheritTags } from './tags.mjs';
