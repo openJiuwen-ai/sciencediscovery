@@ -2272,7 +2272,8 @@ test("managed recovery HTTP contract returns original receipts, scoped conflicts
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   context.after(() => new Promise<void>(done => server.close(() => done())));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const health = await fetch(`${origin}/health`).then(response => response.json()) as RunnerHealth;
+  const health = await fetch(`${origin}/health`, { headers: { authorization: "Bearer runner-test-token" } })
+    .then(response => response.json()) as RunnerHealth;
   assert.equal(health.capabilities?.executionRecoveryVersion, 1);
   assert.ok(health.runnerInstanceId);
   assert.ok(health.runnerBootId);
@@ -2310,7 +2311,8 @@ test("managed recovery HTTP contract returns original receipts, scoped conflicts
   await new Promise<void>(done => restarted.listen(0, "127.0.0.1", done));
   context.after(() => new Promise<void>(done => restarted.close(() => done())));
   const secondOrigin = `http://127.0.0.1:${(restarted.address() as AddressInfo).port}`;
-  const restartedHealth = await fetch(`${secondOrigin}/health`).then(response => response.json()) as RunnerHealth;
+  const restartedHealth = await fetch(`${secondOrigin}/health`, { headers: { authorization: "Bearer runner-test-token" } })
+    .then(response => response.json()) as RunnerHealth;
   assert.equal(restartedHealth.runnerInstanceId, health.runnerInstanceId);
   assert.notEqual(restartedHealth.runnerBootId, health.runnerBootId);
   const replay = await fetch(`${secondOrigin}/shell-executions`, signedExecutionInit("runner-test-token", input));
