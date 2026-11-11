@@ -453,6 +453,76 @@ async def test_bridge_calls_go_to_the_callers_url_with_its_token(harness):
                     "body": {"name": "run_shell", "arguments": {"command": "x"}}}
 
 
+async def test_read_artifact_retries_a_pre_dispatch_connect_failure(harness):
+    from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
+
+    attempts = 0
+
+    async def handler(_request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("connection refused before dispatch")
+        return httpx.Response(200, json={"text": "artifact", "isError": False})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await bridge_caller(Bridge(url="http://legacy.test/bridge"), client)(
+            "read_artifact", {"name": "notes-a.md", "version": 2})
+    assert result == ("artifact", False)
+    assert attempts == 2
+
+
+async def test_read_artifact_does_not_retry_an_executed_then_lost_response(harness):
+    from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
+
+    attempts = 0
+
+    async def handler(_request):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadError("response lost after dispatch")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.ReadError):
+            await bridge_caller(Bridge(url="http://legacy.test/bridge"), client)(
+                "read_artifact", {"name": "notes-a.md", "version": 2})
+    assert attempts == 1
+
+
+async def test_read_artifact_does_not_retry_a_bridge_502(harness):
+    from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
+
+    attempts = 0
+
+    async def handler(_request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, json={"error": "temporary"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await bridge_caller(Bridge(url="http://legacy.test/bridge"), client)(
+                "read_artifact", {"name": "notes-a.md", "version": 2})
+    assert attempts == 1
+
+
+async def test_non_read_tools_are_not_retried_after_transport_failure(harness):
+    from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
+
+    attempts = 0
+
+    async def handler(_request):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadError("connection dropped")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.ReadError):
+            await bridge_caller(Bridge(url="http://legacy.test/bridge"), client)(
+                "declare_artifact", {"name": "notes-a.md"})
+    assert attempts == 1
+
+
 async def test_closing_the_stream_cancels_the_gateway_run(harness):
     import asyncio
 

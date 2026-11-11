@@ -1015,6 +1015,50 @@ test("gateway reports an empty terminal turn after reasoning-only output as a mi
   } finally { await g.close(); }
 });
 
+test("gateway retries one reasoning-only network interruption without replaying the hidden thought", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onThinkingDelta?.("partial reasoning");
+    if (calls === 1) throw new Error("terminated");
+    callbacks?.onWireDiagnostics?.({ ...EMPTY_WIRE, hasReasoning: true, retryErrors: [], retries: 0 });
+    callbacks?.onTextDelta?.("recovered answer");
+    return answer();
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(calls, 2);
+    assert.equal((body.match(/partial reasoning/g) ?? []).length, 1);
+    assert.match(body, /recovered answer/);
+    assert.match(body, /\[DONE\]/);
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network"]);
+    assert.equal(record.retries, 1);
+  } finally { await g.close(); }
+});
+
+test("gateway does not replay a non-streaming turn after visible output", async () => {
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onTextDelta?.("partial answer");
+    throw new Error("terminated");
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: false, messages: [] });
+    assert.equal(response.status, 502);
+    assert.equal(calls, 1, "visible output must make the failed turn non-replayable");
+  } finally { await g.close(); }
+});
+
 test("housekeeping may still return an empty turn; only a task answer is rejected", async () => {
   const { streamer } = fakeStreamer(answer({ assistantMessage: { role: "assistant", content: "" }, toolCalls: [], completionObserved: true }));
   const g = await gateway(streamer);

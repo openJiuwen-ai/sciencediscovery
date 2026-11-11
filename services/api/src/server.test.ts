@@ -668,10 +668,10 @@ test("request errors after headers terminate the response without rejecting the 
   const root = resolve(process.cwd(), ".tmp", `sent-headers-${randomUUID()}`);
   await mkdir(root, { recursive: true });
   const server = createApiServer(testConfig(root));
-  context.after(async () => {
-    await removeTestRoot(root);
-    await closeApiServer(server);
-  });
+  // removeTestRoot cancels outstanding runs and closes the API before deleting
+  // the data directory. Keep teardown ownership in one place so a second
+  // close cannot race the final write drain.
+  context.after(() => removeTestRoot(root));
   // Capture escaped rejections so the unfixed handler fails an assertion instead
   // of crashing the test process with ERR_HTTP_HEADERS_SENT.
   const handler = server.listeners("request")[0]!;

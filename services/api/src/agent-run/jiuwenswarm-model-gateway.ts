@@ -362,6 +362,7 @@ export async function startModelGateway(
     let wireReported = false;
     let pendingWire: ModelWireDiagnostics | undefined;
     const purpose = auxiliary ? "auxiliary" : "task";
+    const streamRetryErrors: ModelWireErrorClass[] = [];
     // The transport reports its wire record on the success path, but the turn it
     // returned can still fail here (empty terminal turn, unusable tool call). The
     // record is held until the outcome is known, so the one line a request writes
@@ -372,10 +373,12 @@ export async function startModelGateway(
       const classification = pendingWire?.error?.classification ?? errorClass;
       if (!pendingWire && classification === undefined) return;
       wireReported = true;
+      const retryErrors = [...(pendingWire?.retryErrors ?? []), ...streamRetryErrors];
       const record = {
         ...(pendingWire ?? { endpoint: modelEndpointIdentity(endpoint), model: endpoint.model }),
         gatewayRequestId: id,
         purpose,
+        ...(retryErrors.length ? { retryErrors, retries: retryErrors.length } : {}),
         // The transport's own classified record already carries its status;
         // a local rejection only adds the class to the record it reported.
         ...(classification === undefined ? {} : { error: pendingWire?.error ?? { classification } }),
@@ -470,6 +473,29 @@ export async function startModelGateway(
     const record = async (turn: ModelTurn) => {
       if (observed) await observe("completion", () => observed.completed(turn, history));
     };
+    const streamTurn = async (
+      makeCallbacks: (attempt: number) => NonNullable<Parameters<Streamer>[6]>,
+      state: { text: boolean; tool: boolean },
+    ): Promise<ModelTurn> => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, makeCallbacks(attempt));
+        } catch (error) {
+          const classification = classifyModelWireError(error);
+          // A model stream can fail after sending only hidden reasoning. It is
+          // safe to replay that model turn because no visible answer or tool
+          // call has been committed. Never replay a turn that may have exposed
+          // text or started a tool, and never retry auxiliary housekeeping.
+          if (attempt !== 0 || auxiliary || classification !== "network" || state.text || state.tool) throw error;
+          streamRetryErrors.push(classification);
+          console.warn(`[model-gateway] retrying an interrupted reasoning-only model stream request=${id}`);
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 250);
+            controller.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+          });
+        }
+      }
+    };
     try {
       controller.signal.throwIfAborted();
       if (!auxiliary) { last = undefined; lifecycle?.beforeTurn?.(); }
@@ -496,14 +522,16 @@ export async function startModelGateway(
         trace("start", true);
         await prepare();
         controller.signal.throwIfAborted();
-        const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
+        const visible = { text: false, tool: false };
+        const turn = await streamTurn((attempt) => ({
           onProgress: () => { upstream(); trace("receive"); },
-          onTextDelta: (delta) => writeDelta({ content: delta }),
-          onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
+          onTextDelta: (delta) => { if (delta.length > 0) visible.text = true; writeDelta({ content: delta }); },
+          onThinkingDelta: (delta) => { if (attempt === 0) writeDelta({ reasoning_content: delta }); },
           onToolCallDelta: (delta) => {
             // Keep tool arguments behind the finish boundary: even valid JSON
             // can be semantically incomplete when the response hits its cap.
             controller.signal.throwIfAborted();
+            visible.tool = true;
             toolArgumentChars += delta.arguments.length;
             // SSE comments are discarded by OpenAI SDKs and never reach Swarm's
             // decoded-chunk idle watchdog. An empty delta carries real upstream
@@ -514,7 +542,7 @@ export async function startModelGateway(
           // the run, so the transport classifies its one record accordingly.
           rejectEmptyTerminalTurn: !auxiliary,
           onWireDiagnostics: logWire,
-        });
+        }), visible);
         controller.signal.throwIfAborted();
         await recordInvalidArguments(turn, id);
         const invalid = invalidCalls(turn);
@@ -537,14 +565,15 @@ export async function startModelGateway(
       }
       await prepare();
       controller.signal.throwIfAborted();
-      const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
+      const visible = { text: false, tool: false };
+      const turn = await streamTurn(() => ({
         onProgress: upstream,
-        onTextDelta: progress,
+        onTextDelta: (delta) => { if (delta.length > 0) visible.text = true; progress(); },
         onThinkingDelta: progress,
-        onToolCallDelta: progress,
+        onToolCallDelta: () => { visible.tool = true; progress(); },
         rejectEmptyTerminalTurn: !auxiliary,
         onWireDiagnostics: logWire,
-      });
+      }), visible);
       controller.signal.throwIfAborted();
       await recordInvalidArguments(turn, id);
       const invalid = invalidCalls(turn);
