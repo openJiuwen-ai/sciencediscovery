@@ -182,6 +182,19 @@ function dotGlyph(state: ItemState): string {
 }
 
 /**
+ * Tooltip for one self-check row.
+ *
+ * A skipped row has two different stories: the component was not checked at all,
+ * or the caller is not allowed to read its detail. Only the second is worth
+ * explaining, and today only the Runner reaches it — the browser path reads the
+ * public health body, which carries liveness but no Runner detail.
+ */
+export function selfCheckTip(key: "api" | "runner" | "model", state: ItemState, runnerNeedsToken: boolean): string | undefined {
+  if (state !== "skip") return undefined;
+  return key === "runner" && runnerNeedsToken ? TEXT.wizard.boot.runnerNeedsToken : TEXT.wizard.boot.notChecked;
+}
+
+/**
  * The first run, in the shell wizard's split-screen language.
  *
  * Three steps, in the shell's order: the workspace directory, the environment
@@ -369,7 +382,10 @@ export function SetupWizard({
             kind: undefined,
             message: undefined,
             api: "ok",
-            runner: result.runner === null ? "skip" : "ok",
+            // `false` is a state only the browser branch can hold (it has no
+            // `ok` rollup), and it must not paint green: an answer carrying a
+            // Runner that is starting or wedged is not a ready Runner.
+            runner: result.runner === null ? "skip" : result.runner ? "ok" : "fail",
             runnerNeedsToken: Boolean(result.runnerNeedsToken),
             model: result.model ? "ok" : "skip",
           }));
@@ -587,13 +603,7 @@ export function SetupWizard({
                         <li key={key}>
                           <span
                             className={["boot-dot", dotClass(state)].filter(Boolean).join(" ")}
-                            title={
-                              state !== "skip"
-                                ? undefined
-                                : key === "runner" && boot.runnerNeedsToken
-                                  ? TEXT.wizard.boot.runnerNeedsToken
-                                  : TEXT.wizard.boot.notChecked
-                            }
+                            title={selfCheckTip(key, state, Boolean(boot.runnerNeedsToken))}
                           >
                             {dotGlyph(state)}
                           </span>
