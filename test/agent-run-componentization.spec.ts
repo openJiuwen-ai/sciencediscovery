@@ -380,7 +380,11 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
   test("S2b subagent 首个受控工具的权限卡也出现在主对话最外层", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(180000);
     const logs: string[] = [];
+    const previewRequests: string[] = [];
     attachLogCollector(page, logs);
+    page.on("request", (request) => {
+      if (request.url().includes("/research-package/preview?")) previewRequests.push(request.url());
+    });
 
     const { baseUrl, stop } = await startMockLlm((_body, ctx) => {
       if (ctx.isSubagent) {
@@ -442,6 +446,7 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
 
       const consoleErrors = logs.filter((line) => line.startsWith("[error]") || line.startsWith("[pageerror]"));
       expect(consoleErrors, `no console/page errors expected, got: ${consoleErrors.join("; ")}`).toEqual([]);
+      expect(previewRequests, "a closed Research Package dialog must not poll preview metadata").toEqual([]);
     } finally {
       if (projectId) await deleteProject(projectId).catch(() => undefined);
       await deleteTestModel(model.id).catch(() => undefined);

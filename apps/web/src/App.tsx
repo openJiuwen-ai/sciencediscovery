@@ -200,7 +200,6 @@ import {
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { PluginWebHost } from "./plugins/host.js";
 import { ResearchPackageDialogs, type ResearchPackageDialogTarget } from "./research-package/ResearchPackageActions.js";
-import { ResearchPackagePreviewMonitor } from "./research-package/ResearchPackagePreviewMonitor.js";
 import { ResearchPackageExportMonitor } from "./research-package/ResearchPackageExportTasks.js";
 import type { PluginComposition } from "./api/plugins.js";
 import { duplicateModelProfileId } from "./modelLabels.js";
@@ -6059,7 +6058,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         onChangeConfirmation={setDeletionConfirmation}
         onConfirm={() => void confirmDeletion()}
       /> : null}
-      <ResearchPackagePreviewMonitor client={client} projectId={session?.projectId} sessionId={session?.id} revision={session?.updatedAt} isRunning={isRunning} />
       <ResearchPackageDialogs
         client={client}
         key={researchPackageDialog ? `${researchPackageDialog.kind}:${researchPackageDialog.sessionId}` : "closed"}

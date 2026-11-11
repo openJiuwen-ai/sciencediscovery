@@ -16,7 +16,8 @@ logger = logging.getLogger("sciencediscovery.boundary")
 _handler = None
 _fields = frozenset({"run_id", "agent_id", "session_id", "swarm_session", "run_tag",
     "request_id", "connection", "tool", "status", "error_type", "elapsed_ms",
-    "result_chars", "tool_count", "terminal", "event_type", "tool_call_id"})
+    "result_chars", "tool_count", "terminal", "event_type", "tool_call_id",
+    "attempt", "http_status"})
 
 
 def emit(event: str, **fields) -> None:
