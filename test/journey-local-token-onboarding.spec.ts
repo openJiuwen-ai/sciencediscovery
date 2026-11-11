@@ -141,20 +141,23 @@ for (const locale of ["en", "zh-CN"] as const) {
       });
       await journey.step("替换浏览器中的过期令牌", "重新打开启动链接覆盖过期令牌，直接恢复连接。", async () => {
         await page.evaluate((key) => localStorage.setItem(key, "stale-local-token"), BROWSER_TOKEN_STORAGE_KEY);
-        const response = page.waitForResponse((r) => r.url().endsWith("/api/projects") && r.status() === 200);
+        // The test changes storage behind React; reload after consuming the
+        // startup link so the assertion observes the persisted token rather
+        // than depending on whether page.goto performs a fragment navigation.
         await page.goto(url!);
+        await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), BROWSER_TOKEN_STORAGE_KEY)).toBe(requireApiToken());
+        const response = page.waitForResponse((r) => r.url().endsWith("/api/projects") && r.status() === 200);
+        await page.reload();
         await response;
         await expect(page.getByRole("dialog")).toHaveCount(0);
         expect(unauthorized).toEqual([]);
       });
       await journey.step("打开无效令牌链接", "错误令牌只显示一处恢复提示，没有额外 Toast 或设置警示条。", async () => {
-        // Keep the pathname unchanged to explicitly exercise a same-document
-        // fragment navigation, even if URL synchronization selected a Session.
+        // Change only the fragment so this explicitly exercises the mounted
+        // app's hashchange recovery path.
         const mounted = `mounted-${Date.now()}`;
         await page.evaluate(value => { (window as Window & { onboardingMount?: string }).onboardingMount = value; }, mounted);
-        const invalid = new URL(page.url());
-        invalid.hash = "token=invalid-link-token";
-        await page.goto(invalid.href);
+        await page.evaluate(() => { window.location.hash = "token=invalid-link-token"; });
         expect(await page.evaluate(() => (window as Window & { onboardingMount?: string }).onboardingMount)).toBe(mounted);
         await expect(page.getByRole("alert")).toHaveCount(1);
         await expect(page.getByRole("alert")).toContainText(rejected);
