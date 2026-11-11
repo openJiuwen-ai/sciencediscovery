@@ -747,6 +747,71 @@ function watchBackendInBackground(endpoints: Endpoints, dataDir: string | null):
   })();
 }
 
+// --- post-startup stack liveness -------------------------------------------------
+// The startup-timeout watch above only runs while the stack is still booting.
+// Once the UI is up and the stack is healthy, nothing re-checked the child, so
+// an API that later died (heap exhaustion, a service error) left the window on
+// a dead origin while the shell still held the single-instance lock — a white
+// window whose every relaunch exits as "second instance" (#1085). Watch the
+// owned stack's exit and recover: one automatic restart, then surface the
+// failure and release the lock so a fresh launch can take over.
+
+let stackDeathWatchSeq = 0;
+let stackRestartAttempts = 0;
+const STACK_RESTART_LIMIT = 1;
+/** A stack that stayed healthy this long earns a fresh restart budget — a crash
+ *  long after startup is a new incident, not the auto-restart still failing. */
+const STACK_STABILITY_MS = 60_000;
+let stackStableTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearStackStableTimer(): void {
+  if (stackStableTimer) { clearTimeout(stackStableTimer); stackStableTimer = null; }
+}
+
+function armStackStableTimer(): void {
+  clearStackStableTimer();
+  stackStableTimer = setTimeout(() => { stackStableTimer = null; stackRestartAttempts = 0; }, STACK_STABILITY_MS);
+}
+
+function watchStackLiveness(): void {
+  const handle = stack;
+  if (!handle || !stackOwnedByShell) return;
+  const seq = ++stackDeathWatchSeq;
+  void handle.exited.then((code) => {
+    if (seq !== stackDeathWatchSeq || quitConfirmed || stack !== handle) return;
+    log(`stack exited unexpectedly while the window was open (exit ${code ?? "unknown"}); recovering`);
+    void recoverStackAfterDeath(code);
+  });
+}
+
+async function recoverStackAfterDeath(code: number | null): Promise<void> {
+  clearStackStableTimer();
+  if (stackRestartAttempts >= STACK_RESTART_LIMIT || quitConfirmed) {
+    surfaceBackendDead(code);
+    return;
+  }
+  stackRestartAttempts += 1;
+  log(`auto-restarting the backend (attempt ${stackRestartAttempts}/${STACK_RESTART_LIMIT})`);
+  if (startupFlowInFlight) return;
+  startupFlowInFlight = true;
+  backendWatchSeq += 1;    // supersede any startup-timeout watch
+  stackDeathWatchSeq += 1; // the restart arms its own fresh watch
+  await startupFlow(startupProxyEnv).finally(() => { startupFlowInFlight = false; });
+  // A restart that left no live stack means the crash reproduces on boot — do
+  // not loop. Surface it and release the lock for a fresh launch instead.
+  if (!quitConfirmed && !(stack && stackOwnedByShell && stack.running())) surfaceBackendDead(code);
+}
+
+function surfaceBackendDead(code: number | null): void {
+  log("backend recovery failed; surfacing the error and releasing the single-instance lock");
+  const summary = summarizeStackFailure(code, stackErrTail);
+  showLoading();
+  pushStage("error", `后端服务已停止，自动重启未能恢复。${summary} 请关闭本窗口后重新启动 ScienceDiscovery，或打开日志查看原因。`);
+  // The window is stuck on a dead origin; let a fresh launch acquire the lock
+  // instead of being told it is a second instance.
+  app.releaseSingleInstanceLock();
+}
+
 // --- daily startup flow (extracted so the loading page's retry reruns it) ------
 
 let startupProxyEnv: NodeJS.ProcessEnv | null = null;
@@ -770,6 +835,8 @@ async function startupFlow(proxyEnv: NodeJS.ProcessEnv | null): Promise<void> {
   if (healthy && !quitConfirmed) {
     void loadUi(endpoints, readToken(dataDir));
     watchAgentReady(endpoints, dataDir);
+    armStackStableTimer();
+    watchStackLiveness();
     if (Notification.isSupported()) {
       new Notification({ title: "ScienceDiscovery", body: "后端已就绪" }).show();
     }
@@ -784,6 +851,8 @@ ipcMain.handle("sd-shell:retry-backend", () => {
   if (startupFlowInFlight || wizardMode) return;
   startupFlowInFlight = true;
   backendWatchSeq += 1; // a manual retry supersedes any background watch
+  stackRestartAttempts = 0; // a manual retry is a fresh recovery budget
+  clearStackStableTimer();
   log("retry requested from the loading page");
   void startupFlow(startupProxyEnv).finally(() => { startupFlowInFlight = false; });
 });
@@ -1497,6 +1566,8 @@ app.on("window-all-closed", () => {
 app.on("will-quit", event => {
   stopConsoleSweep();
   clearAgentWatch();
+  stackDeathWatchSeq += 1; // quitting stops the owned stack on purpose, not a crash
+  clearStackStableTimer();
   if (stack && stackOwnedByShell) {
     event.preventDefault();
     void stack.stop().finally(() => { stack = null; app.quit(); });
