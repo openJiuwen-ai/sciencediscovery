@@ -45,6 +45,7 @@ import {
   ResourceRateLimitQueueTimeoutError,
 } from "./resource-rate-limiter.js";
 import { SourceHealth, SourceCoolingError, type SourceAdmission } from "./source-health.js";
+import { SourceOutages, sourceOutages } from "./source-outage.js";
 import { McpResultCache } from "./result-cache.js";
 import { McpSourceCatalog } from "./catalog.js";
 import type { McpTransportClient } from "./transport.js";
@@ -384,6 +385,8 @@ export class McpGovernanceBroker {
   private readonly limiter: ResourceRateLimiter;
   private readonly health: SourceHealth;
   private readonly memoryGraphSink: MemoryGraphSink | null;
+  /** Shared with the catalog so a recorded outage is what readiness reports. */
+  private readonly outages: SourceOutages;
 
   constructor(
     dataDir: string,
@@ -396,6 +399,9 @@ export class McpGovernanceBroker {
       limiter?: ResourceRateLimiter;
       health?: SourceHealth;
       memoryGraphSink?: MemoryGraphSink | null;
+      /** Readiness memory shared with the catalog: a classified provider
+       *  outage recorded here is what `getStatus` reports (#1081). */
+      outages?: SourceOutages;
     } = {},
   ) {
     this.cas = new CasStore(dataDir);
@@ -405,6 +411,7 @@ export class McpGovernanceBroker {
     this.health = options.health ?? healthByLimiter.get(this.limiter) ?? new SourceHealth();
     healthByLimiter.set(this.limiter, this.health);
     this.memoryGraphSink = options.memoryGraphSink ?? null;
+    this.outages = options.outages ?? sourceOutages;
   }
 
   close(): void {
@@ -766,6 +773,20 @@ export class McpGovernanceBroker {
         let error = upstreamError(response);
         try { this.health.check(rateHealthKey); this.health.check(healthKey); } catch (cause) {
           if (cause instanceof SourceCoolingError) error = { ...unavailable(cause), code: last?.status === "rate-limited" ? "RATE_LIMITED" : "SOURCE_COOLDOWN" };
+        }
+        // A provider-level failure is the one condition readiness could never
+        // see: the catalog only compares schemas, and the connector therefore
+        // kept reading `ready` after every call failed (#1081). Remember it per
+        // source; `getStatus` reports it for the next ten minutes without
+        // touching the `status` the gates read, so this stays advisory.
+        if (error.code === "UPSTREAM_UNAVAILABLE") {
+          this.outages.note({
+            at: new Date().toISOString(),
+            code: error.upstreamCode ?? error.code,
+            detail: error.message.slice(0, 160),
+            sourceId: request.sourceId,
+            toolId: request.toolId,
+          });
         }
         const invocation = await this.appendFailure({
           attempts,

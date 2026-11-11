@@ -24,6 +24,7 @@ import type {
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import type { McpTransportClient } from "./transport.js";
+import { SourceOutages, sourceOutages } from "./source-outage.js";
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -108,6 +109,10 @@ export class McpSourceCatalog {
      *  rebuilds MCP connections under the right outbound configuration. */
     private readonly proxyMapProvider?: () => Record<string, ResolvedProxy>,
     private readonly onCatalog?: (catalog: McpCatalog) => void,
+    /** The broker's outage memory. It only decorates `getStatus`, so the
+     *  readiness view can report a dead provider without changing the gate:
+     *  every caller decides on `status`, which this never touches (#1081). */
+    private readonly outages: SourceOutages = sourceOutages,
   ) {}
 
   private apply(catalog: McpCatalog): McpCatalog {
@@ -134,16 +139,18 @@ export class McpSourceCatalog {
 
   getStatus(sourceId: string): McpSourceStatus {
     const status = this.statuses.get(sourceId);
-    if (status) return structuredClone(status);
-    const source = this.registry.get(sourceId);
-    return {
+    const base: McpSourceStatus = status ? structuredClone(status) : {
       availableTools: [],
       error: "MCP catalog has not been refreshed",
       lastCheckedAt: new Date(0).toISOString(),
-      missingTools: Object.keys(source.manifest.tools),
+      missingTools: Object.keys(this.registry.get(sourceId).manifest.tools),
       sourceId,
       status: "unavailable",
     };
+    // Advisory decoration only: `status`, `error` and `missingTools` are exactly
+    // what configuration says they are, so no gate changes behaviour here.
+    const lastOutage = this.outages.read(sourceId);
+    return lastOutage ? { ...base, lastOutage } : base;
   }
 
   listStatuses(): McpSourceStatus[] {
