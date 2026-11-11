@@ -203,6 +203,8 @@ test("sends the prompt, model and the run's tools to the adapter and returns the
     assert.equal(body.cwd, "/workspace");
     assert.equal(typeof body.systemPrompt, "string");
     assert.ok(body.systemPrompt.length > 200, "the run gets the workspace system prompt, not an empty one");
+    assert.match(body.systemPrompt, /Ask clarification questions in a regular assistant message/);
+    assert.ok(body.hiddenJiuwenSwarmTools.includes("ask_user"));
     assert.equal(body.model.model, "gpt-x");
     assert.match(body.model.baseUrl, /^http:\/\/127\.0\.0\.1:\d+\/v1$/, "the adapter is pointed at the run's loopback model gateway, not the provider");
     assert.notEqual(body.model.apiKey, "sk-test", "the provider's key never leaves this process");
@@ -567,6 +569,20 @@ test("the idle timeout stalls a run with no gateway progress, with the wording s
   } finally {
     await adapter.close();
   }
+});
+
+test("an unexpected generic Swarm question ends the run without waiting for an answer", async () => {
+  const adapter = await fakeAdapter((_request, response) => {
+    response.writeHead(200);
+    response.write(line({ event: { type: "user_input.required", request: { id: "q1", question: "Which timeout?" } } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
+    await assert.rejects(Promise.race([
+      agent.execute("Change the timeout"),
+      delay(1_000).then(() => { throw new Error("The run kept waiting on the question"); }),
+    ]), /send the clarification as a new chat message/);
+  } finally { await adapter.close(); }
 });
 
 test("a JiuwenSwarm approval question pauses the idle clock: a human answer slower than the idle timeout still completes the run", async () => {

@@ -636,7 +636,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       : "Delegation is unavailable for this run. Ignore any generic instructions recommending Swarm-native subagent tools; complete the assigned work with the available tools."];
     const systemPromptSeed = this.options.seedModelContext && this.options.gatewayHistory?.length
       ? seedHistoryText(this.options.gatewayHistory) : "";
-    const systemPrompt = [systemPromptSeed, withHostRule, ...replacementSections,
+    const clarificationRule = "Ask clarification questions in a regular assistant message. Include any choices the user needs and end the turn so they can reply in chat.";
+    const systemPrompt = [systemPromptSeed, withHostRule, clarificationRule, ...replacementSections,
       ...(this.options.unsandboxedExecution === true ? [UNSANDBOXED_SUBAGENT_SECTION] : []), ...delegationRule]
       .filter(Boolean).join("\n\n");
     const nativeToolNames = [...(jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []), ...(jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_TOOLS : [])];
@@ -661,6 +662,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         ...(nativeToolNames.length ? { nativeTools: nativeToolNames } : {}),
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
         hiddenJiuwenSwarmTools: [
+          "ask_user",
           ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
           ...hiddenWebTools,
           ...(!jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []),
@@ -696,21 +698,12 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     let finalText = "";
     let failure: string | undefined;
     let receivedTerminal = false;
-    let releaseUserInputWait: (() => void) | undefined;
     for await (const line of ndjson(response.body)) {
       if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
       this.markProgress("event" in line ? `adapter:${line.event.type}` : "adapter:done");
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
       if ("event" in line && line.event.type === "user_input.required") {
-        releaseUserInputWait ??= this.beginExternalWait();
-        continue;
-      }
-      // Accounting/phase frames do not mean the run resumed: the adapter
-      // interleaves them with a paused question, so releasing on them would drop
-      // the wait and let the idle deadline fire while the user is still deciding.
-      if (!("event" in line && (line.event.type === "model.usage" || line.event.type === "agent.phase"))) {
-        releaseUserInputWait?.();
-        releaseUserInputWait = undefined;
+        throw new Error("The assistant requested an interactive reply. Please send the clarification as a new chat message.");
       }
       if ("done" in line) {
         receivedTerminal = true;
