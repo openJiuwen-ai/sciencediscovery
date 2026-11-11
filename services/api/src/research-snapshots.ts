@@ -38,7 +38,7 @@ import type { createPlatformServices } from "./bootstrap/platform.js";
 import { createContinuationOperations } from "./research-continuations.js";
 import { buildConversationBranch } from "./conversation-branches.js";
 import { verifyResearchCopy } from "./research-snapshot-integrity.js";
-import { readTrajectoryDetail } from "./research-trajectory-detail.js";
+import { filterTrajectoryIndex, readTrajectoryDetail } from "./research-trajectory-detail.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
 import { ResearchPackageExports, type ResearchPackageExportOptions } from "./research-package-exports.js";
 import { sessionTrajectory } from "./trajectory.js";
@@ -116,6 +116,9 @@ function trimTrajectory(trajectory: PackageTrajectory, runs: Set<string>): Packa
   return { index: { ...trajectory.index, entries: trajectory.index.entries.filter((entry) => selectedIds.has(entry.id)), untimedEntries: untimed, historicalEntries: untimed,
     warnings: [...trajectory.index.warnings, "必要导出仅包含最近模型输入、最终输出和相关工具摘要；不包含完整思考及事件流。"] }, details, runIds: [...runs] };
 }
+
+/** How many per-entry trajectory omissions a receipt may carry before it is summarised. */
+const TRAJECTORY_OMISSION_LIMIT = 5;
 
 function necessaryHistory(history: PackageHistory, turnIds: Set<string>, executionIds: Set<string>, reviewIds: Set<string>): PackageHistory {
   const claims = (history.claims ?? []).filter((row) => reviewIds.has(row.reviewRunId));
@@ -364,12 +367,18 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
     const hydrateTrajectory = async (record: ExportSessionRecord, entries: TrajectoryEntry[], summarize = false) => {
       const view = trajectoryViews.get(record.session.id)!;
       const details: TrajectoryDetail[] = [];
+      // The exported index and the details must stay 1:1: the importer rejects a
+      // package otherwise (`validatePackageTrajectory` requires
+      // `details.length === entries.length`), so an entry whose record cannot be
+      // read is dropped from the index as well as from the details (#1083).
+      const retained = new Set<string>();
+      const unreadable: string[] = [];
       let counted = 0;
       for (const entry of entries) {
         signal.throwIfAborted();
-        // One unreadable record must not fail the whole preview or export (#1083).
-        const detail = await readTrajectoryDetail(view, entry, record.session.id, (message) => omissions.push(message), signal);
+        const detail = await readTrajectoryDetail(view, entry, record.session.id, (message) => unreadable.push(message), signal);
         if (!detail) continue;
+        retained.add(entry.id);
         if (preview) {
           const retained = summarize ? necessaryTrajectoryDetail(detail) : detail;
           // The records skeleton keeps []; add its elements and commas only.
@@ -380,7 +389,13 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
           if (counted % 32 === 0) await setImmediate();
         } else details.push(detail);
       }
-      return { ...record.trajectory, details };
+      // Bound the receipt: a session whose trajectory store is unavailable would
+      // otherwise add one line per entry to both the package and the preview.
+      for (const message of unreadable.slice(0, TRAJECTORY_OMISSION_LIMIT)) omissions.push(message);
+      if (unreadable.length > TRAJECTORY_OMISSION_LIMIT) {
+        omissions.push(`trajectory:${record.session.id}:${unreadable.length - TRAJECTORY_OMISSION_LIMIT} more entries could not be read; the entries listed above are only the first few.`);
+      }
+      return { ...record.trajectory, index: filterTrajectoryIndex(record.trajectory.index, retained), details };
     };
     for (const session of sessions) {
       signal.throwIfAborted();
