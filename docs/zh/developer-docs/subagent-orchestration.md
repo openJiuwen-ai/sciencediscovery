@@ -81,8 +81,8 @@ Swarm 原生模式仍需开放其原生工具（`SCIENCE_AGENT_JIUWENSWARM_TOOLS
 | `subagent_stop_reason` / `stopReason` | 停止原因，例如完成、超时、轮数上限、取消 |
 | `subagent_token_usage` | 子 Agent 模型 token 使用量 |
 | `subagent_model_name` | 子 Agent 使用的模型 |
-| `subagent_result_brief` | 供主 Agent 综合的短摘要 |
-| `subagent_result_sha256` | 摘要内容 hash，便于诊断和审计 |
+| `subagent_result_brief` | 已移除：正文只由 `finalText` 承载（同一串此前被写了三次）。 |
+| `subagent_result_sha256` | **已交付**文本的 hash；内容被截断时另见 `subagent_result_truncated`、`subagent_result_chars`、`subagent_result_ref`。 |
 | `resultValidation` | Brief 结构化输出校验结果 |
 | `structuredResult` / `rawStructuredResult` | 通过校验的结构化输出或原始待诊断输出 |
 
@@ -189,3 +189,5 @@ subagents/<subagentId>/
 任务目录条目通过不可变的 `SubagentAuthority` 引用关联完整记录，不再内嵌轨迹。引用保留采集时的完整任务记录及继续执行所需的上下文引用。未变化的目录对象复用引用，任务或 Brief 更新后生成新版本。UI 和 native task API 仍从目录读取完整记录。历史快照继续可读，无需迁移持久化目录。
 
 本次隔离的是快照内容，不改变模型提示词或授权策略。State Pool 闭包校验仍检查引用对象，包括继续执行的历史。历史闭包遍历和其他共享资源快照的重复保存属于后续性能优化，不能仅凭此改动认定真实 E2E 超时已经修复。
+
+`finalText` 的语义是「子 Agent **最后一段连续的 assistant 输出**」：流式运行时会把一次回答拆成相邻的多个 assistant step，这些相邻分片会合并后交付；被工具步骤隔开的更早内容不会进入结果。需要完整产出时，子 Agent 应在结束前自行收口，或由调用方按 `subagent_result_ref` 读取全文（仅在内容被截断时才发布）。
