@@ -307,12 +307,17 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
 
       // The dialog places its flags as a token in the composer and stops
       // there: the goal is the sentence after the token, and the message
-      // leaves when the user sends it.
+      // leaves once the user confirms the settings for that task.
       const area = page.locator("#composer-textarea");
       await expect(area).toBeVisible({ timeout: 30_000 });
       await area.fill(PROBLEM);
       const before = new Set((await api<DesktopRun[]>(page, sessionRuns())).map((run) => run.id));
       await area.press("Enter");
+      const confirmation = page.getByRole("dialog", { name: /^(Confirm evolution settings|确认演进设置)$/ });
+      await confirmation.getByRole("button", { name: /^(Start evolution|开始演进)$/ }).click();
+      await expect.poll(async () => await unisolated.isVisible() || !(await confirmation.isVisible())).toBe(true);
+      if (await unisolated.isVisible()) await unisolated.click();
+      await expect(confirmation).toBeHidden();
 
       runId = (await waitForNewRun(page, fixture!.session.id, before)).id;
       metrics.turns.push({ id: runId, kind: "design", prompt: PROBLEM });
