@@ -869,8 +869,11 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
           <Contents><Key>PMC123.2/PMC123.2.pdf</Key></Contents>
         </ListBucketResult>"""
 
+        seen: list[dict] = []
+
         async def fake_get_text(url, *, params=None, accept="", ssl_context=None,
                                 arxiv_diagnostics=False, fixed_endpoint=False):
+            seen.append(dict(params or {}))
             if params and params.get("continuation-token") == "next-page-token":
                 return page_two
             return page_one
@@ -883,6 +886,18 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["artifacts"][0]["sourceUrl"],
             "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.2/PMC123.2.pdf",
+        )
+        # The real bucket defaults to the V1 document only when `list-type=2` is
+        # absent, so every page must say V2; and the prefix must carry the
+        # trailing dot so a longer PMCID (PMC1230) cannot fill the window.
+        self.assertTrue(seen, "the listing was requested")
+        self.assertTrue(
+            all("list-type" in page and page["list-type"] == "2" for page in seen),
+            "every page speaks ListObjects V2",
+        )
+        self.assertTrue(
+            all(page.get("prefix") == "PMC123." for page in seen),
+            "the prefix is the record's own version directory",
         )
 
     async def test_pmc_candidate_refuses_a_truncated_listing_without_a_continuation_token(self) -> None:
