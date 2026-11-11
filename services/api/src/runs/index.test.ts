@@ -323,6 +323,20 @@ test("completed traces retain bounded authoritative evidence and actual per-resp
   }
   for(const value of ["null","plain evidence","{}",'{"sourceId":"other","toolId":"search","records":[]}',
     '{"sourceId":"pubmed","toolId":"read","records":[]}','{"sourceId":"pubmed","toolId":"search","records":3}']) assert.equal(trace(value).paperCount,undefined);
+  // Real gateway envelope for the preprint connectors:
+  // services/gateway/src/sciencediscovery_gateway/public_biomed_mcp.py:182-202 and :708.
+  const gatewayResult=(sourceId:string,toolId:string,records:unknown[])=>JSON.stringify({
+    attribution:sourceId,license:"Provider terms apply",records,retrievedAt:"2026-11-09T00:00:00Z",
+    sourceId,toolId,untrusted:true,warnings:[],
+  });
+  for(const sourceId of ["biorxiv","medrxiv"]) {
+    assert.equal(trace(gatewayResult(sourceId,"search_preprints",Array.from({length:25},()=>({})))).paperCount,25);
+    assert.equal(trace(gatewayResult(sourceId,"search_preprints",[])).paperCount,0);
+  }
+  // Registered non-literature sources stay uncounted even for search tools with records.
+  assert.equal(trace(gatewayResult("uniprot","search",[{},{}])).paperCount,undefined);
+  assert.equal(trace(gatewayResult("pdb","search_structures",[{},{}])).paperCount,undefined);
+  assert.equal(trace(gatewayResult("biorxiv","read",[])).paperCount,undefined);
 });
 
 /** A store whose only job is to record what reached the run stream. */

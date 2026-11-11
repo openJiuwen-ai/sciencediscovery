@@ -51,4 +51,19 @@ test("paper counts use returned search records and reject estimates and other to
   for (const value of ["invalid", "null", "{}", '{"sourceId":"other","toolId":"search","records":[]}', '{"sourceId":"pubmed","toolId":"read","records":[]}', '{"sourceId":"pubmed","toolId":"search","records":5}']) {
     assert.equal(returnedPaperCount(value), undefined);
   }
+  // bioRxiv/medRxiv return preprints through `search_preprints` in the same envelope as the
+  // three sources above: services/gateway/src/sciencediscovery_gateway/public_biomed_mcp.py:182-202
+  // (`_result`) and :708 (`_result(server, "search_preprints", records, ...)`).
+  const gatewayResult = (sourceId: string, toolId: string, records: unknown[]) => JSON.stringify({
+    attribution: sourceId, license: "Provider terms apply", records, retrievedAt: "2026-11-09T00:00:00Z",
+    sourceId, toolId, untrusted: true, warnings: [],
+  });
+  for (const sourceId of ["biorxiv", "medrxiv"]) {
+    assert.equal(returnedPaperCount(gatewayResult(sourceId, "search_preprints", [])), 0);
+    assert.equal(returnedPaperCount(gatewayResult(sourceId, "search_preprints", Array.from({ length: 25 }, () => ({})))), 25);
+  }
+  // Registered non-literature sources keep no count even when the tool is a search with records.
+  assert.equal(returnedPaperCount(gatewayResult("uniprot", "search", [{}, {}])), undefined);
+  assert.equal(returnedPaperCount(gatewayResult("pdb", "search_structures", [{}, {}])), undefined);
+  assert.equal(returnedPaperCount(gatewayResult("biorxiv", "read", [])), undefined);
 });
