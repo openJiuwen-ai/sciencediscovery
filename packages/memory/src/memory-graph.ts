@@ -681,7 +681,8 @@ export class MemoryGraphClient {
    * contains/next edges (the "click to expand a scope" payload). Mirrors
    * ``getChain``'s defensive POST contract: an unreachable sidecar or an
    * absent/non-subagent scope resolves to an empty subgraph with a ``reason``
-   * (``node_not_found`` / ``memory_graph_unreachable``) rather than throwing,
+   * (``node_not_found`` / ``memory_graph_unreachable`` / the sidecar's
+   * ``memory_graph_query_limit`` budget refusal) rather than throwing,
    * so the frontend's expand toggle can surface a "scope gone" notice instead
    * of crashing.
    */

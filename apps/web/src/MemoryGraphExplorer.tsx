@@ -756,6 +756,34 @@ export function shouldCloseOnEscape(csvWindowOpen: boolean, molstarOpen: boolean
   return !csvWindowOpen && !molstarOpen;
 }
 
+/** What an expansion payload means before it is merged into the graph.
+ *  `undefined` means it has rows and may be expanded. */
+export type ScopeExpansionNote = "busy" | "empty" | "failed" | "gone" | "unreachable";
+
+/**
+ * Decide whether `getScopeExpansion` answered, and if not, why.
+ *
+ * A `reason` means the read did not answer, so its empty payload must never be
+ * read as "this subagent has no children". `node_not_found` is a scope deleted
+ * between fold and expand; `memory_graph_unreachable` is a down graph;
+ * `memory_graph_query_limit` is the sidecar's HTTP 503 work-budget refusal on a
+ * large scope, which is temporary and retryable rather than empty. Any other
+ * reason is still a failed read (an unknown 4xx/5xx code), so it gets the
+ * generic failure notice instead of claiming emptiness.
+ */
+export function scopeExpansionNote(
+  expansion: Pick<MemorySubgraph, "reason" | "nodes" | "edges">,
+): ScopeExpansionNote | undefined {
+  switch (expansion.reason) {
+    case "node_not_found": return "gone";
+    case "memory_graph_unreachable": return "unreachable";
+    case "memory_graph_query_limit": return "busy";
+    case undefined: break;
+    default: return "failed";
+  }
+  return expansion.nodes.length || expansion.edges.length ? undefined : "empty";
+}
+
 /**
  * Full-screen memory-graph explorer.
  *
@@ -1435,19 +1463,24 @@ export function MemoryGraphExplorer({
         return next;
       });
       // An expansion with no children/products is a "no products yet" scope:
-      // surface a notice instead of a blank expansion (doc16 §2.5). node_not_found
-      // (scope deleted between fold + expand) and memory_graph_unreachable get
-      // their own notices so the user knows the scope is gone, not empty.
+      // surface a notice instead of a blank expansion (doc16 §2.5). A `reason`
+      // means the read did not answer, so it gets its own notice — the scope is
+      // gone, the graph is down, or the graph was too busy to answer — and is
+      // never reported as empty.
       // Such a scope is NOT added to expandedScopes — it has nothing to expand,
       // so leaving it "collapsed" means every subsequent double-click re-fetches
       // and re-shows the notice (rather than the second click silently folding
       // an empty expansion with no notice, which read as "the hint disappeared").
-      if (expansion.reason === "node_not_found") {
-        setScopeNotes((current) => new Map(current).set(scopeTaskId, t("scope.gone")));
-      } else if (expansion.reason === "memory_graph_unreachable") {
-        setScopeNotes((current) => new Map(current).set(scopeTaskId, t("memory.unreachable")));
-      } else if (!expansion.nodes.length && !expansion.edges.length) {
-        setScopeNotes((current) => new Map(current).set(scopeTaskId, t("scope.noProducts")));
+      const note = scopeExpansionNote(expansion);
+      if (note) {
+        const message: Record<ScopeExpansionNote, MessageKey> = {
+          busy: "scope.busy",
+          empty: "scope.noProducts",
+          failed: "scope.expandFailed",
+          gone: "scope.gone",
+          unreachable: "memory.unreachable",
+        };
+        setScopeNotes((current) => new Map(current).set(scopeTaskId, t(message[note])));
       } else {
         // Non-empty: actually expand. Only here does the scope enter the
         // expanded set (a subsequent double-click then folds it for real).
