@@ -413,7 +413,13 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
     keys: list[str] = []
     continuation: str | None = None
     while True:
-        params: dict[str, Any] = {"prefix": pmcid, "max-keys": "40"}
+        # `list-type=2` makes the bucket answer in the V2 document shape, whose
+        # `NextContinuationToken` is the token the next page sends. The default
+        # V1 listing returns `NextMarker` instead, so without `list-type=2` a
+        # truncated page carries no continuation token and the walk below would
+        # refuse records it can serve. The prefix carries the trailing dot so a
+        # longer PMCID (``PMC1230`` next to ``PMC123``) cannot flood the window.
+        params: dict[str, Any] = {"prefix": f"{pmcid}.", "list-type": "2", "max-keys": "40"}
         if continuation:
             params["continuation-token"] = continuation
         listing = await _get_text(
