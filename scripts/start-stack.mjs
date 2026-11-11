@@ -269,16 +269,31 @@ const runOpts = { cwd: repositoryRoot };
 async function runStep(label, command, args, extraEnv = {}, cwd) {
   say(`==> ${label}`);
   const child = spawnService(command, args, { ...runOpts, ...(cwd ? { cwd } : {}), env: extraEnv });
+  // A build step is a child like any service: an interrupt that lands mid-sync
+  // has to be able to stop `uv` before the lockfile is restored, and only a
+  // registered child can be stopped by shutdown(). The step is dropped again as
+  // soon as it exits, so a later signal cannot kill a finished step.
+  children.push(child);
+  const forget = () => {
+    const at = children.indexOf(child);
+    if (at >= 0) children.splice(at, 1);
+  };
   const code = await new Promise(resolveExit => child.once("exit", resolveExit));
+  forget();
+  // A child stopped by a shutdown exits on a signal, not with a status, and the
+  // startup sequence must stop here: the rest of it would run against a
+  // half-torn-down tree and race shutdown()'s own exit code (the missing-env
+  // checks below would answer 1 before the interrupt answers 143). Never
+  // settling parks the caller until shutdown() exits the process.
+  if (shuttingDown) return new Promise(() => {});
   if (code !== 0) fail(`${label} failed with exit code ${code}.`);
 }
 
 // Active mirror-sync lockfile/backup pair, set only for the window a `uv sync`
-// is running against a custom index. cleanup() restores it synchronously: the
-// async finally in uvSyncProject cannot run under the SIGINT/SIGTERM handlers
-// here, which call process.exit and never await it, so an interrupt mid-sync
-// would otherwise leave uv.lock holding mirror-resolved versions plus a stray
-// uv.lock.stack-backup — exactly the failure the bash twin's trap closes.
+// is running against a custom index. shutdown() restores it: the async finally
+// in uvSyncProject cannot run under a SIGINT/SIGTERM handler, and an interrupt
+// mid-sync would otherwise leave uv.lock holding mirror-resolved versions plus a
+// stray uv.lock.stack-backup — exactly the failure the bash twin's trap closes.
 let activeLockRestore = null;
 
 function restoreActiveLockfile() {
@@ -294,6 +309,28 @@ function restoreActiveLockfile() {
     // Best effort: an unreadable backup must not mask the real shutdown. The
     // working tree keeps whatever uv wrote; that is recoverable with a checkout.
   }
+}
+
+// No handler runs when the process is killed outright — the desktop shell stops
+// the stack with `taskkill /T /F`, and power loss or the OOM killer behave the
+// same. Entry is then the only place that can undo the interrupted sync: the
+// backup is pristine by construction (uvSyncProject copies the committed
+// lockfile into it before uv starts), so restoring it is always the right move.
+function recoverLeftoverLockfile(projectDir) {
+  const lockfile = join(projectDir, "uv.lock");
+  const backup = join(projectDir, "uv.lock.stack-backup");
+  if (!existsSync(backup)) return false;
+  try {
+    copyFileSync(backup, lockfile);
+    rmSync(backup, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (recoverLeftoverLockfile(repositoryRoot)) {
+  say("[lockfile] restored uv.lock from a sync that a previous run did not finish");
 }
 
 async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
@@ -337,19 +374,47 @@ async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
 // catch an interrupt that lands while uv is resolving: Node's default SIGINT
 // behaviour terminates the process, and the sync's async finally never runs.
 const children = [];
-let cleanedUp = false;
-function cleanup() {
-  if (cleanedUp) return;
-  cleanedUp = true;
-  // Restore a lockfile an interrupted mirror sync left backed up before killing
-  // the children, so a Ctrl-C mid-sync cannot strand uv.lock on mirror-resolved
-  // versions.
-  restoreActiveLockfile();
-  for (const child of children.splice(0)) killTree(child);
+let shuttingDown = false;
+
+/** Kill every registered child and resolve once each one has exited.
+ *
+ * `killTree` only asks: on POSIX it sends SIGTERM, and `uv` keeps writing the
+ * lockfile until it is actually gone. Restoring the lockfile before that is the
+ * defect this waits out, so the wait is bounded and escalates to SIGKILL rather
+ * than hanging shutdown on a wedged child.
+ */
+async function stopChildren() {
+  const pending = children.splice(0);
+  await Promise.all(pending.map(async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise(done => child.once("exit", done));
+    killTree(child);
+    await Promise.race([exited, delay(5_000)]);
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    }
+  }));
 }
-process.on("SIGINT", () => { cleanup(); process.exit(130); });
-process.on("SIGTERM", () => { cleanup(); process.exit(143); });
-process.on("exit", cleanup);
+
+// Synchronous fallback for `process.on("exit")`, where nothing can be awaited.
+// Order still matters: kill first, restore after, so a child that dies during
+// this turn cannot rewrite the lockfile behind the restore.
+function cleanupSync() {
+  for (const child of children.splice(0)) killTree(child);
+  restoreActiveLockfile();
+}
+
+async function shutdown(code) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await stopChildren();
+  restoreActiveLockfile();
+  process.exit(code);
+}
+
+process.on("SIGINT", () => { void shutdown(130); });
+process.on("SIGTERM", () => { void shutdown(143); });
+process.on("exit", cleanupSync);
 
 if (!options.noBuild) {
   if (!options.noNodeBuild) {
@@ -761,11 +826,10 @@ try {
   await Promise.all(sidecarPromises);
 
   // Foreground wait for the API to exit (Ctrl-C goes through the SIGINT
-  // handler → cleanup tears down the whole stack)
+  // handler → shutdown tears down the whole stack)
   const apiExitCode = await new Promise(resolveExit => apiChild.once("exit", resolveExit));
-  cleanup();
-  process.exit(apiExitCode ?? 0);
+  await shutdown(apiExitCode ?? 0);
 } catch (error) {
-  cleanup();
+  cleanupSync();
   fail(error instanceof Error ? error.message : String(error));
 }

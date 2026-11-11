@@ -68,9 +68,11 @@ export function spawnStack(
       if (stopping) return;
       stopping = true;
       if (child.exitCode !== null || child.signalCode !== null) return;
-      // start-stack.mjs installs SIGINT/SIGTERM handlers that killTree the whole
-      // stack. A GUI app has no console to signal, so use taskkill /T: it
-      // terminates the process tree, and each service's own cleanup runs.
+      // start-stack.mjs installs SIGINT/SIGTERM handlers that kill the whole
+      // stack, but a GUI app has no console to signal, and the /F below is
+      // TerminateProcess: no handler runs at all. That is why start-stack.mjs
+      // also restores a leftover uv.lock.stack-backup on its next entry — this
+      // path leaves no chance for any in-process cleanup.
       const kill = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
       await new Promise<number | null>(resolve => kill.once("exit", code => resolve(code)));
       const done = await Promise.race([exited.then(() => true), new Promise(r => setTimeout(() => r(false), timeoutMs))]);
