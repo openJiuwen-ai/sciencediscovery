@@ -1876,6 +1876,15 @@
   position: relative; display: inline-flex; align-items: center; min-height: 34px; padding: 4px 10px;
   border: 1px solid var(--border, #d9e0eb); border-radius: 8px; background: var(--surface); color: inherit; cursor: pointer; font: inherit;
 }
+/* A tool that cannot be used has to look that way. Without this row the
+   generate button kept `cursor: pointer` and full contrast while `disabled`,
+   so a click that the DOM never dispatched read as a broken feature (#1091).
+   The footer and nested-row buttons are included because `fieldset[disabled]`
+   greys the whole block while a generation runs. */
+.evolve-json-tools button:disabled, .evolve-json-footer button:disabled, .evolve-json-children button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
 .evolve-json-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .evolve-json-upload:focus-within { outline: 2px solid var(--primary, #2563eb); outline-offset: 2px; }
 .evolve-json-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }

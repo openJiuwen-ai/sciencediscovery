@@ -41,8 +41,8 @@ function toJson(value: Value): unknown {
 }
 
 const copy = {
-  zh: { title: "起始字段", needTask: "先在会话输入框写下任务，即可生成起始字段。", draft: "生成起始字段", drafting: "正在生成…", upload: "上传 JSON", add: "添加字段", addItem: "添加元素", empty: "根据任务生成起始字段、导入文件，或直接添加字段。", name: "字段名", value: "初始值", scope: "允许修改", remove: "删除", type: "值类型", invalid: "请检查字段名是否为空或重复，以及数值是否有效。", readError: "无法导入。请选择包含 JSON 对象的文件。", draftError: "未能生成起始字段，请重试或上传文件。", locked: "未勾选的字段将保持原值", types: ["文本", "数字", "布尔值", "空值", "对象", "数组"] },
-  en: { title: "Starting fields", needTask: "Enter the task in the composer to generate starting fields.", draft: "Generate starting fields", drafting: "Generating…", upload: "Upload JSON", add: "Add field", addItem: "Add item", empty: "Generate starting fields from your task, upload a file, or add fields.", name: "Field name", value: "Initial value", scope: "Allow edits", remove: "Remove", type: "Value type", invalid: "Check for empty or duplicate field names and invalid numbers.", readError: "Could not import the file. Choose a JSON object.", draftError: "Could not generate starting fields. Retry or upload a file.", locked: "Unchecked fields stay fixed", types: ["Text", "Number", "Boolean", "Null", "Object", "Array"] },
+  zh: { title: "起始字段", needSession: "会话尚未就绪：先在会话输入框发送一条消息，「生成起始字段」就会启用。", draft: "生成起始字段", drafting: "正在生成…", upload: "上传 JSON", add: "添加字段", addItem: "添加元素", empty: "根据任务生成起始字段、导入文件，或直接添加字段。", name: "字段名", value: "初始值", scope: "允许修改", remove: "删除", type: "值类型", invalid: "请检查字段名是否为空或重复，以及数值是否有效。", readError: "无法导入。请选择包含 JSON 对象的文件。", draftError: "未能生成起始字段，请重试或上传文件。", locked: "未勾选的字段将保持原值", types: ["文本", "数字", "布尔值", "空值", "对象", "数组"] },
+  en: { title: "Starting fields", needSession: "This session is not ready yet: send a message in the composer and Generate starting fields becomes available.", draft: "Generate starting fields", drafting: "Generating…", upload: "Upload JSON", add: "Add field", addItem: "Add item", empty: "Generate starting fields from your task, upload a file, or add fields.", name: "Field name", value: "Initial value", scope: "Allow edits", remove: "Remove", type: "Value type", invalid: "Check for empty or duplicate field names and invalid numbers.", readError: "Could not import the file. Choose a JSON object.", draftError: "Could not generate starting fields. Retry or upload a file.", locked: "Unchecked fields stay fixed", types: ["Text", "Number", "Boolean", "Null", "Object", "Array"] },
 };
 const kinds: Kind[] = ["string", "number", "boolean", "null", "object", "array"];
 type Labels = typeof copy.en;
@@ -154,7 +154,10 @@ export function DirectionInput({ chinese, onChange, onGenerate, value }: {
           }} /></label>
       </div>
     </header>
-    {!onGenerate ? <p className="evolve-json-file">{labels.needTask}</p> : null}
+    {/* `onGenerate` is absent because the session has no loaded detail yet —
+        App.tsx hands it over only while `state.detail` exists — so the hint
+        names that reason rather than the task the user already typed (#1091). */}
+    {!onGenerate ? <p className="evolve-json-file">{labels.needSession}</p> : null}
     {fileName ? <p className="evolve-json-file">{fileName}</p> : null}
     {error ? <p role="alert" className="evolve-json-error">{error === "read" ? labels.readError : error === "draft" ? labels.draftError : labels.invalid}</p> : null}
     <fieldset disabled={busy} className="evolve-json-fieldset">
