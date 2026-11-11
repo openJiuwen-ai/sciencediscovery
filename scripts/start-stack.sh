@@ -161,11 +161,11 @@ api_foreground=0
 # default and variable name as scripts/lib/stack-platform.mjs and
 # services/api/src/heap-budget.ts (scripts/api-heap-budget.test.mjs guards it).
 api_heap_budget_mb="${SCIENCE_AGENT_API_MAX_OLD_SPACE_MB:-3072}"
-case "" in
-  ''|*[!0-9]*) echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be an integer number of MiB, got ''." >&2; exit 2 ;;
+case "$api_heap_budget_mb" in
+  ''|*[!0-9]*) echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be an integer number of MiB, got '$api_heap_budget_mb'." >&2; exit 2 ;;
 esac
 if (( api_heap_budget_mb < 256 || api_heap_budget_mb > 32768 )); then
-  echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be between 256 and 32768, got ." >&2
+  echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be between 256 and 32768, got $api_heap_budget_mb." >&2
   exit 2
 fi
 
