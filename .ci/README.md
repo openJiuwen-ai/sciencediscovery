@@ -387,11 +387,14 @@ the shard summary, in the suite reconcile and in the shared-plan summary, so
 no profile can turn an outage into a green required check.
 
 An authentication (401/403) or rate-limit (429) answer is a decision, not an
-outage, and is never soft-classified; neither is a semantic failure, a
-delivery miss or a timeout. The provider context has to name the gateway
-itself: a product delivery failure that merely quotes a provider status — the
-words "provider", "llm", "gateway" or "upstream" beside a `500` — is the
-product's own failure and stays a `FAIL`.
+outage, and a delivery miss or the product's stalled-run wording is the run's
+own verdict; none of those four is ever soft-classified, even when another text
+in the same case names the gateway. A semantic failure is not one of the four:
+it records what one step printed, so a sibling text that names the gateway
+outvotes it — see the four-verdict rule below. The provider context has to name
+the gateway itself: a product delivery failure that merely quotes a provider
+status — the words "provider", "llm", "gateway" or "upstream" beside a `500` —
+is the product's own failure and stays a `FAIL`.
 
 A delivery miss outranks the gateway: it is the product's own verdict, so it
 stays a `FAIL` even when it carries the provider's words with it. An assertion
@@ -410,12 +413,19 @@ block attached. Four shapes therefore stay apart:
 - an assertion that only quotes a bare provider word beside a status is the
   product's own failure and stays a `FAIL`.
 
-A verdict recorded beside the outage outranks it too. A case records one text
-per failed `expect()` or hook, so the provider's 401/403 or 429 answer, a
-delivery miss, or the product's stalled-run wording can sit next to a sibling
-text that names the gateway; each of those is the case's own verdict and keeps
-it a `FAIL`. Only the assertion wrapper is the weaker half that a sibling text
-may outvote.
+A verdict recorded beside the outage outranks it. A case records one text per
+failed `expect()` or hook, so four kinds of text keep the case a `FAIL` even
+when a sibling text names the gateway: a delivery miss, a 401/403 answer, a 429
+answer, and the product's stalled-run wording. A timeout whose own text also
+names the gateway's status and context — the `181001` code, `model call failed`,
+`openai api` or `chat/completions` beside a 5xx, e.g. `Error code: 504 - Gateway
+Timeout` — or the gateway's routing failure is the outage, not the stalled run,
+so it is not one of the four. A bare `504 Gateway Timeout` that names no gateway
+context is a status the product's text quotes, stays a `FAIL`, and vetoes the
+case like the other stalled-run wording. Every other text — an assertion
+wrapper, a thrown API error, a semantic verdict — records what one step printed
+rather than a verdict on the run, so a sibling text that names the gateway
+outvotes it.
 
 The "a soft classification is not a soft pass" floor above is unchanged either
 way.
