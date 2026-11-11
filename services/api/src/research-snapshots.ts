@@ -212,6 +212,22 @@ export function packagedEvolveRuns(payload: unknown): boolean {
   return Array.isArray(container.runs) && container.runs.length > 0;
 }
 
+/** Whether any carried run has candidates whose source files do not travel.
+ *
+ *  A candidate's source lives outside the package (`evolve-candidates/<runId>/
+ *  <sha256>.py`), so the exporter carries the run record and its event log but
+ *  never the source scripts. A run with candidates therefore comes back with
+ *  references that cannot be inspected or re-run, and the receipt must say so. */
+export function packageCarriesEvolveCandidates(payload: unknown): boolean {
+  const container = typeof payload === "object" && payload !== null ? payload as { runs?: unknown } : {};
+  const runs = Array.isArray(container.runs) ? container.runs : [];
+  return runs.some((entry) => {
+    const run = typeof entry === "object" && entry !== null ? (entry as { run?: unknown }).run : undefined;
+    const candidates = typeof run === "object" && run !== null ? (run as { candidates?: unknown }).candidates : undefined;
+    return typeof candidates === "number" && Number.isInteger(candidates) && candidates > 0;
+  });
+}
+
 export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefined): boolean {
   return (artifacts ?? []).some((artifact) =>
     typeof artifact.name === "string" && artifact.name.startsWith("evolve/"));
@@ -721,6 +737,8 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
         const ranEvolve = packageRanEvolve(records.artifacts);
         if (ranEvolve && !carriedEvolveRuns && !omissions.some((item) => item.includes("does not carry evolution (evolve) search runs"))) {
           omissions.push("This package does not carry evolution (evolve) search runs: their candidate trees, scores and budgets are not restored. Re-run the search at the source, or export again from a version that includes them.");
+        } else if (carriedEvolveRuns && packageCarriesEvolveCandidates(records.evolve) && !omissions.some((item) => item.includes("candidate source"))) {
+          omissions.push("Evolution (evolve) candidate source files are not carried in this package: their candidates are restored as references without the source code.");
         }
         if (!records.memoryGraph && !records.memoryGraphSummary) omissions.push("This package contains no scientific memory snapshot; export it again from the source with the updated version to restore scientific memory.");
         else if (!records.memoryGraph && records.memoryGraphSummary) omissions.push("This package contains a scientific memory summary, not the full graph; its nodes and relationships cannot be restored.");

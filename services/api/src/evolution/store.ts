@@ -65,6 +65,8 @@ export interface CreateEvolveRunInput {
   /** Set when this run continues another run's search. */
   resumedFromRunId?: string;
   sessionId: string;
+  /** Restore path: the exported run's own timestamp. Defaults to now. */
+  createdAt?: string;
 }
 
 export interface AppendEventsResult {
@@ -174,7 +176,7 @@ export class EvolutionStore {
       algorithm: input.goal.algorithm,
       candidates: 0,
       costCents: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: input.createdAt ?? new Date().toISOString(),
       goal: input.goal,
       id,
       lastSeq: 0,
