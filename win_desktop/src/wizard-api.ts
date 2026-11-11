@@ -4,7 +4,8 @@
 // injected, no Electron imports.
 //
 // Contracts verified against services/api:
-//   GET /api/health (4410+N) / runner /health (4311+N) → no auth
+//   GET /api/health (4410+N) → liveness for any caller; the deployment detail,
+//     the Runner's body included, only with a bearer token
 //   GET /api/settings → { overrides, effective } (modelConfigured display only)
 
 export type WizardFetch = typeof fetch;
@@ -14,6 +15,12 @@ export type WizardFetch = typeof fetch;
 export interface SettingsResponse {
   overrides?: Record<string, unknown>;
   effective?: { modelId?: string | null };
+}
+
+/** The authenticated `/api/health` detail; a caller without a token gets only
+ *  `{ service, status }`, so `runner` is the field that proves the detail. */
+export interface HealthDetailResponse {
+  runner?: { status?: string; execution?: { ready?: boolean } };
 }
 
 export interface SelfCheckResult {
@@ -45,20 +52,19 @@ async function fetchSettings(
 export async function runSelfCheck(
   apiBase: string, token: string, runnerBase: string | null, fetchImpl: WizardFetch,
 ): Promise<SelfCheckResult> {
-  const api = await fetchImpl(`${apiBase}/api/health`, { signal: AbortSignal.timeout(4000) })
-    .then(r => r.ok).catch(() => false);
-  let runner = false;
-  if (runnerBase) {
-    try {
-      const res = await fetchImpl(`${runnerBase}/health`, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        // Gate on execution readiness (readiness.ts: ready=true for the
-        // unsandboxed local-execution path once the runner is up).
-        const body = await res.json() as { execution?: { ready?: boolean } };
-        runner = body.execution?.ready === true;
-      }
-    } catch { /* down */ }
-  }
+  let api = false;
+  let health: HealthDetailResponse | null = null;
+  try {
+    const res = await fetchImpl(`${apiBase}/api/health`, {
+      headers: authHeaders(token), signal: AbortSignal.timeout(4000),
+    });
+    api = res.ok;
+    if (api) health = await res.json() as HealthDetailResponse;
+  } catch { /* down */ }
+  // Readiness comes through the API, which forwards the Runner's own health
+  // body: the Runner port answers an anonymous caller with liveness only, so a
+  // direct probe cannot tell "ready" from "up" any more.
+  const runner = health?.runner?.execution?.ready === true;
   let modelConfigured = false;
   if (api) {
     const settings = await fetchSettings(apiBase, token, fetchImpl);
@@ -67,6 +73,8 @@ export async function runSelfCheck(
   return {
     api,
     runner,
+    // Only meaningful when the shell knows a Runner to check; the readiness
+    // itself is part of the API's authenticated answer.
     runnerChecked: runnerBase !== null,
     modelConfigured,
     // No model gate — the user may enter unconfigured and set up
