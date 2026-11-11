@@ -27,6 +27,7 @@ import {
   API_ORIGIN,
   api,
   cleanupDesktopFixture,
+  confirmEvolveDirectionDialog,
   createDesktopFixture,
   openDesktopSession,
   seedDesktopOrigin,
@@ -313,6 +314,9 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       await area.fill(PROBLEM);
       const before = new Set((await api<DesktopRun[]>(page, sessionRuns())).map((run) => run.id));
       await area.press("Enter");
+      // The sentence stops at the confirmation dialog the composer opens for
+      // an evolve send; answering it is what sends the command.
+      await confirmEvolveDirectionDialog(page);
 
       runId = (await waitForNewRun(page, fixture!.session.id, before)).id;
       metrics.turns.push({ id: runId, kind: "design", prompt: PROBLEM });

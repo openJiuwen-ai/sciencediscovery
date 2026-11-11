@@ -505,6 +505,29 @@ export async function openProjectSession(
   await expect(page.getByRole("heading", { exact: true, name: currentSession.title })).toBeVisible();
 }
 
+/** Whether a prompt is the evolve command, which stops at a confirmation
+ *  dialog instead of leaving on the submit. */
+export function isEvolveCommand(prompt: string): boolean {
+  return /^\/evolve-design(?:\s|$)/u.test(prompt.trimStart());
+}
+
+/**
+ * Answer the "confirm evolution settings" dialog the web client opens for an
+ * `/evolve-design` send.
+ *
+ * The command is deliberately not sent on the submit: `submitMessage` stores
+ * the draft and returns, and only the dialog's own button hands it to
+ * `sendComposerMessage`. A journey that ignores the dialog therefore waits on
+ * a Run that was never asked for, and the stack log shows no
+ * `POST /api/sessions/<id>/messages` at all.
+ */
+export async function confirmEvolveDirectionDialog(page: Page, timeout = 20_000): Promise<void> {
+  const dialog = page.getByRole("dialog", { name: /确认演进设置|Confirm evolution settings/ });
+  await expect(dialog).toBeVisible({ timeout });
+  await dialog.getByRole("button", { name: /^(开始演进|Start evolution)$/ }).click();
+  await expect(dialog).toBeHidden({ timeout: 60_000 });
+}
+
 /** Send one natural-language user request and return the persisted Run it creates. */
 export async function sendUserMessage(page: Page, sessionId: string, prompt: string): Promise<JourneyRun> {
   const runsPath = `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
@@ -515,6 +538,7 @@ export async function sendUserMessage(page: Page, sessionId: string, prompt: str
     candidate.method() === "POST" && /\/api\/sessions\/[^/]+\/messages$/.test(candidate.url()));
   await page.locator("form.composer").getByRole("textbox").fill(prompt);
   await page.getByRole("button", { name: /^(Run analysis|Add to queue|运行分析|加入队列)$/ }).click();
+  if (isEvolveCommand(prompt)) await confirmEvolveDirectionDialog(page);
   await request;
 
   let created: JourneyRun | undefined;

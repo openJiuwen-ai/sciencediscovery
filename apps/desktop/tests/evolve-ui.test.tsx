@@ -646,6 +646,32 @@ test("the create dialog offers the two searches as illustrated cards", () => {
   assert.match(html, /开始设计/);
 });
 
+test("the confirm step keeps the words a journey answers it by", () => {
+  const status: EvolveStatus = { canInitialize: true, state: "ready" };
+  const html = renderToStaticMarkup(
+    <EvolveCreateDialog
+      archived={false}
+      initializing={false}
+      onClose={() => {}}
+      onInitialize={() => {}}
+      onSend={() => {}}
+      running={false}
+      status={status}
+      submission={{ allowDirect: false }}
+    />,
+  );
+  // A typed evolve command is not sent by the composer's submit: this dialog
+  // takes it instead, and the desktop journey answers it by these two strings —
+  // the title it selects the dialog by and the button it presses. A rename here
+  // is what leaves that journey waiting on a Run nobody asked for, so it is
+  // pinned here rather than only in the real-E2E case that nightly owns.
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /aria-labelledby="evolve-create-title"/);
+  assert.match(html, /<h2 id="evolve-create-title">确认演进设置<\/h2>/);
+  assert.match(html, /class="evolve-create-submit"[^>]*>开始演进</);
+  // The create step keeps its own button — the two steps differ by `submission`.
+  assert.equal(html.includes("开始设计"), false);
+});
 test("the create dialog pauses at checkpoints unless the command said otherwise", () => {
   const status: EvolveStatus = { canInitialize: true, state: "ready" };
   const render = (checkpointMode?: "auto" | "confirm") => renderToStaticMarkup(

@@ -31,6 +31,7 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { isPlaceholderGoal } from "../src/evolve/command.js";
+import { DirectionDialog } from "../src/evolve/DirectionDialog.js";
 import { EvolveRunCard } from "../src/evolve/EvolveRunCard.js";
 import {
   emptyRunView,
@@ -505,4 +506,23 @@ test("the engine's log lines fold into the view for the panel to render", () => 
   ]);
   assert.equal(view.logLines.length, 2);
   assert.equal(view.logLines[1]!.level, "warn");
+});
+
+test("the confirm step keeps the words a journey answers it by", () => {
+  const html = renderToStaticMarkup(createElement(DirectionDialog, {
+    chinese: true,
+    task: "compress the text losslessly",
+    initialAlgorithm: "puct",
+    onClose: () => {},
+    onConfirm: () => {},
+  }));
+  // The command does not leave on the composer's submit: `submitMessage` keeps
+  // the draft and this dialog is what sends it. The real-E2E journey answers it
+  // by these two strings — the title it selects the dialog by and the button it
+  // presses — so a rename here would leave that journey waiting on a Run that
+  // nobody asked for. Nightly owns the journey; this pins the words it needs.
+  assert.match(html, /确认演进设置/);
+  assert.match(html, />开始演进</);
+  // The dialog is labelled by its heading, which is how a role query finds it.
+  assert.match(html, /aria-labelledby="[^"]+"[\s\S]*?<h2 id="[^"]+">确认演进设置<\/h2>/);
 });

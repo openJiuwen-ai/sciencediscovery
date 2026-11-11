@@ -8,7 +8,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { test, requireRealEnv, requireRealStack, allowRealEnvException } from "./helpers/e2e.ts";
 import { measureSession } from "./helpers/case-measurements.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { cleanupJourney, confirmEvolveDirectionDialog, createProjectAndSession, isEvolveCommand, openProjectSession } from "./helpers/journeys.ts";
 import { runTestCleanup } from "./helpers/test-failure.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { evolutionScorecard } from "./helpers/evolve-result.mjs";
@@ -92,6 +92,10 @@ test("PUCT-COMPRESS documented text compression search", {
       const before = new Set((await api<any[]>(`${prefix}/runs`)).map(run => run.id));
       await box.fill(text);
       await page.getByRole("button", { name: /^(Run analysis|Add to queue|运行分析|加入队列)$/ }).click();
+      // The evolve command stops at the confirmation dialog: the message is
+      // handed over by its own button, not by the composer's submit. The
+      // checkpoint reply below is an ordinary sentence and must not wait.
+      if (isEvolveCommand(text)) await confirmEvolveDirectionDialog(page);
       let created: any;
       // Slash commands may expand into skill context, so compare persisted identities, not rewritten prompt text.
       await expect.poll(async () => {

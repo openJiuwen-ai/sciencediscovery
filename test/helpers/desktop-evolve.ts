@@ -362,6 +362,39 @@ export async function openDesktopSession(page: Page, fixture: DesktopFixture): P
   await expect(page.locator("#composer-textarea")).toBeVisible();
 }
 
+/** Whether a prompt is the evolve command, which stops at a confirmation
+ *  dialog instead of leaving on the submit. */
+export function isEvolveCommand(prompt: string): boolean {
+  return /^\/evolve-design(?:\s|$)/u.test(prompt.trimStart());
+}
+
+/**
+ * Answer the "confirm evolution settings" dialog the desktop composer opens
+ * for an evolve send.
+ *
+ * `Composer.submit` stores the draft and returns as soon as an evolve command
+ * is involved; the dialog's own button is what calls `sendDraft`. A journey
+ * that types the sentence, presses Enter and then waits for a Run waits on
+ * something that was never asked for — the stack log stays free of
+ * `POST /api/sessions/<id>/messages`.
+ *
+ * Without a sandbox the same dialog asks a second question, and the command
+ * carries `--allow-direct` only after it is answered; that alert is handled
+ * here the same way the srbench journey handles it, and is absent on CI.
+ */
+export async function confirmEvolveDirectionDialog(page: Page, timeout = 20_000): Promise<void> {
+  const dialog = page.getByRole("dialog", { name: /确认演进设置|Confirm evolution settings/ });
+  await expect(dialog).toBeVisible({ timeout });
+  await dialog.getByRole("button", { name: /^(开始演进|Start evolution)$/ }).click();
+  const unisolated = page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" });
+  // The alert belongs to the same component, so it opens before the dialog
+  // closes; give it the moment it needs before concluding this host has a
+  // sandbox.
+  await unisolated.waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+  if (await unisolated.isVisible().catch(() => false)) await unisolated.click();
+  await expect(dialog).toBeHidden({ timeout: 60_000 });
+}
+
 /** Wait on the persisted Run the service created, not on a transient state. */
 export async function waitForNewRun(
   page: Page,
@@ -384,5 +417,6 @@ export async function sendMessage(page: Page, sessionId: string, prompt: string)
   const before = new Set((await api<DesktopRun[]>(page, runsPath)).map((run) => run.id));
   await page.locator("#composer-textarea").fill(prompt);
   await page.locator("#composer-textarea").press("Enter");
+  if (isEvolveCommand(prompt)) await confirmEvolveDirectionDialog(page);
   return waitForNewRun(page, sessionId, before);
 }
