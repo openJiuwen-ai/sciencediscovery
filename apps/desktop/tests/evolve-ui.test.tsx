@@ -698,6 +698,41 @@ test("the create dialog opens on the search the command named", () => {
   assert.match(byDefault, /aria-checked="true"[\s\S]{0,600}?evolve-algorithm-name">PUCT算法/);
 });
 
+test("the generate action names the real reason it is unavailable", () => {
+  // `submission.onGenerate` reaches the input only while the session has a
+  // loaded detail — App.tsx derives it from `state.detail` — so its absence
+  // means "no session yet", not "no task typed". The old hint claimed the
+  // latter and sent the reporter to retype a task that could not unlock the
+  // button; the disabled row also looked exactly like the enabled one (#1091).
+  const status: EvolveStatus = { canInitialize: true, state: "ready" };
+  const render = (onGenerate?: (signal: AbortSignal) => Promise<{ baseline: string; editable: string[] }>) => renderToStaticMarkup(
+    <EvolveCreateDialog
+      archived={false}
+      initializing={false}
+      onClose={() => {}}
+      onInitialize={() => {}}
+      onSend={() => {}}
+      running={false}
+      status={status}
+      submission={{ allowDirect: false, onGenerate }}
+    />,
+  );
+  const button = /<button[^>]*>生成起始字段<\/button>/;
+  const disabled = (html: string) => /<button[^>]*disabled=""[^>]*>生成起始字段<\/button>/.test(html);
+
+  const withoutSession = render();
+  // Still offered, but now visibly unavailable and explained.
+  assert.match(withoutSession, button);
+  assert.equal(disabled(withoutSession), true);
+  assert.match(withoutSession, /会话尚未就绪/);
+  assert.equal(withoutSession.includes("先在会话输入框写下任务"), false);
+
+  const ready = render(async () => ({ baseline: "{}", editable: [] }));
+  assert.match(ready, button);
+  assert.equal(disabled(ready), false);
+  assert.equal(ready.includes("会话尚未就绪"), false);
+});
+
 test("a host with no sandbox warns that candidates run unconfined", () => {
   // The warning is a statement under the title, not a switch: consent is asked
   // when the search is started, so the form must not offer to give it early.
