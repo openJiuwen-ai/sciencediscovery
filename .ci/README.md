@@ -356,7 +356,11 @@ server error, not because the product ran and did not deliver. The suite
 tells the two apart. A failure that carries a gateway status (500, 502,
 503, 504) together with a provider marker — the gateway's own `181001`
 model-call code, `new_api_error`, `model_not_found`, "no available channel" —
-is recorded as `PROVIDER_FAULT` rather than `FAIL`:
+is recorded as `PROVIDER_FAULT` rather than `FAIL`. So is a stream that
+answered `200` and then broke on the wire: `read ECONNRESET`, `other side
+closed`, `socket hang up` or `UND_ERR_SOCKET` together with the same gateway
+marker carries no status at all, and is recorded as `PROVIDER_FAULT:
+provider-transport`:
 
 - the provider's own text is kept unchanged in the failure record;
 - the case counts as executed, and the cases that passed in the same job stay
@@ -389,7 +393,11 @@ itself: a product delivery failure that merely quotes a provider status — the
 words "provider", "llm", "gateway" or "upstream" beside a `500` — is the
 product's own failure and stays a `FAIL`. A delivery miss or an assertion
 diff is the product's own report in the first place, so it stays a `FAIL`
-even when it carries the provider's words with it.
+even when it carries the provider's words with it — with one deliberate
+exception: a status-less transport break is checked before that product
+report, because the failed case text wraps the provider's words in
+`delivery_status=failed`, which is the product restating a run that died on
+the wire, not evidence it mishandled a complete answer.
 
 A case whose first attempt died early on such a fault is run once more, on
 its own. Only an attempt that failed within five minutes is repeated, so a

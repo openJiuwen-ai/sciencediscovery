@@ -24,12 +24,19 @@
  * anything the provider said.
  *
  * The rules stay narrow on purpose. A fault must carry a server status *and*
- * a provider context, or name one of the gateway's own routing failures
- * outright. An authentication or rate-limit answer is a decision, not an
- * outage, and a failure with no provider context is the product's own. The
- * provider's context has to name the gateway itself: a product delivery
- * failure that merely quotes a provider status is the product's failure, and
- * stays one.
+ * a provider context, name one of the gateway's own routing failures
+ * outright, or be a transport break with no status at all — `read
+ * ECONNRESET`, `other side closed`, `socket hang up`, `UND_ERR_SOCKET` —
+ * beside the gateway naming itself. An authentication or rate-limit answer
+ * is a decision, not an outage, and a failure with no provider context is the
+ * product's own. The provider's context has to name the gateway itself: a
+ * product delivery failure that merely quotes a provider status is the
+ * product's failure, and stays one.
+ *
+ * A transport break is checked before the product-report rule on purpose: the
+ * failed case text wraps the provider's words in `delivery_status=failed`,
+ * which is the product restating a run that died on the wire, not evidence it
+ * mishandled a complete answer.
  *
  * Naming a fault is not a pass. The accounting keeps the two apart and
  * reports the fault as such, but a planned case that only faulted is an
