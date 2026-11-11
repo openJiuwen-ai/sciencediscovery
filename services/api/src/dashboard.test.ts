@@ -1586,7 +1586,6 @@ test("a long file does not cost a legitimate table its columns", async (context)
     for (const row of payload.rows) assert.equal(row.length, 6, `${rowCount}: rows are six cells wide`);
     assert.deepEqual(payload.clippedColumns, { shown: 6, total: 6 });
     assert.equal(payload.clippedCells, 0, `${rowCount}: nothing is past the width`);
-    assert.deepEqual(payload.warnings, [], `${rowCount}: a whole table warns about nothing`);
   }
 });
 
@@ -1629,10 +1628,10 @@ test("a delimited preview caps a pathological line and counts what it leaves out
     { shown: 2, total: 2 },
     "the column count comes from the header; the wide row is cells, not columns",
   );
-  assert.deepEqual(
-    payload.warnings,
-    ["199997 cells past the preview width are not shown."],
-    "one loss, one sentence: the rows' cells, not a schema the file does not have",
+  assert.equal(
+    "warnings" in payload,
+    false,
+    "the payload carries the numbers the viewer localizes from, not English sentences of its own",
   );
   assert.ok(
     JSON.stringify(payload).length < 1_000_000,
@@ -1689,7 +1688,6 @@ test("a wide data line is a row, not the file's column count", async (context) =
   if (ragged.mode !== "dataset-table") assert.fail(`unexpected mode ${ragged.mode}`);
   assert.deepEqual(ragged.columns, named, "every named column is kept, in order");
   assert.deepEqual(ragged.clippedColumns, { shown: 40, total: 40 });
-  assert.deepEqual(ragged.warnings, [], "a short row pads up to the header, so nothing is unnamed");
 });
 
 test("a header wider than the preview is clipped with an explicit signal", async (context) => {
@@ -1755,11 +1753,6 @@ test("a delimited preview shows the same columns whatever maxRows it is asked fo
   assert.equal(first.columns.length, 4, "the header plus the capped surplus, whatever maxRows asks");
   assert.equal(first.rows.length, 1);
   assert.equal(first.rows[0]?.length, 4, "a returned row is padded to the file-wide width");
-  assert.deepEqual(
-    first.warnings,
-    ["The preview pads 2 unnamed columns for a wider line outside the returned rows."],
-    "the grid is wider than the row returned, and says why",
-  );
   assert.equal(many.rows.length, 100, "maxRows above the row constant is clamped");
   assert.equal(some.rows.length, 50, "maxRows below the row constant still lowers the count");
   assert.equal(many.totalRows, 103);
