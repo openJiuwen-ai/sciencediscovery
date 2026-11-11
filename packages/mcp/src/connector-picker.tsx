@@ -140,7 +140,8 @@ export function ConnectorPicker({
                       provider had failed, because the catalog only compares
                       schemas (#1081). The label is advisory: it never changes
                       the selection or the readiness gate above. */}
-                  {status?.lastOutage ? <small className="connector-picker-outage" role="status">
+                  {status?.lastOutage ? <small className="connector-picker-outage" role="status"
+                    title={status.lastOutage.detail ?? undefined}>
                     {t("connectors.lastOutage", { at: new Date(status.lastOutage.at).toLocaleString(), code: status.lastOutage.code })}
                   </small> : null}
                 </span>

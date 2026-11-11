@@ -246,6 +246,11 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-popover label strong { color: var(--text-heading); font-size: 13px; }
 .connector-picker-popover label small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .connector-picker-popover label .connector-picker-status { color: var(--warning-accent); white-space: normal; }
+/* The recorded-outage line sits under the readiness line. It needs the same
+   treatment: without a rule it inherits `label small` (nowrap + ellipsis), so
+   the localized sentence was clipped at the popover's 340px width and drawn
+   in the muted colour instead of the warning colour (#1102 review). */
+.connector-picker-popover label .connector-picker-outage { color: var(--warning-accent); white-space: normal; }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

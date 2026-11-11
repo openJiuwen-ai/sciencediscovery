@@ -17,6 +17,7 @@ import { createIdeaResearchClient } from "../idea-tree/research.js";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
+import { SourceOutages } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
 import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
@@ -243,7 +244,10 @@ export function createPlatformServices(
     }
     return map;
   };
-  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap, (catalog) => customMcpServers.applyCatalog(catalog));
+    // One instance for both sides: the broker records an outage and the catalog
+  // reports it in `getStatus`, so they must not fall back to two defaults.
+  const mcpSourceOutages = new SourceOutages();
+  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap, (catalog) => customMcpServers.applyCatalog(catalog), mcpSourceOutages);
   // WebBroker mirrors successful web_search / web_fetch to the graph (WebPage
   // nodes by URL); the registry's ``toolGraphType(...)`` gates the emit. The
   // sink is the same instance used by the MCP broker — fire-and-forget in
@@ -255,7 +259,7 @@ export function createPlatformServices(
     mcpRegistry,
     mcpCatalog,
     mcpGateway,
-    { memoryGraphSink },
+    { memoryGraphSink, outages: mcpSourceOutages },
   );
   const paperService = new PaperService(store, config.paperPythonPath, config.paperWorkerPath);
   const artifactManager = new GovernedDownloadManager(

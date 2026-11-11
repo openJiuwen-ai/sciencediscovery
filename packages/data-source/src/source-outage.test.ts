@@ -5,7 +5,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import type { McpCatalog, McpSourceManifest } from "@sciencediscovery/schema";
 import { McpSourceCatalog } from "./catalog.js";
-import { SOURCE_OUTAGE_TTL_MS, SourceOutages } from "./source-outage.js";
+import { recordedOutage, SOURCE_OUTAGE_TTL_MS, SourceOutages } from "./source-outage.js";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 const at = "2026-11-11T12:00:00.000Z";
@@ -54,4 +54,52 @@ test("the catalog reports the outage beside the status instead of changing it", 
     assert.deepEqual(during.lastOutage, outage);
     assert.deepEqual(during.availableTools, before.availableTools);
   });
+});
+
+test("only a provider-level failure is remembered, not a tool-level rejection", () => {
+  // A routine tool failure (invalid query, unresolvable DOI) arrives as
+  // `semantic-error`; `upstreamError` still falls back to UPSTREAM_UNAVAILABLE
+  // for it, so the old predicate recorded a ten-minute outage and the readiness
+  // line read `Last upstream outage: SEMANTIC_ERROR` (#1102 review).
+  const at = () => Date.parse("2026-11-11T12:00:00.000Z");
+  const semantic = { code: "UPSTREAM_UNAVAILABLE", message: "DOI not found", upstreamCode: "SEMANTIC_ERROR" };
+  assert.equal(recordedOutage({ status: "semantic-error" }, "pubmed", "search", semantic, at), undefined);
+  assert.equal(recordedOutage({ status: "rate-limited" }, "pubmed", "search", semantic, at), undefined);
+  // A broker cooldown / cancellation is not evidence about the endpoint either.
+  assert.equal(recordedOutage(undefined, "pubmed", "search", semantic, at), undefined);
+
+  // A record-scoped 404 keeps NOT_FOUND and is not an outage.
+  const notFound = { code: "NOT_FOUND", message: "HTTP 404", upstreamCode: "NOT_FOUND" };
+  assert.equal(recordedOutage({ status: "semantic-error", upstream: { statusCode: 404 } }, "pubmed", "search", notFound, at), undefined);
+
+  // Transport and server failures are.
+  const transport = recordedOutage({ status: "transport-error" }, "pubmed", "search", semantic, at);
+  assert.equal(transport?.code, "UPSTREAM_UNAVAILABLE");
+  assert.equal(transport?.sourceId, "pubmed");
+  assert.equal(transport?.toolId, "search");
+  assert.equal(transport?.at, "2026-11-11T12:00:00.000Z");
+  assert.equal(recordedOutage({ status: "server-error" }, "pubmed", "search", semantic, at)?.code, "UPSTREAM_UNAVAILABLE");
+});
+
+test("an endpoint-scoped failure is recorded with the endpoint code", () => {
+  // The 406 endpoint refusal is the one endpoint-level signal that exists today:
+  // http_errors.py sets `failureScope: "endpoint"` and SourceHealth keys its
+  // cooldown on exactly that. It used to be stored as SEMANTIC_ERROR, i.e.
+  // indistinguishable from a request-scoped rejection (#1102 review).
+  const at = () => Date.parse("2026-11-11T12:00:00.000Z");
+  const outage = recordedOutage(
+    { status: "semantic-error", upstream: { endpoint: "https://example.org", failureScope: "endpoint", statusCode: 406 } },
+    "pubmed",
+    "search",
+    { code: "UPSTREAM_UNAVAILABLE", message: "HTTP 406 from example.org", upstreamCode: "SEMANTIC_ERROR" },
+    at,
+  );
+  assert.equal(outage?.code, "ENDPOINT_UNAVAILABLE");
+  assert.equal(outage?.detail, "HTTP 406 from example.org");
+  assert.equal(outage?.sourceId, "pubmed");
+
+  // And it is what `getStatus` then reports, next to an unchanged status.
+  const outages = new SourceOutages(at);
+  outages.note(outage!);
+  assert.deepEqual(outages.read("pubmed"), outage);
 });
