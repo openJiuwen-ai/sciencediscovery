@@ -118,7 +118,26 @@ test("shutdown signals an admitted calculation before waiting for its completion
   await admitted; await previews.close(); await pending;
 });
 
-test("background warming caches all default sizes, invalidates on evidence revisions and serializes work", async () => {
+test("background warming preheats only the necessary profile, not all five", async () => {
+  const calls: ExportPreviewOptions[] = [];
+  const previews = new ResearchExportPreviews(async () => "r1", async (options, revision) => {
+    calls.push(options);
+    return { revision, estimatedBytes: 1, estimateKind: "uncompressed", files: [], omissions: [] };
+  });
+  try {
+    previews.watch("p", "s");
+    await previews.tick();
+    assert.equal(calls.length, 1, "the background warm runs one profile");
+    assert.equal(calls[0]!.level, "necessary");
+    assert.equal(calls[0]!.includeFullTrajectory, false);
+    assert.equal(calls[0]!.includeFullMemoryGraph, false);
+    // The explicit defaults request still computes all five on demand.
+    await previews.defaults("p", "s");
+    assert.equal(calls.length, 5);
+  } finally { await previews.close(); }
+});
+
+test("default preview sizes cache, invalidate on evidence revisions and serialize work", async () => {
   let revision = "r1", active = 0, peak = 0;
   const calls: ExportPreviewOptions[] = [];
   const previews = new ResearchExportPreviews(async () => revision, async (options, current) => {
@@ -161,7 +180,7 @@ test("background warming defers active sessions and resumes at their terminal re
     await previews.tick();
     const warmed = await previews.defaults("p", "s");
     assert.equal(warmed.revision, "completed");
-    assert.equal(calculations, 6, "one explicit request followed by five terminal profiles");
+    assert.equal(calculations, 6, "one explicit request, the terminal warm, then the four on-demand complete profiles");
   } finally { await previews.close(); }
 });
 

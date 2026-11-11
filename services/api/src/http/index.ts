@@ -3101,7 +3101,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionMatch && request.method === "GET") {
         const session = await store.getSessionDetail(sessionMatch[1]!);
         if (!session) return sendError(response, 404, "Session not found");
-        if (!session.researchSnapshot || session.researchSnapshot.state === "ready") exportPreviews.watch(session.projectId, session.id);
+        // Reading a session must not start an export build: warming here ran
+        // five full preview profiles per read and per 3 s tick, exhausting the
+        // default heap on large projects (#1085). The export dialog warms on
+        // its own `defaults` request instead.
         sendJson(response, 200, session);
         return;
       }
