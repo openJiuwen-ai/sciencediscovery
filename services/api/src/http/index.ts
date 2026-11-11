@@ -1199,7 +1199,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           runner: runner ?? { status: "unavailable" },
           service: "sciencediscovery-api",
-          status: runner && runner.execution?.ready !== false ? "ok" : "degraded",
+          // `status` follows the Runner's readiness record, not the fact that a
+          // Runner answered: a Runner that does not accept this token answers
+          // 200 with its public body, which carries no `execution`. Reading that
+          // as "ok" would tell an operator the stack is healthy while its Runner
+          // was never consulted.
+          status: runner?.execution && runner.execution.ready !== false ? "ok" : "degraded",
           workspace,
         });
         return;

@@ -630,6 +630,21 @@ test("API health exposes details only with a valid token on both routes", async 
   }
 });
 
+test("API health is degraded when the Runner answers without its detail", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `api-health-liveness-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  // A Runner that does not accept this token still answers 200, with the public
+  // body and no readiness record. The authenticated detail must not read that as
+  // a healthy stack: nothing was consulted to say so.
+  const { origin } = await startTestApi(context, root, undefined, { runnerToken: "a-token-the-runner-will-not-accept" });
+  const response = await fetch(`${origin}/health`, { headers: authorization });
+  assert.equal(response.status, 200);
+  const health = await response.json() as { runner: { execution?: unknown; status: string }; status: string };
+  assert.equal(health.runner.execution, undefined);
+  assert.equal(health.status, "degraded");
+});
+
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
