@@ -25,7 +25,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TEXT } from "../src/text.js";
 import { AuthScreen } from "../src/views/AuthScreen.js";
 import { OfflineScreen } from "../src/views/OfflineScreen.js";
-import { SetupWizard } from "../src/views/SetupWizard.js";
+import { SetupWizard, selfCheckTip } from "../src/views/SetupWizard.js";
 import { StubClient } from "./api-stub.js";
 
 const noop = () => {};
@@ -141,5 +141,20 @@ describe("the first-run setup wizard", () => {
 
     assert.ok(markup.includes(TEXT.wizard.custom.protocol));
     assert.ok(markup.includes(TEXT.wizard.custom.option));
+  });
+
+  it("only the Runner says why it was not checked, and only when the token is the reason", () => {
+    // The browser path reads the public health body: liveness, no Runner detail.
+    // A row that is skipped for that reason must not read like a defect.
+    assert.equal(selfCheckTip("runner", "skip", true), TEXT.wizard.boot.runnerNeedsToken);
+    assert.notEqual(TEXT.wizard.boot.runnerNeedsToken, TEXT.wizard.boot.notChecked);
+    // Another skip reason keeps the neutral wording, and so does every other row.
+    assert.equal(selfCheckTip("runner", "skip", false), TEXT.wizard.boot.notChecked);
+    assert.equal(selfCheckTip("api", "skip", true), TEXT.wizard.boot.notChecked);
+    assert.equal(selfCheckTip("model", "skip", false), TEXT.wizard.boot.notChecked);
+    // A row that was checked carries no tooltip at all.
+    for (const state of ["ok", "fail", "pending"] as const) {
+      assert.equal(selfCheckTip("runner", state, true), undefined);
+    }
   });
 });
