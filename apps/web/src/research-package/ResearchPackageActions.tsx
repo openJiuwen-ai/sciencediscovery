@@ -218,6 +218,11 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const sizeText = (bytes: number | undefined) => bytes === undefined
     ? scopeGone ? unavailableSize : t("researchPackage.previewCalculating")
     : formatSize(bytes);
+  // What the alert may claim is on screen. `preview` alone is not enough: picking
+  // a file clears it while the two scope cards keep the sizes they read from
+  // `defaults`, and those survive the gone answer — in that window the cards show
+  // last-known bytes, so the sentence has to admit them.
+  const hasVisibleSizes = preview !== undefined || necessarySize !== undefined || completeSize !== undefined;
   return <DialogFrame description={t("researchPackage.exportDescription")} onClose={onClose} title={t("researchPackage.exportEvidence")}>
     <div className="research-export-body">
       <div className="research-choice-grid"><ChoiceCard checked={level === "necessary"} description={t("researchPackage.necessaryDescription", { size: sizeText(necessarySize) })} onClick={() => chooseLevel("necessary")} title={t("researchPackage.scopeNecessary")} /><ChoiceCard checked={level === "complete"} description={t("researchPackage.completeDescription", { size: sizeText(completeSize) })} onClick={() => chooseLevel("complete")} title={t("researchPackage.scopeComplete")} /></div>
@@ -233,7 +238,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {level === "complete" ? <label className="research-export-toggle"><input checked={includeFullMemoryGraph} onChange={(event) => setIncludeFullMemoryGraph(event.target.checked)} type="checkbox" /><span><strong>{t("researchPackage.fullMemoryGraph")}</strong><small>{t("researchPackage.fullMemoryGraphHint")}</small></span></label> : null}
       <p className="research-export-note">{t("researchPackage.completeNote")}</p>
       {preview?.omissions.length ? <details className="research-export-details"><summary>{t("researchPackage.omissions", { count: preview.omissions.length })}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
-      {scopeGone ? <p role="alert" className="research-export-error">{t(preview ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
+      {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
     <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;
