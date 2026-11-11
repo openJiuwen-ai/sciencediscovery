@@ -298,7 +298,6 @@ export function subagentFinalText(subagent: Pick<Subagent, "steps">): string | u
 }
 
 async function summarizeSubagentResult(subagent: Subagent, saveSubagentResult?: WorkspaceToolOptions["saveSubagentResult"]): Promise<{
-  brief?: string;
   error?: string;
   finalText?: string;
   id: string;
@@ -336,7 +335,13 @@ async function summarizeSubagentResult(subagent: Subagent, saveSubagentResult?: 
   const finalText = fullFinalText?.slice(0, SUBAGENT_RESULT_TEXT_LIMIT);
   const truncated = fullFinalText !== undefined && finalText !== undefined && fullFinalText.length > finalText.length;
   // Only an oversized body needs a ref; a full handoff stays self-contained.
-  const resultRef = truncated ? (await saveSubagentResult?.(fullFinalText))?.ref : undefined;
+  // A failing sink is not fatal: `ToolOutputGuard` already treats it that way, and
+  // the parent is better served by a marked truncated body than by a tool error
+  // that loses the whole handoff (#1107 review).
+  let resultRef: string | undefined;
+  if (truncated) {
+    try { resultRef = (await saveSubagentResult?.(fullFinalText))?.ref; } catch { resultRef = undefined; }
+  }
   const stopReason = subagentStopReason(subagent);
   const subagentContractStopReason = contractStopReason(stopReason);
   const tokenUsage = subagentTokenUsage(subagent.usage);

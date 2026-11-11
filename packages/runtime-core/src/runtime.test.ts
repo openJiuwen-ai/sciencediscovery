@@ -267,7 +267,6 @@ test("the max-turn boundary closes every assistant tool call before returning", 
   // Every allowed turn asked for another tool, so the run stops by naming the
   // bound instead of reporting `completed` (#1106). The loop still has to have
   // paired each assistant tool call with its result before it stops.
-  const states = loop.state;
   await assert.rejects(() => loop.run([], new AbortController().signal, () => undefined), /maxTurns=128/u);
   assert.equal(turn, 128, "the model is asked exactly as many times as the bound allows");
   const history = loop.state.history;
@@ -278,7 +277,6 @@ test("the max-turn boundary closes every assistant tool call before returning", 
     assert.equal(tool.tool_call_id, (assistant.tool_calls as Array<{ id: string }>)[0]!.id);
   }
   assert.equal(loop.state.phase, "failed", "a bounded stop is a failure, not a completion");
-  void states;
 });
 
 test("uses assembler history as the next authoritative state", async () => {

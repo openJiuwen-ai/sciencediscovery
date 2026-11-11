@@ -56,6 +56,26 @@ test("subagent lifecycle distinguishes timeout and max-turn caps", () => {
     }),
     { error: "Subagent exceeded maxTurns=3", status: "timed_out" },
   );
+  // The engine now reports its own exhaustion (#1106). The observer that sets
+  // `maxTurnsExceeded` never runs for a bound inside the ceiling, so the message
+  // alone has to classify as a budget stop rather than as an ordinary failure.
+  assert.deepEqual(
+    classifySubagentFailure(new Error("Agent exceeded maxTurns=128"), {
+      maxTurns: 128,
+      maxTurnsExceeded: false,
+      parentAborted: false,
+    }),
+    { error: "Agent exceeded maxTurns=128", status: "timed_out" },
+  );
+  // Anything else still lands in `failed`, so the new branch is not a catch-all.
+  assert.deepEqual(
+    classifySubagentFailure(new Error("Agent exceeded the retry budget"), {
+      maxTurns: 128,
+      maxTurnsExceeded: false,
+      parentAborted: false,
+    }),
+    { error: "Agent exceeded the retry budget", status: "failed" },
+  );
 });
 
 test("subagent lifecycle maps parent abort to cancelled and preserves other failures", () => {
