@@ -159,5 +159,29 @@ text can still be sensitive.
 - This is an observation component, not a model tool or a plugin enable/disable setting.
   Viewing or exporting does not execute models, tools, recovery, publishing, or evolution.
 
+### Heap budget and the event budget
+
+Two limits are explicit instead of being left to V8's defaults.
+
+- **The API's old-space budget** is `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB` (default
+  3072 MiB). Every launch path passes it — the `services/api` package scripts,
+  `scripts/start-stack.sh`, `scripts/start-stack.mjs` and the packaged launcher — and the
+  API states the flag it actually received in its `api_heap_budget` log event. A process
+  started without the flag logs `api_heap_budget_implicit` instead of silently running on
+  V8's default. `api_memory_sample` records RSS, heap usage and the ratio to the limit every
+  30 seconds; `api_memory_pressure` (75%) and `api_memory_critical` (90%) are logged once
+  each, so a long Session is visible in the log before the process is killed.
+- **The trajectory builder's event budget** is `SCIENCE_AGENT_TRAJECTORY_MAX_EVENTS`
+  (default 120000). A Session with more recorded Run events than that is shown as a tail:
+  the oldest events are dropped as newer ones arrive, and the trajectory index carries a
+  warning naming how many were left out. Committed Steps, event segments, journals and
+  contexts are read from CAS rather than from that array, so they are unaffected, and the
+  viewer lists the warning with the other recording-completeness notes. Raising the
+  variable includes more of a very long Session at the cost of holding more of it in memory.
+
+`scripts/measure-trajectory-memory.mjs` builds a Session of a requested size through the
+store and reports the peak RSS and heap of its trajectory build; that measurement is how
+the number 120000 was chosen.
+
 See [plugin mechanism](plugins.md), [Agent backend](agent-backend.md), and
 [content-addressable storage](cas.md).
