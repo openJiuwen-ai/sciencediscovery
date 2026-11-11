@@ -92,8 +92,6 @@ export type ArtifactPreviewPayload =
       clippedCells?: number;
       /** The file's column count and the count the preview shows. */
       clippedColumns?: { total: number; shown: number };
-      /** Sentences for what the preview left out; empty when whole. */
-      warnings?: string[];
       /**
        * The re-indented source document, carried only for JSON-backed tables so
        * the viewer can offer a raw-JSON view of the same version. Absent for

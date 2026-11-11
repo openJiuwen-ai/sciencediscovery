@@ -155,12 +155,6 @@ export type ArtifactPreviewPayload =
        */
       clippedColumns: { total: number; shown: number };
       /**
-       * Human-readable sentences for everything the preview left out: a clipped
-       * column set, clipped row cells, both, or nothing. Empty when the preview
-       * is whole, so a consumer can show them verbatim.
-       */
-      warnings: string[];
-      /**
        * The re-indented source document, carried only for JSON-backed tables so
        * the viewer can offer a raw-JSON view of the same version. Absent for
        * csv/tsv, which have no JSON form to switch to.
@@ -379,12 +373,11 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   totalRows: number;
   clippedCells: number;
   clippedColumns: { total: number; shown: number };
-  warnings: string[];
 } {
   const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
   if (!lines.length) {
-    return { columns: [], clippedCells: 0, clippedColumns: { shown: 0, total: 0 }, rows: [], totalRows: 0, warnings: [] };
+    return { columns: [], clippedCells: 0, clippedColumns: { shown: 0, total: 0 }, rows: [], totalRows: 0 };
   }
   const header = lines[0] ?? [];
   const totalRows = Math.max(0, lines.length - 1);
@@ -420,25 +413,10 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
     }
     return [...row, ...Array.from({ length: width - row.length }, () => "")];
   });
-  const warnings: string[] = [];
-  if (clippedColumns.total > clippedColumns.shown) {
-    warnings.push(`The file has ${clippedColumns.total} columns; the preview shows the first ${clippedColumns.shown}.`);
-  }
-  if (clippedCells > 0) {
-    warnings.push(`${clippedCells} cells past the preview width are not shown.`);
-  }
-  // The width can come from a line this call does not return. The column set must
-  // not depend on how many rows a caller asks for, so the width stays file-wide,
-  // but the padding must not look like data either: name the columns that exist
-  // only for an unseen line.
-  const widestReturned = rows.reduce((widestRow, row) => Math.max(widestRow, row.length), 0);
-  const paddingColumns = Math.max(0, width - Math.max(totalColumns, widestReturned));
-  if (paddingColumns > 0) {
-    warnings.push(
-      `The preview pads ${paddingColumns} unnamed ${paddingColumns === 1 ? "column" : "columns"} `
-      + "for a wider line outside the returned rows.",
-    );
-  }
+  // The width can come from a line this call does not return, so the returned
+  // rows are padded to a file-wide width. `clippedCells`, `clippedColumns` and
+  // the padded width are the whole contract: the viewer composes its own copy
+  // from those numbers, so the payload carries no sentences of its own.
   return {
     clippedCells,
     clippedColumns,
@@ -447,7 +425,6 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
       : [...header, ...Array.from({ length: width - header.length }, () => "")],
     rows: paddedRows,
     totalRows,
-    warnings,
   };
 }
 
@@ -474,7 +451,6 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
   totalRows: number;
   clippedCells: number;
   clippedColumns: { total: number; shown: number };
-  warnings: string[];
 } {
   const columns = records.reduce<string[]>((acc, record) => {
     for (const key of Object.keys(record)) {
@@ -493,7 +469,6 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
     columns,
     rows,
     totalRows: records.length,
-    warnings: [],
   };
 }
 
