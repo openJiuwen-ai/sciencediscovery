@@ -99,3 +99,12 @@ rg '\[recording-progress\]|\[gateway-progress\]|\[model-stream\]' /path/to/api.l
 
 这些日志用于定位下一次异常等待，并不说明历史上的慢记录根因已经确定。
 如果事件循环本身被同步工作阻塞，定时日志也会延迟；需要结合外部 CPU、内存和 I/O 监控判断。
+
+### 堆预算与事件预算
+
+有两个上限是显式给出的，不再交给 V8 的默认值。
+
+- **API 的老生代预算**由 `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB` 决定（默认 3072 MiB）。所有启动路径都传入它——`services/api` 的 package 脚本、`scripts/start-stack.sh`、`scripts/start-stack.mjs` 和打包后的 launcher——API 在 `api_heap_budget` 日志事件里写明自己实际收到的 flag。没有收到 flag 的进程记录 `api_heap_budget_implicit`，而不是静默按 V8 默认值运行。`api_memory_sample` 每 30 秒记录 RSS、堆用量和占上限的比例；`api_memory_pressure`（75%）与 `api_memory_critical`（90%）各自只记一次，长时间会话在进程被杀之前就能在日志里看到。
+- **轨迹构建端的事件预算**由 `SCIENCE_AGENT_TRAJECTORY_MAX_EVENTS` 决定（默认 120000）。超过该数量的会话按尾部展示：更早的事件在更新事件到达时被丢弃，轨迹索引里带一条说明丢弃数量的 warning。已提交 Step、EventSegment、journal 和上下文都从 CAS 读取而不是来自这个数组，因此不受影响；查看器把该 warning 与其它记录完整性说明列在一起。提高该变量可以让超长会话保留更多内容，代价是占用更多内存。
+
+`scripts/measure-trajectory-memory.mjs` 按指定规模通过 store 构造会话，并报告其轨迹构建的 RSS 与堆峰值；120000 这个默认值就是据此测出来的。

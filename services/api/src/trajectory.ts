@@ -5,8 +5,48 @@ import { object, redact, type TrajectoryAgent, type TrajectoryDetail } from "@sc
 import type { SessionStore } from "./store.js";
 import { readPackageTrajectory } from "./research-package-trajectory.js";
 
+/**
+ * How many recorded Run events this view may hold while it is built.
+ *
+ * The builder below appends every event of every Run, of every agent stream and
+ * every `tool-<id>` stream, and hands the whole array to `openSessionTrajectory`,
+ * which keeps it for the life of the request (#1063, one layer above the
+ * whole-stream reads #1061 fixed). A long research session therefore became one
+ * unbounded array. It is bounded now: past the budget the oldest events are
+ * dropped as newer ones arrive, and the trajectory index carries a warning
+ * naming how many were left out, so the view is honest about being a tail
+ * instead of pretending the session was shorter.
+ *
+ * What the index is built from — committed steps, event segments, journals and
+ * contexts — is read from CAS, not from this array, so the newest work stays
+ * complete and the warning is the only visible difference.
+ */
+export const TRAJECTORY_MAX_EVENTS_ENV = "SCIENCE_AGENT_TRAJECTORY_MAX_EVENTS";
+export const DEFAULT_TRAJECTORY_MAX_EVENTS = 120_000;
+export const MIN_TRAJECTORY_MAX_EVENTS = 1_000;
+export const MAX_TRAJECTORY_MAX_EVENTS = 5_000_000;
+
+/** Trim in blocks: a per-event `splice` would make appending quadratic. */
+const TRAJECTORY_TRIM_BLOCK = 4_096;
+
+export function trajectoryMaxEvents(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[TRAJECTORY_MAX_EVENTS_ENV]?.trim();
+  if (!raw) return DEFAULT_TRAJECTORY_MAX_EVENTS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_TRAJECTORY_MAX_EVENTS || value > MAX_TRAJECTORY_MAX_EVENTS) {
+    throw new Error(`${TRAJECTORY_MAX_EVENTS_ENV} must be an integer between ${MIN_TRAJECTORY_MAX_EVENTS} and ${MAX_TRAJECTORY_MAX_EVENTS}, received "${raw}"`);
+  }
+  return value;
+}
+
 /** The authenticated API host resolves ownership. The component never imports SessionStore. */
-export async function sessionTrajectory(store: SessionStore, sessionId: string, signal: AbortSignal) {
+export async function sessionTrajectory(
+  store: SessionStore,
+  sessionId: string,
+  signal: AbortSignal,
+  options: { maxEvents?: number } = {},
+) {
+  const maxEvents = options.maxEvents ?? trajectoryMaxEvents();
   const archived = await readPackageTrajectory(store.dataDir, sessionId);
   const archivedRuns = new Set(archived?.runIds ?? []);
   const agentAliases: Record<string, string> = Object.create(null);
@@ -15,6 +55,18 @@ export async function sessionTrajectory(store: SessionStore, sessionId: string, 
     id: `subagent:${child.id}`, label: child.input.description || child.id, parentId: mainId, parentRunId: child.parentTurnId,
   }))];
   const events: RecordedEvent[] = [];
+  let omittedEvents = 0;
+  // Trim in blocks so appending stays amortised constant; the exact budget is
+  // restored once, after the last event is collected.
+  const block = Math.max(1, Math.min(TRAJECTORY_TRIM_BLOCK, maxEvents));
+  const keep = (recorded: RecordedEvent) => {
+    events.push(recorded);
+    if (events.length > maxEvents + block) {
+      const drop = events.length - maxEvents;
+      events.splice(0, drop);
+      omittedEvents += drop;
+    }
+  };
   const recordedSteps = new Set<string>();
   for (const run of await store.listSessionRuns(sessionId)) {
     if (archivedRuns.has(run.id)) continue;
@@ -37,12 +89,12 @@ export async function sessionTrajectory(store: SessionStore, sessionId: string, 
         if (typeof step.id === "string") recordedSteps.add(`${stream.agentId}:${step.id}`);
         const toolId = trace.id ?? trace.toolCallId ?? step.toolCallId;
         if (typeof toolId === "string") tools.set(toolId, stream.agentId);
-        events.push({ id: `${run.id}:${stream.id}:${record.sequence}`, agentId: stream.agentId, streamId: stream.id, sequence: record.sequence, createdAt: record.createdAt, runId: run.id, event });
+        keep({ id: `${run.id}:${stream.id}:${record.sequence}`, agentId: stream.agentId, streamId: stream.id, sequence: record.sequence, createdAt: record.createdAt, runId: run.id, event });
       }
     }
     for (const [id, agentId] of tools) {
       for (const record of await store.listRunStreamEvents(sessionId, run.id, `tool-${id}`)) {
-        events.push({ id: `${run.id}:tool-${id}:${record.sequence}`, agentId, streamId: `tool-${id}`, sequence: record.sequence, createdAt: record.createdAt, runId: run.id, event: record.event });
+        keep({ id: `${run.id}:tool-${id}:${record.sequence}`, agentId, streamId: `tool-${id}`, sequence: record.sequence, createdAt: record.createdAt, runId: run.id, event: record.event });
       }
     }
   }
@@ -51,7 +103,7 @@ export async function sessionTrajectory(store: SessionStore, sessionId: string, 
     for (const step of child.steps) {
       const agentId = `subagent:${child.id}`;
       if (recordedSteps.has(`${agentId}:${step.id}`)) continue;
-      events.push({ id: `subagent-step:${child.id}:${step.id}`, agentId, createdAt: step.createdAt, runId: child.parentTurnId,
+      keep({ id: `subagent-step:${child.id}:${step.id}`, agentId, createdAt: step.createdAt, runId: child.parentTurnId,
         event: { type: "subagent.step", subagentId: child.id, step } });
     }
   }
@@ -59,10 +111,21 @@ export async function sessionTrajectory(store: SessionStore, sessionId: string, 
     if (archivedRuns.has(invocation.turnId)) continue;
     const owners = children.filter(item => item.parentTurnId === invocation.turnId && item.steps.some(step => step.toolCallId === invocation.toolCallId));
     const child = owners.length === 1 ? owners[0] : undefined;
-    events.push({ id: `mcp:${invocation.id}`, agentId: child ? `subagent:${child.id}` : mainId,
+    keep({ id: `mcp:${invocation.id}`, agentId: child ? `subagent:${child.id}` : mainId,
       createdAt: invocation.startedAt, runId: invocation.turnId, event: { type: "mcp.invocation", ...invocation } });
   }
+  if (events.length > maxEvents) {
+    const drop = events.length - maxEvents;
+    events.splice(0, drop);
+    omittedEvents += drop;
+  }
   const live = await openSessionTrajectory(store.dataDir, { sessionId, agents, events, agentAliases }, signal);
+  // The warning travels with the index, which the viewer already renders as its
+  // "recording completeness" list, so a bounded view cannot be mistaken for a
+  // short session.
+  if (omittedEvents > 0) {
+    live.index.warnings.push(`Only the newest ${maxEvents.toLocaleString("en-US")} recorded Run events are shown; ${omittedEvents.toLocaleString("en-US")} older events were left out to keep this view within its budget. Raise ${TRAJECTORY_MAX_EVENTS_ENV} to include more.`);
+  }
   if (!archived) return live;
   const untimed = [...(archived.index.untimedEntries ?? archived.index.historicalEntries ?? []), ...(live.index.untimedEntries ?? [])];
   const index = { ...live.index, agents: [...new Map([...archived.index.agents, ...live.index.agents].map((agent) => [agent.id, agent])).values()],

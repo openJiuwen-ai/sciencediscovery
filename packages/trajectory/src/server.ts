@@ -315,7 +315,12 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
       });
   }
   const ordered = orderEvents(entries);
-  entries.splice(0, entries.length, ...ordered);
+  // Assign element by element: spreading `ordered` into `splice` passes one
+  // argument per entry, and V8 refuses that call once a long Session has more
+  // entries than the argument limit (200k recorded Run events is enough), which
+  // turned the whole trajectory read into a RangeError (#1063).
+  entries.length = 0;
+  for (const entry of ordered) entries.push(entry);
   // Context snapshots referenced by events are details, not standalone markers.
   const history = historicalEntries.filter(e => !(e.contextId && linkedContexts.has(e.contextId) && (e.id.startsWith("before:") || e.id.startsWith("context:"))));
   if (history.length) warnings.add("Some invocation records have no reliable event timestamp. They remain inspectable with their invocation, but have no wall-clock position.");
