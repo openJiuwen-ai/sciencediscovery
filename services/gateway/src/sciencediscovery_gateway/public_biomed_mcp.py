@@ -408,21 +408,33 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
     # The bucket is a fixed service path with no record identifier, so a "gone"
     # answer is an endpoint outage, not a missing record.
     bucket = external_url("data_sources.ncbi.pmc_oa_package_bucket").rstrip("/") + "/"
-    listing = await _get_text(
-        bucket,
-        params={"prefix": pmcid, "max-keys": "40"},
-        accept="application/xml",
-        fixed_endpoint=True,
-    )
-    root = ET.fromstring(listing)
-    # A version directory with many figures can fill the 40-key window and hide a
-    # newer version; list with a delimiter so each version is one entry, and
-    # refuse to guess when the bucket says there are more.
-    if root.findtext(".//{*}IsTruncated", default="false").strip().lower() == "true":
-        raise ValueError("PMC OA package listing is truncated; the article PDF cannot be located reliably")
     # The listing is S3 XML, so its elements carry the S3 namespace; match on the
     # local name to stay independent of the exact namespace URI.
-    keys = [key.text.strip() for key in root.findall(".//{*}Contents/{*}Key") if key.text]
+    keys: list[str] = []
+    continuation: str | None = None
+    while True:
+        params: dict[str, Any] = {"prefix": pmcid, "max-keys": "40"}
+        if continuation:
+            params["continuation-token"] = continuation
+        listing = await _get_text(
+            bucket,
+            params=params,
+            accept="application/xml",
+            fixed_endpoint=True,
+        )
+        root = ET.fromstring(listing)
+        keys += [key.text.strip() for key in root.findall(".//{*}Contents/{*}Key") if key.text]
+        # A version directory with many files can exceed the 40-key window, and
+        # the record's own article PDF can live in the first page while a newer
+        # version sits behind the boundary. Walk the listing to its end instead
+        # of refusing on truncation, so a bucket that can serve the record keeps
+        # serving it (#1049).
+        if root.findtext(".//{*}IsTruncated", default="false").strip().lower() != "true":
+            break
+        next_token = root.findtext(".//{*}NextContinuationToken", default="").strip()
+        if not next_token:
+            raise ValueError("PMC OA package listing is truncated without a continuation token")
+        continuation = next_token
     # Prefer the version whose directory holds the article PDF named after the
     # record itself (`<PMCID>.<n>/<PMCID>.<n>.pdf`). A package directory can also
     # hold supplements (`srep32040-s1.pdf`, `mmc1.pdf`, `peerj-*.pdf`), and those
