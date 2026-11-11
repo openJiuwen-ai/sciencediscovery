@@ -216,9 +216,11 @@ test("a gone scope still admits the sizes its scope cards are showing", async (c
       return defaults;
     },
     // Changing the file selection asks for a custom preview; after the deletion
-    // that request never arrives, so the estimate stays empty while the two
-    // scope cards keep the sizes they read from the cached defaults.
-    previewResearchPackage: () => new Promise(() => undefined),
+    // that request answers 404, so the estimate stays empty while the two scope
+    // cards keep the sizes they read from the cached defaults.
+    previewResearchPackage: async () => {
+      throw new ApiRequestError("Preview file is no longer available", 404, "EXPORT_PREVIEW_RESOURCE_DELETED");
+    },
     exportResearchPackage: async () => new Blob(),
     startResearchPackageExport: async () => ({ id: "task", status: "queued", filename: "x.sdresearch" }),
   } as unknown as ApiClient;
