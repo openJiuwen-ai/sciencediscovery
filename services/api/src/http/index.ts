@@ -1160,15 +1160,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       // checks after that — never a hung response.
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/api/health")) {
         if (!(await settleWithin(ready.then(() => true), 3_000, false))) {
-          sendJson(response, 503, { service: "sciencediscovery-api", status: "starting" });
+          sendJson(response, 503, { service: "sciencediscovery-api", liveness: "starting" });
           return;
         }
         // Liveness for everyone, detail for a caller that proves it may read it:
         // the record below carries the Runner's platform, the sandbox egress
         // allowlist and the workspace quotas, which are reconnaissance for
         // anyone who can reach this port without a token.
+        //
+        // The two answers share no field name on purpose. `status` in the detail
+        // is derived from the Runner, so a liveness body spelling it `"ok"` would
+        // let every reader that gates on `status === "ok"` pass without ever
+        // having read the detail — a wrong token would look like a healthy stack.
         if (!isAuthorized(request, config.authToken)) {
-          sendJson(response, 200, { service: "sciencediscovery-api", status: "ok" });
+          sendJson(response, 200, { service: "sciencediscovery-api", liveness: "ok" });
           return;
         }
         const runner = await settleWithin(runnerClient.health().catch(() => undefined), 2_000, undefined);

@@ -617,7 +617,7 @@ test("API health exposes details only with a valid token on both routes", async 
     for (const headers of [undefined, { authorization: "Bearer wrong-token" }]) {
       const response = await fetch(`${origin}${path}`, { headers });
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { service: "sciencediscovery-api", status: "ok" });
+      assert.deepEqual(await response.json(), { service: "sciencediscovery-api", liveness: "ok" });
     }
     const response = await fetch(`${origin}${path}`, { headers: authorization });
     assert.equal(response.status, 200);

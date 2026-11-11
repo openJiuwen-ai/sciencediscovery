@@ -31,7 +31,7 @@ This page records the key HTTP interfaces used by the current Web UI, based on `
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-Without a valid bearer token, `/health` and `/api/health` return HTTP `200` with only `{"service":"sciencediscovery-api","status":"ok"}`. The Runner returns only `{"status":"ok"}`. These public responses report liveness and do not probe dependencies.
+Without a valid bearer token, `/health` and `/api/health` return HTTP `200` with only `{"service":"sciencediscovery-api","liveness":"ok"}`. The Runner returns only `{"status":"ok"}`. These public responses report liveness and do not probe dependencies. The public API body carries `liveness`, never `status`: `status` in the authenticated body is derived from the Runner, so a reader that gates on `status: "ok"` can only be reading a detail it was authorized to see.
 
 With a valid token, the API returns the deployment details below:
 

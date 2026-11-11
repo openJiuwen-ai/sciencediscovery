@@ -50,7 +50,7 @@ function apiHealth(detail: unknown): Route {
     pattern: /\/api\/health$/,
     reply: (call) => call.authorization === `Bearer ${TOKEN}`
       ? { status: 200, body: detail }
-      : { status: 200, body: { service: "sciencediscovery-api", status: "ok" } },
+      : { status: 200, body: { service: "sciencediscovery-api", liveness: "ok" } },
   };
 }
 
@@ -130,7 +130,7 @@ test("runSelfCheck: unknown runner base is skipped, not failed", async () => {
 
 test("runSelfCheck: API down → model not evaluated, gate fails", async () => {
   const { fetchImpl } = makeFetch([
-    { pattern: /\/api\/health$/, reply: () => ({ status: 503, body: { service: "sciencediscovery-api", status: "starting" } }) },
+    { pattern: /\/api\/health$/, reply: () => ({ status: 503, body: { service: "sciencediscovery-api", liveness: "starting" } }) },
   ]);
   const res = await runSelfCheck(BASE, TOKEN, "http://127.0.0.1:4311", fetchImpl);
   assert.equal(res.api, false);

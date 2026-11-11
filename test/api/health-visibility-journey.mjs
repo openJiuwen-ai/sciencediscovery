@@ -92,7 +92,7 @@ try {
   await step("2. Missing and wrong tokens expose exactly liveness", async () => {
     for (const bearer of [undefined, "wrong-token"]) {
       for (const path of ["/health", "/api/health"]) {
-        assert.deepEqual(await get(api.origin, path, bearer), { service: "sciencediscovery-api", status: "ok" });
+        assert.deepEqual(await get(api.origin, path, bearer), { service: "sciencediscovery-api", liveness: "ok" });
       }
       assert.deepEqual(await get(runner.origin, "/health", bearer), { status: "ok" });
     }
@@ -115,7 +115,7 @@ try {
   await step("4. Public liveness survives Runner outage; authenticated diagnosis reports it", async () => {
     await stop(runner);
     for (const path of ["/health", "/api/health"]) {
-      assert.deepEqual(await get(api.origin, path), { service: "sciencediscovery-api", status: "ok" });
+      assert.deepEqual(await get(api.origin, path), { service: "sciencediscovery-api", liveness: "ok" });
       const detailed = await get(api.origin, path, token);
       assert.equal(detailed.status, "degraded");
       assert.equal(detailed.runner.status, "unavailable");
