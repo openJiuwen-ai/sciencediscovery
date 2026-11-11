@@ -384,7 +384,10 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 验证成功提示：全量登记数量 + 设为默认（系统首个模型）
         const successAlert = wizardSection.locator(".wizard-alert-success");
         await expect(successAlert).toBeVisible();
-        await expect(successAlert).toContainText("模型已连接");
+        await expect(successAlert).toContainText("基础连接检查通过");
+        // issue #824: a pass is the basic check only, so the unqualified
+        // "模型已连接" claim must not return.
+        await expect(successAlert).not.toContainText("模型已连接");
         await expect(successAlert).toContainText("登记 2 个模型");
         await expect(successAlert).toContainText("已设为全局默认任务模型");
 

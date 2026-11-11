@@ -180,7 +180,7 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
 
     await journey.step(
       "填写自定义端点并保存连接",
-      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示模型已连接，后端服务商列表里出现这个自定义服务商。",
+      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示基础连接检查通过，后端服务商列表里出现这个自定义服务商。",
       async () => {
         const wizard = page.getByRole("dialog", { name: "系统设置" }).locator(".model-connect-wizard");
         await wizard.locator("#wizard-custom-name").fill(providerName);
@@ -191,7 +191,9 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
         await wizard.locator(".wizard-submit-button").click();
         const success = wizard.locator(".wizard-alert-success");
         // Saving connects the model and refreshes both registries before showing success.
-        await expect(success).toContainText("模型已连接", { timeout: 30_000 });
+        await expect(success).toContainText("基础连接检查通过", { timeout: 30_000 });
+        // issue #824: the unqualified "模型已连接" claim must not return.
+        await expect(success).not.toContainText("模型已连接");
         await success.scrollIntoViewIfNeeded();
         expect(await journeyProviderNames(page)).toContain(providerName);
       },
@@ -254,7 +256,7 @@ test("没有预置服务商时连接卡片直接进入自定义模式", { tag: "
 
     await journey.step(
       "填写自定义端点并保存连接",
-      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示模型已连接，后端服务商列表里出现这个自定义服务商。",
+      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示基础连接检查通过，后端服务商列表里出现这个自定义服务商。",
       async () => {
         const wizard = page.getByRole("dialog", { name: "系统设置" }).locator(".model-connect-wizard");
         await wizard.locator("#wizard-custom-name").fill(providerName);
@@ -264,7 +266,8 @@ test("没有预置服务商时连接卡片直接进入自定义模式", { tag: "
         await wizard.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizard.locator(".wizard-submit-button").click();
         const success = wizard.locator(".wizard-alert-success");
-        await expect(success).toContainText("模型已连接");
+        await expect(success).toContainText("基础连接检查通过");
+        await expect(success).not.toContainText("模型已连接");
         await success.scrollIntoViewIfNeeded();
         expect(await journeyProviderNames(page)).toContain(providerName);
       },
