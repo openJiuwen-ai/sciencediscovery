@@ -69,11 +69,12 @@ test("serviceCommand resolves bare commands through the merged environment PATH"
   }
 });
 
-test("spawnService runs Windows command shims without a shell option", async () => {
+for (const extension of ["cmd", "bat"]) {
+test(`spawnService runs Windows .${extension} shims with literal arguments`, async () => {
   if (!isWindows) return;
   const dir = await mkdtemp(join(tmpdir(), "sd stack cmd "));
   try {
-    const shim = join(dir, "probe.cmd");
+    const shim = join(dir, `probe with spaces.${extension}`);
     await writeFile(shim, "@echo off\r\nnode -e \"process.stdout.write(process.argv[1])\" %1\r\n", "utf8");
     const child = spawnService(shim, ["shim & %PATH% ready"], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -84,12 +85,24 @@ test("spawnService runs Windows command shims without a shell option", async () 
     child.stderr.on("data", chunk => { stderr += chunk; });
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("close", (code, signal) => resolve({ code, signal }));
     });
     assert.deepEqual(result, { code: 0, signal: null }, stderr);
     assert.equal(stdout, "shim & %PATH% ready");
   } finally {
     await rm(dir, { force: true, recursive: true });
+  }
+});
+}
+
+test("spawnService rejects unsupported Windows shim characters before spawning", () => {
+  if (!isWindows) return;
+  for (const extension of ["cmd", "bat"]) {
+    for (const character of ["\0", "\r", "\n", '"']) {
+      const command = join(tmpdir(), `probe.${extension}`);
+      assert.throws(() => spawnService(command, [`before${character}after`]), /cannot contain NUL, newlines, or quotes/);
+      assert.throws(() => spawnService(join(tmpdir(), `before${character}after.${extension}`), []), /cannot contain NUL, newlines, or quotes/);
+    }
   }
 });
 
