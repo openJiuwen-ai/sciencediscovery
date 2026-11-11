@@ -101,6 +101,30 @@ export function latestEvolveCheckpointMode(
   return latest === undefined ? undefined : evolveCommandCheckpointMode(latest);
 }
 
+/** Whether the design the Session is on already has a search of its own.
+ *
+ *  A search the Session holds may belong to an earlier design: the run list is
+ *  per Session and survives a new `/evolve-design`. Asking it the Session-wide
+ *  question would silence the cardless-stall push for a second no-confirm
+ *  design that has not started anything yet — the exact stall the push exists
+ *  for. A run counts only when it was created after the latest design command,
+ *  which is also what makes the answer survive a reopened window: both times
+ *  come from the server, not from a counter this client keeps. */
+export function designHasSearch(
+  runs: ReadonlyArray<{ createdAt: string }>,
+  messages: ReadonlyArray<{ content: string; createdAt: string; role: string }>,
+): boolean {
+  const command = messages
+    .filter((message) => message.role === "user" && isEvolveCommand(message.content))
+    .at(-1);
+  const startedAt = command === undefined ? Number.NaN : Date.parse(command.createdAt);
+  if (Number.isNaN(startedAt)) return false;
+  return runs.some((run) => {
+    const created = Date.parse(run.createdAt);
+    return !Number.isNaN(created) && created >= startedAt;
+  });
+}
+
 /** The search the command names, as `--algorithm` says.
  *
  *  Read here so the setup detour keeps the choice: a command typed with

@@ -564,8 +564,10 @@ test("a checkpoint arrives as a card and its confirmation is sent as the reply",
         call.method === "POST" &&
         call.path === "/api/sessions/session-1/messages" &&
         // The reply names the step: six identical "继续" left the model unable
-        // to tell which checkpoint it was answering.
-        call.body?.includes("确认检查点 1/4，继续。") === true,
+        // to tell which checkpoint it was answering. It counts the checkpoints
+        // the reader answers, not the steps: this card has four steps and its
+        // last one is the record, so the band above says 1/3 and so does this.
+        call.body?.includes("确认检查点 1/3，继续。") === true,
     ),
   ).toBe(true);
 });

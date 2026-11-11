@@ -47,6 +47,7 @@ import { useConfigurationRequests } from "./app/use-configuration-requests.js";
 import { formatByteLimit } from "./app/upload.js";
 import {
   composeEvolveMessage,
+  designHasSearch,
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
@@ -710,6 +711,14 @@ export function App({ initialToken }: Props) {
     [state.detail?.messages, state.pendingMessage?.content],
   );
 
+  /** Whether *this design* already has a search. The Session's whole run list
+   *  would answer for designs that are long finished, and a second no-confirm
+   *  design in the same conversation would never be carried. */
+  const searchStarted = useMemo(
+    () => designHasSearch(evolve.runs, state.detail?.messages ?? []),
+    [evolve.runs, state.detail?.messages],
+  );
+
   // A no-confirm design that ends its turn on an auto card is carried forward
   // here — the model cannot start the next turn by itself, and the card offers
   // nothing to press. See the hook for what it refuses to act on.
@@ -718,7 +727,7 @@ export function App({ initialToken }: Props) {
     design,
     running: state.running,
     run: state.run,
-    searchStarted: evolve.runs.length > 0,
+    searchStarted,
     send: (text) => latestSend.current(text),
     sessionId: state.sessionId,
   });

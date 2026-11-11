@@ -125,9 +125,12 @@ export interface AutoContinueInput {
    *  Only an `auto` design — nobody waiting at the checkpoints — may be pushed
    *  forward by this client. */
   checkpointMode?: EvolveCheckpointMode;
-  /** Whether the Session already has a search. A turn that ran after the
-   *  search exists is not a stalled design, and continuing it would be a paid
-   *  call answering nothing. */
+  /** Whether *this design* already has a search — one created after its
+   *  `/evolve-design` command, not the Session's whole run history. A turn
+   *  that ran after the design's own search exists is not a stalled design,
+   *  and continuing it would be a paid call answering nothing; a search an
+   *  earlier design started says nothing about this one, and reading it as if
+   *  it did would leave a second no-confirm design stalled with no push. */
   searchStarted?: boolean;
   /** Whether a turn is in flight. The transition to `false` is the signal that
    *  one just ended. */
