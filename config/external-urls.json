@@ -54,7 +54,6 @@
       "pubmed_article_template": "https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
       "accounts_help": "https://www.ncbi.nlm.nih.gov/accounts/",
       "pmc_oa_package_bucket": "https://pmc-oa-opendata.s3.amazonaws.com/",
-      "pmc_ftp_https_prefix": "https://ftp.ncbi.nlm.nih.gov/",
       "clinvar_variation_template": "https://www.ncbi.nlm.nih.gov/clinvar/variation/{variation_id}/",
       "geo_accession_template": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}",
       "geo_series_template": "https://ftp.ncbi.nlm.nih.gov/geo/series/{bucket}/{accession}"

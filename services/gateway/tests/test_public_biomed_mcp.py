@@ -819,6 +819,56 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
                          "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.2/PMC123.2.pdf")
         self.assertEqual(artifact["mimeType"], "application/pdf")
 
+    async def test_pmc_candidate_prefers_the_article_pdf_over_a_supplement(self) -> None:
+        # A version directory can hold both the article (`<PMCID>.<n>.pdf`) and a
+        # supplement (`srep32040-s1.pdf`); the supplement sorts after the article
+        # basename, so "take the last PDF" would hand the supplement to the
+        # reader (#1049).
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Contents><Key>PMC123.1/PMC123.1.pdf</Key></Contents>
+          <Contents><Key>PMC123.1/srep32040-s1.pdf</Key></Contents>
+        </ListBucketResult>"""
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(return_value=listing),
+        ):
+            result = await _pmc_pdf_candidate("europe-pmc", "PMC123")
+        self.assertEqual(
+            result["artifacts"][0]["sourceUrl"],
+            "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.1/PMC123.1.pdf",
+        )
+
+    async def test_pmc_candidate_selects_the_largest_integer_version(self) -> None:
+        # Version 10 sorts before 2 lexicographically; the newest revision is the
+        # largest integer.
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Contents><Key>PMC123.2/PMC123.2.pdf</Key></Contents>
+          <Contents><Key>PMC123.10/PMC123.10.pdf</Key></Contents>
+        </ListBucketResult>"""
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(return_value=listing),
+        ):
+            result = await _pmc_pdf_candidate("europe-pmc", "PMC123")
+        self.assertEqual(
+            result["artifacts"][0]["sourceUrl"],
+            "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.10/PMC123.10.pdf",
+        )
+
+    async def test_pmc_candidate_refuses_a_truncated_listing(self) -> None:
+        # A version directory with many figures can fill the window and hide a
+        # newer revision; refuse rather than guess.
+        listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <IsTruncated>true</IsTruncated>
+          <Contents><Key>PMC123.1/PMC123.1.pdf</Key></Contents>
+        </ListBucketResult>"""
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(return_value=listing),
+        ):
+            with self.assertRaisesRegex(ValueError, "truncated"):
+                await _pmc_pdf_candidate("europe-pmc", "PMC123")
+
     async def test_pmc_candidate_reports_a_record_without_a_package(self) -> None:
         listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
           <Contents><Key>PMC123.1/metadata.json</Key></Contents>
@@ -878,11 +928,24 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         request = httpx.Request("GET", "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=PMC1")
         for status in (404, 405, 410):
             with self.assertRaises(RuntimeError) as caught:
-                _raise_for_status(httpx.Response(status, request=request))
+                _raise_for_status(httpx.Response(status, request=request), fixed_endpoint=True)
             metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
             self.assertEqual(metadata["failureScope"], "endpoint")
             self.assertEqual(metadata["statusCode"], status)
             self.assertEqual(metadata["endpoint"], "https://www.ncbi.nlm.nih.gov")
+
+    def test_gone_record_lookups_stay_unclassified_without_the_flag(self) -> None:
+        # A record-scoped URL (a PDB entry, a Reactome pathway) that answers 404
+        # means "no such record", not "the endpoint is gone". Without the
+        # fixed-endpoint flag it must stay unclassified so the client reports
+        # NOT_FOUND rather than an outage.
+        request = httpx.Request("GET", "https://data.rcsb.org/rest/v1/core/entry/XXXX")
+        for status in (404, 410):
+            with self.assertRaises(RuntimeError) as caught:
+                _raise_for_status(httpx.Response(status, request=request))
+            metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
+            self.assertEqual(metadata["failureScope"], "unknown")
+            self.assertEqual(metadata["statusCode"], status)
 
     def test_a_server_error_stays_unclassified(self) -> None:
         request = httpx.Request("GET", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
