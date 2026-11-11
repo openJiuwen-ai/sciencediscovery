@@ -25,7 +25,7 @@ import type { ServeCredentials } from "./bootstrap-tokens.js";
 import { defaultSettings } from "./cli-options.js";
 import { startMemoryGraph } from "./memory-graph.js";
 import type { PayloadManifest } from "./payload-manifest.js";
-import { mcpProbeRuntime, planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
+import { API_HEAP_BUDGET_ENV, DEFAULT_API_HEAP_BUDGET_MB, apiHeapBudgetMb, mcpProbeRuntime, planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
 
 const manifest: PayloadManifest = {
   app: {
@@ -141,12 +141,24 @@ describe("serve topology", () => {
       services.map((service) => [service.command, ...service.args]),
       [
         ["/cache/payload/abc/node/bin/node", "/cache/payload/abc/app/services/runner/dist/server.js"],
-        ["/cache/payload/abc/node/bin/node", "/cache/payload/abc/app/services/api/dist/server.js"],
+        // The API runs under an explicit old-space budget; V8's default is what
+        // the run in #1011 died of. See apiHeapBudgetMb in serve.ts.
+        ["/cache/payload/abc/node/bin/node", "--max-old-space-size=3072", "/cache/payload/abc/app/services/api/dist/server.js"],
       ],
     );
     // repositoryRoot inside the API resolves four levels up from dist/http,
     // which must land on the payload's app root for the Web assets to load.
     assert.ok(services.every((service) => service.cwd === "/cache/payload/abc/app"));
+  });
+
+  test("the API heap budget honours the environment override and refuses nonsense", () => {
+    assert.equal(apiHeapBudgetMb({}), DEFAULT_API_HEAP_BUDGET_MB);
+    assert.equal(apiHeapBudgetMb({ [API_HEAP_BUDGET_ENV]: " 4096 " }), 4096);
+    for (const raw of ["0", "abc", "1.5", "255", "32769"]) {
+      assert.throws(() => apiHeapBudgetMb({ [API_HEAP_BUDGET_ENV]: raw }), /SCIENCE_AGENT_API_MAX_OLD_SPACE_MB/, raw);
+    }
+    const services = planServices(contextFor({ baseEnv: { [API_HEAP_BUDGET_ENV]: "2048" } }));
+    assert.ok(services[1]!.args.includes("--max-old-space-size=2048"));
   });
 
   test("the API is told which interpreter starts the bundled stdio MCP servers", () => {

@@ -178,6 +178,31 @@ export async function waitHealthy(name, url, { timeoutSeconds = 10, intervalMs =
   return false;
 }
 
+/**
+ * The API's old-space budget.
+ *
+ * The API can only obey a limit that was passed when Node started, so every
+ * launch path applies it here rather than leaning on V8's default — that
+ * default is what the run in #1011 died of, with nothing in the log beforehand.
+ * `start-stack.sh`, `services/launcher/src/serve.ts` and
+ * `services/api/src/heap-budget.ts` carry the same default and the same variable
+ * name; `scripts/api-heap-budget.test.mjs` fails when they drift apart.
+ */
+export const API_HEAP_BUDGET_ENV = "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB";
+export const DEFAULT_API_HEAP_BUDGET_MB = 3072;
+export const MIN_API_HEAP_BUDGET_MB = 256;
+export const MAX_API_HEAP_BUDGET_MB = 32768;
+
+export function apiHeapBudgetMb(env = process.env) {
+  const raw = env[API_HEAP_BUDGET_ENV]?.trim();
+  if (!raw) return DEFAULT_API_HEAP_BUDGET_MB;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_API_HEAP_BUDGET_MB || value > MAX_API_HEAP_BUDGET_MB) {
+    throw new Error(`${API_HEAP_BUDGET_ENV} must be an integer between ${MIN_API_HEAP_BUDGET_MB} and ${MAX_API_HEAP_BUDGET_MB}, received "${raw}"`);
+  }
+  return value;
+}
+
 /** Resolve a service command against the environment its child will get:
  *  callers pass *overrides* (e.g. { UV_PROJECT_ENVIRONMENT }), and looking up
  *  the command in the overrides alone finds no PATH at all. */
