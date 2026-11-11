@@ -155,8 +155,14 @@ function classifyDesktopConfiguration(request: ConfigurationRequestView): {
   }
   if (capability === "connector.enable") {
     const target = targetField("connectorId"), change = request.changes[0];
-    // The adapter summarizes more than ten IDs with an ellipsis. That is not
-    // evidence of an exact single addition; never infer it from a list prefix.
+    // The adapter lists at most ten IDs and reports a longer set only as
+    // "<count> connectors: <ten IDs> …" (services/api/src/configuration/
+    // domain-adapters.ts). A listed prefix alone never proves which ID was
+    // added, but the adapter's own shape does: an enable is
+    // [...new Set([...current, target])], so the result repeats the current
+    // order unchanged and is exactly one ID longer. Proving that lets a
+    // session with many enabled connectors decide here instead of reaching the
+    // dead-end notice, whose only action records a refusal (#1100).
     const ids = (value: string | undefined): string[] | undefined => {
       if (value === "") return [];
       if (typeof value !== "string") return undefined;
@@ -164,20 +170,41 @@ function classifyDesktopConfiguration(request: ConfigurationRequestView): {
       return result.length <= 10 && new Set(result).size === result.length
         && result.every(id => /^[a-z0-9][a-z0-9._:-]{0,99}$/i.test(id)) ? result : undefined;
     };
+    const summary = (value: string | undefined): { count: number; listed: string[] } | undefined => {
+      const match = typeof value === "string" ? /^(\d{1,3}) connectors: (.+) …$/.exec(value) : null;
+      const listed = match?.[2] === undefined ? undefined : ids(match[2]);
+      const count = match?.[1] === undefined ? undefined : Number(match[1]);
+      return listed?.length === 10 && count !== undefined && count > 10 ? { count, listed } : undefined;
+    };
     const before = ids(change?.before), after = ids(change?.after), id = target?.value;
     const bound = request.scope.kind === "session" && request.scope.id === request.sessionId
       && request.fields.length === 1 && target && typeof id === "string"
       && request.changes.length === 1 && change?.field === "enabledConnectorIds";
-    if (!bound || !before || typeof id !== "string") return { unsupported: true };
-    if (ready && after && !before.includes(id) && after.length === before.length + 1
-      && after.includes(id) && before.every(previous => after.includes(previous)))
+    if (!bound || typeof id !== "string") return { unsupported: true };
+    const beforeSummary = before ? undefined : summary(change?.before);
+    const afterSummary = after ? undefined : summary(change?.after);
+    // A bounded list proves the addition ID by ID, including the unchanged
+    // baseline that would not fit the compact diff.
+    const exactAddition = before !== undefined && after !== undefined && !before.includes(id)
+      && after.length === before.length + 1 && after.includes(id)
+      && before.every(previous => after.includes(previous));
+    // A summarized side proves only its count and its first ten IDs, so keep the
+    // adapter's append-only shape: the visible baseline reappears unchanged and
+    // the whole set is one ID longer, without the target already being visible.
+    const baseline = before ?? beforeSummary?.listed;
+    const baselineCount = before ? before.length : beforeSummary?.count;
+    const countedAddition = afterSummary !== undefined && baseline !== undefined && baselineCount !== undefined
+      && afterSummary.listed.every((value, index) => value === baseline[index])
+      && afterSummary.count === baselineCount + 1 && !baseline.includes(id);
+    if (ready && (exactAddition || countedAddition))
       return { connectorAddition: true, targetLabel: targetLabel("connectorId") };
     // Receipt-based reversals use the same capability, but are not additions.
-    // Lock the target and retain their complete bounded before/after diff. The
-    // generic length gate below still rejects long or summarized restorations.
-    const restoring = change?.after === "Inherit parent settings" || after
-      && before.includes(id) && !after.includes(id) && before.length === after.length + 1
-      && after.every(previous => before.includes(previous));
+    // Lock the target and retain their complete bounded before/after diff: a
+    // summarized baseline cannot show which connectors a reversal restores, so
+    // the generic length gate below still rejects summarized restorations.
+    const restoring = before !== undefined && (change?.after === "Inherit parent settings"
+      || after !== undefined && before.includes(id) && !after.includes(id)
+        && before.length === after.length + 1 && after.every(previous => before.includes(previous)));
     if ((ready || request.state === "applied" && request.previewDigest) && restoring)
       return { fieldIds: [], connectorRestoration: true, targetLabel: targetLabel("connectorId") };
     return { unsupported: true };

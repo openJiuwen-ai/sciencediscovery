@@ -66,7 +66,7 @@ test("Session connector addition proves a single target even with long existing 
   });
   assert.equal(connector(prior).changes[0]!.after!.length, 82);
 });
-test("Session connector addition never hides replacement or summarized lists", () => {
+test("Session connector addition never hides replacement or unproven lists", () => {
   const view = connector(["pubmed"]);
   for (const change of [
     { field: "enabledConnectorIds", before: "pubmed", after: serverId },
@@ -75,6 +75,36 @@ test("Session connector addition never hides replacement or summarized lists", (
     { field: "enabledConnectorIds", before: "12 connectors: pubmed …", after: "13 connectors: pubmed …" },
     { field: "enabledConnectorIds", before: "pubmed, pubmed", after: `pubmed, pubmed, ${serverId}` },
     { field: "enabledConnectorIds", after: serverId }, { field: "enabled", before: "false", after: "true" },
+  ]) assert.deepEqual(desktopConfigurationPresentation({ ...view, changes: [change] }), unsupported);
+});
+const ten = Array.from({ length: 10 }, (_, index) => `custom-00000000000${index}`);
+const summarized = (count: number, listed: string[] = ten) => `${count} connectors: ${listed.join(", ")} …`;
+test("a summarized connector selection still proves its single addition", async () => {
+  const { readFile } = await import("node:fs/promises");
+  // The API integration test produces and verifies this view through a real
+  // proposal: eleven enabled connectors plus the requested UniProt connector,
+  // so both sides of the diff exceed the adapter's ten-ID detail limit.
+  const fixtures = JSON.parse(await readFile(new URL("../../../test/fixtures/configuration-connector-summarized-addition.json", import.meta.url), "utf8")) as Array<{ kind: string; view: ConfigurationRequestView }>;
+  assert.deepEqual(fixtures.map(fixture => fixture.kind), ["summarizedAddition"]);
+  assert.deepEqual(desktopConfigurationPresentation(fixtures[0]!.view), { connectorAddition: true, targetLabel: "uniprot" });
+  // Only the result is summarized when the baseline holds exactly ten IDs.
+  const after = [...ten, serverId].sort();
+  assert.deepEqual(desktopConfigurationPresentation({ ...connector(ten), changes: [{ field: "enabledConnectorIds",
+    before: ten.join(", "), after: summarized(11, after.slice(0, 10)) }] }), { connectorAddition: true, targetLabel: serverId });
+});
+test("a summarized connector selection proves nothing from a list prefix", () => {
+  const view = connector(["pubmed"]);
+  for (const change of [
+    { field: "enabledConnectorIds", before: summarized(11), after: summarized(13) },
+    { field: "enabledConnectorIds", before: summarized(13), after: summarized(12) },
+    { field: "enabledConnectorIds", before: summarized(11), after: summarized(11) },
+    { field: "enabledConnectorIds", before: summarized(11, [serverId, ...ten.slice(1)]), after: summarized(12, [serverId, ...ten.slice(1)]) },
+    // The adapter appends the requested connector, so a summarized result that
+    // drops a visible baseline ID is a swap, not an addition, even at count +1.
+    { field: "enabledConnectorIds", before: ten.join(", "), after: summarized(11, [...ten.slice(1), "custom-0000000000ff"]) },
+    { field: "enabledConnectorIds", before: summarized(11), after: summarized(12, [...ten.slice(1), "custom-0000000000ff"]) },
+    { field: "enabledConnectorIds", before: summarized(11).replace(" …", ""), after: summarized(12) },
+    { field: "enabledConnectorIds", before: "11 connectors: pubmed …", after: "12 connectors: pubmed …" },
   ]) assert.deepEqual(desktopConfigurationPresentation({ ...view, changes: [change] }), unsupported);
 });
 test("Session connector addition requires exact current-session target binding", () => {

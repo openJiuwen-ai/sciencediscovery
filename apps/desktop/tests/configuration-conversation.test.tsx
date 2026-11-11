@@ -1451,6 +1451,31 @@ test("proven Session connector addition shows its chosen target rather than the 
   assert.equal(view.changes[0]!.after!.length, 82);
 });
 
+const connectorAdditions = JSON.parse(readFileSync(new URL("../../../test/fixtures/configuration-connector-summarized-addition.json", import.meta.url), "utf8")) as Array<{ kind: string; view: ConfigurationRequestView }>;
+test("a Session with more than ten enabled connectors still confirms its addition instead of only refusing it", async () => {
+  const { desktopConfigurationPresentation } = await import("../src/app/configuration-presentation.js");
+  // The API integration test produces and verifies this view through a real
+  // proposal: eleven enabled connectors plus the requested UniProt connector,
+  // so the adapter summarizes both sides of the diff (#1100).
+  assert.deepEqual(connectorAdditions.map(fixture => fixture.kind), ["summarizedAddition"]);
+  const view = connectorAdditions[0]!.view;
+  const previous = getLanguage();
+  try {
+    for (const language of ["en", "zh-CN"]) {
+      setLanguage(language);
+      assert.deepEqual(desktopConfigurationPresentation(view), { connectorAddition: true, targetLabel: "uniprot" });
+      const html = render({ request: view });
+      assert.match(html, /uniprot/);
+      assert.match(html, language === "en" ? /Confirm/ : /确认/);
+      assert.doesNotMatch(html, /Not supported here yet|暂不支持/);
+      assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*>(Confirm|确认)/);
+      assert.doesNotMatch(html, /11 connectors|12 connectors/);
+      const saved = render({ request: { ...view, state: "applied", allowedActions: ["query"] } });
+      assert.match(saved, /desktop-configuration-record/);
+    }
+  } finally { setLanguage(previous); }
+});
+
 // The API test produces and verifies these complete views through real
 // previewReversal/preview/apply. No fake V3 options or restoration values.
 const connectorReversals = JSON.parse(readFileSync(new URL("../../../test/fixtures/configuration-connector-reversal.json", import.meta.url), "utf8")) as Array<{ kind: string; view: ConfigurationRequestView }>;
