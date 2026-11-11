@@ -19,7 +19,7 @@ import { dirname, resolve } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
-import { exportEvolveRuns, restoreEvolveRuns } from "./evolution/package.js";
+import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/package.js";
 import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
@@ -207,9 +207,15 @@ export function packageEvolveRunsFor(payload: unknown, sourceSessionId: string |
   });
 }
 
-/** Whether the package actually carries evolve runs. */
+/** Whether the package actually carries evolve runs.
+ *
+ *  Counts the run list itself, not the runs that would restore for one source
+ *  session: a package written by this exporter stamps every run with a string
+ *  `sessionId`, so the owner-scoped filter in `packageEvolveRunsFor` would
+ *  report "carries nothing" for the very package it just produced (#1019). */
 export function packagedEvolveRuns(payload: unknown): boolean {
-  return packageEvolveRunsFor(payload, undefined).length > 0;
+  const container = typeof payload === "object" && payload !== null ? payload as { runs?: unknown } : {};
+  return Array.isArray(container.runs) && container.runs.length > 0;
 }
 
 export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefined): boolean {
@@ -418,11 +424,14 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
     // them an imported session shows the candidate files with no search behind
     // them (#1019). A broken run store must not abort an export, so it costs the
     // runs only — the same way an unavailable memory graph costs the graph.
-    let evolveRuns: Awaited<ReturnType<typeof exportEvolveRuns>> = [];
+    let evolveRuns: Awaited<ReturnType<typeof exportEvolveRuns>> = { runs: [], truncated: 0 };
     try {
       evolveRuns = await exportEvolveRuns(evolutionStore, sessions.map((session) => session.id));
     } catch {
       omissions.push("Evolution (evolve) search runs could not be read while exporting; the package does not carry them.");
+    }
+    if (evolveRuns.truncated > 0) {
+      omissions.push(`Evolution (evolve) search runs were capped at ${MAX_RUNS}: ${evolveRuns.truncated} older runs are not carried.`);
     }
     const inheritedMemorySummary = sessions.map((session) => session.researchSnapshot?.scientificMemorySummary).find((summary): summary is ScientificMemorySummary => Boolean(summary));
     const availableMemoryGraph = memoryGraph?.nodes.length === 0 && inheritedMemorySummary ? undefined : memoryGraph;
@@ -568,7 +577,7 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
         exportLevel: level, exportProfile,
         project: { ...project, settingsOverrides: undefined }, sessions: selectedSessionRecords, artifacts: selectedArtifacts,
         environmentRevisions, versionObjects: [...versionObjects.values()],
-        ...(evolveRuns.length ? { evolve: { runs: evolveRuns } } : {}),
+        ...(evolveRuns.runs.length ? { evolve: { runs: evolveRuns.runs } } : {}),
         ...(packageMemoryGraph ? { memoryGraph: packageMemoryGraph } : {}),
         ...(memoryGraphSummary ? { memoryGraphSummary } : {}),
       },
