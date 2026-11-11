@@ -41,8 +41,21 @@ test('the existing status and routing classes are unchanged', () => {
   assert.equal(detectProviderFault('openAI API answered status 429 rate limit'), null);
 });
 
-test('every text a case carries has to agree, as before', () => {
+test('a status-less transport break classifies at case level too', () => {
+  // The product's report wraps the provider's words in `delivery_status=failed`;
+  // that wrapper is not a verdict, so the case still records the break.
   assert.deepEqual(detectProviderFaultFromErrors([streamDiedAfter200]),
     { code: 'provider-transport', status: null });
-  assert.equal(detectProviderFaultFromErrors([streamDiedAfter200, 'assertion failed on delivery']), null);
+  // An assertion wrapper beside it records nothing either, and neither vetoes.
+  assert.deepEqual(
+    detectProviderFaultFromErrors([streamDiedAfter200, 'assertion failed on delivery to the workspace']),
+    { code: 'provider-transport', status: null },
+  );
+});
+
+test('a delivery miss the case recorded beside a break still vetoes', () => {
+  // Another text that is itself a delivery verdict is the case's own answer; the
+  // short-circuit covers the wrapper inside the break's text, not a sibling.
+  assert.equal(detectProviderFaultFromErrors([streamDiedAfter200, 'Error: delivery_status=failed']), null);
+  assert.equal(detectProviderFaultFromErrors(['delivery_status=failed; assertion failed']), null);
 });

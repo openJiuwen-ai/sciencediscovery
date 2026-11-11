@@ -205,11 +205,21 @@ export function detectProviderFault(text) {
  * verdict — and for a verdict on the run itself: a delivery miss, a 401/403 or
  * 429 answer, or the product's stalled-run wording. Only the first kind may be
  * outvoted by a sibling text that names the gateway; the four verdicts may not.
+ * A status-less transport break is not a verdict either: the text carries the
+ * product's report wrapper, but that wrapper restates a run that died on the
+ * transport after the provider had answered whole, so the break still
+ * classifies at case level.
  * A timeout whose own text names the gateway's status and context, or its
  * routing failure, is not the product's stalled run, so it is not one of the
  * four either; a bare status the text only quotes is.
  */
 function vetoesCase(text) {
+  // A status-less transport break outranks the product's report wrapper for the
+  // same reason `detectProviderFault` checks it first: the wrapper restates a run
+  // that died on the transport after the provider had answered whole. The text
+  // that carries it therefore records no verdict of its own, and an assertion
+  // wrapper beside it neither.
+  if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return false;
   if (DELIVERY_MISS.test(text) || UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
   if (!TIMED_OUT.test(text)) return false;
   const status = serverStatus(text);
