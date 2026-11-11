@@ -66,7 +66,7 @@ test("a session's evolve runs travel with their event log and come back under th
   context.after(() => rm(targetDir, { force: true, recursive: true }));
   const source = new EvolutionStore(sourceDir);
   const target = new EvolutionStore(targetDir);
-  const run = await source.createRun({ goal: goal(), id: "run-1", sessionId: "session-source" });
+  const run = await source.createRun({ goal: goal(), id: "run-1", sessionId: "session-source", createdAt: "2026-08-19T00:00:03.000Z" });
   await source.appendEvents("run-1", [
     { createdAt: "2026-08-19T00:00:01.000Z", event: { level: "info", message: "started", type: "log" } as never, sequence: 1 },
   ]);
@@ -89,6 +89,7 @@ test("a session's evolve runs travel with their event log and come back under th
   assert.equal(back?.status, "succeeded");
   assert.equal(back?.candidates, 7);
   assert.equal(back?.tokens, 1_234);
+  assert.equal(back?.createdAt, "2026-08-19T00:00:03.000Z", "the run keeps its own timestamp, not the import time");
   assert.equal((await target.readEvents("run-1")).length, 1, "the search tree survives the trip");
   assert.equal(back?.goal.statement, run.goal.statement);
 });
@@ -100,7 +101,9 @@ test("a run that was still executing at export time is restored as stopped", asy
   await store.createRun({ goal: goal(), id: "run-a", sessionId: "s" });
   await store.patchRun("run-a", { status: "running" });
   const packed = await exportEvolveRuns(store, ["s"]);
-  const fresh = new EvolutionStore(temporaryDataDir("evolution-package-active-import"));
+  const freshDir = temporaryDataDir("evolution-package-active-import");
+  context.after(() => rm(freshDir, { force: true, recursive: true }));
+  const fresh = new EvolutionStore(freshDir);
   const restored = await restoreEvolveRuns(fresh, { sessionId: "s2" }, { runs: packed.runs });
   assert.equal(restored.restored, 1);
   // Nothing can advance it here, so presenting it as running would lie.
@@ -140,4 +143,8 @@ test("a malformed evolve record degrades to an omission instead of failing the i
   const noGoal = await restoreEvolveRuns(store, { sessionId: "s" }, { runs: [{ run: { id: "run-9", status: "succeeded" } }] });
   assert.equal(noGoal.restored, 0);
   assert.deepEqual(noGoal.omissions, ["evolve:run-9:missing the run goal"]);
+
+  const statementOnly = await restoreEvolveRuns(store, { sessionId: "s" }, { runs: [{ run: { id: "run-10", status: "succeeded", goal: { algorithm: "puct", statement: "a statement with no budget" } } }] });
+  assert.equal(statementOnly.restored, 0);
+  assert.deepEqual(statementOnly.omissions, ["evolve:run-10:invalid run goal"]);
 });

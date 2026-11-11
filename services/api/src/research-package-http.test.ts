@@ -253,8 +253,18 @@ function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = fa
     ...(withEvolveRuns ? { evolve: { runs: [{
       run: {
         id: "evolve-run-source", sessionId: "source-one", algorithm: "puct",
-        goal: { algorithm: "puct", statement: "Search for candidate genes" },
-        status: "succeeded", startedAt: date, finishedAt: date, candidates: 2, costCents: 0, tokens: 0,
+        goal: {
+          algorithm: "puct",
+          baselineProgramCas: "sha256:baseline",
+          budget: { candidateTimeoutSeconds: 60, expansions: 6, maxCostCents: 500, maxSeconds: 1_800, maxTokens: 200_000, maxTokensPerCall: 16_000, workers: 1 },
+          frozen: ["score.py"],
+          modelId: "model-1",
+          scorecard: { aggregate: "weighted_sum", confirmedAt: date, confirmedBy: "tester", constraints: [], criteria: [], derivedFrom: { draftRunId: "draft-1", statement: "Search for candidate genes" }, hash: "sha256:card", schemaVersion: 1, solvedThreshold: 0.999 },
+          schemaVersion: 2,
+          statement: "Search for candidate genes",
+          target: { entrypoint: "classify.py", kind: "program", programId: "p1" },
+        },
+        status: "succeeded", startedAt: date, finishedAt: date, candidates: 2, costCents: 0, tokens: 0, createdAt: date,
       },
       events: [{ sequence: 1, createdAt: date, event: { type: "log", level: "info", message: "started" } }],
     }] } } : {}),
@@ -367,6 +377,11 @@ test("a package carrying the evolve runs and their artifact reports no search lo
   assert.equal(receipt.artifactCount, 2);
   assert.equal(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")), false,
     "the carried run records make the search loss untrue");
+  // The runs travel, but their candidate *sources* (`evolve-candidates/<run>/
+  // <sha256>.py`) never enter the package, so a run that has candidates must
+  // still be told it came back without their code.
+  assert.ok(receipt.omissions.some((item) => item.includes("candidate source")),
+    "the receipt names the candidate sources it could not carry");
   // The /api/evolve/runs route is gated on the external evolve service being
   // ready, which this fixture never provisions, so the restoration is read back
   // from the local EvolutionStore the import wrote it into.

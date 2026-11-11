@@ -58,8 +58,10 @@ export async function exportEvolveRuns(store: EvolutionStore, sessionIds: readon
   const wanted = new Set(sessionIds);
   const runs = (await store.listRuns()).filter((run) => wanted.has(run.sessionId));
   const ordered = [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  // Cap by keeping the newest runs; the tail of an oldest-first list is still
+  // oldest-first, so the dropped set is the oldest and the receipt can say so.
   const packed: PackageEvolveRun[] = [];
-  for (const run of ordered.slice(0, MAX_RUNS)) {
+  for (const run of ordered.slice(-MAX_RUNS)) {
     packed.push({ events: await store.readEvents(run.id), run });
   }
   return { runs: packed, truncated: Math.max(0, ordered.length - MAX_RUNS) };
@@ -85,6 +87,31 @@ function validEvents(value: unknown): EvolveEventRecord[] {
       || !event || typeof event.type !== "string") return [];
     return [{ createdAt: record.createdAt, event, sequence } as EvolveEventRecord];
   });
+}
+
+const EVOLVE_ALGORITHMS: ReadonlySet<unknown> = new Set(["puct", "openevolve"]);
+
+/** A goal is restorable only when it carries the fields the web client
+ *  dereferences unconditionally: `EvolveRunCard` reads `goal.budget.expansions`,
+ *  and `EvolvePanel` reads `goal.scorecard`, `goal.target` and
+ *  `goal.baselineProgramCas`. A goal missing any of them would break the evolve
+ *  card/panel once the imported session is opened, so such a run is dropped
+ *  with an omission instead of restored broken. */
+function validGoal(value: unknown): Record<string, unknown> | undefined {
+  const goal = asRecord(value);
+  if (!goal) return undefined;
+  const budget = asRecord(goal.budget);
+  if (!EVOLVE_ALGORITHMS.has(goal.algorithm)
+    || typeof goal.statement !== "string"
+    || typeof goal.baselineProgramCas !== "string"
+    || !budget || !Number.isInteger(budget.expansions)
+    || !asRecord(goal.scorecard) || !asRecord(goal.target)) return undefined;
+  return goal;
+}
+
+function validDateString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return Number.isNaN(Date.parse(value)) ? undefined : value;
 }
 
 /**
@@ -130,16 +157,23 @@ export async function restoreEvolveRuns(
       result.omissions.push(`evolve:${id}:run id already exists here (owned by session ${existing.sessionId}); a package restores each run once per data directory`);
       continue;
     }
-    const goal = asRecord(run?.goal);
-    if (!goal || typeof goal.statement !== "string") {
+    const rawGoal = asRecord(run?.goal);
+    if (!rawGoal) {
       result.omissions.push(`evolve:${id}:missing the run goal`);
       continue;
     }
+    const goal = validGoal(rawGoal);
+    if (!goal) {
+      result.omissions.push(`evolve:${id}:invalid run goal`);
+      continue;
+    }
     const status = typeof run?.status === "string" && STATUSES.has(run.status) ? run.status as EvolveRunStatus : "failed";
+    const createdAt = validDateString(run?.createdAt);
     try {
       await store.createRun({
         goal: goal as unknown as EvolveRun["goal"],
         id,
+        ...(createdAt ? { createdAt } : {}),
         ...(target.projectId ? { projectId: target.projectId } : {}),
         sessionId: target.sessionId,
       });
