@@ -243,6 +243,7 @@ import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { draftEvolveDirection } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
+import { createMemoryWatch } from "../memory-watch.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
 import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
@@ -4770,6 +4771,11 @@ export async function startApiServer(config = loadServerConfig()): Promise<Serve
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : config.port;
   apiLog.info("service_started", { host: config.host, port });
+  // The budget and the sampled heap belong to the launched service, not to a
+  // server created in a test: a fixture gets no 30 s timeline and no boot line
+  // it did not ask for (#1063).
+  const stopMemoryWatch = createMemoryWatch({ log: apiLog }).start();
+  server.once("close", stopMemoryWatch);
   console.log(`ScienceDiscovery listening on http://${config.host}:${port}`);
   for (const line of accessTokenBanner({ ...config, port: config.publicPort ?? port })) console.log(line);
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1") {
