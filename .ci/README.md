@@ -410,6 +410,13 @@ block attached. Four shapes therefore stay apart:
 - an assertion that only quotes a bare provider word beside a status is the
   product's own failure and stays a `FAIL`.
 
+A verdict recorded beside the outage outranks it too. A case records one text
+per failed `expect()` or hook, so the provider's 401/403 or 429 answer, a
+delivery miss, or the product's stalled-run wording can sit next to a sibling
+text that names the gateway; each of those is the case's own verdict and keeps
+it a `FAIL`. Only the assertion wrapper is the weaker half that a sibling text
+may outvote.
+
 The "a soft classification is not a soft pass" floor above is unchanged either
 way.
 

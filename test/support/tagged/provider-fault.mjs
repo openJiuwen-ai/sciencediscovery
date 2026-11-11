@@ -194,18 +194,37 @@ export function detectProviderFault(text) {
 }
 
 /**
+ * Whether one text vetoes the whole case.
+ *
+ * `detectProviderFault` answers `null` both for an assertion wrapper, which is
+ * the weaker half of a case that also recorded the outage, and for a verdict
+ * of its own: a delivery miss, a 401/403 or 429 answer, or the product's
+ * stalled-run wording. Only the assertion wrapper may be outvoted by a sibling
+ * text; a verdict of its own may not, because the contract keeps a decision and
+ * a timeout out of the soft classification. A timeout that names the gateway's
+ * routing failure is the exception the per-text rule already carves out.
+ */
+function vetoesCase(text) {
+  if (DELIVERY_MISS.test(text) || UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
+  return TIMED_OUT.test(text) && !ROUTING_FAILURE.test(text);
+}
+
+/**
  * Classify a failed case from the text its errors carry.
  *
  * A case is a provider fault when at least one recorded text names one and no
- * text reports a delivery miss. A Playwright case appends its assertion to the
- * gateway's error, so requiring every text to classify let that assertion line
- * veto the outage and turn a whole queue red as a product regression.
+ * text records a verdict of its own. A Playwright case appends its assertion to
+ * the gateway's error, so requiring every text to classify let that assertion
+ * line veto the outage and turn a whole queue red as a product regression;
+ * requiring only one text to classify must not go the other way and let an
+ * outage outrank a decision the case recorded beside it.
  */
 export function detectProviderFaultFromErrors(errors = []) {
   const texts = (Array.isArray(errors) ? errors : [errors]).filter(text => typeof text === 'string');
   if (!texts.length) return null;
-  // A delivery miss anywhere in the case is the product's own report.
-  if (texts.some(text => DELIVERY_MISS.test(text))) return null;
+  // A delivery miss, a provider decision or a stalled run anywhere in the case
+  // is the case's own verdict.
+  if (texts.some(vetoesCase)) return null;
   const detected = texts.map(text => detectProviderFault(text)).filter(Boolean);
   return detected.length ? detected[0] : null;
 }
