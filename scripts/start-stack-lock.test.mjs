@@ -313,7 +313,7 @@ test("the .mjs twin installs its signal handlers before the mirror syncs run", (
 
   const handlerSigint = lineOf('process.on("SIGINT"', "the SIGINT handler");
   const handlerTerm = lineOf('process.on("SIGTERM"', "the SIGTERM handler");
-  const handlerExit = lineOf('process.on("exit", cleanup)', "the exit handler");
+  const handlerExit = lineOf('process.on("exit", cleanupSync)', "the exit handler");
   const buildBlock = lineOf("if (!options.noBuild) {", "the top-level build block");
 
   const syncs = [];
@@ -330,6 +330,18 @@ test("the .mjs twin installs its signal handlers before the mirror syncs run", (
       `a mirror sync at line ${sync} runs before the SIGINT handler is registered at ${handlerSigint}`,
     );
   }
+
+  // Registering a handler is not enough: killTree only asks, so the restore has
+  // to wait for the child that rewrites the lockfile. This pins the order inside
+  // the handler's shutdown — kill and wait, then restore.
+  const shutdownIndex = src.indexOf("async function shutdown(code)");
+  assert.ok(shutdownIndex >= 0, "shutdown() is gone from scripts/start-stack.mjs");
+  const shutdownBody = src.slice(shutdownIndex, src.indexOf("\n}\n", shutdownIndex));
+  assert.match(
+    shutdownBody,
+    /await stopChildren\(\);\s*restoreActiveLockfile\(\);/,
+    "shutdown() no longer restores only after the children have exited; uv can rewrite uv.lock behind the restore",
+  );
 });
 
 test("the .mjs twin's finally restores through the idempotent helper, not a cleared global", () => {
