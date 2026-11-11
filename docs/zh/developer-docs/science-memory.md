@@ -159,7 +159,7 @@ declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)
 - 走到 `max_hops`（默认 8）仍未到终点 → `truncated:true` + `broken:false`（链没断只是没走完，区别于断链）
 - 起点不存在 → HTTP 404（产物完全无记忆，比 broken 更严重）
 - 图不可达 → `broken:true` + `reason:"memory_graph_unreachable"`，HTTP 200（降级不崩，与所有 read 端点一致）
-- sidecar 拒绝查询（非 2xx，例如本地 work 预算耗尽时的 HTTP 503 `memory_graph_query_limit`）→ `broken:true`，浏览器侧仍是 HTTP 200，`reason` 透传 sidecar 的 `detail.code`；`memory_graph_unreachable` 只表示网络不可达，避免把"服务健康但查询过重"误报成服务挂了
+- sidecar 拒绝查询（非 2xx，例如本地 work 预算耗尽时的 HTTP 503 `memory_graph_query_limit`）→ `broken:true`，浏览器侧仍是 HTTP 200，`reason` 透传 sidecar 的 `detail.code`；`memory_graph_unreachable` 只表示网络不可达，避免把"服务健康但查询过重"误报成服务挂了。消费方把 `memory_graph_query_limit` 当作暂时不可用、而不是"节点不存在"：计算复核会给出 inconclusive 而不再报 "provenance marker missing"，桌面端显示可重试的记忆服务错误，而不是"未找到"或空溯源
 
 reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AND_PROCEED`；`broken:true` 或 `truncated:true` → `REVISE_AND_RETRY`。**接口只输出 `broken`，不输出 verdict/decision**——后者是 reviewer agent 内部的事，保持"只要接口、不要 specialist 决策逻辑"的边界。
 

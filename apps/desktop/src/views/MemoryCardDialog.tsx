@@ -33,7 +33,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../api/client.js";
-import { listMemoryNodes, memoryChain } from "../api/memory.js";
+import { graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../api/memory.js";
 import {
   listArtifacts,
   listArtifactVersions,
@@ -176,7 +176,11 @@ export function MemoryCardDialog({
           });
           return;
         }
-        if (result.reason === "memory_graph_unreachable") {
+        // A budget refusal (HTTP 503 memory_graph_query_limit) is a temporary
+        // failure to answer, not proof that the reference has no node. Report
+        // it like an unreachable service instead of falling through to
+        // ``missing``, which would tell the reader the reference does not exist.
+        if (graphTemporarilyUnavailable(result.reason)) {
           setState({
             message: TEXT.memory.unreachableBody,
             offerSettings: true,
@@ -398,7 +402,9 @@ type ProvenanceState =
  *  that as "nothing recorded" would print a trace full of empty steps for a
  *  service that never answered. */
 function chainProblem(reason: string | undefined): string | undefined {
-  if (reason === "memory_graph_unreachable") return TEXT.memory.unreachableBody;
+  // A budget refusal means the graph could not answer, not that nothing was
+  // recorded; ``undefined`` here would render a "ready" trace with no sources.
+  if (graphTemporarilyUnavailable(reason)) return TEXT.memory.unreachableBody;
   if (reason === "memory_graph_disabled") return TEXT.memory.disabledBody;
   return undefined;
 }
