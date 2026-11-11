@@ -4,7 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { packageRanEvolve } from "./research-snapshots.js";
+import { packageRanEvolve, packagedEvolveRuns } from "./research-snapshots.js";
 
 test("a package proves an evolve search ran only through its published result artifact", () => {
   // #1019: a run's result is published as `evolve/<run>/<entrypoint>`, so that
@@ -23,4 +23,15 @@ test("an artifact without a usable name is not evidence either way", () => {
   assert.equal(packageRanEvolve([{}]), false);
   assert.equal(packageRanEvolve([{ name: 42 }]), false);
   assert.equal(packageRanEvolve([{ name: null }]), false);
+});
+
+test("a carried evolve run counts as carried regardless of its owner", () => {
+  // #1019: the exporter stamps every run with a string `sessionId`, so the
+  // owner-scoped filter used for restoration must not gate this check, or the
+  // package this version just wrote would report "does not carry" its own runs.
+  assert.equal(packagedEvolveRuns(undefined), false);
+  assert.equal(packagedEvolveRuns({}), false);
+  assert.equal(packagedEvolveRuns({ runs: [] }), false);
+  assert.equal(packagedEvolveRuns({ runs: [{ run: { id: "run-1", sessionId: "session-source" } }] }), true);
+  assert.equal(packagedEvolveRuns({ runs: [{ run: { id: "run-2" } }] }), true);
 });

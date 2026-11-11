@@ -60,9 +60,9 @@ function goal(statement = "Push the accuracy up"): EvolveGoal {
 }
 
 test("a session's evolve runs travel with their event log and come back under the new session", async (context) => {
-  context.after(() => rm(temporaryDataDir("evolution-package-export"), { force: true, recursive: true }));
   const sourceDir = temporaryDataDir("evolution-package-export");
   const targetDir = temporaryDataDir("evolution-package-import");
+  context.after(() => rm(sourceDir, { force: true, recursive: true }));
   context.after(() => rm(targetDir, { force: true, recursive: true }));
   const source = new EvolutionStore(sourceDir);
   const target = new EvolutionStore(targetDir);
@@ -75,11 +75,12 @@ test("a session's evolve runs travel with their event log and come back under th
   await source.createRun({ goal: goal(), id: "run-2", sessionId: "session-other" });
 
   const packed = await exportEvolveRuns(source, ["session-source"]);
-  assert.deepEqual(packed.map((entry) => entry.run.id), ["run-1"]);
-  assert.equal(packed[0]!.events.length, 1);
-  assert.equal(packed[0]!.run.tokens, 1_234);
+  assert.deepEqual(packed.runs.map((entry) => entry.run.id), ["run-1"]);
+  assert.equal(packed.truncated, 0);
+  assert.equal(packed.runs[0]!.events.length, 1);
+  assert.equal(packed.runs[0]!.run.tokens, 1_234);
 
-  const restored = await restoreEvolveRuns(target, { projectId: "project-1", sessionId: "session-imported" }, { runs: packed });
+  const restored = await restoreEvolveRuns(target, { projectId: "project-1", sessionId: "session-imported" }, { runs: packed.runs });
   assert.equal(restored.restored, 1);
   assert.deepEqual(restored.omissions, []);
   const back = await target.readRun("run-1");
@@ -100,7 +101,7 @@ test("a run that was still executing at export time is restored as stopped", asy
   await store.patchRun("run-a", { status: "running" });
   const packed = await exportEvolveRuns(store, ["s"]);
   const fresh = new EvolutionStore(temporaryDataDir("evolution-package-active-import"));
-  const restored = await restoreEvolveRuns(fresh, { sessionId: "s2" }, { runs: packed });
+  const restored = await restoreEvolveRuns(fresh, { sessionId: "s2" }, { runs: packed.runs });
   assert.equal(restored.restored, 1);
   // Nothing can advance it here, so presenting it as running would lie.
   assert.equal((await fresh.readRun("run-a"))?.status, "stopped");
@@ -116,10 +117,11 @@ test("an existing run id is never overwritten by a second import", async (contex
   await source.createRun({ goal: goal(), id: "run-1", sessionId: "session-source" });
   const packed = await exportEvolveRuns(source, ["session-source"]);
 
-  assert.equal((await restoreEvolveRuns(target, { sessionId: "first" }, { runs: packed })).restored, 1);
-  const second = await restoreEvolveRuns(target, { sessionId: "second" }, { runs: packed });
+  assert.equal((await restoreEvolveRuns(target, { sessionId: "first" }, { runs: packed.runs })).restored, 1);
+  const second = await restoreEvolveRuns(target, { sessionId: "second" }, { runs: packed.runs });
   assert.equal(second.restored, 0);
-  assert.deepEqual(second.omissions, ["evolve:run-1:already present in this project"]);
+  assert.equal(second.omissions.length, 1);
+  assert.match(second.omissions[0]!, /^evolve:run-1:run id already exists here/);
   assert.equal((await target.readRun("run-1"))?.sessionId, "first", "the first import keeps its run");
 });
 

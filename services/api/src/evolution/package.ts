@@ -43,11 +43,18 @@ export interface EvolveRestoreResult {
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const STATUSES: ReadonlySet<string> = new Set(["budget_exhausted", "failed", "pending", "running", "stopped", "succeeded"]);
 /** A package cannot ask the importer to create an unbounded number of runs. */
-const MAX_RUNS = 200;
+export const MAX_RUNS = 200;
+
+export interface ExportEvolveRunsResult {
+  /** The runs carried, oldest first. */
+  runs: PackageEvolveRun[];
+  /** Runs dropped because the package caps at {@link MAX_RUNS}. */
+  truncated: number;
+}
 
 /** Every run of the given sessions, with its event log, oldest first so a
  *  reader can replay the search in the order it happened. */
-export async function exportEvolveRuns(store: EvolutionStore, sessionIds: readonly string[]): Promise<PackageEvolveRun[]> {
+export async function exportEvolveRuns(store: EvolutionStore, sessionIds: readonly string[]): Promise<ExportEvolveRunsResult> {
   const wanted = new Set(sessionIds);
   const runs = (await store.listRuns()).filter((run) => wanted.has(run.sessionId));
   const ordered = [...runs].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
@@ -55,7 +62,7 @@ export async function exportEvolveRuns(store: EvolutionStore, sessionIds: readon
   for (const run of ordered.slice(0, MAX_RUNS)) {
     packed.push({ events: await store.readEvents(run.id), run });
   }
-  return packed;
+  return { runs: packed, truncated: Math.max(0, ordered.length - MAX_RUNS) };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -72,8 +79,11 @@ function validEvents(value: unknown): EvolveEventRecord[] {
     const record = asRecord(entry);
     const sequence = record?.sequence;
     const event = asRecord(record?.event);
-    if (!Number.isInteger(sequence) || Number(sequence) < 1 || !event || typeof event.type !== "string") return [];
-    return [{ ...record, event, sequence } as unknown as EvolveEventRecord];
+    // `parseEventLines` drops a record without a string `createdAt` on read, so
+    // accepting one here would advance the watermark past events no reader sees.
+    if (!Number.isInteger(sequence) || Number(sequence) < 1 || typeof record?.createdAt !== "string"
+      || !event || typeof event.type !== "string") return [];
+    return [{ createdAt: record.createdAt, event, sequence } as EvolveEventRecord];
   });
 }
 
@@ -98,7 +108,12 @@ export async function restoreEvolveRuns(
     result.omissions.push("evolve:package carries an evolve record that is not a run list");
     return result;
   }
-  for (const entry of entries.slice(0, MAX_RUNS)) {
+  const carried = entries.length;
+  const withinCap = entries.slice(0, MAX_RUNS);
+  if (carried > MAX_RUNS) {
+    result.omissions.push(`evolve:package carries ${carried} runs; only the first ${MAX_RUNS} were restored`);
+  }
+  for (const entry of withinCap) {
     const packed = asRecord(entry);
     const run = asRecord(packed?.run);
     const id = typeof run?.id === "string" ? run.id : "";
@@ -106,8 +121,13 @@ export async function restoreEvolveRuns(
       result.omissions.push("evolve:package carries a run with an invalid id");
       continue;
     }
-    if (await store.readRun(id)) {
-      result.omissions.push(`evolve:${id}:already present in this project`);
+    const existing = await store.readRun(id);
+    if (existing) {
+      // Run ids are global to the data directory, not per project: the same
+      // package imported into a second project, or after the first session was
+      // deleted, finds its id already taken. Say whose run it is instead of
+      // claiming it is in this project.
+      result.omissions.push(`evolve:${id}:run id already exists here (owned by session ${existing.sessionId}); a package restores each run once per data directory`);
       continue;
     }
     const goal = asRecord(run?.goal);
