@@ -27,6 +27,7 @@ import {
   useAutoContinue,
   type AutoContinueInput,
 } from "../src/evolve/use-auto-continue.js";
+import { designHasSearch } from "../src/evolve/command.js";
 import { emptyRunStream } from "../src/run-stream/model.js";
 
 function streamed(content: string) {
@@ -371,6 +372,50 @@ test("a turn after the search exists is not a stalled design", async () => {
   await mount(renderer!, { ...props(emptyRunStream(), false), running: true });
   await mount(renderer!, props(created, false));
   assert.equal(sent.length, 0);
+  renderer!.unmount();
+});
+
+test("a search an earlier design started is not this design's search", () => {
+  // The run list is per Session and survives a new `/evolve-design`, so asking
+  // it the Session-wide question silences the cardless-stall push for a design
+  // that has not started anything yet — the exact stall the push exists for.
+  const first = { content: "/evolve-design --no-confirm 第一个目标", role: "user", createdAt: "2026-11-10T09:00:00Z" };
+  const second = { content: "/evolve-design --no-confirm 第二个目标", role: "user", createdAt: "2026-11-10T11:00:00Z" };
+  const earlier = { createdAt: "2026-11-10T09:20:00Z" };
+  const messages = [first, { content: "设计好了", role: "assistant", createdAt: "2026-11-10T09:10:00Z" }, second];
+  // The only run predates the second command: it belongs to the first design.
+  assert.equal(designHasSearch([earlier], messages), false);
+  // A run created after the second command is the second design's own.
+  assert.equal(designHasSearch([earlier, { createdAt: "2026-11-10T11:20:00Z" }], messages), true);
+  // With no design command there is no design whose search it could be.
+  assert.equal(designHasSearch([earlier], [second]), false);
+});
+
+test("a stalled second design is pushed even though the Session already ran a search", async () => {
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (design: string, running: boolean, run = emptyRunStream(), searchStarted = false) => ({
+    checkpointMode: "auto" as const, design, running, run, searchStarted, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props("design-1", false)));
+  });
+
+  // The first design started a search of its own; a later turn of it is not a
+  // stall.
+  await mount(renderer!, props("design-1", true));
+  await mount(renderer!, props("design-1", false, stalled(), true));
+  assert.equal(sent.length, 0);
+
+  // The second design begins. The first design's run is still in the Session's
+  // list, but `designHasSearch` answers for the new design and says it has
+  // none — so its cardless ending is carried, as it would be in a fresh
+  // Session.
+  await mount(renderer!, props("design-2", true));
+  await mount(renderer!, props("design-2", false, stalled()));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /create_evolve_run/);
   renderer!.unmount();
 });
 
