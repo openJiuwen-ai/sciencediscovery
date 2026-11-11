@@ -226,6 +226,20 @@ test("Quick computation review treats graph unavailability as inconclusive", asy
   );
   assert.deepEqual(thrown.findings, []);
   assert.equal(thrown.inconclusive, true);
+
+  // A budget refusal is a busy graph, not a missing provenance marker: the
+  // memory client now forwards the sidecar's detail.code as ``reason``.
+  const busy = await quickComputationReview(
+    version(),
+    async () => completeTrace({
+      broken: true,
+      chain: [],
+      reason: "memory_graph_query_limit",
+      startNode: null,
+    }),
+  );
+  assert.deepEqual(busy.findings, []);
+  assert.equal(busy.inconclusive, true);
 });
 
 test("Quick computation review accepts an older node from the same Artifact version lineage", async () => {

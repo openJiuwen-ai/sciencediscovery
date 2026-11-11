@@ -29,6 +29,14 @@ import type {
   MemoryGraphNodeLabel,
 } from "./types.js";
 
+/** Whether a `reason` means the graph could not answer *this* query, so the
+ *  card must offer a retry rather than claim the reference does not exist.
+ *  `memory_graph_query_limit` is the sidecar's HTTP 503 budget refusal; it is
+ *  not a missing node and must not render as one. */
+export function graphTemporarilyUnavailable(reason?: string): boolean {
+  return reason === "memory_graph_unreachable" || reason === "memory_graph_query_limit";
+}
+
 /** `POST /api/memory/query/by-node-type` — the card list. A `sessionId` of
  *  `undefined` reads every Session, which is what 全部会话 means. */
 export function listMemoryNodes(

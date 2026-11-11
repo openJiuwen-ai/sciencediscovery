@@ -171,7 +171,12 @@ function finding(
 function unavailable(reason?: string): boolean {
   return reason === "memory_graph_disabled"
     || reason === "memory_graph_unreachable"
-    || reason === "network_error";
+    || reason === "network_error"
+    // A budget refusal (HTTP 503 memory_graph_query_limit) means the graph was
+    // too busy to answer, not that the Artifact has no provenance node. Without
+    // this the reason reaches the !startNode branch below and the review emits
+    // a critical MARKER_MISSING finding against a healthy graph.
+    || reason === "memory_graph_query_limit";
 }
 
 function artifactNodeVersion(nodeId: string, artifactId: string): number | undefined {

@@ -18,8 +18,21 @@ const { describe, it } = createTest(import.meta.url, {
 });
 import assert from "node:assert/strict";
 
-import { listMemoryNodes, memoryChain } from "../src/api/memory.js";
+import { graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../src/api/memory.js";
 import { StubClient, json } from "./api-stub.js";
+
+describe("a graph that could not answer", () => {
+  it("counts a budget refusal as temporary, like an unreachable service", () => {
+    assert.equal(graphTemporarilyUnavailable("memory_graph_unreachable"), true);
+    assert.equal(graphTemporarilyUnavailable("memory_graph_query_limit"), true);
+  });
+
+  it("does not turn a missing node or an off service into a retry", () => {
+    assert.equal(graphTemporarilyUnavailable("node_not_found"), false);
+    assert.equal(graphTemporarilyUnavailable("memory_graph_disabled"), false);
+    assert.equal(graphTemporarilyUnavailable(undefined), false);
+  });
+});
 
 describe("the memory card list", () => {
   it("asks for the two kinds in one scoped read", async () => {
