@@ -185,7 +185,10 @@ export class RunnerClient {
     // The health check is the first thing a connection does, so this is where
     // the clock offset is first learned — before anything needs signing.
     const sentAt = Date.now();
-    const response = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
+    const response = await fetch(`${this.baseUrl}/health`, {
+      headers: { authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(5_000),
+    });
     this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) throw new Error(`Runner health check failed (${response.status})`);
     return await response.json() as RunnerHealth;

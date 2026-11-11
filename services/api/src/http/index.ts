@@ -1163,6 +1163,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sendJson(response, 503, { service: "sciencediscovery-api", status: "starting" });
           return;
         }
+        // Liveness for everyone, detail for a caller that proves it may read it:
+        // the record below carries the Runner's platform, the sandbox egress
+        // allowlist and the workspace quotas, which are reconnaissance for
+        // anyone who can reach this port without a token.
+        if (!isAuthorized(request, config.authToken)) {
+          sendJson(response, 200, { service: "sciencediscovery-api", status: "ok" });
+          return;
+        }
         const runner = await settleWithin(runnerClient.health().catch(() => undefined), 2_000, undefined);
         // Toggle off → disabled (the System Settings switch is off). Toggle on
         // but sidecar/Neo4j down → degraded. The client always exists now.

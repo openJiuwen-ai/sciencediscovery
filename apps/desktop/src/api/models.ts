@@ -25,14 +25,14 @@ import type {
   RuntimeSettingsOverrides,
 } from "./types.js";
 
-/** `GET /health` and `GET /api/health` share one handler, and it sits ahead of
- *  the `/api/` token gate — so this doubles as a liveness probe that works
- *  before a token is known. It does NOT check the token: a 200 here means "the
- *  backend is up", never "you are authenticated". */
+/** `GET /health` and `GET /api/health` share one handler ahead of the `/api/`
+ *  token gate. An unauthenticated 200 is liveness only (`service`/`status`);
+ *  deployment details (including `runner`) are present only when the request
+ *  carries a valid bearer token. A 200 never means "you are authenticated". */
 export interface HealthReport {
   memoryGraph?: string;
-  // The route forwards the runner's own health body, which carries the
-  // execution capability the first-run self-check gates on.
+  // Present only for authenticated callers. The runner's own health body
+  // carries the execution capability the first-run self-check gates on.
   runner?: { execution?: { ready?: boolean }; status?: string };
   service?: string;
   status?: string;
