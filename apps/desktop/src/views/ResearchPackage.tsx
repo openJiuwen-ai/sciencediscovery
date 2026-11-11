@@ -63,7 +63,10 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [importProjectId, setImportProjectId] = useState("");
   const projectId = request?.kind === "import" ? importProjectId || request.projectId : request?.projectId;
   const [level, setLevel] = useState("necessary");
-  const [trajectory, setTrajectory] = useState(false), [graph, setGraph] = useState(false);
+  // No trajectory state: this client has no trajectory view, so an export never
+  // asks for full trajectory details. The API parameter is kept for the web
+  // client, which does have one.
+  const [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
   const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
@@ -195,7 +198,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setMessageId(request.messageId ?? "");
     if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
@@ -233,16 +236,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     // Ticking a workspace file must not blank the dialog: the list stays mounted
     // and the size line says it is recalculating. A level or option change does
     // reset, because that is when the list itself changes (#1057).
-    const scope = `${level}|${trajectory}|${graph}`;
+    const scope = `${level}|${graph}`;
     if (previewScope.current !== scope) { previewScope.current = scope; setPreview(undefined); }
     setEstimating(true); setError("");
-    const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory, graph, files).then(value => { if (active) { setPreview(value); setEstimating(false); } }).catch(reason => {
+    const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph, files).then(value => { if (active) { setPreview(value); setEstimating(false); } }).catch(reason => {
       if (!active) return;
       if (reason?.code === "EXPORT_PREVIEW_PENDING") timer = setTimeout(load, 1500);
       else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
-  }, [client, dialog, detail?.id, projectId, level, trajectory, graph, files]);
+  }, [client, dialog, detail?.id, projectId, level, graph, files]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
@@ -338,7 +341,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             <span className="research-profile-contents">{value === "necessary" ? t.necessaryContents : t.completeContents}</span>
             <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? `${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : "—"}</b></span>
           </button>)}</div>
-          {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.trajectory}</label><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
+          {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
           <p>{preview ? <>{t.estimate} <b>{(preview.estimatedBytes / 1024).toFixed(1)} KiB</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
@@ -364,7 +367,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: level === "complete" && trajectory, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
           const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
