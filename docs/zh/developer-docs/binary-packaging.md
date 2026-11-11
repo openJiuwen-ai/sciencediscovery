@@ -124,7 +124,7 @@ Node 与 CPython 运行时按 `scripts/binary-release/runtimes.json` 中固定�
 随后准备两部分依赖：
 
 1. **uv**：从配置的 PyPI index 下载构建时固定版本与 SHA256 的 uv wheel，校验后放入 `<data-dir>/tools/uv/`；
-2. **gateway Python 环境**：在 `<data-dir>/envs/gateway` 基于内置 CPython 创建 venv，并按从 `services/gateway/uv.lock` 导出的 hash-pinned requirements 安装。
+2. **gateway Python 环境**：在 `<data-dir>/envs/gateway` 基于内置 CPython 创建 venv，并按从根 `uv.lock`（uv workspace，五个 sidecar 共享的单一锁文件）导出的 hash-pinned requirements 安装。
 
 相关变量：
 

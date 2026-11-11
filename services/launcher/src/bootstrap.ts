@@ -23,8 +23,9 @@
  *      index (Huawei Cloud mirror by default), sha256-verified against the
  *      pin recorded at build time, binary extracted with the bundled CPython.
  *   2. The gateway environment — a uv-managed venv on the bundled CPython,
- *      installed from the hash-pinned requirements export of
- *      services/gateway/uv.lock. The export carries exact versions and
+ *      installed from the hash-pinned requirements export of the root
+ *      uv.lock (the uv workspace's single lockfile shared by the five
+ *      sidecars). The export carries exact versions and
  *      sha256 hashes but no index URLs, so the mirror configuration applies
  *      while the resolution stays identical to the checked-in lockfile.
  *
