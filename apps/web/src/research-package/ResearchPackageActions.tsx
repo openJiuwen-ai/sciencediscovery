@@ -5,6 +5,7 @@ import type { ResearchPackageExportProfileView as ResearchPackageExportProfile }
 import { trackResearchPackageExport } from "./ResearchPackageExportTasks.js";
 import { ContinueResearchButton } from "./ContinueResearchButton.js";
 import { ExportPreviewCache } from "./export-preview-cache.js";
+import { ApiRequestError } from "../api/auth.js";
 import { translateActive, useLocale } from "../i18n/index.js";
 
 export type ResearchPackageDialogTarget = { projectId: string; sessionId: string; kind: "conversation" | "package" | "import" };
@@ -114,6 +115,11 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  // The scope this dialog previews can be deleted while the dialog is open (another
+  // client, another tab, a teardown). The poll then answers `deleted`; the last
+  // estimate stays on screen as the pre-deletion snapshot, but exporting it would
+  // only fail, so both export buttons are disabled from that answer on.
+  const [scopeGone, setScopeGone] = useState(false);
   const [sessionTitle, setSessionTitle] = useState(t("researchPackage.currentSession"));
   const [defaults, setDefaults] = useState(() => previewCache.peekDefaults(target.projectId, target.sessionId));
   const sessionRevision = defaults?.revision;
@@ -142,7 +148,12 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       setDefaults(next);
       if (!next) setPreview(undefined);
     });
-    const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).catch((reason: unknown) => { if (active) setError(errorText(reason)); }); };
+    setScopeGone(false);
+    const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).catch((reason: unknown) => {
+      if (!active) return;
+      if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_RESOURCE_DELETED") setScopeGone(true);
+      setError(errorText(reason));
+    }); };
     refresh();
     const timer = window.setInterval(refresh, 3_000);
     return () => { active = false; unsubscribe(); window.clearInterval(timer); };
@@ -214,7 +225,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {preview?.omissions.length ? <details className="research-export-details"><summary>{t("researchPackage.omissions", { count: preview.omissions.length })}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
       {error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
-    <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
+    <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;
 }
 

@@ -135,9 +135,15 @@ export class PluginApiClient extends AuthApiClient {
 
   private async requestResearchPackagePreview<T>(path: string, signal?: AbortSignal): Promise<T> {
     try {
-      const result = await this.request<T | { code: "EXPORT_PREVIEW_PENDING" }>(path, { signal, headers: { Prefer: "respond-async" } });
+      const result = await this.request<T | { code: "EXPORT_PREVIEW_PENDING" } | { state: "deleted" }>(path, { signal, headers: { Prefer: "respond-async" } });
       if (result && typeof result === "object" && "code" in result && result.code === "EXPORT_PREVIEW_PENDING") {
         throw new ApiRequestError(translateActive("researchPackage.previewPending"), 202, result.code);
+      }
+      // The Project or Session was deleted while it was being polled. The API
+      // answers that as a normal end of polling rather than a resource error,
+      // and polling callers stop on this error instead of asking again (#1072).
+      if (result && typeof result === "object" && "state" in result && result.state === "deleted") {
+        throw new ApiRequestError(translateActive("researchPackage.resourceDeleted"), 410, "EXPORT_PREVIEW_RESOURCE_DELETED");
       }
       return result as T;
     } catch (error) {

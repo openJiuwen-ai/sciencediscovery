@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
+import { ApiRequestError } from "../src/api/auth.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { ResearchPackageDialogs } from "../src/research-package/ResearchPackageActions.js";
 import { ExportPreviewCache } from "../src/research-package/export-preview-cache.js";
@@ -111,5 +112,52 @@ test("file selection shows inspection progress immediately and supports success,
   } finally {
     if (renderer) await act(async () => renderer!.unmount());
     globalThis.document = previousDocument;
+  }
+});
+test("a deleted scope keeps the last estimate but disables both export buttons", async (context) => {
+  context.mock.timers.enable({ apis: ["setInterval"] });
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  globalThis.window = { setInterval, clearInterval } as unknown as Window & typeof globalThis;
+  globalThis.document = { activeElement: null, addEventListener: () => undefined, removeEventListener: () => undefined } as unknown as Document;
+  const preview = { revision: "r1", estimatedBytes: 1024, files: [{ path: "data/result.csv", size: 20, selected: true }], omissions: [] };
+  const defaults = { revision: "r1", necessary: preview, complete: preview, completeWithTrajectory: preview, completeWithMemoryGraph: preview, completeWithTrajectoryAndMemoryGraph: preview };
+  let fail = false;
+  const client = {
+    getResearchPackagePreviews: async () => {
+      if (fail) throw new ApiRequestError("该项目或会话已不存在，没有可预览的内容。", 410, "EXPORT_PREVIEW_RESOURCE_DELETED");
+      return defaults;
+    },
+    previewResearchPackage: async () => preview,
+    exportResearchPackage: async () => new Blob(),
+    startResearchPackageExport: async () => ({ id: "task", status: "queued", filename: "x.sdresearch" }),
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await new ExportPreviewCache(client).refreshDefaults("project-a", "session-a");
+    await act(async () => {
+      renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ResearchPackageDialogs, {
+        client,
+        onClose: () => undefined,
+        target: { projectId: "project-a", sessionId: "session-a", kind: "package" },
+      })));
+    });
+    // Ready to export while the scope exists.
+    assert.equal(button(renderer!, "立即导出").props.disabled, false);
+    assert.ok(renderer!.root.findAllByType("strong").some((node) => node.children.join("").includes("预计 1.0 KiB")));
+    // The Project is deleted elsewhere; the dialog's own 3 s poll answers `deleted`.
+    fail = true;
+    await act(async () => { context.mock.timers.tick(3_000); });
+    await act(async () => { await Promise.resolve(); });
+    assert.equal(button(renderer!, "立即导出").props.disabled, true, "a gone scope cannot be exported");
+    assert.equal(button(renderer!, "后台导出").props.disabled, true);
+    // The last estimate stays on screen as the pre-deletion snapshot.
+    assert.ok(renderer!.root.findAllByType("strong").some((node) => node.children.join("").includes("预计 1.0 KiB")));
+    assert.ok(renderer!.root.findByProps({ role: "alert" }).children.join("").includes("该项目或会话已不存在"));
+  } finally {
+    if (renderer) await act(async () => renderer!.unmount());
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+    context.mock.timers.reset();
   }
 });

@@ -1385,9 +1385,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const researchPackageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package(?:\/(inspect|import|preview))?$/);
       if (researchPackageMatch) {
         const projectId = decodeURIComponent(researchPackageMatch[1]!);
-        if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
         const sessionId = url.searchParams.get("sessionId") ?? undefined;
-        if (request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview")) {
+        const previewRead = request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview");
+        // Only the polling shape (`defaults=1`, what a mounted panel asks every
+        // 3 s) ends quietly. A one-shot preview read keeps its status: there the
+        // caller asked once, and a deleted scope is worth reporting.
+        const previewPoll = previewRead && researchPackageMatch[2] === "preview" && url.searchParams.get("defaults") === "1";
+        const packagePreviewGone = () => !store.getProject(projectId)
+          || (sessionId !== undefined && sessionId !== "" && !store.getSession(sessionId));
+        // A mounted panel polls the preview of the Session it is showing. When
+        // that Session or Project has been deleted, the honest answer to the
+        // poll is "there is nothing left to preview" — not a 404, which the
+        // browser reports as a console error and which a polling client would
+        // keep asking for (#1072). The panel stops on this answer. Downloads
+        // keep their 404 below: asking for a package that is gone is a mistake
+        // worth reporting, asking after a polled preview is not.
+        if (previewPoll && packagePreviewGone()) return sendJson(response, 200, { state: "deleted" as const });
+        if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
+        if (previewRead) {
           const requestedLevel = url.searchParams.get("level");
           const level = requestedLevel === "complete" ? "complete" : "necessary";
           const includeFullTrajectory = url.searchParams.get("includeFullTrajectory") !== "0";
@@ -1402,6 +1417,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               }
               return sendJson(response, 200, await previewResearchPackage(projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph));
             } catch (error) {
+              // The scope can disappear while a preview is being calculated —
+              // teardown, or another client deleting the Project/Session. That
+              // ends the poll; it is not a failure of the page still showing it.
+              // An ENOENT counts only when the scope is really gone, so a
+              // missing input of a live Project still surfaces as an error.
+              if (previewPoll && ((error instanceof ApiStatusError && error.code === "EXPORT_PREVIEW_RESOURCE_DELETED")
+                || (packagePreviewGone() && (error as NodeJS.ErrnoException).code === "ENOENT")))
+                return sendJson(response, 200, { state: "deleted" as const });
               // Pending is expected while a run changes evidence. Opt-in clients can
               // wait without turning that state into a browser resource error.
               const preferAsync = [request.headers.prefer].flat().join(",").split(",").some((preference) => preference.trim().toLowerCase() === "respond-async");

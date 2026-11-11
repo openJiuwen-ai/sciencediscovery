@@ -115,6 +115,27 @@ test("pending export previews return HTTP 409 for single and default profiles", 
   }
 });
 
+test("a preview poll of a deleted project ends as gone instead of a 404", async (context) => {
+  const { rawRequest, request, project } = await fixture(context);
+  const target = await project();
+  const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}`;
+  assert.equal((await rawRequest(`${endpoint}&defaults=1`)).status, 200);
+  await request(`/api/projects/${target.id}`, {
+    method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmationId: target.id }),
+  });
+  // The panel still has the Session on screen; its poll must end quietly, not
+  // raise a browser resource error the mocked journey records (#1072).
+  const gone = await rawRequest(`${endpoint}&defaults=1`);
+  assert.equal(gone.status, 200);
+  assert.deepEqual(await gone.json(), { state: "deleted" });
+  // A one-shot preview read keeps reporting that its scope is gone.
+  const single = await rawRequest(`${endpoint}&level=complete`);
+  assert.equal(single.status, 404);
+  // A download of a package that is gone is still a mistake worth reporting.
+  const missingPackage = await rawRequest(`/api/projects/${target.id}/research-package?sessionId=${target.firstSession.id}`);
+  assert.equal(missingPackage.status, 404);
+});
+
 test("async preview clients receive accepted pending state and recover for single and default profiles", async (context) => {
   const { rawRequest, project } = await fixture(context);
   const target = await project();
@@ -144,7 +165,7 @@ test("async preview clients receive accepted pending state and recover for singl
   assert.equal((await failed.json() as { code: string }).code, "EXPORT_STORAGE_UNAVAILABLE");
 });
 
-test("preview deletion and shutdown retain their HTTP status for async clients", async (context) => {
+test("preview deletion ends the poll quietly while shutdown and the one-shot read keep their status", async (context) => {
   const { rawRequest, project } = await fixture(context);
   const target = await project();
   let failure: ApiStatusError;
@@ -152,10 +173,18 @@ test("preview deletion and shutdown retain their HTTP status for async clients",
   const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}`;
   for (const [status, code] of [[404, "EXPORT_PREVIEW_RESOURCE_DELETED"], [503, "EXPORT_PREVIEW_SERVICE_CLOSED"]] as const) {
     failure = new ApiStatusError(status, "Preview intentionally stopped", code);
-    for (const query of ["&level=complete", "&defaults=1"]) {
-      const response = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
-      assert.equal(response.status, status);
-      assert.equal((await response.json() as { code: string }).code, code);
+    // The one-shot read keeps its status; the polling shape ends as `gone`
+    // because that is what a mounted panel asks and repeats (#1072).
+    const single = await rawRequest(`${endpoint}&level=complete`, { headers: { Prefer: "respond-async" } });
+    assert.equal(single.status, status);
+    assert.equal((await single.json() as { code: string }).code, code);
+    const polled = await rawRequest(`${endpoint}&defaults=1`, { headers: { Prefer: "respond-async" } });
+    if (code === "EXPORT_PREVIEW_RESOURCE_DELETED") {
+      assert.equal(polled.status, 200);
+      assert.deepEqual(await polled.json(), { state: "deleted" });
+    } else {
+      assert.equal(polled.status, status);
+      assert.equal((await polled.json() as { code: string }).code, code);
     }
   }
 });
