@@ -98,6 +98,19 @@ test("unknown engines and non-boolean switches are rejected rather than coerced"
   assert.throws(() => normalizeWebSettings({ ...base, searchEngine: "bing" }), /Unknown web setting/);
 });
 
+test("an unknown free search engine is tagged as client input so the route answers 400", () => {
+  assert.throws(
+    () => normalizeWebSettings({ ...base, freeSearchEngines: { google: true } }),
+    (error: unknown) => (error as { code?: string }).code === "INVALID_WEB_SETTINGS",
+    "the status follows the code, not the wording of a message a later edit could reword",
+  );
+  assert.throws(
+    () => normalizeWebSettings({ ...base, freeSearchEngines: { google: true } }),
+    /Unknown free search engine: google/,
+    "the message the client already shows is unchanged",
+  );
+});
+
 
 test("Idea Tree settings reject template-owned fields and discard their legacy catalog values", () => {
   const updated = normalizeIdeaTreeSettings({templateId: "water-treatment-materials/v1", explorationIntensity: "deep", maxTokens: 120000, maxTokensPerCall: 6000}, DEFAULT_IDEA_TREE_SETTINGS);

@@ -33,7 +33,11 @@ test("keeps known validation failures at 400 without hiding internal faults", ()
     assert.equal(isKnownClientInputError(new Error(message)), true, message);
   }
   assert.equal(isKnownClientInputError(new SyntaxError("Malformed JSON")), true);
-  assert.equal(isKnownClientInputError(new Error("Database invariant failed")), false);
+  // A real internal fault must keep the generic 500; the settings route relies on
+  // this, so tagging one more rejection as client input must not widen the class.
+  for (const message of ["Database invariant failed", "Catalog database is not initialized"]) {
+    assert.equal(isKnownClientInputError(new Error(message)), false, message);
+  }
 });
 
 test("a length rejection is client input only when it is the whole message", () => {

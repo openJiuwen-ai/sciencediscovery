@@ -64,6 +64,44 @@ describe("PUT /api/web/settings answers a client error that names the rejected f
     assert.equal(response.body.error, "Unknown web setting: nope");
   });
 
+  test("an unknown free search engine is a 400 that names it", async () => {
+    const response = await request("PUT", { freeSearchEngines: { nope: true } });
+    assert.equal(response.status, 400, "an unrecognised engine is client input, not a server fault");
+    assert.equal(response.body.error, "Unknown free search engine: nope");
+  });
+
+  // Guard tests: these already reached the client-input branch through the
+  // message-shape classifier before the fix above. They are pinned here so a
+  // later reworded message cannot push them back into the catch-all 500.
+  test("the remaining validation rejections stay 400 with their wording intact", async () => {
+    const cases: Array<[string, unknown, string]> = [
+      ["deepseekEnabled", { deepseekEnabled: "yes" }, "deepseekEnabled must be a boolean"],
+      ["paidSearchProviders", { paidSearchProviders: ["bogus"] }, "paidSearchProviders must list supported paid search providers"],
+      ["freeSearchEngines.bing", { freeSearchEngines: { bing: "yes" } }, "freeSearchEngines.bing must be a boolean"],
+      ["searchCacheTtlSeconds", { searchCacheTtlSeconds: 1e9 }, "searchCacheTtlSeconds must be an integer between 0 and 2592000 seconds"],
+    ];
+    for (const [label, body, message] of cases) {
+      const response = await request("PUT", body);
+      assert.equal(response.status, 400, `${label} is client input, not a server fault`);
+      assert.equal(response.body.error, message);
+    }
+  });
+
+  test("no shape of a client mistake is answered with a generic 500", async () => {
+    // A non-object body is destructured against the stored settings before
+    // normalisation runs, so each shape lands somewhere else. What must hold for
+    // all of them is the report's premise: none of them is a server fault.
+    for (const [label, body] of [
+      ["array", []],
+      ["string", "x"],
+      ["null", null],
+      ["number", 7],
+    ] as const) {
+      const response = await request("PUT", body);
+      assert.notEqual(response.status, 500, `${label} body is not an internal server error`);
+    }
+  });
+
   test("a valid update still answers 200 and reads back through GET", async () => {
     const put = await request("PUT", { searchCacheTtlSeconds: 17 });
     assert.equal(put.status, 200);
