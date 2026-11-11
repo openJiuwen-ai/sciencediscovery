@@ -140,6 +140,16 @@ test('a decision or a stall beside a gateway outage still vetoes the case', () =
   assert.equal(detectProviderFaultFromErrors([RATE_LIMITED, GATEWAY_503]), null);
   assert.equal(detectProviderFaultFromErrors(['Agent run stalled: no assistant progress for 600000 ms', GATEWAY_503]), null);
   assert.equal(detectProviderFaultFromErrors(['Test timeout of 240000ms exceeded.', GATEWAY_500]), null);
+  // One aggregated retry log can hold a decision and a break in the same text.
+  // The decision still vetoes the case: the per-text rule answers `null` for it,
+  // so the case veto must not read the break first and let a sibling 503 carry
+  // an authentication or quota answer.
+  const unauthorizedRetry = '[181001] model call failed after 2 attempts: attempt 1: openAI API answered Error code: 401 - unauthorized; attempt 2: read ECONNRESET';
+  assert.equal(detectProviderFault(unauthorizedRetry), null);
+  assert.equal(detectProviderFaultFromErrors([unauthorizedRetry, GATEWAY_503]), null);
+  const rateLimitedRetry = '[181001] model call failed after 2 attempts: attempt 1: openAI API answered Error code: 429 - rate limit; attempt 2: socket hang up';
+  assert.equal(detectProviderFault(rateLimitedRetry), null);
+  assert.equal(detectProviderFaultFromErrors([rateLimitedRetry, GATEWAY_503]), null);
   // A timeout that names the gateway's own routing failure is the exception:
   // the per-text rule never masks a routing failure behind that wording.
   assert.equal(detectProviderFaultFromErrors(['No available channel for model deepseek-v4-flash; timed out', GATEWAY_503]).code,

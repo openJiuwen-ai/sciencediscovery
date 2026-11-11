@@ -214,13 +214,18 @@ export function detectProviderFault(text) {
  * four either; a bare status the text only quotes is.
  */
 function vetoesCase(text) {
+  // An authentication or rate-limit answer stays a decision even when the same
+  // message also records a break, because a retrying gateway client aggregates
+  // its attempts: `attempt 1: … 401` beside `attempt 2: read ECONNRESET`. This
+  // is the order `detectProviderFault` keeps, so the two rules cannot disagree.
+  if (UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
   // A status-less transport break outranks the product's report wrapper for the
   // same reason `detectProviderFault` checks it first: the wrapper restates a run
   // that died on the transport after the provider had answered whole. The text
   // that carries it therefore records no verdict of its own, and an assertion
   // wrapper beside it neither.
   if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return false;
-  if (DELIVERY_MISS.test(text) || UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
+  if (DELIVERY_MISS.test(text)) return true;
   if (!TIMED_OUT.test(text)) return false;
   const status = serverStatus(text);
   const gatewayStatus = status !== null && GATEWAY_CONTEXT.test(text);
