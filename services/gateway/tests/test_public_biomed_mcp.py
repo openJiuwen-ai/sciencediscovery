@@ -855,9 +855,39 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.10/PMC123.10.pdf",
         )
 
-    async def test_pmc_candidate_refuses_a_truncated_listing(self) -> None:
-        # A version directory with many figures can fill the window and hide a
-        # newer revision; refuse rather than guess.
+    async def test_pmc_candidate_walks_a_truncated_listing_to_the_article_pdf(self) -> None:
+        # A version directory can fill the 40-key window, and the prefix can also
+        # match a longer PMCID; the article PDF lives on a later page, so the
+        # listing is walked with the continuation token instead of refused (#1049).
+        page_one = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <IsTruncated>true</IsTruncated>
+          <NextContinuationToken>next-page-token</NextContinuationToken>
+          <Contents><Key>PMC123.1/PMC123.1.pdf</Key></Contents>
+        </ListBucketResult>"""
+        page_two = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <IsTruncated>false</IsTruncated>
+          <Contents><Key>PMC123.2/PMC123.2.pdf</Key></Contents>
+        </ListBucketResult>"""
+
+        async def fake_get_text(url, *, params=None, accept="", ssl_context=None,
+                                arxiv_diagnostics=False, fixed_endpoint=False):
+            if params and params.get("continuation-token") == "next-page-token":
+                return page_two
+            return page_one
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=AsyncMock(side_effect=fake_get_text),
+        ):
+            result = await _pmc_pdf_candidate("europe-pmc", "PMC123")
+        self.assertEqual(
+            result["artifacts"][0]["sourceUrl"],
+            "https://pmc-oa-opendata.s3.amazonaws.com/PMC123.2/PMC123.2.pdf",
+        )
+
+    async def test_pmc_candidate_refuses_a_truncated_listing_without_a_continuation_token(self) -> None:
+        # Truncation without a continuation token means the walk cannot proceed;
+        # refuse rather than guess at the article key.
         listing = """<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
           <IsTruncated>true</IsTruncated>
           <Contents><Key>PMC123.1/PMC123.1.pdf</Key></Contents>
@@ -866,7 +896,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "sciencediscovery_gateway.public_biomed_mcp._get_text",
             new=AsyncMock(return_value=listing),
         ):
-            with self.assertRaisesRegex(ValueError, "truncated"):
+            with self.assertRaisesRegex(ValueError, "truncated without a continuation token"):
                 await _pmc_pdf_candidate("europe-pmc", "PMC123")
 
     async def test_pmc_candidate_reports_a_record_without_a_package(self) -> None:
