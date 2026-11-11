@@ -247,3 +247,28 @@ test("data sources, Web access and custom MCP servers are separate groups, each 
     assert.deepEqual(toggled, ["pubmed", "uniprot", "web", "custom-0123456789ab"]);
   } finally {await act(async () => view.unmount());}
 });
+
+test("a recorded provider outage is shown beside a ready connector", async () => {
+  // Readiness used to be configuration-only, so a connector whose every call
+  // was failing still read `ready` (#1081). The picker reports the recorded
+  // outage and leaves the status — and therefore the gate — alone.
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { addEventListener: () => {}, removeEventListener: () => {} } });
+  let view: ReactTestRenderer | undefined;
+  try {
+    const status: McpSourceStatus = {
+      availableTools: ["search"], lastCheckedAt: "2026-11-11T12:00:00.000Z", missingTools: [], sourceId: "pubmed", status: "ready",
+      lastOutage: { at: "2026-11-11T12:00:00.000Z", code: "ENDPOINT_UNAVAILABLE", sourceId: "pubmed", toolId: "search" },
+    };
+    const t = ((key: string, variables?: Record<string, string | number>) => key === "connectors.lastOutage" ? `outage ${variables?.code}` : key) as never;
+    await act(async () => { view = create(createElement(McpPicker, { connectors, enabledIds: ["pubmed"], icons: { database: null, external: null }, onToggle: () => {}, sourceStatuses: { pubmed: status }, t })); });
+    await act(async () => { view!.root.findAllByType("button")[0]!.props.onClick(); });
+    assert.equal(status.status, "ready", "the outage never rewrites the readiness status");
+    assert.match(JSON.stringify(view!.toJSON()), /outage ENDPOINT_UNAVAILABLE/);
+  } finally {
+    await act(async () => { view?.unmount(); });
+    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+});

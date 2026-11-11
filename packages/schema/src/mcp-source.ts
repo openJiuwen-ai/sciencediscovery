@@ -180,9 +180,28 @@ export interface McpSourceStatus {
   catalogRevision?: string;
   error?: string;
   lastCheckedAt: string;
+  /** The last provider outage this process classified for the source, while it
+   *  is still inside the readiness window. Advisory only: it is reported
+   *  alongside `status` and never changes it, so a transient upstream error
+   *  cannot disable a connector that would still answer (#1081). */
+  lastOutage?: McpSourceOutage;
   missingTools: McpToolId[];
   sourceId: McpSourceId;
   status: "degraded" | "disabled" | "misconfigured" | "ready" | "unavailable";
+}
+
+/** One classified upstream outage, as the readiness view reports it. */
+export interface McpSourceOutage {
+  /** When the failure happened, ISO-8601. */
+  at: string;
+  /** The classification the gateway/broker already assigned, e.g.
+   *  `UPSTREAM_UNAVAILABLE` or (once the endpoint vocabulary lands)
+   *  `ENDPOINT_UNAVAILABLE`. */
+  code: string;
+  /** The provider's own words, shortened for a status line. */
+  detail?: string;
+  sourceId: McpSourceId;
+  toolId?: McpToolId;
 }
 
 export interface McpCatalogTool {

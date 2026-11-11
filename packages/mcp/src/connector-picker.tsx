@@ -15,7 +15,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogEmpty"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogEmpty"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed"|"connectors.lastOutage",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -135,6 +135,13 @@ export function ConnectorPicker({
                   {unavailable ? <small className="connector-picker-status" role="status">
                     {!status ? t("connectors.catalogUnknown") : status.status === "ready" ? t("connectors.catalogEmpty") : t(status.status === "degraded" ? "connectors.catalogDegraded" : "connectors.catalogUnavailable", { error: status.error ?? "" })}
                     {status && status.status !== "ready" ? <> {status.missingTools.length ? t("connectors.omittedTools", { tools: status.missingTools.join(", ") }) : t("connectors.unknownTools")}</> : null}
+                  </small> : null}
+                  {/* Readiness kept reporting `ready` after every call to a dead
+                      provider had failed, because the catalog only compares
+                      schemas (#1081). The label is advisory: it never changes
+                      the selection or the readiness gate above. */}
+                  {status?.lastOutage ? <small className="connector-picker-outage" role="status">
+                    {t("connectors.lastOutage", { at: new Date(status.lastOutage.at).toLocaleString(), code: status.lastOutage.code })}
                   </small> : null}
                 </span>
               </label>
