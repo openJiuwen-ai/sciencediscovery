@@ -388,7 +388,7 @@ export function normalizeWebSettings(value: unknown): WebSettings {
   const freeInput = migrated.freeSearchEngines ?? { ...DEFAULT_WEB_SETTINGS.freeSearchEngines };
   if (!isRecord(freeInput)) throw new Error("freeSearchEngines must be an object");
   const unknownEngine = Object.keys(freeInput).find((key) => !FREE_SEARCH_ORDER.includes(key as FreeSearchEngine));
-  if (unknownEngine) throw new Error(`Unknown free search engine: ${unknownEngine}`);
+  if (unknownEngine) throw Object.assign(new Error(`Unknown free search engine: ${unknownEngine}`), { code: "INVALID_WEB_SETTINGS" });
   const freeSearchEngines = Object.fromEntries(FREE_SEARCH_ORDER.map((engine) => {
     const enabled = freeInput[engine];
     if (enabled !== undefined && typeof enabled !== "boolean") {
