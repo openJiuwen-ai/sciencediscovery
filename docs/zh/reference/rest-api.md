@@ -33,7 +33,7 @@
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-未携带有效 bearer token 时，`/health` 和 `/api/health` 返回 HTTP `200`，仅包含 `{"service":"sciencediscovery-api","status":"ok"}`；Runner 仅返回 `{"status":"ok"}`。公开响应只表示进程存活，不探测依赖。
+未携带有效 bearer token 时，`/health` 和 `/api/health` 返回 HTTP `200`，仅包含 `{"service":"sciencediscovery-api","liveness":"ok"}`；Runner 仅返回 `{"status":"ok"}`。公开响应只表示进程存活，不探测依赖。公开的 API 响应体只带 `liveness`，不带 `status`：认证响应里的 `status` 由 Runner 推导而来，因此只认 `status: "ok"` 的读取方读到的一定是已授权的详情。
 
 携带有效 token 时，API 返回以下部署详情：
 

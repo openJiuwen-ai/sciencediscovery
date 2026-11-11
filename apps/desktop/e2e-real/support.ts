@@ -94,11 +94,11 @@ export async function seedToken(page: Page): Promise<void> {
  *
  * The authenticated API health reports `status: "ok"` only when the Runner
  * answered too, so one probe covers both services once the token is sent. The
- * public answer is liveness only — `service` and `status`, with no `runner` —
- * so a body without a `runner` means the credential was not accepted as a
- * detail reader, not that the stack is down. That case is told apart on an
- * authenticated route: a 401/403 there is the wrong credential (a failure, not
- * a skip), anything else is a stack this suite may not diagnose (a skip).
+ * public answer is liveness only — `service` and `liveness`, with no `status`
+ * and no `runner` — so a body carrying `liveness` means the credential was not
+ * accepted as a detail reader, not that the stack is down. That case is told
+ * apart on an authenticated route: a 401/403 there is the wrong credential (a
+ * failure, not a skip), anything else is a stack this suite may not diagnose.
  */
 export async function requireStack(info: TestInfo): Promise<void> {
   const headers = { authorization: `Bearer ${token()}`, connection: "close" };
@@ -113,12 +113,10 @@ export async function requireStack(info: TestInfo): Promise<void> {
     throw new Error(`${API_ORIGIN}/health rejected the configured credential (HTTP ${health.status})`);
   }
   if (!health.ok) info.skip(true, `ScienceDiscovery stack health is HTTP ${health.status}`);
-  const body = await health.json() as { runner?: { status?: string }; service?: string; status?: string };
-  if (body.service !== "sciencediscovery-api" || body.status !== "ok") {
-    info.skip(true, `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"})`);
-    return;
-  }
-  if (body.runner === undefined) {
+  const body = await health.json() as { liveness?: string; runner?: { status?: string }; service?: string; status?: string };
+  // No detail was read: either the credential is not the one this stack was
+  // started with, or it is missing. Both are a skip, and the reason says which.
+  if (body.liveness !== undefined || body.runner === undefined) {
     const context = await request.newContext();
     try {
       const probe = await context.get(`${API_ORIGIN}/api/sessions`, { headers });
@@ -129,6 +127,10 @@ export async function requireStack(info: TestInfo): Promise<void> {
       await context.dispose();
     }
     info.skip(true, `ScienceDiscovery stack answered liveness only, so ${token() ? "E2E_API_TOKEN" : "no E2E_API_TOKEN"} cannot read the Runner detail this suite needs`);
+    return;
+  }
+  if (body.service !== "sciencediscovery-api" || body.status !== "ok") {
+    info.skip(true, `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"})`);
     return;
   }
   if (body.runner.status === "unavailable") {

@@ -109,6 +109,11 @@ export function allowRealEnvException(testInfo: TestInfo, reason: string): void 
  * `status: "ok"` only when the Runner answered its own health check, and echoes
  * that Runner status back. There is no third service to probe — the agent loop,
  * the MCP client, and the web providers all run inside the API process.
+ *
+ * That detail needs the token the stack was started with. A refused or missing
+ * credential gets a `liveness` answer instead, which is a skip with its own
+ * reason — never a pass: the public body says the process is up, nothing about
+ * the Runner.
  */
 export async function requireRealStack(
   testInfo: TestInfo,
@@ -126,7 +131,15 @@ export async function requireRealStack(
   }
   if (!response.ok) throw new Error(`Real stack health check failed with HTTP ${response.status}`);
 
-  const health = await response.json() as { runner?: { status?: string }; service?: string; status?: string };
+  const health = await response.json() as { liveness?: string; runner?: { status?: string }; service?: string; status?: string };
+  // The liveness answer means this suite may not read the detail: E2E_API_TOKEN
+  // is missing, or it is not the token this stack was started with.
+  if (health.liveness !== undefined) {
+    const reason = `BLOCKED: ScienceDiscovery stack answered liveness only (${health.liveness}), so ${process.env.E2E_API_TOKEN ? "E2E_API_TOKEN is not the token this stack was started with" : "E2E_API_TOKEN is not set"} and the Runner detail this suite needs cannot be read`;
+    console.warn(reason);
+    testInfo.skip(true, reason);
+    return;
+  }
   if (health.service !== "sciencediscovery-api" || health.status !== "ok" || health.runner?.status === "unavailable") {
     const reason = `BLOCKED: ScienceDiscovery stack health is incomplete (service=${health.service ?? "unknown"}, status=${health.status ?? "unknown"}, runner=${health.runner?.status ?? "unknown"})`;
     console.warn(reason);
