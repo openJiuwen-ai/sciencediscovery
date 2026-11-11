@@ -109,11 +109,21 @@ export function latestEvolveCheckpointMode(
  *  design that has not started anything yet — the exact stall the push exists
  *  for. A run counts only when it was created after the latest design command,
  *  which is also what makes the answer survive a reopened window: both times
- *  come from the server, not from a counter this client keeps. */
+ *  come from the server, not from a counter this client keeps.
+ *
+ *  `pending` is the message being sent right now. The hook acts on the running
+ *  → idle transition, and at that moment the design's command is still only
+ *  that pending message — the transcript is written when the turn settles. The
+ *  persisted latest command would then be the *previous* design's, and its run
+ *  would answer yes for a design that owns nothing. A design whose command is
+ *  not persisted yet cannot own a run, so the answer is no; a run this very
+ *  turn created is already covered by `run.evolveRunsCreated`. */
 export function designHasSearch(
   runs: ReadonlyArray<{ createdAt: string }>,
   messages: ReadonlyArray<{ content: string; createdAt: string; role: string }>,
+  pending?: string,
 ): boolean {
+  if (pending !== undefined && isEvolveCommand(pending)) return false;
   const command = messages
     .filter((message) => message.role === "user" && isEvolveCommand(message.content))
     .at(-1);

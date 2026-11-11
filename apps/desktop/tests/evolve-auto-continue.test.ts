@@ -387,8 +387,15 @@ test("a search an earlier design started is not this design's search", () => {
   assert.equal(designHasSearch([earlier], messages), false);
   // A run created after the second command is the second design's own.
   assert.equal(designHasSearch([earlier, { createdAt: "2026-11-10T11:20:00Z" }], messages), true);
-  // With no design command there is no design whose search it could be.
+  // With no command and no run there is nothing for a search to belong to.
+  assert.equal(designHasSearch([], []), false);
+  // A run that predates the design's command belongs to a design before it.
   assert.equal(designHasSearch([earlier], [second]), false);
+  // A design's first turn ends before its own command is persisted: the
+  // transcript still shows the previous design. That design's run — created
+  // after its own command — would answer yes for a design that owns nothing.
+  assert.equal(designHasSearch([earlier], [first]), true);
+  assert.equal(designHasSearch([earlier], [first], second.content), false);
 });
 
 test("a stalled second design is pushed even though the Session already ran a search", async () => {
