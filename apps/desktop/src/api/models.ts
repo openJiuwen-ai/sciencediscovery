@@ -26,10 +26,12 @@ import type {
 } from "./types.js";
 
 /** `GET /health` and `GET /api/health` share one handler ahead of the `/api/`
- *  token gate. An unauthenticated 200 is liveness only (`service`/`status`);
- *  deployment details (including `runner`) are present only when the request
- *  carries a valid bearer token. A 200 never means "you are authenticated". */
+ *  token gate. An unauthenticated 200 is liveness only (`service`/`liveness`);
+ *  deployment details (including `runner` and `status`) are present only when
+ *  the request carries a valid bearer token. A 200 never means "you are
+ *  authenticated". */
 export interface HealthReport {
+  liveness?: string;
   memoryGraph?: string;
   // Present only for authenticated callers. The runner's own health body
   // carries the execution capability the first-run self-check gates on.

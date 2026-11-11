@@ -18,7 +18,7 @@ export interface SettingsResponse {
 }
 
 /** The authenticated `/api/health` detail; a caller without a token gets only
- *  `{ service, status }`, so `runner` is the field that proves the detail. */
+ *  `{ service, liveness }`, so `runner` is the field that proves the detail. */
 export interface HealthDetailResponse {
   runner?: { status?: string; execution?: { ready?: boolean } };
 }
