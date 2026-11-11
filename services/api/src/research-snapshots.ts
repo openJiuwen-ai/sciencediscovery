@@ -38,6 +38,7 @@ import type { createPlatformServices } from "./bootstrap/platform.js";
 import { createContinuationOperations } from "./research-continuations.js";
 import { buildConversationBranch } from "./conversation-branches.js";
 import { verifyResearchCopy } from "./research-snapshot-integrity.js";
+import { readTrajectoryDetail } from "./research-trajectory-detail.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
 import { ResearchPackageExports, type ResearchPackageExportOptions } from "./research-package-exports.js";
 import { sessionTrajectory } from "./trajectory.js";
@@ -366,8 +367,9 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
       let counted = 0;
       for (const entry of entries) {
         signal.throwIfAborted();
-        const detail = await view.detail(entry.id);
-        if (!detail) throw new Error(`Missing trajectory detail: ${entry.id}`);
+        // One unreadable record must not fail the whole preview or export (#1083).
+        const detail = await readTrajectoryDetail(view, entry, record.session.id, (message) => omissions.push(message), signal);
+        if (!detail) continue;
         if (preview) {
           const retained = summarize ? necessaryTrajectoryDetail(detail) : detail;
           // The records skeleton keeps []; add its elements and commas only.
