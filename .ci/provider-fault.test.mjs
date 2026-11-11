@@ -113,6 +113,21 @@ test('an assertion beside a gateway outage does not hide the outage', () => {
   assert.equal(detectProviderFaultFromErrors([]), null);
 });
 
+test('a decision or a stall beside a gateway outage still vetoes the case', () => {
+  // A case records one text per failed expect() or hook, so the provider's
+  // 401/429 answer or the product's stalled-run wording can sit beside a
+  // sibling 503. Those texts are verdicts of their own, not assertion
+  // wrappers, so they keep the case out of the soft classification.
+  assert.equal(detectProviderFaultFromErrors([UNAUTHORIZED, GATEWAY_503]), null);
+  assert.equal(detectProviderFaultFromErrors([RATE_LIMITED, GATEWAY_503]), null);
+  assert.equal(detectProviderFaultFromErrors(['Agent run stalled: no assistant progress for 600000 ms', GATEWAY_503]), null);
+  assert.equal(detectProviderFaultFromErrors(['Test timeout of 240000ms exceeded.', GATEWAY_500]), null);
+  // A timeout that names the gateway's own routing failure is the exception:
+  // the per-text rule never masks a routing failure behind that wording.
+  assert.equal(detectProviderFaultFromErrors(['No available channel for model deepseek-v4-flash; timed out', GATEWAY_503]).code,
+    'provider-unavailable');
+});
+
 test('one text holding the gateway error and the assertion block is still the outage', () => {
   const mixed = `${GATEWAY_503}\nexpect(received).toBe(expected) // Object.is equality\nExpected: "completed"\nReceived: "failed"`;
   assert.equal(detectProviderFault(mixed).status, 503);
