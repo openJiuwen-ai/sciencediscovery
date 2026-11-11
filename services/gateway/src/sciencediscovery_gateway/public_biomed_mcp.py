@@ -84,13 +84,14 @@ def _log_arxiv_http(
 
 
 async def _get_json(
-    url: str, *, params: dict[str, Any] | None = None, client: httpx.AsyncClient | None = None
+    url: str, *, params: dict[str, Any] | None = None, client: httpx.AsyncClient | None = None,
+    fixed_endpoint: bool = False,
 ) -> Any:
     if client is None:
         async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as owned:
-            return await _get_json(url, params=params, client=owned)
+            return await _get_json(url, params=params, client=owned, fixed_endpoint=fixed_endpoint)
     response = await client.get(url, params=params, headers={"accept": "application/json"})
-    _raise_for_status(response)
+    _raise_for_status(response, fixed_endpoint=fixed_endpoint)
     return response.json()
 
 
@@ -101,6 +102,7 @@ async def _get_text(
     accept: str = "text/plain",
     ssl_context: ssl.SSLContext | None = None,
     arxiv_diagnostics: bool = False,
+    fixed_endpoint: bool = False,
 ) -> str:
     client_options = {"verify": ssl_context} if ssl_context is not None else {}
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, **client_options) as client:
@@ -110,7 +112,7 @@ async def _get_text(
         error_type: str | None = None
         try:
             response = await client.get(url, params=params, headers={"accept": accept})
-            _raise_for_status(response)
+            _raise_for_status(response, fixed_endpoint=fixed_endpoint)
             return response.text
         except Exception as error:
             error_type = type(error).__name__
@@ -390,6 +392,7 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
             external_url("data_sources.ncbi.eutils_elink"),
             params={"db": "pmc", "dbfrom": "pubmed", "id": identifier, "linkname": "pubmed_pmc", "retmode": "xml"},
             accept="application/xml",
+            fixed_endpoint=True,
         )
         root = ET.fromstring(links)
         linked = root.findtext(".//LinkSetDb/Link/Id", default="")
@@ -402,22 +405,40 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
     # it is the PMC OA package bucket. Ask it for this record's keys instead of
     # asking a locator that no longer answers, so a provider retirement degrades
     # into "this record has no package" rather than "the download tool is gone".
+    # The bucket is a fixed service path with no record identifier, so a "gone"
+    # answer is an endpoint outage, not a missing record.
     bucket = external_url("data_sources.ncbi.pmc_oa_package_bucket").rstrip("/") + "/"
     listing = await _get_text(
         bucket,
         params={"prefix": pmcid, "max-keys": "40"},
         accept="application/xml",
+        fixed_endpoint=True,
     )
     root = ET.fromstring(listing)
+    # A version directory with many figures can fill the 40-key window and hide a
+    # newer version; list with a delimiter so each version is one entry, and
+    # refuse to guess when the bucket says there are more.
+    if root.findtext(".//{*}IsTruncated", default="false").strip().lower() == "true":
+        raise ValueError("PMC OA package listing is truncated; the article PDF cannot be located reliably")
     # The listing is S3 XML, so its elements carry the S3 namespace; match on the
     # local name to stay independent of the exact namespace URI.
     keys = [key.text.strip() for key in root.findall(".//{*}Contents/{*}Key") if key.text]
-    pdf_keys = sorted(key for key in keys if re.fullmatch(rf"{pmcid}\.\d+/[A-Za-z0-9._-]+\.pdf", key))
-    if not pdf_keys:
+    # Prefer the version whose directory holds the article PDF named after the
+    # record itself (`<PMCID>.<n>/<PMCID>.<n>.pdf`). A package directory can also
+    # hold supplements (`srep32040-s1.pdf`, `mmc1.pdf`, `peerj-*.pdf`), and those
+    # sort after the article basename, so "take the last PDF" hands the supplement
+    # to the reader as if it were the article (#1049).
+    article_keys = [
+        key for key in keys
+        if re.fullmatch(rf"{pmcid}\.\d+/{pmcid}\.\d+\.pdf", key)
+    ]
+    if not article_keys:
         raise ValueError("PMC OA record does not provide a PDF")
-    # Take the newest package version: keys sort as PMC<id>.<n>/... and n is the
-    # bucket's own monotonic revision counter for that record.
-    key = pdf_keys[-1]
+    def version_of(key: str) -> int:
+        return int(re.match(rf"{pmcid}\.(\d+)/", key).group(1))
+    # The newest version is the largest integer revision, not the lexicographic
+    # maximum: PMC123.10 sorts before PMC123.2 as a string.
+    key = max(article_keys, key=version_of)
     href = bucket + key
     if not href.startswith(bucket):
         raise ValueError("PMC OA PDF URL escaped its fixed host allowlist")
@@ -999,7 +1020,7 @@ async def reactome_enrichment(identifiers: list[str], species: str = "Homo sapie
             params={"pageSize": 100, "page": 1, "species": species},
             headers={"accept": "application/json", "content-type": "text/plain"},
         )
-        _raise_for_status(response)
+        _raise_for_status(response, fixed_endpoint=True)
         data = response.json()
     pathways = data.get("pathways", [])
     records = []

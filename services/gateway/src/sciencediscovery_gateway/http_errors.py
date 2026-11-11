@@ -24,8 +24,17 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 
-def raise_for_status(response: httpx.Response) -> None:
-    """Preserve status, Retry-After and refusal attribution without raw URLs/bodies."""
+def raise_for_status(response: httpx.Response, *, fixed_endpoint: bool = False) -> None:
+    """Preserve status, Retry-After and refusal attribution without raw URLs/bodies.
+
+    `fixed_endpoint` marks a URL that carries no record identifier — a service
+    path the config points at directly, like the PMC OA package bucket. A "gone"
+    answer from such a URL describes the endpoint itself: a retired route
+    answers 404 here even for records that exist, and reporting NOT_FOUND reads
+    to an agent as "this literature does not exist" (#1049). A record lookup
+    (a PDB entry, a Reactome pathway) that answers 404 means "no such record",
+    so it stays unclassified and the client reports NOT_FOUND.
+    """
     if response.status_code < 400:
         return
     message = f"HTTP {response.status_code} {response.reason_phrase} from {response.request.url.host}"
@@ -42,14 +51,7 @@ def raise_for_status(response: httpx.Response) -> None:
     if retry_ms is not None:
         message += f" (retry-after: {retry_ms / 1000:g})"
     failure_scope = "unknown"
-    if response.status_code in (404, 405, 410):
-        # The URL comes from the configured service table, never from a
-        # caller-supplied one, so "gone" / "method not allowed" / "permanently
-        # gone" describe the *configured endpoint*, not the record that was
-        # asked about: a retired path answers 404 here even for records that
-        # exist. Classifying it as `unknown` let the client turn a dead
-        # endpoint into NOT_FOUND, which reads to an agent as "this literature
-        # does not exist" (#1049).
+    if fixed_endpoint and response.status_code in (404, 405, 410):
         failure_scope = "endpoint"
     elif response.status_code == 406:
         # Only a generic edge rejection is evidence of endpoint health. Query
