@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ToolTrace } from "@sciencediscovery/schema";
+import { literatureRecordCount, type ToolTrace } from "@sciencediscovery/schema";
 
 /** Only promote deliberately short task fields, never raw prompts or workspace paths. */
 export function researchLabel(trace: Pick<ToolTrace, "args" | "input" | "name">): string {
@@ -58,8 +58,8 @@ export function reportedFailure(value: string): string | undefined {
 /** Count returned literature records, never a provider's total-hit estimate or duplicate calls. */
 export function returnedPaperCount(value: string): number | undefined {
   try {
-    const result = JSON.parse(value) as { sourceId?: unknown; toolId?: unknown; records?: unknown } | null;
-    return result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
-      && result.toolId === "search" && Array.isArray(result.records) ? result.records.length : undefined;
+    // The literature decision lives in the tool graph registry's `product: "paper"`
+    // rows, next to the same rule the API writes into the trace.
+    return literatureRecordCount(JSON.parse(value));
   } catch { return undefined; }
 }

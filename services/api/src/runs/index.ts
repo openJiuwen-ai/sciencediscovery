@@ -32,7 +32,7 @@ import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
-import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { isEvidenceSessionReadOnly, literatureRecordCount } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -306,9 +306,9 @@ function completedToolEvidence(text: string): Pick<ToolTrace, "preview" | "paper
   const preview = (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
   let paperCount: number | undefined;
   try {
-    const result = JSON.parse(text);
-    if (result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
-      && result.toolId === "search" && Array.isArray(result.records)) paperCount = result.records.length;
+    // The count comes from the tool graph registry's `product: "paper"` rows, so a
+    // preprint source counts as literature without another name in a list here.
+    paperCount = literatureRecordCount(JSON.parse(text));
   } catch { /* Plain tool text is still useful bounded evidence. */ }
   return { preview, ...(paperCount !== undefined ? { paperCount } : {}) };
 }

@@ -103,3 +103,21 @@ export function toolGraphSpec(toolName: string): ToolGraphSpec | undefined {
 export function toolGraphType(toolName: string): ToolGraphType | undefined {
   return TOOL_GRAPH_REGISTRY[toolName]?.type;
 }
+
+/**
+ * 数一条检索结果里返回的文献条数，不是检索源报的命中总数。
+ *
+ * 判定只查上面这张表（``mcp__<sourceId>__<toolId>`` 的 ``product`` 是否
+ * 是 ``paper``），不另设源名白名单：新登记的文献工具自动计数，数据库源
+ * 和 ``read`` 这类非检索工具自动不计数。API 写进轨迹的 paperCount 和
+ * 前端时间线的 "N papers returned" 都走这里，两侧不会漂移。
+ */
+export function literatureRecordCount(result: unknown): number | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const { sourceId, toolId, records } = result as { sourceId?: unknown; toolId?: unknown; records?: unknown };
+  if (typeof sourceId !== "string" || typeof toolId !== "string" || !Array.isArray(records)) return undefined;
+  // 网关结果里 toolId 是 MCP 工具名去掉前缀的短名（"search_preprints"），
+  // 少数路径直接给完整工具名，两种都按同一张表查。
+  const tool = toolId.startsWith("mcp__") ? toolId : `mcp__${sourceId}__${toolId}`;
+  return toolGraphSpec(tool)?.product === "paper" ? records.length : undefined;
+}
