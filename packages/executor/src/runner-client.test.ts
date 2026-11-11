@@ -112,6 +112,26 @@ test("direct capability probes preserve target workspace scope and caller cancel
   assert.equal(requests.length, 3, "an aborted probe must not reach the target");
 });
 
+test("RunnerClient authenticates health and learns the clock before later requests", async (context) => {
+  const remoteNow = Date.now() + 120_000;
+  const server = createServer((request, response) => {
+    assert.equal(request.headers.authorization, "Bearer test-token");
+    assert.equal(request.url, "/health");
+    response.writeHead(200, { "content-type": "application/json", date: new Date(remoteNow).toUTCString() });
+    response.end(JSON.stringify({ status: "ok", platform: "linux", runnerVersion: "fixture" }));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const client = new RunnerClient(`http://127.0.0.1:${address.port}`, "test-token");
+  assert.equal((await client.health()).runnerVersion, "fixture");
+  assert.ok(Math.abs(client.clockOffsetMs - 120_000) < 5_000);
+});
+
 test("managed result integrity is checked before clock conversion and structured conflicts survive HTTP", async t => {
   const { createHash } = await import("node:crypto");
   const result = { stdout: "original", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z" };

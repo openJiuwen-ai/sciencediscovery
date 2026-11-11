@@ -92,15 +92,19 @@ export async function seedToken(page: Page): Promise<void> {
 /**
  * Skip when the configured stack is absent or incomplete.
  *
- * The API reports `status: "ok"` only when the Runner answered too, so one
- * probe covers both services. A failed request is a skip, a 401 is not — the
- * latter means the stack is there and the credential is wrong, which should be
- * reported as a failure rather than hidden.
+ * The authenticated API health reports `status: "ok"` only when the Runner
+ * answered too, so one probe covers both services once the token is sent. The
+ * public answer is liveness only — `service` and `status`, with no `runner` —
+ * so a body without a `runner` means the credential was not accepted as a
+ * detail reader, not that the stack is down. That case is told apart on an
+ * authenticated route: a 401/403 there is the wrong credential (a failure, not
+ * a skip), anything else is a stack this suite may not diagnose (a skip).
  */
 export async function requireStack(info: TestInfo): Promise<void> {
+  const headers = { authorization: `Bearer ${token()}`, connection: "close" };
   let health: Response;
   try {
-    health = await fetch(`${API_ORIGIN}/health`, { signal: AbortSignal.timeout(3_000) });
+    health = await fetch(`${API_ORIGIN}/health`, { headers, signal: AbortSignal.timeout(3_000) });
   } catch (error) {
     info.skip(true, `ScienceDiscovery stack is unavailable at ${API_ORIGIN}: ${String(error)}`);
     return;
@@ -110,8 +114,25 @@ export async function requireStack(info: TestInfo): Promise<void> {
   }
   if (!health.ok) info.skip(true, `ScienceDiscovery stack health is HTTP ${health.status}`);
   const body = await health.json() as { runner?: { status?: string }; service?: string; status?: string };
-  if (body.service !== "sciencediscovery-api" || body.status !== "ok" || body.runner?.status === "unavailable") {
-    info.skip(true, `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"}, runner=${body.runner?.status ?? "unknown"})`);
+  if (body.service !== "sciencediscovery-api" || body.status !== "ok") {
+    info.skip(true, `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"})`);
+    return;
+  }
+  if (body.runner === undefined) {
+    const context = await request.newContext();
+    try {
+      const probe = await context.get(`${API_ORIGIN}/api/sessions`, { headers });
+      if (probe.status() === 401 || probe.status() === 403) {
+        throw new Error(`${API_ORIGIN} rejected the configured credential (HTTP ${probe.status()})`);
+      }
+    } finally {
+      await context.dispose();
+    }
+    info.skip(true, `ScienceDiscovery stack answered liveness only, so ${token() ? "E2E_API_TOKEN" : "no E2E_API_TOKEN"} cannot read the Runner detail this suite needs`);
+    return;
+  }
+  if (body.runner.status === "unavailable") {
+    info.skip(true, "ScienceDiscovery stack health is incomplete (runner=unavailable)");
   }
 }
 

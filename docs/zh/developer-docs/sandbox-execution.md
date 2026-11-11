@@ -31,7 +31,7 @@ Runner 是无 root 的代码执行器：Agent 的常规执行统一使用 `run_s
 
 安装、构建和启动工作台不再要求本地沙箱可用。源码/Docker 启动脚本与二进制启动器在本地 Runner 不可用时仍保持 API/UI 可用。无需代码执行的 Agent 任务可以继续；本地 Runner 的状态不能代替远端执行能力的检查。
 
-每个 Runner 在自己的进程中探测可执行文件及沙箱配置。`GET /health` 的 `execution` 包含 `instanceId`、`checkedAt`、依赖可用性、沙箱可用性、就绪状态与原因。带鉴权的 `GET /execution-capability` 读取缓存；`POST` 在修复后刷新，同时刷新共用的沙箱配置缓存。API 对应入口为 `/api/runners/{runnerId}/execution-capability`。没有此接口的旧 Runner 视为能力未知，需要升级，不能直接视为安全可用。
+每个 Runner 在自己的进程中探测可执行文件及沙箱配置。携带有效 bearer token 的 `GET /health` 响应中，`execution` 包含 `instanceId`、`checkedAt`、依赖可用性、沙箱可用性、就绪状态与原因。带鉴权的 `GET /execution-capability` 读取缓存；`POST` 在修复后刷新，同时刷新共用的沙箱配置缓存。API 对应入口为 `/api/runners/{runnerId}/execution-capability`。没有此接口的旧 Runner 视为能力未知，需要升级，不能直接视为安全可用。
 
 Runner 设置保留能力状态与**重新检查**按钮。Agent 可调用 `check_runner(runner_id?)`，直接刷新目标 Runner 的同一份能力报告，不依赖沙箱。该工具只诊断，不执行代码、不挂起等待。执行前发现 Runner 不可用时，工具返回 `RUNNER_UNAVAILABLE`、`dispatched: false`、`operationId`、原因与修复建议；本次调用已结束，不进入执行队列。Agent 自行决定继续其他工作、说明阻塞并结束本轮，或显式调用 `wait_for_runner(operation_id)`。
 
@@ -191,7 +191,7 @@ launch 具体做的事：
 
 ```bash
 # 查看 API 上传限额与 runner 回退值
-curl -s http://127.0.0.1:4310/health | jq '.workspace, .runner.maxWorkspaceBytes, .runner.maxFileBytes, .runner.maxOutputBytes'
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/health | jq '.workspace, .runner.maxWorkspaceBytes, .runner.maxFileBytes, .runner.maxOutputBytes'
 
 # 查看/修改持久化系统配额（对新执行立即生效）
 curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/api/quota-settings
