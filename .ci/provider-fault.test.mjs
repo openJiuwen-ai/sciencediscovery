@@ -345,6 +345,15 @@ test('only an early gateway fault is worth repeating', () => {
   assert.deepEqual(retryableProviderFaults([early, late, product]), [early]);
 });
 
+test('a status-less transport break is not re-run by the harness repeat', () => {
+  // A break after a 200 is a provider fault for the accounting, but the early
+  // repeat must not deliver the retry the issue's in-client change will own.
+  const transport = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-transport', status: null }, durationMs: 9_300 };
+  const serverError = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-server-error', status: 503 }, durationMs: 9_300 };
+  assert.deepEqual(retryableProviderFaults([transport]), []);
+  assert.deepEqual(retryableProviderFaults([serverError]), [serverError]);
+});
+
 test('a failed repeat is audited and stays a provider fault, not a product failure', () => {
   const plan = createPlan([identity('case-a', realTags)], {
     revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },

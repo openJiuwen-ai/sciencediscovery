@@ -186,8 +186,15 @@ export function detectProviderFaultFromErrors(errors = []) {
  */
 export const PROVIDER_FAULT_RETRY_BUDGET_MS = 300_000;
 
-/** The cases a first attempt may repeat: an early transient gateway fault. */
+/** The cases a first attempt may repeat: an early transient gateway fault
+ *  that is not a status-less transport break. A break after a 200 (`read
+ *  ECONNRESET`) is a provider fault for the accounting, but it must not earn
+ *  the harness's early repeat: that repeat re-runs a whole journey, while the
+ *  bounded restream the issue asks for has not landed yet, so repeating here
+ *  would deliver the retry this PR says it does not contain. */
 export function retryableProviderFaults(results = [], budgetMs = PROVIDER_FAULT_RETRY_BUDGET_MS) {
   return (Array.isArray(results) ? results : []).filter(result =>
-    result?.outcome === PROVIDER_FAULT && typeof result.durationMs === 'number' && result.durationMs <= budgetMs);
+    result?.outcome === PROVIDER_FAULT
+    && result?.providerFault?.code !== 'provider-transport'
+    && typeof result.durationMs === 'number' && result.durationMs <= budgetMs);
 }
