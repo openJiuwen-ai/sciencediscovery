@@ -7023,26 +7023,7 @@ export class SessionStore {
     streamId: string,
     after = 0,
   ): Promise<SessionRunEvent[]> {
-    const run = await this.getSessionRun(sessionId, runId);
-    if (!run) throw new Error("Run not found");
-    assertValidStreamId(streamId);
-    const records: SessionRunEvent[] = [];
-    if (streamId === MAIN_RUN_STREAM) {
-      // Apply the cursor while copying. Collecting first and filtering after
-      // made every cursor read cost the whole history twice: once as the stored
-      // array and once as the filtered copy (#1011).
-      for (const record of await this.readArray<SessionRunEvent>(this.sessionRunEventsPath(sessionId, runId))) {
-        if (record.sequence > after) records.push(record);
-      }
-    }
-    // The stream is ordered by sequence, so a line at or below the cursor is
-    // dropped before its record is built: retention is the requested tail, not
-    // the file.
-    for await (const line of this.streamLines(this.runStreamPath(sessionId, runId, streamId))) {
-      if (line.sequence <= after) continue;
-      records.push({ createdAt: line.createdAt, event: line.event, runId, sequence: line.sequence, sessionId });
-    }
-    return records.toSorted((left, right) => left.sequence - right.sequence);
+    return await this.readRunStreamEvents(sessionId, runId, streamId, (record) => record.sequence > after);
   }
 
   /**
@@ -7060,17 +7041,37 @@ export class SessionStore {
     streamId: string,
     type: SessionRunEvent["event"]["type"],
   ): Promise<SessionRunEvent[]> {
+    return await this.readRunStreamEvents(sessionId, runId, streamId, (record) => record.event.type === type);
+  }
+
+  /**
+   * The two readers above share the same two-source walk and envelope, only the
+   * per-record predicate differs. Keeping it in one place means a third reader
+   * adds a predicate instead of a copy of the read-and-sort body.
+   */
+  private async readRunStreamEvents(
+    sessionId: string,
+    runId: string,
+    streamId: string,
+    keep: (record: { sequence: number; event: SessionRunEvent["event"] }) => boolean,
+  ): Promise<SessionRunEvent[]> {
     const run = await this.getSessionRun(sessionId, runId);
     if (!run) throw new Error("Run not found");
     assertValidStreamId(streamId);
     const records: SessionRunEvent[] = [];
     if (streamId === MAIN_RUN_STREAM) {
+      // Apply the predicate while copying. Collecting first and filtering after
+      // made every cursor read cost the whole history twice: once as the stored
+      // array and once as the filtered copy (#1011).
       for (const record of await this.readArray<SessionRunEvent>(this.sessionRunEventsPath(sessionId, runId))) {
-        if (record.event.type === type) records.push(record);
+        if (keep(record)) records.push(record);
       }
     }
+    // The stream is ordered by sequence, so a line the predicate drops is
+    // discarded before its record is built: retention is the requested tail,
+    // not the file.
     for await (const line of this.streamLines(this.runStreamPath(sessionId, runId, streamId))) {
-      if (line.event.type !== type) continue;
+      if (!keep(line)) continue;
       records.push({ createdAt: line.createdAt, event: line.event, runId, sequence: line.sequence, sessionId });
     }
     return records.toSorted((left, right) => left.sequence - right.sequence);
