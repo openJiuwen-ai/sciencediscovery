@@ -27,7 +27,7 @@ function optionalModelSetting<T extends string>(value: string | undefined, name:
  * Purpose: Guard the documented PUCT text compression tutorial through real design, search and persisted delivery.
  * Steps:
  *   1. Read the tutorial prompt, create a session and choose PUCT in the browser.
- *   2. Submit the real task; acknowledge design checkpoints if the Agent asks.
+ *   2. Confirm the evolution settings and submit the task; acknowledge any design checkpoints.
  *   3. Wait for the main Agent and actual background search to finish; read its persisted result.
  *   4. Record the search's held-out score independently, without improvement or minimum-score assertions.
  * Environment: Linux Swarm stack with platform task delegation, bubblewrap, scientific Python and evolve sidecar.
@@ -92,6 +92,11 @@ test("PUCT-COMPRESS documented text compression search", {
       const before = new Set((await api<any[]>(`${prefix}/runs`)).map(run => run.id));
       await box.fill(text);
       await page.getByRole("button", { name: /^(Run analysis|Add to queue|运行分析|加入队列)$/ }).click();
+      if (/^\/evolve-design(?:\s|$)/u.test(text.trimStart())) {
+        const confirmation = page.getByRole("dialog", { name: /^(Confirm evolution settings|确认演进设置)$/ });
+        await confirmation.getByRole("button", { name: /^(Start evolution|开始演进)$/ }).click();
+        await expect(confirmation).toBeHidden();
+      }
       let created: any;
       // Slash commands may expand into skill context, so compare persisted identities, not rewritten prompt text.
       await expect.poll(async () => {
