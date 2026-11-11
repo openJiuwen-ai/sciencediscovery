@@ -10,6 +10,7 @@
 // keeps them equal.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,3 +75,42 @@ test("no start path launches the API without the flag", async () => {
     "the packaged launcher must pass the budget",
   );
 });
+
+/**
+ * The block itself has to keep working, not merely parse: a `case` whose
+ * subject was empty, or a message with the value dropped out of it, passes
+ * `bash -n` and any regex over the file, and then refuses every launch (#1105
+ * review). So run the committed lines and check what they do.
+ */
+test("the shell budget block continues on a valid value and refuses a bad one", async () => {
+  const shell = await read("scripts/start-stack.sh");
+  const start = shell.indexOf('api_heap_budget_mb="${SCIENCE_AGENT_API_MAX_OLD_SPACE_MB');
+  assert.ok(start > 0, "the budget block must exist in start-stack.sh");
+  const rangeCheck = shell.indexOf("if (( api_heap_budget_mb < ", start);
+  assert.ok(rangeCheck > start, "the range check must follow the variable");
+  const end = shell.indexOf("\nfi\n", rangeCheck);
+  assert.ok(end > rangeCheck, "the range check must be closed");
+  const block = shell.slice(start, end + 4);
+
+  const run = (value) => execFileSync("bash", ["-c", `${block}\necho CONTINUED`], {
+    encoding: "utf8",
+    env: { ...process.env, SCIENCE_AGENT_API_MAX_OLD_SPACE_MB: value },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const fails = (value) => {
+    try {
+      run(value);
+      return false;
+    } catch (error) {
+      return error.status === 2;
+    }
+  };
+
+  assert.match(run("3072"), /CONTINUED/, "the default value must not stop the launch");
+  assert.match(run("4096"), /CONTINUED/, "a valid override must not stop the launch");
+  assert.equal(fails("abc"), true, "a non-numeric override must exit 2");
+  // An empty override is not a refusal: `${VAR:-default}` treats it as unset, so it\n  // must fall through to the default. What must never pass is a case subject that\n  // is not the variable at all, which the mutation below covers.\n  assert.match(run(""), /CONTINUED budget=3072/, "an empty override must fall back to the default");
+  assert.equal(fails("1"), true, "an out-of-range override must exit 2");
+  assert.throws(() => run("abc"), /got 'abc'/, "the message must name the value it refused");
+});
+
