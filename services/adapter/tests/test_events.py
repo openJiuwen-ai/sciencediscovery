@@ -223,12 +223,16 @@ def test_decide_deny_and_allow_matching():
     assert answer["selected_options"] == ["B"] and resolved["request"]["decision"] == "allowed"
 
 
-def test_ask_user_question_is_reported_as_an_external_user_wait():
-    mapper = RunEventMapper()
+def test_ask_user_question_preserves_prompts_and_choices_for_chat():
+    mapper = RunEventMapper(turn=2)
     assert mapper.feed({"type": "event", "event": "chat.ask_user_question", "payload": {
-        "request_id": "r", "source": "ask_user_interrupt", "questions": [{"question": "Choose a goal"}],
-    }}) == [{"type": "user_input.required", "request": {
-        "id": "r", "question": "Choose a goal", "source": "ask_user_interrupt",
+        "request_id": "r", "source": "ask_user_interrupt", "questions": [
+            {"question": "Which timeout?", "options": [{"label": "Idle"}, {"label": "Whole turn"}]},
+            {"question": "How many seconds?"},
+        ],
+    }}) == [{"type": "user_input.required", "turn": 2, "request": {
+        "id": "r", "question": "Which timeout?\n- Idle\n- Whole turn\n\nHow many seconds?",
+        "source": "ask_user_interrupt",
     }}]
     assert mapper.unmapped == []
 

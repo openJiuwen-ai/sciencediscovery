@@ -374,6 +374,16 @@ def test_hidden_host_tools_are_not_offered_and_ours_of_the_same_name_take_their_
     assert [c["function"]["name"] for c in calls] == ["mcp_sci_read_file", "unavailable__bash", "unavailable__write_file", "subagent_spawn"]
 
 
+def test_native_ask_user_is_hidden_from_the_outgoing_model_tool_list():
+    route = LlmRoute(**{**ROUTE.__dict__, "all_native_tools": True,
+                        "hidden_native_tools": frozenset({"ask_user"}), "shadowed": set()})
+    body = {"tools": [tool("ask_user"), tool("mcp_sci_run_shell")], "messages": []}
+    assert [t["function"]["name"] for t in rewrite_request(body, route)["tools"]] == ["run_shell"]
+    chunk = {"choices": [{"delta": {"tool_calls": [{"function": {"name": "ask_user"}}]}}]}
+    call = rewrite_response(chunk, route)["choices"][0]["delta"]["tool_calls"][0]
+    assert call["function"]["name"] == "unavailable__ask_user"
+
+
 def test_platform_delegation_hides_native_lifecycle_but_keeps_web_tools():
     hidden = frozenset({"subagent_spawn", "subagent_wait", "subagent_list",
                         "subagent_send_input", "subagent_close", "subagent_resume"})

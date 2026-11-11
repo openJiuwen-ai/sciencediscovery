@@ -571,17 +571,23 @@ test("the idle timeout stalls a run with no gateway progress, with the wording s
   }
 });
 
-test("an unexpected generic Swarm question ends the run without waiting for an answer", async () => {
+test("an unexpected generic Swarm question is shown in chat without leaving the run open", async () => {
+  const question = "Which timeout?\n- Idle timeout\n- Whole-turn timeout";
   const adapter = await fakeAdapter((_request, response) => {
     response.writeHead(200);
-    response.write(line({ event: { type: "user_input.required", request: { id: "q1", question: "Which timeout?" } } }));
+    response.write(line({ event: { type: "user_input.required", turn: 1, request: { id: "q1", question } } }));
   });
   try {
     const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
-    await assert.rejects(Promise.race([
+    const events = collect(agent);
+    const result = await Promise.race([
       agent.execute("Change the timeout"),
       delay(1_000).then(() => { throw new Error("The run kept waiting on the question"); }),
-    ]), /send the clarification as a new chat message/);
+    ]);
+    assert.equal(result.finalMessages.at(-1)?.content, question);
+    const updates = events.filter(event => event.type === "message_update");
+    assert.deepEqual(updates.map(event => event.assistantMessageEvent.type === "text_delta" && event.assistantMessageEvent.delta),
+      [question]);
   } finally { await adapter.close(); }
 });
 
@@ -1751,7 +1757,7 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     assert.equal(sent.systemPrompt.includes("Use only the registered workspace tools"), false);
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
     // These options give the run no web tools, so JiuwenSwarm's web tools are hidden as well.
-    assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
+    assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["ask_user", "bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
       "free_search", "paid_search", "fetch_webpage",
       "todo_create", "todo_modify", "todo_list", "todo_get",
       "subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
