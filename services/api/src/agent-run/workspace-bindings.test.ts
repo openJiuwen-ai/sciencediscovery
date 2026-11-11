@@ -182,6 +182,8 @@ test("an explicitly unavailable managed Shell blocks run_shell before any execut
     assert.equal(result.runner.ready, false);
     assert.equal(result.runner.reason, unavailableReason);
     assert.match(result.instruction, /no Shell execution record was created/);
+    assert.match(result.instruction, /independent Python execution channel is unaffected/);
+    assert.match(result.instruction, /python -c through run_shell still requires Bash/);
     return true;
   });
   assert.equal(f.shellDispatches.length, 0, "no Shell execution is recorded or dispatched");

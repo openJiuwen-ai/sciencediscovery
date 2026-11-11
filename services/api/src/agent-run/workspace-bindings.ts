@@ -234,7 +234,7 @@ export function createWorkspaceExecutionBindings(
       blockedOperations.set(operationId, { runner, toolCallId, summary: summary.slice(0, 500), requiresShell });
       throw new RunnerUnavailableError({ code: "RUNNER_UNAVAILABLE", dispatched: false, operationId, runner,
         instruction: (shellUnavailable
-          ? "This call has finished without dispatching code: the target Runner reports its managed Shell as unavailable, so no Shell execution record was created and Python execution is unaffected. Report the Shell blocker with its repair steps. "
+          ? "This call has finished without dispatching code: the target Runner reports its managed Shell as unavailable, so no Shell execution record was created. The independent Python execution channel is unaffected; python -c through run_shell still requires Bash. Report the Shell blocker with its repair steps. "
           : "This call has finished without dispatching code. ")
           + "Decide whether to continue other work, explain the blocker and finish, or wait for user help. If you decide to wait, including when the user requested a pause for their decision, call wait_for_runner(operation_id); text saying 'paused' or 'waiting' does not create a pending operation or interactive card. Showing the card does not repair, install, switch machines or execute code and needs no extra confirmation merely to display the requested choices. Preserve the user's constraints after receiving their decision. check_runner is diagnostic only. Do not repeatedly retry unchanged failures. Nothing will execute automatically." });
     }
