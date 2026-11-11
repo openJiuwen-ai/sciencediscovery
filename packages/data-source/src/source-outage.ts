@@ -2,6 +2,57 @@
 // Licensed under the Apache License, Version 2.0 (the "License").
 import type { McpSourceOutage } from "@sciencediscovery/schema";
 
+/** The part of an attempt this module needs to judge a failure. */
+export interface OutageAttempt {
+  errorCode?: string;
+  errorMessage?: string;
+  status?: string;
+  upstream?: { endpoint?: string; failureScope?: string; statusCode?: number };
+}
+
+
+/**
+ * Decide whether a failed attempt is evidence that the provider is gone, and if
+ * so describe it for the readiness view.
+ *
+ * A tool-level rejection is not an outage. `upstreamError()` falls back to
+ * `UPSTREAM_UNAVAILABLE` for every attempt status it does not map, and a
+ * tool-reported error arrives as `semantic-error`: an invalid query or a DOI the
+ * provider cannot resolve says something about the request, not the endpoint.
+ * `SourceHealth` already separates those two (`statusCode === 406 &&
+ * failureScope === "endpoint"`), so this uses the same evidence — a declared
+ * endpoint scope, or a transport/server failure — and nothing else.
+ */
+export function recordedOutage(
+  attempt: OutageAttempt | undefined,
+  sourceId: string,
+  toolId: string | undefined,
+  error: { code?: string; message?: string; upstreamCode?: string },
+  now: () => number = Date.now,
+): McpSourceOutage | undefined {
+  if (!attempt) return undefined;
+  const endpointScoped = attempt.upstream?.failureScope === "endpoint";
+  const providerLevel = endpointScoped
+    || attempt.status === "transport-error"
+    || attempt.status === "server-error";
+  if (!providerLevel) return undefined;
+  return {
+    at: new Date(now()).toISOString(),
+    // A declared endpoint scope is exactly the outage the issue asks to name, so
+    // it gets the endpoint vocabulary rather than the generic tool-level code.
+    code: endpointScoped
+      ? "ENDPOINT_UNAVAILABLE"
+      // A transport or server failure is the provider being gone; use that
+      // vocabulary rather than whatever tool-level code rode along with it.
+      : attempt.status === "transport-error" || attempt.status === "server-error"
+        ? "UPSTREAM_UNAVAILABLE"
+        : (error.upstreamCode ?? error.code ?? "UPSTREAM_UNAVAILABLE"),
+    ...(error.message ? { detail: error.message.slice(0, 160) } : {}),
+    sourceId,
+    ...(toolId ? { toolId } : {}),
+  };
+}
+
 /**
  * How long a recorded provider outage stays visible. Ten minutes keeps a
  * blip from sticking around for a session while still outliving a single

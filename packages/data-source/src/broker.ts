@@ -45,7 +45,7 @@ import {
   ResourceRateLimitQueueTimeoutError,
 } from "./resource-rate-limiter.js";
 import { SourceHealth, SourceCoolingError, type SourceAdmission } from "./source-health.js";
-import { SourceOutages, sourceOutages } from "./source-outage.js";
+import { recordedOutage, SourceOutages, sourceOutages } from "./source-outage.js";
 import { McpResultCache } from "./result-cache.js";
 import { McpSourceCatalog } from "./catalog.js";
 import type { McpTransportClient } from "./transport.js";
@@ -774,20 +774,15 @@ export class McpGovernanceBroker {
         try { this.health.check(rateHealthKey); this.health.check(healthKey); } catch (cause) {
           if (cause instanceof SourceCoolingError) error = { ...unavailable(cause), code: last?.status === "rate-limited" ? "RATE_LIMITED" : "SOURCE_COOLDOWN" };
         }
-        // A provider-level failure is the one condition readiness could never
-        // see: the catalog only compares schemas, and the connector therefore
-        // kept reading `ready` after every call failed (#1081). Remember it per
-        // source; `getStatus` reports it for the next ten minutes without
-        // touching the `status` the gates read, so this stays advisory.
-        if (error.code === "UPSTREAM_UNAVAILABLE") {
-          this.outages.note({
-            at: new Date().toISOString(),
-            code: error.upstreamCode ?? error.code,
-            detail: error.message.slice(0, 160),
-            sourceId: request.sourceId,
-            toolId: request.toolId,
-          });
-        }
+        // Remember the failure only when it is evidence about the endpoint.
+        // `upstreamError` falls back to UPSTREAM_UNAVAILABLE for any attempt
+        // status it does not map explicitly, and a tool-reported `isError` is
+        // classified `semantic-error` — a bad query or an unresolvable DOI is a
+        // statement about the request, not about the provider. `SourceHealth`
+        // already treats those as request-specific, so recording them here would
+        // make readiness contradict admission (#1081).
+        const outage = recordedOutage(last, request.sourceId, request.toolId, error);
+        if (outage) this.outages.note(outage);
         const invocation = await this.appendFailure({
           attempts,
           cacheKey: key,
