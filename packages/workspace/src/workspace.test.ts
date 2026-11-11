@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -2060,13 +2061,14 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), {
     artifacts: [],
     artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths.",
-    brief: "Method A found a stable result.",
     finalText: "Method A found a stable result.",
     id: "subagent-1",
     status: "completed",
     stopReason: "completed",
-    subagent_result_brief: "Method A found a stable result.",
     subagent_result_sha256: "dc9504f060f70663d4d4ea2b53542286e3bf97d0254c771bb899838d3842e4f5",
+    // This record is built by hand, so of course the two agree; when production
+    // clamps 300 or 900 to the engine ceiling the effective value is lower.
+    subagent_turn_budget: { configured: 900, effective: 900 },
     subagent_status: "completed",
     subagent_token_usage: { input_tokens: 20, output_tokens: 5, total_tokens: 25 },
     turnCount: 1,
@@ -2256,9 +2258,57 @@ test("task tool summarizes failed subagents with status contract metadata", asyn
   assert.equal(summary.subagent_status, "failed");
   assert.equal(summary.stopReason, "result_validation_failed");
   assert.equal(summary.subagent_error, "Subagent result validation failed: missing summary");
+  // One body, named for what it is; the two duplicate keys are gone (#1107).
   assert.equal(summary.subagent_result_brief, undefined);
-  assert.equal(summary.brief, "I could not produce the requested JSON.");
+  assert.equal(summary.brief, undefined);
+  assert.equal(summary.finalText, "I could not produce the requested JSON.");
   assert.deepEqual((summary.resultValidation as { status?: string } | undefined)?.status, "failed");
+});
+
+test("an oversized child result says what it left out and where the rest is", async () => {
+  const timestamp = new Date().toISOString();
+  const full = "F".repeat(20_105);
+  let stored: string | undefined;
+  const tools = createWorkspaceTools(process.cwd(), {
+    runSubagent: async (input): Promise<Subagent> => ({
+      createdAt: timestamp,
+      id: "subagent-big",
+      input,
+      maxTurns: 300,
+      effectiveMaxTurns: 128,
+      parentTurnId: "turn-1",
+      sessionId: "session-1",
+      status: "completed",
+      steps: [{
+        content: full, createdAt: timestamp, id: "assistant-big", kind: "assistant", status: "completed",
+      }],
+      turnCount: 128,
+    }),
+    saveSubagentResult: async (text) => { stored = text; return { ref: "tool-output-abc" }; },
+  });
+  const task = tools.find((tool) => tool.name === "task")!;
+  const result = await task.execute("task-call", { description: "Collect records", prompt: "Return every record." },
+    new AbortController().signal, undefined);
+  const summary = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "") as Record<string, unknown>;
+
+  // The whole body was handed to the store, so the pointer resolves to the full text.
+  assert.equal(stored, full);
+  assert.equal(summary.subagent_result_ref, "tool-output-abc");
+  assert.equal(summary.subagent_result_truncated, true);
+  assert.deepEqual(summary.subagent_result_chars, { delivered: 20_000, full: 20_105 });
+  assert.equal((summary.finalText as string).length, 20_000);
+
+  // The integrity field now describes what the parent actually received.
+  assert.equal(summary.subagent_result_sha256, createHash("sha256").update((summary.finalText as string)).digest("hex"));
+  assert.notEqual(summary.subagent_result_sha256, createHash("sha256").update(full).digest("hex"));
+
+  // One body only: the two duplicate keys are gone, so a large handoff no longer
+  // pays three times the characters and stop being parseable on the way in.
+  assert.equal(summary.brief, undefined);
+  assert.equal(summary.subagent_result_brief, undefined);
+
+  // And the record says which bound actually stopped it.
+  assert.deepEqual(summary.subagent_turn_budget, { configured: 300, effective: 128 });
 });
 
 test("filterTools inherits the parent tool set before applying the denylist", () => {
