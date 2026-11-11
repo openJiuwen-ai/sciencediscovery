@@ -200,3 +200,55 @@ test("a scope already gone at open claims no snapshot and stops promising a size
     context.mock.timers.reset();
   }
 });
+
+test("a gone scope still admits the sizes its scope cards are showing", async (context) => {
+  context.mock.timers.enable({ apis: ["setInterval"] });
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  globalThis.window = { setInterval, clearInterval } as unknown as Window & typeof globalThis;
+  globalThis.document = { activeElement: null, addEventListener: () => undefined, removeEventListener: () => undefined } as unknown as Document;
+  const preview = { revision: "r1", estimatedBytes: 1024, files: [{ path: "data/result.csv", size: 20, selected: true }], omissions: [] };
+  const defaults = { revision: "r1", necessary: preview, complete: { ...preview, estimatedBytes: 2048 }, completeWithTrajectory: preview, completeWithMemoryGraph: preview, completeWithTrajectoryAndMemoryGraph: preview };
+  let fail = false;
+  const client = {
+    getResearchPackagePreviews: async () => {
+      if (fail) throw new ApiRequestError("该项目或会话已不存在；上方为删除前的大小，已不能导出。", 410, "EXPORT_PREVIEW_RESOURCE_DELETED");
+      return defaults;
+    },
+    // Changing the file selection asks for a custom preview; after the deletion
+    // that request never arrives, so the estimate stays empty while the two
+    // scope cards keep the sizes they read from the cached defaults.
+    previewResearchPackage: () => new Promise(() => undefined),
+    exportResearchPackage: async () => new Blob(),
+    startResearchPackageExport: async () => ({ id: "task", status: "queued", filename: "x.sdresearch" }),
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await new ExportPreviewCache(client).refreshDefaults("project-select", "session-select");
+    await act(async () => {
+      renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ResearchPackageDialogs, {
+        client,
+        onClose: () => undefined,
+        target: { projectId: "project-select", sessionId: "session-select", kind: "package" },
+      })));
+    });
+    const checked = renderer!.root.findAll((item) => item.type === "input" && item.props.type === "checkbox" && item.props.checked === true);
+    assert.ok(checked.length > 0, "the dialog must list the selectable workspace file");
+    await act(async () => { checked[0]!.props.onChange({ target: { checked: false } }); });
+    assert.equal(renderer!.root.findAllByType("strong").some((node) => node.children.join("") === "预计 1.0 KiB"), false, "the estimate is gone once a custom selection is pending");
+    fail = true;
+    await act(async () => { context.mock.timers.tick(3_000); });
+    await act(async () => { await Promise.resolve(); });
+    // The estimate is empty, but both cards still carry their sizes from the
+    // cached defaults — so the sentence must admit that sizes remain visible.
+    const text = renderer!.root.findAllByType("strong").map((node) => node.children.join("")).join("|");
+    assert.ok(text.includes("—"), `the estimate should read as unavailable, got ${text}`);
+    assert.ok(renderer!.root.root.findAllByType("button").some((node) => node.children.join("").includes("1.0 KiB")), "the scope cards keep their sizes");
+    assert.equal(renderer!.root.findByProps({ role: "alert" }).children.join(""), "该项目或会话已不存在；上方为删除前的大小，已不能导出。");
+  } finally {
+    if (renderer) await act(async () => renderer!.unmount());
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+    context.mock.timers.reset();
+  }
+});
