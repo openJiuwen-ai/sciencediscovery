@@ -140,8 +140,9 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     assert.equal(markup.includes("A ready copy is reached through"), false,
       "no explanation comment leaks into the rendered view");
     await act(async () => { await Promise.resolve(); });
-    assert.equal(rendered(view).includes(t.recalculating), false,
-      "the recalculating marker settles once the estimate returns");
+    const settled = rendered(view);
+    assert.equal(settled.includes(t.recalculating), false, "the estimate settles and the recalculating marker goes");
+    assert.ok(settled.includes("100.0 KiB"), "the settled size is still shown");
   });
 });
 
