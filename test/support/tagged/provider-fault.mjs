@@ -92,6 +92,13 @@ const ROUTING_FAILURE = /\bno available channel\b|\bmodel_not_found\b|\bnew_api_
 const GATEWAY_CONTEXT = /\b181001\b|\bmodel call failed\b|\bopenai api\b|\bchat\/completions\b/i;
 
 /**
+ * A transport break the provider caused after it had already answered. There is
+ * no HTTP status to read: the gateway said `200`, streamed for a while and then
+ * the connection died. The words are the only evidence, so they must be exact.
+ */
+const TRANSPORT_BREAK = /\bread\s+econnreset\b|\beconnreset\b|\bother side closed\b|\bsocket hang up\b|\bund_err_socket\b/i;
+
+/**
  * The product's own report: a delivery miss or an assertion diff. Such a
  * text says what the product did with the answer, not what the provider
  * answered, so a provider status quoted inside it is the product's failure
@@ -127,6 +134,14 @@ export function detectProviderFault(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
   // An authentication or rate-limit answer is a decision, not an outage.
   if (UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return null;
+  // A stream that broke after the provider had already answered carries no
+  // status at all: the gateway returned 200, sent records, then the connection
+  // died (`read ECONNRESET`, `other side closed`). It is checked before the
+  // product-report rule on purpose — the run's own failure text wraps the
+  // provider's words in `delivery_status=failed`, and that wrapper is the
+  // product restating a run that died on the transport, not evidence that the
+  // product mis-handled an answer it received whole.
+  if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return { code: 'provider-transport', status: null };
   // A delivery miss or an assertion diff is the product's own report, even
   // when it quotes a provider status: the product ran and did not deliver.
   if (PRODUCT_REPORT.test(text)) return null;
