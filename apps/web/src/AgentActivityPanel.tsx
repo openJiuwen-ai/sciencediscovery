@@ -39,12 +39,14 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
   const [openFolds, setOpenFolds] = useState<Record<string, boolean>>({});
   useEffect(() => {
     let disposed = false; let pending = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
     setActivity(undefined); setLogs(undefined); setError("");
     const applyMiss = async (reason: unknown, fallback: string) => {
       const miss = await classifySessionPollMiss(client, sessionId, reason);
       if (disposed) return;
       if (miss.kind === "stale") { setError(""); return; }
-      if (miss.kind === "gone") { setActivity(undefined); setError(miss.message); return; }
+      // A deleted Session cannot answer again; keep the message and stop asking.
+      if (miss.kind === "gone") { setActivity(undefined); setError(miss.message); if (timer !== undefined) clearInterval(timer); return; }
       if (miss.kind === "other") { setError(miss.message); return; }
       setError(reason instanceof Error ? reason.message : fallback);
     };
@@ -55,8 +57,9 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
       catch (reason) { if (!disposed && !isAuthFailure(reason)) await applyMiss(reason, t("activity.loadFailed")); }
       finally { pending = false; }
     };
-    void refresh(); const timer = setInterval(() => void refresh(), 2000);
-    return () => { disposed = true; clearInterval(timer); };
+    timer = setInterval(() => void refresh(), 2000);
+    void refresh();
+    return () => { disposed = true; if (timer !== undefined) clearInterval(timer); };
   }, [client, sessionId]);
   useEffect(() => {
     if (focus) setOpenFolds((current) => ({ ...current, [focus.kind]: true }));
