@@ -1465,6 +1465,7 @@ export const en = {
   "scope.noProducts": "This node has no expandable child nodes.",
   "scope.gone": "This subagent is no longer in the graph.",
   "scope.expandFailed": "Could not expand this subagent.",
+  "scope.busy": "ScienceMemory is too busy to expand this subagent. Try again in a moment.",
   "memory.unreachable": "ScienceMemory is reachable but Neo4j is not.",
   "memory.stats.cancelled": "cancelled",
 
@@ -4661,6 +4662,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "scope.noProducts": "该节点暂无可展开的子节点。",
   "scope.gone": "该 subagent 已不在图中。",
   "scope.expandFailed": "无法展开该 subagent。",
+  "scope.busy": "ScienceMemory 当前繁忙，暂时无法展开该 subagent，请稍后重试。",
   "memory.unreachable": "ScienceMemory 已启用但 Neo4j 不可达。",
   "tour.title": "科学记忆操作指引",
   "tour.step1.card.body": "这是你本次会话的科学记忆——研究目标和每一步执行的任务。打开时默认只显示研究主线：研究目标 → 子任务 → 工具调用。每个任务产出的代码、论文、产物默认折叠不显示，双击任务节点可以把折叠子节点展开。",

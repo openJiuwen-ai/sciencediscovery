@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 
 import type { MemorySubgraph } from "@sciencediscovery/schema";
 
-import { buildScopeChildCounts, countScopeChildren, mergeChainScopeExpansions, mergeExpansions } from "../src/MemoryGraphExplorer.js";
+import { buildScopeChildCounts, countScopeChildren, mergeChainScopeExpansions, mergeExpansions, scopeExpansionNote } from "../src/MemoryGraphExplorer.js";
 import { isNodeCancelled, isNodeCompleted } from "../src/MemoryGraphView.js";
 
 // A minimal folded subgraph: one subagent scope, its surrogate edge to an
@@ -837,4 +837,21 @@ test("mergeChainScopeExpansions round-trips: expand then collapse restores the f
   assert.equal(ids.has(CODE1), false, "Code folded away on collapse");
   assert.equal(ids.has(ART), true, "Artifact kept on collapse");
   assert.equal(collapsed.edges.some((e) => e.extra?.surrogate === true && e.source === SCOPE && e.target === ART), true, "surrogate synthesised on collapse");
+});
+
+// --- expansion answers: a reason is a failed read, never an empty scope ---
+// A budget refusal is the sidecar's HTTP 503 `memory_graph_query_limit` on a
+// large scope. It must read as "busy, retry", not as "no expandable children";
+// the same holds for any unknown non-2xx code.
+test("an expansion that carries a reason never reads as an empty scope", () => {
+  const empty = { nodes: [], edges: [] };
+  assert.equal(scopeExpansionNote({ ...empty, reason: "node_not_found" }), "gone");
+  assert.equal(scopeExpansionNote({ ...empty, reason: "memory_graph_unreachable" }), "unreachable");
+  assert.equal(scopeExpansionNote({ ...empty, reason: "memory_graph_query_limit" }), "busy");
+  assert.equal(scopeExpansionNote({ ...empty, reason: "bad_request" }), "failed");
+});
+
+test("only a reason-free expansion with no rows is empty", () => {
+  assert.equal(scopeExpansionNote({ nodes: [], edges: [] }), "empty");
+  assert.equal(scopeExpansionNote(expansionGraph()), undefined);
 });
