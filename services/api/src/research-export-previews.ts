@@ -108,11 +108,14 @@ export class ResearchExportPreviews {
     for (let attempt = 0; ; attempt++) {
       try { return await this.getAttempt(options, deferWhileRunning, memo); }
       catch (error) {
-        // Default previews are background-safe reads. A run can begin after
-        // admission but before trajectory/CAS files are published; expose that
-        // transient missing-file state through the existing pending contract.
-        // Explicit previews keep the original error semantics.
-        if (deferWhileRunning && isMissingPreviewFile(error)) {
+        // A run can begin after admission but before trajectory/CAS files are
+        // published, so a read inside the preview can hit a file that is not on
+        // disk yet. That is a retry, not a client error: an explicit preview used
+        // to keep the raw ENOENT, which the server maps to 404 "File not found"
+        // and a browser logs as a resource error — enough to red a @mocked
+        // journey on its own (#1099). Both the warmed defaults and the explicit
+        // previews now answer the pending contract the client already handles.
+        if (isMissingPreviewFile(error)) {
           throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
         }
         // Recompute once for a surviving scope after a sibling was deleted.

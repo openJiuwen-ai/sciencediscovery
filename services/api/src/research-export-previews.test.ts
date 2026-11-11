@@ -261,7 +261,12 @@ test("default previews expose a retryable status when a run races file publicati
   } finally { await previews.close(); }
 });
 
-test("explicit previews preserve missing-file errors", async () => {
+test("explicit previews answer the pending contract when a run races file publication", async () => {
+  // This used to preserve the raw ENOENT, and the server turned that into
+  // 404 {"error":"File not found"}. A browser logs a 404 as a resource
+  // error, which reds a @mocked journey on its own; the retry contract the
+  // client already understands is the honest answer to a file the run has not
+  // published yet (#1099).
   const previews = new ResearchExportPreviews(async () => "r1", async () => {
     const error = new Error("trajectory is not published yet") as NodeJS.ErrnoException;
     error.code = "ENOENT";
@@ -269,8 +274,7 @@ test("explicit previews preserve missing-file errors", async () => {
   });
   const options = { projectId: "p", sessionId: "s", level: "necessary" as const, includeFullTrajectory: false };
   try {
-    await assert.rejects(previews.get(options), (error: unknown) =>
-      error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT");
+    await assert.rejects(previews.get(options), statusError(409, "EXPORT_PREVIEW_PENDING"));
   } finally { await previews.close(); }
 });
 
