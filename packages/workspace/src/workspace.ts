@@ -297,7 +297,7 @@ export function subagentFinalText(subagent: Pick<Subagent, "steps">): string | u
   return text || undefined;
 }
 
-function summarizeSubagentResult(subagent: Subagent): {
+async function summarizeSubagentResult(subagent: Subagent, saveSubagentResult?: WorkspaceToolOptions["saveSubagentResult"]): Promise<{
   brief?: string;
   error?: string;
   finalText?: string;
@@ -309,8 +309,19 @@ function summarizeSubagentResult(subagent: Subagent): {
   structuredResult?: unknown;
   subagent_error?: string;
   subagent_model_name?: string;
-  subagent_result_brief?: string;
+  /** Present only when the child's final output did not fit. Without it a
+   *  caller had no way to tell a full handoff from a cut one (#1107). */
+  subagent_result_truncated?: true;
+  /** Characters delivered and characters the child actually produced. */
+  subagent_result_chars?: { delivered: number; full: number };
+  /** A resolvable pointer to the full text: `read_tool_output(ref, offset, limit)`. */
+  subagent_result_ref?: string;
   subagent_result_sha256?: string;
+  /** The configured budget and the bound the engine actually enforced. They
+   *  differ when the configuration asks for more turns than the engine ceiling;
+   *  reporting only the configured value let a child that stopped at the ceiling
+   *  look like it had finished inside its budget (#1106). */
+  subagent_turn_budget?: { configured: number; effective: number };
   subagent_status: Subagent["status"];
   subagent_stop_reason?: SubagentContractStopReason;
   subagent_token_usage?: {
@@ -320,16 +331,21 @@ function summarizeSubagentResult(subagent: Subagent): {
   };
   turnCount: number;
   usage?: Subagent["usage"];
-} {
+}> {
   const fullFinalText = subagentFinalText(subagent);
   const finalText = fullFinalText?.slice(0, SUBAGENT_RESULT_TEXT_LIMIT);
+  const truncated = fullFinalText !== undefined && finalText !== undefined && fullFinalText.length > finalText.length;
+  // Only an oversized body needs a ref; a full handoff stays self-contained.
+  const resultRef = truncated ? (await saveSubagentResult?.(fullFinalText))?.ref : undefined;
   const stopReason = subagentStopReason(subagent);
   const subagentContractStopReason = contractStopReason(stopReason);
   const tokenUsage = subagentTokenUsage(subagent.usage);
   const modelName = subagent.model?.model ?? subagent.model?.name;
   return {
-    ...(finalText ? { brief: finalText } : {}),
     ...(subagent.error ? { error: subagent.error } : {}),
+    // One copy of the body. `brief` and `subagent_result_brief` carried the same
+    // string, which tripled an oversized handoff and pushed it past the
+    // tool-output projection bound, where it stopped being parseable JSON (#1107).
     ...(finalText ? { finalText } : {}),
     id: subagent.id,
     ...(subagent.rawStructuredResult ? { rawStructuredResult: subagent.rawStructuredResult } : {}),
@@ -341,9 +357,20 @@ function summarizeSubagentResult(subagent: Subagent): {
     stopReason,
     ...(subagent.error && subagent.status !== "completed" ? { subagent_error: subagent.error.slice(0, SUBAGENT_RESULT_TEXT_LIMIT) } : {}),
     ...(modelName ? { subagent_model_name: modelName } : {}),
-    ...(subagent.status === "completed" && finalText ? { subagent_result_brief: finalText } : {}),
-    ...(subagent.status === "completed" && fullFinalText
-      ? { subagent_result_sha256: createHash("sha256").update(fullFinalText).digest("hex") }
+    ...(truncated
+      ? {
+        subagent_result_chars: { delivered: finalText!.length, full: fullFinalText!.length },
+        ...(resultRef ? { subagent_result_ref: resultRef } : {}),
+        subagent_result_truncated: true as const,
+      }
+      : {}),
+    // Hash what the parent received. Hashing the uncut text made an integrity
+    // check fail on a handoff that was reported `completed` (#1107).
+    ...(subagent.status === "completed" && finalText
+      ? { subagent_result_sha256: createHash("sha256").update(finalText).digest("hex") }
+      : {}),
+    ...(subagent.maxTurns !== undefined
+      ? { subagent_turn_budget: { configured: subagent.maxTurns, effective: subagent.effectiveMaxTurns ?? subagent.maxTurns } }
       : {}),
     subagent_status: subagent.status,
     ...(subagentContractStopReason ? { subagent_stop_reason: subagentContractStopReason } : {}),
@@ -354,6 +381,11 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  /** Persist a child's oversized final text so the parent can read it back.
+   *  `read_tool_output(ref, offset, limit)` already exists on the tool-output
+   *  store; this is the only seam the workspace layer needs to publish a ref
+   *  for content it had to cut (#1107). */
+  saveSubagentResult?: (text: string) => Promise<{ ref: string } | undefined>;
   mcpReadiness?: {
     summary: string;
     decide(action: "continue" | "wait" | "check", reason: string, sourceIds: string[], signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
@@ -2300,7 +2332,7 @@ const taskArgumentMessage = (missing: readonly string[]): string =>
   + "Re-issue this call with a complete prompt.";
 
 /** Default delegation preserves the established request/result and budget semantics. */
-export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy" | "listArtifacts">): AgentTool[] {
+export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy" | "listArtifacts" | "saveSubagentResult">): AgentTool[] {
   const tools: AgentTool[] = [];
   if (options.runSubagent) {
     const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
@@ -2381,7 +2413,7 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
         const artifacts = (await options.listArtifacts?.() ?? [])
           .filter((artifact) => !artifact.deletedAt && artifact.originMeta?.subagentId === subagent.id)
           .map((artifact) => ({ artifact_id: artifact.id, name: artifact.name, version: artifact.currentVersion }));
-        const summary = { ...summarizeSubagentResult(subagent), artifacts,
+        const summary = { ...await summarizeSubagentResult(subagent, options.saveSubagentResult), artifacts,
           artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths." };
         return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
       },

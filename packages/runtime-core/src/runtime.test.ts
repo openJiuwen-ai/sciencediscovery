@@ -167,7 +167,9 @@ test("durable turn commit follows the bounded pool and exclusive barriers", asyn
       },
     },
   });
-  await loop.run([], new AbortController().signal, () => {});
+  // The turn did its work and then used the last allowed turn, so the run ends by
+  // reporting the bound instead of claiming it finished (#1106).
+  await assert.rejects(() => loop.run([], new AbortController().signal, () => {}), /maxTurns=1/u);
   assert.equal(peak, 2);
   assert.equal(commits, 1);
 });
@@ -262,14 +264,21 @@ test("the max-turn boundary closes every assistant tool call before returning", 
       },
     },
   });
-  const result = await loop.run([], new AbortController().signal, () => undefined);
-  assert.equal(result.turns, 128);
-  assert.equal(result.history.length, 256);
-  for (let index = 0; index < result.history.length; index += 2) {
-    const assistant = result.history[index]!;
-    const tool = result.history[index + 1]!;
+  // Every allowed turn asked for another tool, so the run stops by naming the
+  // bound instead of reporting `completed` (#1106). The loop still has to have
+  // paired each assistant tool call with its result before it stops.
+  const states = loop.state;
+  await assert.rejects(() => loop.run([], new AbortController().signal, () => undefined), /maxTurns=128/u);
+  assert.equal(turn, 128, "the model is asked exactly as many times as the bound allows");
+  const history = loop.state.history;
+  assert.equal(history.length, 256);
+  for (let index = 0; index < history.length; index += 2) {
+    const assistant = history[index]!;
+    const tool = history[index + 1]!;
     assert.equal(tool.tool_call_id, (assistant.tool_calls as Array<{ id: string }>)[0]!.id);
   }
+  assert.equal(loop.state.phase, "failed", "a bounded stop is a failure, not a completion");
+  void states;
 });
 
 test("uses assembler history as the next authoritative state", async () => {
@@ -391,12 +400,18 @@ test("a truncated tool-call-free turn is retried with output-limit feedback befo
       feedback: (turn, attempt) => { const text = `recover ${attempt}`; feedbacks.push(text); return { role: "user", content: text }; },
     },
   });
-  const result = await loop.run([{ role: "user", content: "big task" }], new AbortController().signal, () => undefined);
+  // The recovery happens inside the single allowed turn; the turn then ends with a
+  // tool call still outstanding, so the run reports the bound (#1106).
+  await assert.rejects(
+    () => loop.run([{ role: "user", content: "big task" }], new AbortController().signal, () => undefined),
+    /maxTurns=1/u,
+  );
   assert.equal(calls, 2);
   assert.deepEqual(feedbacks, ["recover 1"]);
-  assert.deepEqual(result.history.map((message) => message.role), ["user", "user", "assistant", "tool"]);
-  assert.equal(result.history[1]?.content, "recover 1");
-  assert.equal(result.history[2]?.content, "done");
+  const history = loop.state.history;
+  assert.deepEqual(history.map((message) => message.role), ["user", "user", "assistant", "tool"]);
+  assert.equal(history[1]?.content, "recover 1");
+  assert.equal(history[2]?.content, "done");
 });
 
 test("output-limit recovery exhausts and still reports the truncated turn for fail-closed handling", async () => {

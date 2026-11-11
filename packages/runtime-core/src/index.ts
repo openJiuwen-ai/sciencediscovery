@@ -15,7 +15,9 @@
 export {
   AgentLoop,
   ExternalWaitController,
+  MODEL_TURN_CEILING,
   RuntimeBuilder,
+  effectiveModelTurns,
   reduceRunState,
   type AgentLoopOptions,
   type AgentLoopResult,

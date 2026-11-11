@@ -92,6 +92,9 @@ export function createAgentRun(
     ...(bindings.runIdleTimeoutMs !== undefined
       ? { runIdleTimeoutMs: bindings.runIdleTimeoutMs }
       : {}),
+    // The child's declared budget now reaches the loop; the engine clamps it to
+    // its own ceiling and reports the effective bound (#1106).
+    maxModelTurns: profile.budget.maxModelTurns,
     runTimeoutMs: profile.budget.runTimeoutMs,
     ...(input.runContract ? { runContract: input.runContract } : {}),
     ...(bindings.suspendAfterTurn ? { suspendAfterTurn: bindings.suspendAfterTurn } : {}),

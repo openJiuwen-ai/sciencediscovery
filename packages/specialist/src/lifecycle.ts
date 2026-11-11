@@ -34,7 +34,10 @@ export function classifySubagentFailure(
   const message = options.maxTurnsExceeded
     ? `Subagent exceeded maxTurns=${options.maxTurns}`
     : error instanceof Error ? error.message : "Subagent failed";
-  if (options.maxTurnsExceeded || /timeout/i.test(message)) {
+  // The engine now stops by raising `Agent exceeded maxTurns=N` when it has spent
+  // every allowed turn (#1106); that is the same class as the observer's own
+  // maxTurns abort, so it has to classify the same way rather than as "failed".
+  if (options.maxTurnsExceeded || /timeout/i.test(message) || /maxTurns=/i.test(message)) {
     return { error: message, status: "timed_out" };
   }
   if (options.parentAborted || /cancelled/i.test(message)) {

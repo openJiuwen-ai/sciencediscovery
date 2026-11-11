@@ -27,6 +27,32 @@ import {
   type ToolExecutionMode,
 } from "./tool-scheduler.js";
 
+/**
+ * Hard safety net against a runaway model loop; the wall-clock budgets remain
+ * the primary bound (
+unTimeoutMs / 
+unIdleTimeoutMs).
+ *
+ * It lives next to the loop it bounds so the number a caller is told about and
+ * the number the loop enforces cannot drift apart (#1106).
+ */
+export const MODEL_TURN_CEILING = 128;
+
+/**
+ * The turn bound a run will actually enforce.
+ *
+ * A caller may ask for fewer turns (a subagent budget, for instance). Asking for
+ * more than the ceiling is accepted but does not raise it: the ceiling exists to
+ * stop a runaway loop. Callers that care must report both numbers rather than
+ * assuming the requested one is in force.
+ */
+export function effectiveModelTurns(configured?: number): number {
+  if (configured === undefined) return MODEL_TURN_CEILING;
+  const asked = Math.trunc(configured);
+  if (!Number.isFinite(asked) || asked < 1) return MODEL_TURN_CEILING;
+  return Math.min(asked, MODEL_TURN_CEILING);
+}
+
 export type RuntimeMessage = Record<string, unknown> & { role?: string };
 
 export interface RuntimeToolCall {
@@ -420,16 +446,12 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         }
       }
 
-      // Preserve the historical safety-net behavior: a bounded run returns
-      // its transcript even when every allowed turn requested another tool.
-      const lastTurn = this.options.maxModelTurns - 1;
-      this.transition("completed", lastTurn);
-      this.emit({ type: "completed", ...(usage !== undefined ? { usage } : {}) });
-      return {
-        history: structuredClone(this.state.history),
-        turns: this.options.maxModelTurns,
-        ...(usage !== undefined ? { usage } : {}),
-      };
+      // Every allowed turn was spent and the model still had work to do. That is
+      // not a finished run: reporting it as completed is what let a truncated
+      // subagent reach its parent looking successful (#1106). The message carries
+      // the bound so the failure classifier can name the budget, and the catch
+      // block below records the terminal transition.
+      throw new Error(`Agent exceeded maxTurns=${this.options.maxModelTurns}`);
     } catch (error) {
       this.transition(signal.aborted ? "cancelled" : "failed", this.state.turn);
       throw error;

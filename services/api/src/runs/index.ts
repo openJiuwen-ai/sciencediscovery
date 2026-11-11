@@ -199,6 +199,7 @@ import {
 import { MAX_PAPER_PDF_BYTES, PaperService } from "../papers.js";
 import { closedModelContext } from "./model-context.js";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { effectiveModelTurns } from "@sciencediscovery/runtime-core";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
 import { createConfigurationAgentTools } from "../configuration/agent-tools.js";
@@ -1636,6 +1637,8 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
+          // What the loop will enforce, which is what actually bounds the child.
+          effectiveMaxTurns: effectiveModelTurns(subagentConfig.maxTurns),
           model: codexRuntime
             ? { id: codexRuntime.kind, model: codexRuntime.model ?? `${codexRuntime.kind} default`, name: codexRuntime.kind }
             : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
@@ -2245,9 +2248,13 @@ async function executeAgentRun(
             ? new Error(`Subagent wall-clock timeout after ${subagentConfig.timeoutSeconds} seconds`)
             : error;
           // Keep child failures in their own record, not the lead assistant stream.
+          // The engine reports its own exhaustion as `Agent exceeded maxTurns=N`;
+          // the observer below only fires for budgets inside the ceiling, so the
+          // two paths have to agree on what counts as a budget stop (#1106).
+          const ceilingStop = /maxTurns=\d+/i.test(failureError instanceof Error ? failureError.message : String(failureError));
           const failure = classifySubagentFailure(failureError, {
-            maxTurns: subagent.maxTurns,
-            maxTurnsExceeded,
+            maxTurns: subagent.effectiveMaxTurns ?? subagent.maxTurns,
+            maxTurnsExceeded: maxTurnsExceeded || ceilingStop,
             parentAborted: parentSignal.aborted || childController.signal.aborted,
           });
           subagent = {

@@ -4921,6 +4921,9 @@ export class SessionStore {
     input: SubagentInput,
     execution: {
       maxTurns?: number;
+      /** The bound the engine enforces, which is lower than `maxTurns` when the
+       *  configured budget is above the engine ceiling (#1106). */
+      effectiveMaxTurns?: number;
       model?: ModelRunInfo;
       specialistConfigHash?: string;
       timeoutSeconds?: number;
@@ -4950,6 +4953,7 @@ export class SessionStore {
         subagentType: input.subagentType?.trim() || "general-purpose",
       },
       maxTurns: execution.maxTurns ?? input.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
+      ...(execution.effectiveMaxTurns !== undefined ? { effectiveMaxTurns: execution.effectiveMaxTurns } : {}),
       ...(execution.model ? { model: structuredClone(execution.model) } : {}),
       parentTurnId,
       sessionId,

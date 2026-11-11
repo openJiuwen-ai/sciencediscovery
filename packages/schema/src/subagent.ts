@@ -114,6 +114,10 @@ export interface Subagent {
    */
   interruptedByRestart?: boolean;
   maxTurns: number;
+  /** The bound the engine actually enforces. It can be lower than `maxTurns`
+   *  when the configured budget is above the engine's hard ceiling, so a reader
+   *  must not assume `maxTurns` is what stopped the child (#1106). */
+  effectiveMaxTurns?: number;
   model?: ModelRunInfo;
   parentTurnId: string;
   resultValidation?: SubagentResultValidation;
