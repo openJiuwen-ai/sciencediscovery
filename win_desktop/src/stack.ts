@@ -68,9 +68,13 @@ export function spawnStack(
       if (stopping) return;
       stopping = true;
       if (child.exitCode !== null || child.signalCode !== null) return;
-      // start-stack.mjs installs SIGINT/SIGTERM handlers that killTree the whole
-      // stack. A GUI app has no console to signal, so use taskkill /T: it
-      // terminates the process tree, and each service's own cleanup runs.
+      // taskkill /T /F is TerminateProcess on every process in the tree: no
+      // signal handlers, no atexit, no graceful cleanup anywhere. The stack's
+      // own SIGINT/SIGTERM handlers (which would killTree children and restore
+      // an interrupted mirror-sync lockfile) never run on this path — which is
+      // exactly why start-stack.mjs also self-heals a residual
+      // uv.lock.stack-backup at startup (#897): hard kills are the desktop's
+      // normal shutdown route, not an edge case.
       const kill = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
       await new Promise<number | null>(resolve => kill.once("exit", code => resolve(code)));
       const done = await Promise.race([exited.then(() => true), new Promise(r => setTimeout(() => r(false), timeoutMs))]);

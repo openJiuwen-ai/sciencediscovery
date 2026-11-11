@@ -24,7 +24,7 @@
 
 import { existsSync, copyFileSync, rmSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
@@ -263,13 +263,30 @@ const envsDir = process.env.SCIENCE_AGENT_ENVS_DIR
 // and in the payload (envs-template\sd-services, staged by assemble-backend).
 const SHARED_ENV = join(envsDir, "sd-services");
 
+// Registered children (every spawnService caller, runStep included) so the
+// signal handlers' cleanup() can tear down more than the long-lived services —
+// see #897 A on runStep. Declared before its first user for readability; the
+// comment above the handlers below keeps the ordering rationale.
+const children = [];
+
 // Build (--no-build skips it). Registry overrides apply to this process only
 // and never touch user/global configuration.
 const runOpts = { cwd: repositoryRoot };
 async function runStep(label, command, args, extraEnv = {}, cwd) {
   say(`==> ${label}`);
   const child = spawnService(command, args, { ...runOpts, ...(cwd ? { cwd } : {}), env: extraEnv });
-  const code = await new Promise(resolveExit => child.once("exit", resolveExit));
+  // #897 A: register EVERY child (uv sync included — the build block's
+  // `await uvSyncProject` runs through here), not just the long-lived
+  // services. Before this, a SIGTERM during a mirror sync restored the
+  // lockfile backup and process.exit'ed while uv was still writing: the
+  // restore-then-delete raced the rewrite and left a dirty lock with no
+  // backup to save it. Registration lets cleanup() kill uv BEFORE
+  // restoring (see below), which removes the race instead of narrowing it.
+  children.push(child);
+  let code = await new Promise(resolveExit => {
+    child.once("exit", resolveExit);
+  });
+  children.splice(children.indexOf(child), 1);
   if (code !== 0) fail(`${label} failed with exit code ${code}.`);
 }
 
@@ -336,20 +353,75 @@ async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
 // at top level inside that block, and a handler installed afterwards cannot
 // catch an interrupt that lands while uv is resolving: Node's default SIGINT
 // behaviour terminates the process, and the sync's async finally never runs.
-const children = [];
 let cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
-  // Restore a lockfile an interrupted mirror sync left backed up before killing
-  // the children, so a Ctrl-C mid-sync cannot strand uv.lock on mirror-resolved
-  // versions.
+  // #897 A: kill the children FIRST, restore the lockfile AFTER. The previous
+  // order (restore-then-kill) raced an in-flight `uv sync`: the restore copied
+  // the backup over uv.lock and deleted the backup, then process.exit let the
+  // still-running uv rewrite uv.lock with mirror-resolved content — a dirty
+  // lock with nothing left to save it. Killing first closes that window on
+  // every path a signal handler can see.
+  const killed = children.splice(0);
+  for (const child of killed) killTree(child);
+  // POSIX killTree only delivers SIGTERM; the handler cannot await an async
+  // exit, so wait synchronously (bounded) for the PID to disappear and
+  // escalate to SIGKILL if it lingers. Only then is the lockfile safe to
+  // restore: a live uv could still be mid-write. Windows killTree is a
+  // synchronous taskkill /T /F and needs none of this.
+  if (!isWindows) {
+    for (const child of killed) {
+      const deadline = Date.now() + 5000;
+      while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+        // Busy-wait in micro-slices: Atomics.wait keeps the event loop from
+        // spinning at 100% CPU while staying synchronous.
+        const shared = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(shared, 0, 0, 50);
+        try { process.kill(child.pid, 0); } catch { break; } // gone
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+  }
+  // Restore a lockfile an interrupted mirror sync left backed up — now that
+  // nothing is alive to overwrite it.
   restoreActiveLockfile();
-  for (const child of children.splice(0)) killTree(child);
 }
 process.on("SIGINT", () => { cleanup(); process.exit(130); });
 process.on("SIGTERM", () => { cleanup(); process.exit(143); });
 process.on("exit", cleanup);
+
+// #897 B: the hard-kill paths (desktop close = `taskkill /PID … /T /F` in
+// win_desktop/src/stack.ts, power loss, OOM) never run the handlers above, so
+// an interrupted mirror sync can leave BOTH a dirty uv.lock and its backup
+// behind — and the next start's unconditional `copyFile(lockfile, backup)`
+// would freeze the dirty content as the "pristine" baseline. Self-heal before
+// anything else touches the pair: a residual backup means the previous run
+// was torn down mid-sync, and the backup is the last known-good lock.
+function healResidualLockfileBackup(lockfile, backup) {
+  if (!existsSync(backup)) return;
+  say(`[compat] residual ${relative(repositoryRoot, backup) || backup} found — the previous run was interrupted mid-sync; restoring it as the lockfile baseline.`);
+  try {
+    copyFileSync(backup, lockfile);
+    rmSync(backup, { force: true });
+  } catch (error) {
+    // A backup we cannot apply must not take the start down: the worst case
+    // is the pre-heal behaviour (dirty lock, backup present), and the next
+    // interrupted run still has something to restore from.
+    say(`[compat] could not restore the residual backup (${error.message}); continuing.`);
+  }
+}
+// The workspace-root pair is the only one the syncs below create
+// (uvSyncProject backs up `join(projectDir, "uv.lock")`, and every call
+// passes repositoryRoot as the project dir), so healing the root pair covers
+// all of them. Run unconditionally and BEFORE the build block: a residual
+// backup is history from a previous run, independent of this run's options.
+healResidualLockfileBackup(
+  join(repositoryRoot, "uv.lock"),
+  join(repositoryRoot, "uv.lock.stack-backup"),
+);
 
 if (!options.noBuild) {
   if (!options.noNodeBuild) {
