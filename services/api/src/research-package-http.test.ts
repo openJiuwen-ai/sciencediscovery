@@ -230,7 +230,7 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
-function evidencePackage(legacy = false, withEvolve = false) {
+function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
   const notebook = Buffer.from('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}');
@@ -247,6 +247,17 @@ function evidencePackage(legacy = false, withEvolve = false) {
       workspace: [{ path: "results/result.csv", objectPath: sha256(latest), size: latest.length, modifiedAt: date }, { path: "analysis.ipynb", objectPath: sha256(notebook), size: notebook.length, modifiedAt: date }],
       validations: { reviews: [{ id: "review-source", sessionId: "source-one", kind: "integrity", status: "passed", turnId: "run-source", createdAt: date, finishedAt: date, findings: [] }], artifactReviews: [{ id: "artifact-review-source", sessionId: "source-one", artifactId: "artifact-source", artifactVersionId: "version-two", artifactContentHash: sha256(latest), artifactLogicalName: "results/result.csv", checkpointId: "checkpoint-source", decision: "ACCEPT_AND_PROCEED", createdAt: date, finishedAt: date, findings: [], reviewerSpecialistVersion: "1", status: "completed" }] },
     }, { session: { id: "source-two", title: "分支会话", specialistId: "unavailable-specialist" }, messages: [{ id: "branch-prompt", role: "user", content: "分支研究", createdAt: date }], workspace: [] }],
+    // A package that really ran a search carries both the `evolve/<run>/` artifact
+    // and the run records with their event log; only then is the "searches were not
+    // carried" loss absent from the receipt.
+    ...(withEvolveRuns ? { evolve: { runs: [{
+      run: {
+        id: "evolve-run-source", sessionId: "source-one", algorithm: "puct",
+        goal: { algorithm: "puct", statement: "Search for candidate genes" },
+        status: "succeeded", startedAt: date, finishedAt: date, candidates: 2, costCents: 0, tokens: 0,
+      },
+      events: [{ sequence: 1, createdAt: date, event: { type: "log", level: "info", message: "started" } }],
+    }] } } : {}),
     artifacts: [
       { id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] },
       // A run's result is published as `evolve/<run>/<entrypoint>` with
@@ -341,6 +352,23 @@ test("a package carrying an evolve result reports that the searches themselves w
   assert.equal(receipt.artifactCount, 2);
   assert.ok(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")),
     "the receipt names the searches it could not carry");
+});
+
+test("a package carrying the evolve runs and their artifact reports no search loss", async (context) => {
+  // The import layer must agree with the predicate: a package that ran a search
+  // AND carries the run records is restored, so the "searches were not carried"
+  // omission is absent — this is the path #1019 review F1 found was never tested
+  // at the import boundary.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage(false, true, true)),
+  })).json() as { artifactCount: number; omissions: string[] };
+  assert.equal(receipt.artifactCount, 2);
+  assert.equal(receipt.omissions.some((item) => item.includes("does not carry evolution (evolve) search runs")), false,
+    "the carried run records make the search loss untrue");
+  const runs = await (await request(`/api/evolve/runs?sessionId=${encodeURIComponent(target.firstSession.id)}`)).json() as { id: string }[];
+  assert.equal(runs.some((run) => run.id === "evolve-run-source"), true, "the carried run is restored under the imported session");
 });
 
 test("a package without an evolve artifact reports no such loss", async (context) => {
