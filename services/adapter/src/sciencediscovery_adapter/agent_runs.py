@@ -193,6 +193,23 @@ def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
     request["toolName"] = shown
 
 
+_RETRYABLE_READ_TOOLS = frozenset({"read_artifact"})
+_RETRYABLE_HTTP_STATUS = frozenset({502, 503, 504})
+# Fixed delays keep retries bounded and deterministic. These are deliberately
+# short because the call is already protected by the run's total deadline.
+_BRIDGE_RETRY_DELAYS_SECONDS = (0.05, 0.1)
+
+
+def _retryable_bridge_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in _RETRYABLE_HTTP_STATUS
+    return isinstance(error, (httpx.TransportError, httpx.TimeoutException))
+
+
+def _bridge_http_status(error: BaseException) -> int | None:
+    return error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+
+
 def bridge_caller(
     bridge: Bridge, client: httpx.AsyncClient, skill_directories: dict[str, str] | None = None,
     *, timeout_s: float | None = None, configuration_wait_timeout_s: float | None = None,
@@ -203,19 +220,33 @@ def bridge_caller(
         deadline = (configuration_wait_timeout_s if name == "configuration"
                     and arguments.get("action") == "propose" and configuration_wait_timeout_s
                     else timeout_s)
+        max_attempts = 1 + len(_BRIDGE_RETRY_DELAYS_SECONDS) if name in _RETRYABLE_READ_TOOLS else 1
         try:
             # A total call deadline, rather than HTTP read inactivity: a slow
             # response cannot prolong an ordinary tool by streaming bytes.
             async with asyncio.timeout(deadline):
                 if skill_directories and name == "run_shell" and isinstance(arguments.get("command"), str):
                     arguments = {**arguments, "command": sandbox_skill_paths(arguments["command"], skill_directories)}
-                response = await client.post(
-                    bridge.url, json={"name": name, "arguments": arguments},
-                    headers={"authorization": f"Bearer {bridge.token}"} if bridge.token else {},
-                )
-                response.raise_for_status()
-                body = response.json()
-                return str(body.get("text", "")), bool(body.get("isError", False))
+                for attempt in range(max_attempts):
+                    try:
+                        response = await client.post(
+                            bridge.url, json={"name": name, "arguments": arguments},
+                            headers={"authorization": f"Bearer {bridge.token}"} if bridge.token else {},
+                        )
+                        response.raise_for_status()
+                        body = response.json()
+                        return str(body.get("text", "")), bool(body.get("isError", False))
+                    except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as error:
+                        status = _bridge_http_status(error)
+                        if attempt + 1 >= max_attempts or not _retryable_bridge_error(error):
+                            trace_boundary("tool.bridge.error", **(trace_context or {}), tool=name,
+                                           attempt=attempt + 1, http_status=status,
+                                           error_type=type(error).__name__)
+                            raise
+                        trace_boundary("tool.bridge.retry", **(trace_context or {}), tool=name,
+                                       attempt=attempt + 1, http_status=status,
+                                       error_type=type(error).__name__)
+                        await asyncio.sleep(_BRIDGE_RETRY_DELAYS_SECONDS[attempt])
         except TimeoutError:
             trace_boundary("tool.bridge.timeout", **(trace_context or {}), tool=name, timeout_s=deadline)
             return (f"Tool execution timed out after {deadline}s; "
