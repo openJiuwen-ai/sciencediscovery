@@ -662,6 +662,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         ...(nativeToolNames.length ? { nativeTools: nativeToolNames } : {}),
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
         hiddenJiuwenSwarmTools: [
+          // JiuwenSwarm workswarm0.2.6 registers this name in ask_user_rail.py.
           "ask_user",
           ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
           ...hiddenWebTools,
@@ -703,7 +704,20 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       this.markProgress("event" in line ? `adapter:${line.event.type}` : "adapter:done");
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
       if ("event" in line && line.event.type === "user_input.required") {
-        throw new Error("The assistant requested an interactive reply. Please send the clarification as a new chat message.");
+        const request = line.event.request as { question?: unknown } | undefined;
+        const question = typeof request?.question === "string" ? request.question.trim() : "";
+        if (!question) {
+          throw new Error("The assistant requested an interactive reply. Please send the clarification as a new chat message.");
+        }
+        // Publish the question through the normal chat stream and close the adapter's suspended turn.
+        const responseId = randomUUID();
+        const turn = typeof line.event.turn === "number" ? line.event.turn : 0;
+        translator.handle({ type: "assistant.response.started", responseId, turn });
+        translator.handle({ type: "assistant.delta", responseId, delta: question });
+        translator.handle({ type: "assistant.response.settled", responseId, turn });
+        finalText = question;
+        receivedTerminal = true;
+        break;
       }
       if ("done" in line) {
         receivedTerminal = true;

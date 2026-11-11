@@ -324,15 +324,23 @@ class RunEventMapper:
 
     def _on_chat_ask_user_question(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         request_id = str(payload.get("request_id") or "")
-        question = (payload.get("questions") or [{}])[0]
+        questions = payload.get("questions") or [{}]
         if not request_id:
             self.unmapped.append(f"chat.ask_user_question:{payload.get('source')}")
             return []
         if payload.get("source") != "permission_interrupt":
-            return [*self._settle_response(), {"type": "user_input.required", "request": {
-                "id": request_id, "question": str(question.get("question") or ""),
+            prompts = []
+            for question in questions:
+                prompt = str(question.get("question") or "").strip()
+                if prompt:
+                    choices = [f"- {label}" for option in question.get("options") or []
+                               if (label := str(option.get("label") or "").strip())]
+                    prompts.append("\n".join([prompt, *choices]))
+            return [*self._settle_response(), {"type": "user_input.required", "turn": self.turn, "request": {
+                "id": request_id, "question": "\n\n".join(prompts),
                 "source": str(payload.get("source") or "ask_user"),
             }}]
+        question = questions[0]
         self._permissions[request_id] = [str(o.get("label")) for o in question.get("options") or []]
         tool = str(question.get("header") or "").split(":")[-1].strip() or "tool"
         request = {
