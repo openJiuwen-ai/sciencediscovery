@@ -1637,8 +1637,13 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
-          // What the loop will enforce, which is what actually bounds the child.
-          effectiveMaxTurns: effectiveModelTurns(subagentConfig.maxTurns),
+          // Only the native loop clamps to its own ceiling. JiuwenSwarm and a
+          // specialist's external runtime enforce the configured value through the
+          // `turn_start` observer instead, so claiming 128 there would describe a
+          // bound that never applied (#1113 review).
+          ...(!jiuwenSwarmConfigFromEnv() && !effectiveCodexRuntime
+            ? { effectiveMaxTurns: effectiveModelTurns(subagentConfig.maxTurns) }
+            : {}),
           model: codexRuntime
             ? { id: codexRuntime.kind, model: codexRuntime.model ?? `${codexRuntime.kind} default`, name: codexRuntime.kind }
             : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },

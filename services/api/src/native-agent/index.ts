@@ -65,7 +65,6 @@ import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   ExternalWaitController,
-  MODEL_TURN_CEILING,
   effectiveModelTurns,
   resolveMaxParallelToolCalls,
   type RunEvent,
@@ -98,12 +97,6 @@ import { projectConfigurationHistory } from "../configuration/model-context.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
-
-/** Hard safety net against a runaway model loop; time budgets remain the
- *  primary bound (`runTimeoutMs` / `runIdleTimeoutMs`). */
-// The value and the clamp live in runtime-core so a caller's budget and the
-// loop's bound cannot disagree (#1106).
-const MAX_MODEL_TURNS = MODEL_TURN_CEILING;
 
 export function configuredMaxParallelToolCalls(
   raw = process.env.SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS,

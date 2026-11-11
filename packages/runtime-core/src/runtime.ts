@@ -29,9 +29,7 @@ import {
 
 /**
  * Hard safety net against a runaway model loop; the wall-clock budgets remain
- * the primary bound (
-unTimeoutMs / 
-unIdleTimeoutMs).
+ * the primary bound (`runTimeoutMs` / `runIdleTimeoutMs`).
  *
  * It lives next to the loop it bounds so the number a caller is told about and
  * the number the loop enforces cannot drift apart (#1106).

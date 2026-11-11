@@ -38,7 +38,7 @@ The main first-user input and each child's delegated prompt/Brief/handoff are in
 
 ## 4. Result contract
 
-`task` returns status/stop reason, token usage, model name, a short result brief and SHA256, validation, and validated/raw structured results. With `outputJsonSchema`, the server validates the last non-empty assistant output as one JSON object. Failure marks the child failed rather than treating invalid content as normal structured output.
+`task` returns status/stop reason, token usage, model name, the child's delivered final text (`finalText`) and its SHA256, validation, and validated/raw structured results. With `outputJsonSchema`, the server validates the last non-empty assistant output as one JSON object. Failure marks the child failed rather than treating invalid content as normal structured output.
 
 ### 4.1 Subagent Brief v1 contract
 
