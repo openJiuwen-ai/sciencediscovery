@@ -145,7 +145,10 @@
 .system-config-footer .primary-button { width: auto; min-width: 96px; }
 /* Same box as before, but with the chrome of the neighbouring .secondary-button
    so it reads as a button instead of a floating label. */
-.model-test-button { width: 112px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); padding: 4px 6px; color: var(--text-heading); cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
+/* Width grows with the verdict label: the qualified copy ("Basic check passed · 42 ms",
+   "Compatibility check finished · 380 ms") is longer than the old "Ready" fits, and a
+   fixed 112px box clipped it (issue #824 review). 112px stays as the floor. */
+.model-test-button { min-width: 112px; max-width: 100%; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); padding: 4px 6px; color: var(--text-heading); cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .model-test-button:hover:not(:disabled) { background: var(--surface-sunk); }
 .model-test-button.testing { color: var(--muted); cursor: wait; }
 .model-test-button.success { color: var(--success); }
