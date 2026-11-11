@@ -137,10 +137,12 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     // A // line inside the fragment's children is text, not a comment: it renders
     // into the session view where the removed entry point used to be, so the render
     // must not contain it (#1057).
-    assert.equal(markup.includes("A ready copy is reachable through"), false,
+    assert.equal(markup.includes("A ready copy is reached through"), false,
       "no explanation comment leaks into the rendered view");
     await act(async () => { await Promise.resolve(); });
-    assert.ok(rendered(view).includes(t.recalculating) === false || true, "estimate settles");
+    const settled = rendered(view);
+    assert.equal(settled.includes(t.recalculating), false, "the estimate settles and the recalculating marker goes");
+    assert.ok(settled.includes("100.0 KiB"), "the settled size is still shown");
   });
 });
 
