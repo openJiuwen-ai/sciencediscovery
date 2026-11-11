@@ -113,6 +113,24 @@ test('an assertion beside a gateway outage does not hide the outage', () => {
   assert.equal(detectProviderFaultFromErrors([]), null);
 });
 
+test('a stream that broke after a 200 classifies at case level too', () => {
+  // The product's report wraps the transport break in `delivery_status=failed`,
+  // and Nightly recorded exactly that on DRB-58. The wrapper restates a run that
+  // died on the transport after the provider answered whole, so it is not a
+  // verdict of its own and must not keep the case out of the classification.
+  const streamDied = 'Error: Main run must complete with readable, nonempty declared final artifacts; '
+    + 'delivery_status=failed; run_status=failed; delivered_artifacts=0; '
+    + 'run_error=[181001] model call failed, reason: openAI API async stream error: APIError: read ECONNRESET';
+  assert.deepEqual(detectProviderFaultFromErrors([streamDied]), { code: 'provider-transport', status: null });
+  // An assertion wrapper beside it records nothing either.
+  assert.deepEqual(
+    detectProviderFaultFromErrors([streamDied, 'Expected: "completed", Received: "failed"']),
+    { code: 'provider-transport', status: null },
+  );
+  // A delivery miss the case recorded in another text is still its own verdict.
+  assert.equal(detectProviderFaultFromErrors([streamDied, DELIVERY_MISS]), null);
+});
+
 test('a decision or a stall beside a gateway outage still vetoes the case', () => {
   // A case records one text per failed expect() or hook, so the provider's
   // 401/429 answer or the product's stalled-run wording can sit beside a
