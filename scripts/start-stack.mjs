@@ -28,7 +28,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
-  absoluteFromRepository, findHostPython, findOnPath, isMac, isWindows,
+  absoluteFromRepository, apiHeapBudgetMb, findHostPython, findOnPath, isMac, isWindows,
   loadDotEnv, portAvailability, portOccupant, spawnService, killTree, venvPython, waitHealthy,
 } from "./lib/stack-platform.mjs";
 import { cmdStart as jwStart, isUp as jwIsUp, jwConfig, jwEnv, readInstancePorts } from "./jiuwenswarm.mjs";
@@ -738,7 +738,11 @@ try {
   if (process.env.SCIENCE_AGENT_API_ENTRYPOINT && !existsSync(process.env.SCIENCE_AGENT_API_ENTRYPOINT)) {
     fail("SCIENCE_AGENT_API_ENTRYPOINT requires a local existing module");
   }
-  const apiChild = spawnService(process.execPath, [apiEntry], {
+  // The API's old-space budget. Setting it here rather than relying on V8's
+  // default is what makes the abort in #1011 a budget decision: the API logs the
+  // flag it received and warns before it reaches the limit. One default, one
+  // environment variable, the same pair as start-stack.sh and the launcher.
+  const apiChild = spawnService(process.execPath, [`--max-old-space-size=${apiHeapBudgetMb()}`, apiEntry], {
     cwd: join(repositoryRoot, "services", "api"),
     env: useJiuwenswarm
       ? { SCIENCE_AGENT_PORT: String(legacyPort), SCIENCE_AGENT_PUBLIC_PORT: String(publicPort) }

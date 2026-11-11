@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,32 @@ import { adapterServiceDefinition, ensureInstance, jiuwenswarmServiceDefinition,
 import type { PayloadManifest } from "./payload-manifest.js";
 import { runPreflight } from "./preflight.js";
 import { Supervisor, type ServiceDefinition } from "./supervisor.js";
+
+/**
+ * The API's heap budget on the packaged launch path.
+ *
+ * Node can only obey a limit passed when it starts, so the launcher has to be
+ * one of the places that passes one: V8's default is exactly what the run in
+ * #1011 died of, and `services/api` logs the flag it really received.
+ * `scripts/lib/stack-platform.mjs` and `scripts/start-stack.sh` carry the same
+ * variable name and default; `scripts/api-heap-budget.test.mjs` fails when they
+ * drift apart.
+ */
+export const API_HEAP_BUDGET_ENV = "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB";
+export const DEFAULT_API_HEAP_BUDGET_MB = 3072;
+export const MIN_API_HEAP_BUDGET_MB = 256;
+export const MAX_API_HEAP_BUDGET_MB = 32768;
+
+export function apiHeapBudgetMb(env: NodeJS.ProcessEnv): number {
+  const raw = env[API_HEAP_BUDGET_ENV]?.trim();
+  if (!raw) return DEFAULT_API_HEAP_BUDGET_MB;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_API_HEAP_BUDGET_MB || value > MAX_API_HEAP_BUDGET_MB) {
+    throw new Error(`${API_HEAP_BUDGET_ENV} must be an integer between ${MIN_API_HEAP_BUDGET_MB} and ${MAX_API_HEAP_BUDGET_MB}, received "${raw}"`);
+  }
+  return value;
+}
+
 
 export interface ServeSettings {
   bwrapPath: string;
@@ -196,7 +222,11 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     {
       name: "control API and Web UI",
       command: nodeBinary,
-      args: [payloadPath(payloadRoot, manifest.app.apiEntry)],
+      // The packaged launch path sets the API's heap budget explicitly; V8's
+      // default is what the run in #1011 died of. `apiHeapBudgetMb` reads the
+      // same variable and default as scripts/start-stack.{sh,mjs}, and the API
+      // reports the flag it actually received.
+      args: [`--max-old-space-size=${apiHeapBudgetMb(baseEnv)}`, payloadPath(payloadRoot, manifest.app.apiEntry)],
       cwd: appRoot,
       env: apiEnvironment,
       healthUrl: `http://${settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host}:${apiPort}/health`,
