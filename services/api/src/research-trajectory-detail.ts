@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License").
-import type { TrajectoryDetail } from "@sciencediscovery/trajectory";
+import type { TrajectoryDetail, TrajectoryEntry, TrajectoryIndex } from "@sciencediscovery/trajectory";
 
 /**
  * Read one trajectory entry's detail, turning an unreadable record into an
@@ -38,4 +38,21 @@ export async function readTrajectoryDetail(
     omit(`trajectory:${sessionId}:${entry.id}:${error instanceof Error ? error.message : "unreadable"}`);
     return undefined;
   }
+}
+
+/**
+ * Drop the entries whose detail could not be read.
+ *
+ * The importer is the reason this exists: `validatePackageTrajectory` rejects a
+ * package whose `details.length` differs from `entries.length`, so skipping a
+ * detail while leaving its index entry produced a package that exported fine
+ * and then failed to import as `Invalid research package trajectory` (#1083).
+ * Filtering all three index lists keeps the two sides 1:1.
+ */
+export function filterTrajectoryIndex(index: TrajectoryIndex, retained: ReadonlySet<string>): TrajectoryIndex {
+  const keep = (list: TrajectoryEntry[]): TrajectoryEntry[] => list.filter((entry) => retained.has(entry.id));
+  return { ...index,
+    entries: keep(index.entries),
+    ...(index.untimedEntries ? { untimedEntries: keep(index.untimedEntries) } : {}),
+    ...(index.historicalEntries ? { historicalEntries: keep(index.historicalEntries) } : {}) };
 }
