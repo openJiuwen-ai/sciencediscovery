@@ -713,10 +713,16 @@ export function App({ initialToken }: Props) {
 
   /** Whether *this design* already has a search. The Session's whole run list
    *  would answer for designs that are long finished, and a second no-confirm
-   *  design in the same conversation would never be carried. */
+   *  design in the same conversation would never be carried. The command `now`
+   *  being sent counts: a design whose `/evolve-design` is still pending owns
+   *  no run, whatever the previous design in the transcript started. */
   const searchStarted = useMemo(
-    () => designHasSearch(evolve.runs, state.detail?.messages ?? []),
-    [evolve.runs, state.detail?.messages],
+    () => designHasSearch(
+      evolve.runs,
+      state.detail?.messages ?? [],
+      state.pendingMessage?.content,
+    ),
+    [evolve.runs, state.detail?.messages, state.pendingMessage?.content],
   );
 
   // A no-confirm design that ends its turn on an auto card is carried forward
