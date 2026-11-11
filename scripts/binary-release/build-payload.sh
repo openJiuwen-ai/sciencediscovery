@@ -20,7 +20,8 @@
 # carry uv or the gateway's third-party Python dependencies — the launcher
 # restores those on the user's machine at first launch, from a configurable
 # package index (Huawei Cloud mirror by default), pinned here to exact
-# versions: a hash-locked requirements export of services/gateway/uv.lock and
+# versions: a hash-locked requirements export of the root uv.lock (the uv
+# workspace's single lockfile shared by the five sidecars) and
 # a sha256-pinned uv wheel.
 #
 # JiuwenSwarm and its adapter ARE embedded (unlike the gateway): both are
@@ -117,8 +118,9 @@ mkdir -p "$shared_dir"
 # build-machine paths of any form.
 #
 # The set itself is not asserted here. `uv export --frozen` derives it from the
-# committed services/gateway/uv.lock, so it cannot change without a lockfile
-# change, which is visible in review. A hardcoded pin and hash count was tried
+# committed root uv.lock (running inside a member directory resolves through
+# the workspace lock), so it cannot change without a lockfile change, which
+# is visible in review. A hardcoded pin and hash count was tried
 # and only rotted: it was written against a 201-package tree, the gateway's
 # dependencies moved into the Node control plane, and every release build then
 # failed on the count until someone noticed.
@@ -261,7 +263,8 @@ prepare_shared() {
 
   # Export the locked third-party set with hashes. At first launch the
   # launcher feeds this to `uv pip install --require-hashes --index-url`, so
-  # the versions stay exactly those of services/gateway/uv.lock while the
+  # the versions stay exactly those of the root uv.lock (resolved through
+  # the workspace lock from this member directory) while the
   # download goes through whatever package index the user configured —
   # uv.lock itself records pypi.org URLs and would bypass a mirror.
   # --no-header: the generated header would record this build's command line,

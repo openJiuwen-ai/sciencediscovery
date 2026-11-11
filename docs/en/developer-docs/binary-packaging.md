@@ -115,7 +115,7 @@ The payload digest is part of the directory name, so upgrades do not overwrite o
 Two dependency layers are then prepared:
 
 1. **uv** — download the build-pinned uv wheel from the configured PyPI index, verify its SHA256, and place the executable under `<data-dir>/tools/uv/`;
-2. **gateway Python environment** — create `<data-dir>/envs/gateway` on the bundled CPython and install the hash-pinned requirements exported from `services/gateway/uv.lock`.
+2. **gateway Python environment** — create `<data-dir>/envs/gateway` on the bundled CPython and install the hash-pinned requirements exported from the root `uv.lock` (the uv workspace's single lockfile shared by the five sidecars).
 
 Related variables:
 
