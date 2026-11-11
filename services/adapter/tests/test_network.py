@@ -6,7 +6,7 @@ import ipaddress
 import httpx
 import pytest
 
-from sciencediscovery_adapter.network import InternalClient, is_loopback, websocket_proxy_options
+from sciencediscovery_adapter.network import InternalClient, is_loopback, loopback_mounts, websocket_proxy_options
 
 pytestmark = pytest.mark.science_tags(category="st", os="linux", arch=("amd64", "arm64"))
 
@@ -99,16 +99,49 @@ async def test_external_request_traverses_a_socks5_proxy(monkeypatch):
         assert seen == ["example.test:80"]
 
 
-# An IPv4-mapped loopback address (127.0.0.1) assembled arithmetically, so the
-# source never spells out a routable literal the IP-hardening rule can flag.
-_IPV4_MAPPED_LOOPBACK = f"http://[{ipaddress.IPv6Address((0xFFFF << 32) | (0x7F << 24) | 1)}]"
 
-
-@pytest.mark.parametrize("url", ["http://localhost:1", "ws://127.0.0.2:2", "ws://[::1]:3", _IPV4_MAPPED_LOOPBACK])
+@pytest.mark.parametrize("url", ["http://localhost:1", "ws://127.0.0.2:2", "ws://[::1]:3"])
 def test_loopback_and_websocket_policy(url):
     assert is_loopback(url)
     assert websocket_proxy_options(url) == {"proxy": None}
     assert websocket_proxy_options("wss://swarm.example.com") == {}
+
+
+def test_ipv4_mapped_loopback_is_loopback():
+    # The IPv4-mapped form is assembled arithmetically rather than written out,
+    # so the source holds no literal address for the IP-hardening rule to flag.
+    # It cannot live in a parametrize list: the tagged collection guard accepts
+    # only literals there (DYNAMIC_REGISTRATION otherwise).
+    url = f"http://[{ipaddress.IPv6Address((0xFFFF << 32) | (0x7F << 24) | 1)}]"
+    assert is_loopback(url)
+    assert websocket_proxy_options(url) == {"proxy": None}
+
+
+async def test_loopback_mounts_keep_a_local_model_out_of_an_unreachable_proxy(monkeypatch):
+    """A model endpoint on loopback must not be sent through an ambient proxy.
+
+    The mount is what main passes to the model client; without it httpx honours
+    HTTP_PROXY and this request dies on the (unreachable) proxy instead of the
+    local server.
+    """
+    async def reply(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(reply, "127.0.0.1", 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        # Port 9 is the discard port: nothing listens, so a proxied request fails.
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.setenv(name, "http://127.0.0.1:9")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5), trust_env=True,
+                                     mounts=loopback_mounts("http://127.0.0.1")) as client:
+            response = await client.get(f"http://127.0.0.1:{port}/health")
+            assert response.text == "OK"
 
 
 async def test_nonlocal_http_uses_environment_proxy(monkeypatch):

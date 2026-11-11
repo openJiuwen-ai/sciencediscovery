@@ -66,5 +66,12 @@ class InternalClient:
         return await self.request("GET", url, **kwargs)
 
 
+def loopback_mounts(*urls: str) -> dict[str, None]:
+    """Use HTTPX's direct transport for local services, preserving remote proxies and TLS settings."""
+    hosts = {"localhost", "localhost.", "127.0.0.1", "::1"}
+    hosts.update(host for host in (urlsplit(url).hostname or "" for url in urls if is_loopback(url)) if host)
+    return {f"all://[{host}]" if ":" in host else f"all://{host}": None for host in hosts}
+
+
 def websocket_proxy_options(url: str) -> dict:
     return {"proxy": None} if is_loopback(url) else {}

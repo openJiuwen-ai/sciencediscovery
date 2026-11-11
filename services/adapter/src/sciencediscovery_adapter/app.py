@@ -28,7 +28,7 @@ from .agent_runs import AgentRunner, agent_router
 from .config import Settings
 from .llm_proxy import DEFAULT_ALIAS, LlmRoutes, llm_router
 from .mcp_server import ToolsetRegistry, mcp_router
-from .network import InternalClient
+from .network import InternalClient, loopback_mounts
 from .proxy import proxy_to_legacy
 
 
@@ -63,6 +63,12 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
         # reuse. Tool calls may have side effects, so retrying a ReadError is
         # unsafe; avoid the stale pool instead.
         bridge_limits = httpx.Limits(max_keepalive_connections=0)
+        # Bypass environment proxies only for local service addresses, and keep
+        # trust_env for remote proxies and custom CA certificates. Model routes
+        # are usually external, but a model served on loopback (a local Ollama,
+        # for example) must not be sent through an ambient HTTP(S)/SOCKS proxy:
+        # that is what these mounts keep direct.
+        mounts = loopback_mounts(settings.legacy_url)
         async with (
             # The direct loopback client bypasses environment proxies. External
             # destinations (model routes) are routed per-request through the
@@ -73,7 +79,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
             InternalClient(timeout=timeout, limits=bridge_limits) as bridge,
             # Model routes are external destinations and must retain proxy
             # support, including SOCKS configured through the environment.
-            httpx.AsyncClient(timeout=timeout, trust_env=True) as models,
+            httpx.AsyncClient(timeout=timeout, trust_env=True, mounts=mounts) as models,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge
