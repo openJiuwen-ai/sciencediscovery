@@ -173,17 +173,17 @@ test("the first-install sample supports all five preview profiles without unship
   assert.ok(previews.completeWithTrajectory.estimatedBytes > previews.complete.estimatedBytes, "the recorded trajectory remains in the complete preview");
 });
 
-test("viewing a conversation prewarms default sizes and workspace changes invalidate the cached evidence revision", async (context) => {
+test("viewing a conversation does not warm previews; the export dialog computes the five profiles on demand", async (context) => {
   const f = await fixture(context, true);
   const target = await f.project();
   const sessionId = target.firstSession.id;
   await f.request(`/api/sessions/${sessionId}`);
-  await f.waitForGraphExports(5);
-  assert.ok(f.graphExports() >= 5, "session viewing computes all five profiles before any export request");
+  assert.equal(f.graphExports(), 0, "viewing a session must not start any export build");
   const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${sessionId}`;
   const defaults = async () => await (await f.request(`${endpoint}&defaults=1`)).json() as { revision: string; complete: { estimatedBytes: number; files: { path: string; selected: boolean }[] } };
   const warmed = await defaults();
   const exports = f.graphExports();
+  assert.ok(exports >= 5, "the export dialog computes the profiles it shows");
   await f.request(`${endpoint}&level=necessary&includeFullTrajectory=0`);
   await f.request(`${endpoint}&level=complete&includeFullTrajectory=0`);
   await f.request(`${endpoint}&level=complete&includeFullTrajectory=1`);

@@ -77,7 +77,13 @@ export class ResearchExportPreviews {
     // Chat owns the runtime while evidence is changing. Keep watching and warm
     // the terminal revision later, without repeatedly exporting an active run.
     if (this.closed || !await this.canWarm(projectId, sessionId)) return;
-    await this.defaults(projectId, sessionId, true, { allowed: true });
+    // Preheat only the profile the dialog shows first. The other four are
+    // complete-trajectory / complete-memory-graph materialisations of every
+    // run stream and object; building them here queued five full exports per
+    // watched session and per 3 s tick, enough to exhaust the default 4 GB
+    // heap on large projects (#1085). They are computed on demand when the
+    // export dialog asks for `defaults`.
+    await this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, true, { allowed: true });
   }
 
   private async assertCanCalculate(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo): Promise<string | undefined> {
