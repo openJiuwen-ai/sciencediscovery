@@ -609,6 +609,59 @@ test("an automatic checkpoint is shown but asks for nothing, and the flow carrie
   ).toHaveLength(1);
 });
 
+test("a second no-confirm design is pushed although the first one started a search", async ({ page }) => {
+  // The run list is per Session, so the first design's search is still in it,
+  // created after that design's own command. The second design's command is
+  // still only pending when its first turn ends — the transcript is written
+  // when the turn settles — so "does this design have a search" has to answer
+  // for the design being sent, not the one already in the transcript.
+  const first = liveRun();
+  const mock = await installMockApi(page, {
+    assistantAnswer: "我又核对了一遍评测器。",
+    evolveRunsBySession: {
+      "session-1": [{ ...first, run: { ...first.run, createdAt: "2026-10-01T07:30:00.000Z" } }],
+    },
+    sessions: [makeSession({
+      messages: [
+        {
+          content: "/evolve-design --no-confirm 第一个目标",
+          createdAt: "2026-10-01T07:00:00.000Z",
+          id: "message-design-1",
+          role: "user",
+        },
+        {
+          content: "第一个设计已经启动搜索。",
+          createdAt: "2026-10-01T07:05:00.000Z",
+          id: "message-assistant-1",
+          role: "assistant",
+        },
+      ],
+    })],
+  });
+  await page.goto("/");
+  await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
+
+  await page.locator("#composer-textarea").fill("/evolve-design --no-confirm 第二个目标");
+  await page.locator("#composer-textarea").press("Enter");
+  await sendWithoutScope(page);
+
+  // The turn ended with prose, no card and no search: the client sends the one
+  // sentence that names what the turn owed.
+  await expect.poll(() =>
+    mock.calls.filter(
+      (call) => call.method === "POST" && call.body?.includes("create_evolve_run") === true,
+    ).length,
+  ).toBe(1);
+  // Once. The mock answers the push with the same prose, and a second carry
+  // forward would be a paid turn that changes nothing.
+  await page.waitForTimeout(500);
+  expect(
+    mock.calls.filter(
+      (call) => call.method === "POST" && call.body?.includes("create_evolve_run") === true,
+    ),
+  ).toHaveLength(1);
+});
+
 test("a checkpoint's change button writes the note in the card and sends it from there", async ({ page }) => {
   const mock = await installMockApi(page, {
     assistantAnswer: checkpointAnswer({ step: 2 }),
