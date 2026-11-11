@@ -128,6 +128,41 @@ test('a decision or a stall beside a gateway outage still vetoes the case', () =
     'provider-unavailable');
 });
 
+test('a gateway 504 whose wording says timeout is still the outage', () => {
+  // The gateway names its own 504 in words a timeout also uses. The status and
+  // its context outrank that wording, on its own and beside an assertion block.
+  const gateway504 = "[181001] model call failed, reason: openAI API async stream error: GatewayTimeout: Error code: 504 - Gateway Timeout";
+  assert.equal(detectProviderFault(gateway504).code, 'provider-server-error');
+  assert.equal(detectProviderFault(gateway504).status, 504);
+  const withAssertion = `${gateway504}\nExpected: "completed"\nReceived: "failed"`;
+  assert.equal(detectProviderFault(withAssertion).status, 504);
+  // The 504 text must not veto the case either, with or without a sibling 503,
+  // and the order of the texts must not decide it.
+  assert.equal(detectProviderFaultFromErrors([withAssertion]).status, 504);
+  assert.equal(detectProviderFaultFromErrors([withAssertion, GATEWAY_503]).status, 504);
+  assert.equal(detectProviderFaultFromErrors([GATEWAY_503, withAssertion]).status, 503);
+  // A bare proxy-shaped 504 names no gateway context: it is a status the text
+  // quotes, so it stays the product's and vetoes the case like the stalled-run
+  // wording does.
+  assert.equal(detectProviderFault('504 Gateway Timeout'), null);
+  assert.equal(detectProviderFaultFromErrors(['504 Gateway Timeout', GATEWAY_503]), null);
+  // A stalled-run text that embeds the gateway's own 5xx is the outage, because
+  // the status and its context outrank the timeout wording in the same text.
+  const stalledOnGateway = 'Agent run stalled: no assistant progress for 600000 ms; run_error=[181001] model call failed, Error code: 503';
+  assert.equal(detectProviderFault(stalledOnGateway).status, 503);
+  assert.equal(detectProviderFaultFromErrors([stalledOnGateway]).status, 503);
+});
+
+test('a text that records what one step printed is outvoted by a sibling outage', () => {
+  // Pinned as documented: the four verdicts above are the only texts that keep
+  // a case out, so a product-side message beside a gateway 5xx still lets the
+  // outage carry the case.
+  assert.equal(detectProviderFault('/api/sessions/abc -> 500: {"error":"Internal Server Error"}'), null);
+  assert.equal(detectProviderFaultFromErrors(['/api/sessions/abc -> 500: {"error":"Internal Server Error"}', GATEWAY_503]).status, 503);
+  assert.equal(detectProviderFault('No final report identified; declared intermediate files are insufficient'), null);
+  assert.equal(detectProviderFaultFromErrors(['No final report identified; declared intermediate files are insufficient', GATEWAY_503]).status, 503);
+});
+
 test('one text holding the gateway error and the assertion block is still the outage', () => {
   const mixed = `${GATEWAY_503}\nexpect(received).toBe(expected) // Object.is equality\nExpected: "completed"\nReceived: "failed"`;
   assert.equal(detectProviderFault(mixed).status, 503);

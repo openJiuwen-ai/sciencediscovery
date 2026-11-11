@@ -184,9 +184,13 @@ export function detectProviderFault(text) {
   // gateway: the local API answering 500 is a product failure, not an outage.
   if (!routing && !status) return null;
   if (!routing && !GATEWAY_CONTEXT.test(text)) return null;
-  // A timeout that only mentions a server status is the product's stalled run.
-  // The gateway's own routing failures are never masked by that wording.
-  if (!routing && TIMED_OUT.test(text)) return null;
+  // A timeout is the product's stalled run, unless the same text names the
+  // gateway's own status and context: `Error code: 504 - Gateway Timeout` from
+  // a text carrying `181001`/`model call failed`/`openai api`/`chat/completions`
+  // is the outage, not the stalled run it reads like. A bare `504 Gateway
+  // Timeout` names no gateway context and stays the product's. The gateway's
+  // routing failures are never masked by that wording either.
+  if (!routing && !gatewayStatus && TIMED_OUT.test(text)) return null;
   return {
     code: status ? 'provider-server-error' : 'provider-unavailable',
     status: status ?? null,
@@ -196,17 +200,21 @@ export function detectProviderFault(text) {
 /**
  * Whether one text vetoes the whole case.
  *
- * `detectProviderFault` answers `null` both for an assertion wrapper, which is
- * the weaker half of a case that also recorded the outage, and for a verdict
- * of its own: a delivery miss, a 401/403 or 429 answer, or the product's
- * stalled-run wording. Only the assertion wrapper may be outvoted by a sibling
- * text; a verdict of its own may not, because the contract keeps a decision and
- * a timeout out of the soft classification. A timeout that names the gateway's
- * routing failure is the exception the per-text rule already carves out.
+ * `detectProviderFault` answers `null` both for a text that only records what
+ * one step printed — an assertion wrapper, a thrown API error, a semantic
+ * verdict — and for a verdict on the run itself: a delivery miss, a 401/403 or
+ * 429 answer, or the product's stalled-run wording. Only the first kind may be
+ * outvoted by a sibling text that names the gateway; the four verdicts may not.
+ * A timeout whose own text names the gateway's status and context, or its
+ * routing failure, is not the product's stalled run, so it is not one of the
+ * four either; a bare status the text only quotes is.
  */
 function vetoesCase(text) {
   if (DELIVERY_MISS.test(text) || UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
-  return TIMED_OUT.test(text) && !ROUTING_FAILURE.test(text);
+  if (!TIMED_OUT.test(text)) return false;
+  const status = serverStatus(text);
+  const gatewayStatus = status !== null && GATEWAY_CONTEXT.test(text);
+  return !ROUTING_FAILURE.test(text) && !gatewayStatus;
 }
 
 /**
