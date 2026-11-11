@@ -239,14 +239,22 @@ test("a gone scope still admits the sizes its scope cards are showing", async (c
     await act(async () => { checked[0]!.props.onChange({ target: { checked: false } }); });
     assert.equal(renderer!.root.findAllByType("strong").some((node) => node.children.join("") === "预计 1.0 KiB"), false, "the estimate is gone once a custom selection is pending");
     fail = true;
-    await act(async () => { context.mock.timers.tick(3_000); });
-    await act(async () => { await Promise.resolve(); });
+    // The gone answer arrives through the dialog's own poll; wait for the state
+    // instead of counting microtasks, so the assertion does not depend on how
+    // many awaits the microtask queue happens to need on a given host.
+    const alertText = () => renderer!.root.findAll((item) => item.props?.role === "alert").map((item) => item.children.join("")).join("|");
+    for (let attempt = 0; attempt < 20 && !alertText().includes("上方为删除前的大小"); attempt += 1) {
+      await act(async () => { context.mock.timers.tick(3_000); });
+      await act(async () => { await Promise.resolve(); });
+    }
     // The estimate is empty, but both cards still carry their sizes from the
     // cached defaults — so the sentence must admit that sizes remain visible.
-    const text = renderer!.root.findAllByType("strong").map((node) => node.children.join("")).join("|");
-    assert.ok(text.includes("—"), `the estimate should read as unavailable, got ${text}`);
-    assert.ok(renderer!.root.root.findAllByType("button").some((node) => node.children.join("").includes("1.0 KiB")), "the scope cards keep their sizes");
-    assert.equal(renderer!.root.findByProps({ role: "alert" }).children.join(""), "该项目或会话已不存在；上方为删除前的大小，已不能导出。");
+    const strongs = renderer!.root.findAllByType("strong").map((node) => node.children.join("")).join("|");
+    assert.ok(strongs.includes("—"), `the estimate should read as unavailable, got ${strongs}`);
+    const rendered = renderer!.root.findAll((item) => typeof item.type === "string")
+      .map((item) => item.children.filter((child) => typeof child === "string").join("")).join("|");
+    assert.ok(rendered.includes("1.0 KiB") && rendered.includes("2.0 KiB"), `the scope cards keep their sizes: ${rendered}`);
+    assert.equal(alertText(), "该项目或会话已不存在；上方为删除前的大小，已不能导出。");
   } finally {
     if (renderer) await act(async () => renderer!.unmount());
     globalThis.document = previousDocument;
