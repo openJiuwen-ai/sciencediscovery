@@ -178,6 +178,14 @@ const INVALID_TOOLS = `${INVALID_ARGUMENTS_MARKER} ${NOT_EXECUTED}`;
 const RECOVERY_PROMPT = /^\[(?:Output limit|Tool argument) recovery ([12])\/2;/;
 /** How many times the boundary asks the model to re-issue a withheld response. */
 const MAX_RECOVERY_ATTEMPTS = 2;
+/**
+ * A provider can close an otherwise healthy SSE response after emitting only
+ * hidden reasoning.  Replay the complete model turn a small, fixed number of
+ * times.  This is deliberately separate from the HTTP pre-stream retry
+ * budget: a mid-stream replay is safe only before any text or tool call has
+ * been exposed to Swarm, and must never turn a tool round into a duplicate.
+ */
+const MAX_STREAM_RETRIES = 2;
 const finishReason = (turn: ModelTurn) => turn.truncated ? "length" : turn.toolCalls.length ? "tool_calls" : "stop";
 /** Which recovery attempt a request is, from the feedback Swarm's recovery boundary appended last. */
 const recoveryAttemptOf = (body: ChatRequest) => {
@@ -486,11 +494,12 @@ export async function startModelGateway(
           // safe to replay that model turn because no visible answer or tool
           // call has been committed. Never replay a turn that may have exposed
           // text or started a tool, and never retry auxiliary housekeeping.
-          if (attempt !== 0 || auxiliary || classification !== "network" || state.text || state.tool) throw error;
+          if (attempt >= MAX_STREAM_RETRIES || auxiliary || !["network", "timeout"].includes(classification) || state.text || state.tool) throw error;
           streamRetryErrors.push(classification);
-          console.warn(`[model-gateway] retrying an interrupted reasoning-only model stream request=${id}`);
+          const delayMs = 250 * 2 ** attempt;
+          console.warn(`[model-gateway] retrying an interrupted reasoning-only model stream request=${id} attempt=${attempt + 1}/${MAX_STREAM_RETRIES} delayMs=${delayMs}`);
           await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, 250);
+            const timer = setTimeout(resolve, delayMs);
             controller.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
           });
         }

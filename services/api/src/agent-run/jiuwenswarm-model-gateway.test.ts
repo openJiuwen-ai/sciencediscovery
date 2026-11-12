@@ -1044,6 +1044,59 @@ test("gateway retries one reasoning-only network interruption without replaying 
   } finally { await g.close(); }
 });
 
+test("gateway replays a reasoning-only turn through two transient stream breaks", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onThinkingDelta?.("partial reasoning");
+    if (calls < 3) throw new Error("terminated");
+    callbacks?.onWireDiagnostics?.({ ...EMPTY_WIRE, hasReasoning: true, retryErrors: [], retries: 0 });
+    callbacks?.onTextDelta?.("recovered after two breaks");
+    return answer();
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(calls, 3);
+    assert.equal((body.match(/partial reasoning/g) ?? []).length, 1, "hidden reasoning is never replayed downstream");
+    assert.match(body, /recovered after two breaks/);
+    assert.match(body, /\[DONE\]/);
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network", "network"]);
+    assert.equal(record.retries, 2);
+  } finally { await g.close(); }
+});
+
+test("gateway stops replaying after the bounded stream retry budget", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onThinkingDelta?.("partial reasoning");
+    throw new Error("terminated");
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: false, messages: [] });
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /terminated/);
+    assert.equal(calls, 3, "two retries plus the initial request");
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network", "network"]);
+    assert.equal(record.retries, 2);
+    assert.deepEqual(record.error, { classification: "network" });
+  } finally { await g.close(); }
+});
+
 test("gateway does not replay a non-streaming turn after visible output", async () => {
   let calls = 0;
   const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {

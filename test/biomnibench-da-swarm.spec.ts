@@ -15,7 +15,7 @@ import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { mainRunChain } from "./helpers/run-chain.ts";
 import { loadAnalysisPrompt, cases, manifest, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
-import { generationTokens, judgeTokens, machineIdentity, MEASUREMENT_VERSION, settled, startMemorySampler, toolMetrics } from "./benchmarks/biomnibench-da/metrics.mjs";
+import { allowsUnknownJudgeUsage, generationTokens, judgeTokens, machineIdentity, MEASUREMENT_VERSION, settled, startMemorySampler, toolMetrics } from "./benchmarks/biomnibench-da/metrics.mjs";
 import { manifestHash, validateMetrics } from "../.ci/biomni-gate.mjs";
 import { biomniCase } from "./support/tagged/execution.mjs";
 import { validatePlan } from "./support/tagged/plan.mjs";
@@ -169,7 +169,7 @@ for (const sample of cases) {
           await writeFile(testInfo.outputPath(name), artifact.text);
         }
       });
-      await journey.step("Score and validate the evidence", "Require a valid original-rubric score and complete generator/judge usage before publishing metrics.", async () => {
+      await journey.step("Score and validate the evidence", "Require a valid original-rubric score and usable usage; flag unknown spend from failed Judge transport attempts.", async () => {
         const judgeStart = performance.now();
         metrics.evaluation = { status: "running", gating: true };
         await execute(python, [join(scripts, "judge.py"), "--case", sample.id, "--rubric", join(task, "tests/rubric.txt"),
@@ -178,11 +178,14 @@ for (const sample of cases) {
         metrics.evaluation = { ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8")), gating: true };
         const tokens = judgeTokens(JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.attempts", "attempts.json"), "utf8")));
         metrics.judge_usage = { complete: tokens.complete, unknown_attempts: tokens.unknown_attempts,
-          reported_attempts: tokens.reported_attempts, scope: "all-evaluation-attempts" };
+          reported_attempts: tokens.reported_attempts, transport_unknown_attempts: tokens.transport_unknown_attempts,
+          blocking_unknown_attempts: tokens.blocking_unknown_attempts, scope: "all-evaluation-attempts" };
         Object.assign(metrics.measurements, { score: metrics.evaluation.score, judge_ms: performance.now() - judgeStart,
           judge_tokens: tokens.total, judge_input_tokens: tokens.input, judge_output_tokens: tokens.output,
-          total_tokens: metrics.measurements.generation_tokens + tokens.total });
-        if (!tokens.complete) throw new Error("UNREPORTED_JUDGE_TOKENS");
+          total_tokens: metrics.measurements.generation_tokens + tokens.total,
+          reported_total_tokens: metrics.measurements.generation_tokens + tokens.total,
+          total_tokens_basis: tokens.complete ? "complete" : "known-lower-bound" });
+        if (!tokens.complete && !allowsUnknownJudgeUsage(metrics.judge_usage)) throw new Error("UNREPORTED_JUDGE_TOKENS");
         // Optional non-gating local clarified rubric (#346). Failures here must not sink the official gate.
         try {
           const localRegistry = JSON.parse(await readFile(join(scripts, "local-rubrics.json"), "utf8"));

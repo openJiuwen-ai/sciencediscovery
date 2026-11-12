@@ -12,6 +12,7 @@ import time
 import hashlib
 from rubrics import require_official
 from local_scoring import grade_local
+from judge_usage import allows_unknown_judge_usage, usage_summary
 
 
 def completed_evidence(evidence_dir):
@@ -27,21 +28,6 @@ def completed_evidence(evidence_dir):
                         for name in ('trace.md', 'answer.txt')))
     except (OSError, ValueError, TypeError):
         return False
-
-
-def usage_summary(attempts):
-    totals = dict(input=0, output=0, total=0, reported_attempts=0, unknown_attempts=0)
-    for attempt in attempts:
-        usage = attempt.get('usage') or {}
-        values = [usage.get(k) for k in ('prompt_tokens', 'completion_tokens', 'total_tokens')]
-        if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in values):
-            totals['unknown_attempts'] += 1
-            continue
-        for key, value in zip(('input', 'output', 'total'), values):
-            totals[key] += value
-        totals['reported_attempts'] += 1
-    totals['complete'] = bool(attempts) and totals['unknown_attempts'] == 0
-    return totals
 
 
 def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluations=()):
@@ -64,13 +50,20 @@ def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluatio
     score = json.loads((output / 'quality-scorecard.json').read_text())
     attempts = json.loads((output / 'quality-scorecard.attempts/attempts.json').read_text())
     usage = usage_summary(attempts)
-    original = evidence_dir / 'quality-scorecard.attempts/attempts.json'
-    prior = [usage_summary(json.loads(original.read_text())) if original.exists() else usage_summary([])]
-    for directory in prior_evaluations:
-        path = Path(directory) / 'quality-scorecard.attempts/attempts.json'
+    prior = []
+    # Each on-disk attempt ledger counts once, even if supplied twice by a caller.
+    directories = dict.fromkeys([evidence_dir, *(Path(p).resolve() for p in prior_evaluations)])
+    for directory in directories:
+        if directory == output:
+            continue  # Current usage is already counted separately below.
+        path = directory / 'quality-scorecard.attempts/attempts.json'
         prior.append(usage_summary(json.loads(path.read_text())) if path.exists() else usage_summary([]))
-    previous = {key: sum(p[key] for p in prior) for key in ('input', 'output', 'total', 'reported_attempts', 'unknown_attempts')}
+    usage_keys = ('input', 'output', 'total', 'reported_attempts', 'unknown_attempts',
+                  'transport_unknown_attempts', 'blocking_unknown_attempts')
+    previous = {key: sum(p[key] for p in prior) for key in usage_keys}
     previous['complete'] = all(p['complete'] for p in prior)
+    combined = {key: usage[key] + previous[key] for key in usage_keys}
+    combined['complete'] = usage['complete'] and previous['complete']
     if score.get('status') != 'scored' or not isinstance(score.get('score'), (int, float)) or isinstance(score['score'], bool) or not 0 <= score['score'] <= 100:
         raise ValueError('Judge did not return a valid scored result')
     report = {'case_id': metrics['case_id'], 'integration_status': 'passed',
@@ -79,16 +72,17 @@ def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluatio
               'mode': 'evaluation-only', 'full_e2e_rerun': False,
               'artifact_sha256': {name: hashlib.sha256((evidence_dir / name).read_bytes()).hexdigest()
                                   for name in ('trace.md', 'answer.txt')},
-              'all_evaluations_usage_complete': usage['complete'] and previous is not None and previous['complete']}
+              'all_evaluations_usage_complete': combined['complete']}
+    report['all_evaluations_usage'] = combined
     recovered = dict(metrics)
     recovered.pop('error', None)
     recovered['evaluation'] = dict(score, gating=True)
     recovered['measurements'] = dict(metrics['measurements'], score=score['score'], judge_ms=report['judge_ms'],
-        judge_tokens=usage['total'], judge_input_tokens=usage['input'], judge_output_tokens=usage['output'],
-        total_tokens=metrics['measurements']['generation_tokens'] + usage['total'])
-    recovered['judge_usage'] = dict(complete=report['all_evaluations_usage_complete'],
-        unknown_attempts=usage['unknown_attempts'] + (previous['unknown_attempts'] if previous else 1),
-        reported_attempts=usage['reported_attempts'], scope='final-evaluation-with-prior-accounting-check')
+        judge_tokens=combined['total'], judge_input_tokens=combined['input'], judge_output_tokens=combined['output'],
+        total_tokens=metrics['measurements']['generation_tokens'] + combined['total'],
+        reported_total_tokens=metrics['measurements']['generation_tokens'] + combined['total'],
+        total_tokens_basis='complete' if combined['complete'] else 'known-lower-bound')
+    recovered['judge_usage'] = dict(combined, scope='all-evaluation-attempts')
     local = grade_local(metrics['case_id'], evidence_dir / 'trace.md', evidence_dir / 'answer.txt',
                         output / 'quality-scorecard.local.json', python)
     if local:
@@ -114,8 +108,9 @@ def main():
                       'local_variant_score': report.get('local_evaluation', {}).get('score'),
                       'local_variant_status': report.get('local_evaluation', {}).get('status', 'unavailable'),
                       'local_rubric_version': report.get('local_evaluation', {}).get('rubric', {}).get('version'),
-                      'usage_complete': report['judge_usage']['complete'], 'full_e2e_rerun': False}))
-    return 0 if report['judge_usage']['complete'] else 1
+                      'usage_complete': report['all_evaluations_usage_complete'], 'full_e2e_rerun': False}))
+    usage = report['all_evaluations_usage']
+    return 0 if usage['complete'] or allows_unknown_judge_usage(usage) else 1
 
 
 if __name__ == '__main__':

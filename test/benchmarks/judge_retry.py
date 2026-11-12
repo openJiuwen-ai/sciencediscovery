@@ -3,6 +3,8 @@
 """Bounded retries for one-shot quality judges; never select the highest score."""
 import copy
 import json
+import errno
+import http.client
 import time
 import urllib.error
 from pathlib import Path
@@ -42,8 +44,9 @@ def judge_with_retries(body, request, validate, output, *, sleep=time.sleep, max
         try:
             raw = request(copy.deepcopy(body))
             write_json(output / f"response-{attempt:02}.json", raw)
+            entry['usage'] = raw.get('usage')
             choice = raw["choices"][0]
-            entry.update(finish_reason=choice.get("finish_reason"), usage=raw.get("usage"))
+            entry['finish_reason'] = choice.get('finish_reason')
             if choice.get("finish_reason") != "stop":
                 raise ValueError(f"Judge response incomplete: finish_reason={choice.get('finish_reason')}")
             result = validate(choice["message"].get("content") or "")
@@ -52,10 +55,20 @@ def judge_with_retries(body, request, validate, output, *, sleep=time.sleep, max
                                           "attempt": attempt, "records": str(output)})
             entry["status"] = "scored"
         except urllib.error.HTTPError as error:
-            entry.update(status="error", error_type="HTTPError", error=f"HTTP {error.code}")
+            entry.update(status="error", error_type="HTTPError", error=f"HTTP {error.code}", http_status=error.code)
             retryable = error.code in (408, 429) or 500 <= error.code < 600
+            if error.code == 408 or 500 <= error.code < 600:
+                entry['failure_kind'] = 'provider_http'
+        except (TimeoutError, ConnectionError, urllib.error.URLError, http.client.IncompleteRead,
+                http.client.RemoteDisconnected) as error:
+            entry.update(status="error", error_type=type(error).__name__, error=str(error),
+                         failure_kind='timeout' if isinstance(error, TimeoutError) else 'network')
         except (ValueError, KeyError, TypeError, IndexError, AttributeError, OSError) as error:
             entry.update(status="error", error_type=type(error).__name__, error=str(error))
+            if isinstance(error, OSError) and error.errno in (
+                    errno.ECONNRESET, errno.ECONNABORTED, errno.ECONNREFUSED, errno.EPIPE,
+                    errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ETIMEDOUT):
+                entry['failure_kind'] = 'network'
         entry["seconds"] = time.monotonic() - started
         attempts.append(entry)
         write_json(output / "attempts.json", attempts)
