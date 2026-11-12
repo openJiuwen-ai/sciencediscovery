@@ -331,13 +331,23 @@ test("truncated history and unknown events are counted, not swallowed", () => {
   assert.equal(state.unknownEvents, 1);
 });
 
-test("deferred event types do not count as unknown", () => {
+test("a deferred event type does not count as unknown", () => {
   // Artifacts and the session title are a phase-two surface, not a surprise:
   // counting them would make the "N events this build cannot draw" note
   // permanently wrong.
   const state = fold([
     { type: "artifact.upserted" } as RunStreamEvent,
     { type: "session.updated" } as RunStreamEvent,
+  ]);
+  assert.equal(state.unknownEvents, 0);
+});
+
+test("a persisted model.usage record is not an event this build cannot draw", () => {
+  // #1109 writes one record per model turn into the main stream so a run's
+  // spend can be recomputed from it. The transcript shows tokens through the
+  // turn summary, so a replay must not report the record as unrenderable.
+  const state = fold([
+    { turn: 1, type: "model.usage", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } } as RunStreamEvent,
   ]);
   assert.equal(state.unknownEvents, 0);
 });
