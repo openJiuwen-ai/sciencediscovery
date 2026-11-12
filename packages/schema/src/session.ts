@@ -489,6 +489,22 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
   /** Evidence with no chat equivalent. Bodies remain in immutable CAS objects. */
   | { type: "agent.record"; name: "context.captured" | "state.committed" | "model.completed" | "context_recovery";
       payloadRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string } }
+  /**
+   * One model turn's provider-reported usage, persisted as it arrives.
+   *
+   * The run's usage ledger holds one row per invocation with the invocation's
+   * totals (#1109); without this record a reviewer could not recompute that row
+   * from the record directory, and this channel used to be consumed and dropped
+   * before it was ever written.
+   */
+  | { type: "model.usage"; turn: number; usage: {
+      cacheReadTokens?: number | null;
+      cacheWriteTokens?: number | null;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens?: number | null;
+      totalTokens: number;
+    } }
   | { model: ModelRunInfo; runId: string; settings: EffectiveRuntimeSettings; type: "run.started" }
   | { session: Session; type: "session.updated" }
   /**

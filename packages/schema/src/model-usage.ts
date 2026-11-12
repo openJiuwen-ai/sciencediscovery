@@ -187,6 +187,12 @@ export interface ModelInvocationUsage {
   sessionId: string;
   startedAt: string;
   totalTokens: number | null;
+  /**
+   * How many model turns this row's token figures sum. Present on rows written
+   * after #1109, where one row per invocation carries the invocation's total
+   * instead of one turn's figure; absent on older rows, which describe one turn.
+   */
+  turnsRecorded?: number;
   usageStatus: ModelUsageStatus;
 }
 
