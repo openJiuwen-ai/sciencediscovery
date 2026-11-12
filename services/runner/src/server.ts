@@ -1192,6 +1192,18 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   );
   const capability = await readiness.get();
   if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
+  // A dead managed Shell is not "unavailable" for the Python channel, so the
+  // check above cannot fire on that branch — the gap the 10-hour capture in
+  // #1108 produced no startup complaint from. Say it once, with the repair text.
+  if (capability.shell?.available === false) {
+    logger.warn("managed_shell_unavailable", {
+      runnerInstanceId: capability.instanceId,
+      sandbox: capability.sandbox,
+      readyFor: capability.readyFor,
+      reason: capability.shell.unavailableReason ?? "The managed Shell environment is unavailable",
+    });
+    console.warn(`Managed Shell unavailable on this Runner: Shell routes will be refused until the starter environment is repaired. Python execution is unaffected. ${capability.shell.unavailableReason ?? ""}`.trim());
+  }
   // The operational log is a file. A missing execution dependency is a setup
   // step the operator must take, so it also goes to the starting terminal.
   if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);

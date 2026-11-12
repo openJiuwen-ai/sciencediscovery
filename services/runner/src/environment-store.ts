@@ -56,6 +56,8 @@ const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
 const MANAGED_SHELL_UTILITIES = ["cat", "grep", "head", "sed", "tail", "wc"] as const;
+/** Longest provisioning transcript kept in a capability payload (#1108 criterion 8). */
+const MANAGED_SHELL_REASON_LIMIT = 1200;
 // [windows-desktop] starter specs are platform-dispatched (win32 uses
 // matplotlib-base, see platform/win32.ts ). POSIX list unchanged.
 
@@ -441,9 +443,16 @@ export class EnvironmentStore {
   }
 
   async shellCapability(): Promise<{ available: boolean; name: "bash"; utilities: string[]; unavailableReason?: string }> {
+    // A provisioning failure can carry a whole libmamba transcript. It reaches
+    // the model through `check_runner`, whose result is repeated in the stream,
+    // the step records and the parent's history; one bounded copy is enough to
+    // act on (#1108 criterion 8).
+    const bounded = (reason: string) => (reason.length <= MANAGED_SHELL_REASON_LIMIT
+      ? reason
+      : `${reason.slice(0, MANAGED_SHELL_REASON_LIMIT)}… (transcript truncated; see the Runner log for the rest)`);
     if (!this.capability.available) {
       return { available: false, name: "bash", utilities: [],
-        unavailableReason: this.capability.unavailableReason ?? "The managed shell environment is unavailable" };
+        unavailableReason: bounded(this.capability.unavailableReason ?? "The managed shell environment is unavailable") };
     }
     const runtime = this.resolveRuntime(undefined, "python");
     try {
@@ -461,7 +470,7 @@ export class EnvironmentStore {
         : { available: true, name: "bash", utilities };
     } catch (error) {
       return { available: false, name: "bash", utilities: [],
-        unavailableReason: `Managed Bash is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+        unavailableReason: bounded(`Managed Bash is unavailable: ${error instanceof Error ? error.message : String(error)}`) };
     }
   }
 
