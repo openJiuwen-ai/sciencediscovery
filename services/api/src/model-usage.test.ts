@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 
 
 import { normalizeUsage } from "@sciencediscovery/model";
+import { addCapturedModelUsage, unreportedModelUsage } from "./model-usage/index.js";
 import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 
 import {
@@ -446,4 +447,22 @@ test("USG-017 analytics CSV export is stable and escapes spreadsheet formulas", 
   assert.match(csv, /"'\+unsafe"/);
   assert.match(csv, /"'=cmd"/);
   assert.match(csv, /"0.42 \/ 3.1","USD \/ CNY","5.9098","CNY","USD\/CNY 6.69","Frankfurter","2026-09-01T00:00:00.000Z"/);
+});
+
+test("a run row sums its turns and says how many it summed", () => {
+  const first = { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 100, outputTokens: 20, reasoningTokens: null, totalTokens: 120, usageStatus: "reported" as const };
+  const second = { cacheReadTokens: 5, cacheWriteTokens: null, inputTokens: 300, outputTokens: 40, reasoningTokens: 7, totalTokens: 340, usageStatus: "reported" as const };
+  const total = addCapturedModelUsage(addCapturedModelUsage(unreportedModelUsage(), first), second);
+  // One row per invocation carries the invocation's total, so its token figures
+  // describe the same window as its startedAt/finishedAt (#1109).
+  assert.equal(total.inputTokens, 400);
+  assert.equal(total.outputTokens, 60);
+  assert.equal(total.totalTokens, 460);
+  assert.equal(total.usageStatus, "reported");
+  // A turn that reported nothing is not a zero-cost turn.
+  const unreported = unreportedModelUsage();
+  assert.deepEqual(addCapturedModelUsage({ ...first }, unreported), first);
+  // A run whose turns never reported stays unknown rather than becoming zeros.
+  assert.equal(addCapturedModelUsage(unreported, unreported).inputTokens, null);
+  assert.equal(addCapturedModelUsage(unreported, unreported).usageStatus, "provider-not-reported");
 });

@@ -248,7 +248,9 @@ import {
   searchWorkbench,
 } from "../workbench/index.js";
 import {
+  appendDelegatedModelUsage,
   appendModelUsageForManifest,
+  addCapturedModelUsage,
   capturedModelUsage,
   unreportedModelUsage,
 } from "../model-usage/index.js";
@@ -1085,6 +1087,8 @@ async function executeAgentRun(
   const taskInvocationId = randomUUID();
   let taskInvocationAttempted = false;
   let lastAgentUsage = unreportedModelUsage();
+  // Model turns whose figures the run row sums; the engine reports usage per turn.
+  let modelTurnsRecorded = 0;
   let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
   const plansByAgent = new Map<string, PlanSnapshot>();
@@ -2133,6 +2137,23 @@ async function executeAgentRun(
             finalizeMessageStep();
             void emit({ subagentId: subagent.id, type: "subagent.usage", usage: event.usage });
             scheduleProgressFlush();
+            // Delegated spend is spend of this run, so it gets its own ledger row
+            // instead of vanishing (#1109). `delegation-track` was declared for
+            // exactly this and had no writer; the child's own window and turn
+            // count keep the row's scope and its figures in agreement.
+            const subagentTurns = Math.max(1, subagent.turnCount - startingTurn);
+            if (promptManifest) void appendDelegatedModelUsage(store, {
+              invocationId: `subagent:${subagent.id}`,
+              parentRunId: runId,
+              promptManifest,
+              sessionId,
+              startedAt: subagent.createdAt,
+              finishedAt: new Date().toISOString(),
+              turnsRecorded: subagentTurns,
+              usage: capturedModelUsage({ usage: event.usage, usageReported: true }),
+            }).catch((error: unknown) => {
+              runLog.warn("subagent_usage_persist_failed", { errorMessage: shortErrorMessage(error), subagentId: subagent.id });
+            });
           }
         };
         const subagentExecutionPrompt = formatSubagentExecutionPrompt(subagent.input, handoff);
@@ -2416,7 +2437,13 @@ async function executeAgentRun(
     const active = activeSessions.get(sessionId);
     if (active) active.lastActivityAt = new Date().toISOString();
     if (event.type === "model_usage") {
-      lastAgentUsage = capturedModelUsage(event);
+      // One row per invocation now carries the invocation's totals (#1109), so
+      // the per-turn figures are added to that total *and* persisted: without
+      // them a stored figure could not be recomputed from the record directory.
+      const captured = capturedModelUsage(event);
+      lastAgentUsage = addCapturedModelUsage(lastAgentUsage, captured);
+      if (captured.usageStatus === "reported") modelTurnsRecorded += 1;
+      void publish({ type: "model.usage", turn: turnNumber, usage: event.usage! });
       return;
     }
     if (event.type === "turn_start") {
@@ -2625,6 +2652,7 @@ async function executeAgentRun(
       manifest: promptManifest,
       outcome: "completed",
       runId,
+      turnsRecorded: modelTurnsRecorded,
       usage: taskUsage,
     });
     const message = await store.appendMessage(
@@ -2687,6 +2715,7 @@ async function executeAgentRun(
             manifest: promptManifest,
             outcome: "cancelled",
             runId,
+            turnsRecorded: modelTurnsRecorded,
             usage: lastAgentUsage,
           });
         } catch {
@@ -2734,6 +2763,7 @@ async function executeAgentRun(
           manifest: promptManifest,
           outcome: "failed",
           runId,
+          turnsRecorded: modelTurnsRecorded,
           usage: lastAgentUsage,
         });
       } catch {
