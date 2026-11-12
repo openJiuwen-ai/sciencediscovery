@@ -613,7 +613,7 @@ test("the node drawer shows the score, the parent and one way to expand the diff
   assert.equal(html.includes("aria-modal"), false);
 });
 
-test("the create dialog offers the two searches as illustrated cards", () => {
+test("the create dialog collects the task, the search and the pace on one form", () => {
   const status: EvolveStatus = { canInitialize: true, state: "ready" };
   const html = renderToStaticMarkup(
     <EvolveCreateDialog
@@ -630,20 +630,49 @@ test("the create dialog offers the two searches as illustrated cards", () => {
   assert.match(html, /选择搜索算法/);
   assert.match(html, /PUCT算法/);
   assert.match(html, /OpenEvolve算法/);
-  // Each card states what the search is good at and how it moves.
+  // Each search is one chip; its description is the illustrated card that
+  // floats under the row, so the form stays short and the reading is on demand.
+  assert.equal((html.match(/class="evolve-algorithm-chip/g) ?? []).length, 2);
+  assert.equal((html.match(/evolve-algorithm-art is-/g) ?? []).length, 2);
+  // Neither card is laid out until a pointer or the keyboard asks for one;
+  // both stay in the DOM so `aria-describedby` resolves for both chips.
+  assert.equal((html.match(/class="evolve-algorithm-detail/g) ?? []).length, 2);
+  assert.equal(html.includes("evolve-algorithm-detail is-open"), false);
+  assert.match(html, /id="evolve-algorithm-detail-puct"/);
   assert.match(html, /逐步改进/);
   assert.match(html, /搜索空间窄/);
   assert.match(html, /基于PUCT策略，优先扩展高潜力节点/);
   assert.match(html, /搜索空间宽/);
   assert.match(html, /避免过早收敛/);
   assert.match(html, /MAP-Elites网格保留多样化优质候选/);
-  // The illustration is part of the choice, not decoration a screen reader
-  // has to describe.
-  assert.equal((html.match(/class="evolve-algorithm-art is-/g) ?? []).length, 2);
-  // The goal is written in the composer after the token now; the dialog does
-  // not ask for it a second time.
-  assert.equal(html.includes("<textarea"), false);
+  // The task is asked here, and it is required: the design conversation has
+  // nothing to start from without it.
+  assert.match(html, /任务描述/);
+  const taskField = html.match(/<textarea[^>]*>/)?.[0] ?? "";
+  assert.match(taskField, /class="evolve-create-task-input"/);
+  assert.match(taskField, /required=""/);
+  assert.match(html, /自定义演进参数/);
+  // The starting values and the editable set stay folded away until asked for.
+  assert.match(html, /class="evolve-create-direction" hidden=""/);
   assert.match(html, /开始设计/);
+});
+
+test("the create dialog starts from the task the composer already held", () => {
+  const html = renderToStaticMarkup(
+    <EvolveCreateDialog
+      archived={false}
+      initialGoal="让压缩比更高且完全无损"
+      initializing={false}
+      onClose={() => {}}
+      onInitialize={() => {}}
+      onSend={() => {}}
+      running={false}
+      status={{ canInitialize: true, state: "ready" }}
+    />,
+  );
+  // A sentence typed before the surface opened is carried in, not asked for
+  // twice.
+  assert.match(html, /<textarea[^>]*>让压缩比更高且完全无损<\/textarea>/);
 });
 
 test("the create dialog pauses at checkpoints unless the command said otherwise", () => {
@@ -699,38 +728,49 @@ test("the create dialog opens on the search the command named", () => {
 });
 
 test("the generate action names the real reason it is unavailable", () => {
-  // `submission.onGenerate` reaches the input only while the session has a
-  // loaded detail — App.tsx derives it from `state.detail` — so its absence
-  // means "no session yet", not "no task typed". The old hint claimed the
-  // latter and sent the reporter to retype a task that could not unlock the
-  // button; the disabled row also looked exactly like the enabled one (#1091).
+  // `onGenerateDirection` reaches the input only while the dialog has both a
+  // session detail to draft from and a task typed in the field — App.tsx
+  // derives it from `state.detail` and the dialog gates it on the goal — so
+  // its absence is not something retyping the task can fix. The hint names
+  // what the user can still do instead: upload a file or add parameters.
   const status: EvolveStatus = { canInitialize: true, state: "ready" };
-  const render = (onGenerate?: (signal: AbortSignal) => Promise<{ baseline: string; editable: string[] }>) => renderToStaticMarkup(
+  const render = (
+    onGenerateDirection?: (task: string, signal: AbortSignal) => Promise<{ baseline: string; editable: string[] }>,
+    goal = "",
+  ) => renderToStaticMarkup(
     <EvolveCreateDialog
       archived={false}
+      initialGoal={goal}
       initializing={false}
       onClose={() => {}}
+      onGenerateDirection={onGenerateDirection}
       onInitialize={() => {}}
       onSend={() => {}}
       running={false}
       status={status}
-      submission={{ allowDirect: false, onGenerate }}
     />,
   );
-  const button = /<button[^>]*>生成起始字段<\/button>/;
-  const disabled = (html: string) => /<button[^>]*disabled=""[^>]*>生成起始字段<\/button>/.test(html);
+  const button = /<button[^>]*>生成起始参数<\/button>/;
+  const disabled = (html: string) => /<button[^>]*disabled=""[^>]*>生成起始参数<\/button>/.test(html);
 
   const withoutSession = render();
   // Still offered, but now visibly unavailable and explained.
   assert.match(withoutSession, button);
   assert.equal(disabled(withoutSession), true);
-  assert.match(withoutSession, /会话尚未就绪/);
+  assert.match(withoutSession, /无法自动生成/);
   assert.equal(withoutSession.includes("先在会话输入框写下任务"), false);
 
-  const ready = render(async () => ({ baseline: "{}", editable: [] }));
+  // With a session detail but no task there is nothing to draft from either,
+  // so the button stays gated until the task field has something in it.
+  const withoutTask = render(async () => ({ baseline: "{}", editable: [] }));
+  assert.match(withoutTask, button);
+  assert.equal(disabled(withoutTask), true);
+  assert.match(withoutTask, /无法自动生成/);
+
+  const ready = render(async () => ({ baseline: "{}", editable: [] }), "压缩并解压文本，往返完全无损");
   assert.match(ready, button);
   assert.equal(disabled(ready), false);
-  assert.equal(ready.includes("会话尚未就绪"), false);
+  assert.equal(ready.includes("无法自动生成"), false);
 });
 
 test("a host with no sandbox warns that candidates run unconfined", () => {
@@ -758,8 +798,9 @@ test("a host with no sandbox warns that candidates run unconfined", () => {
   // The warning sits above the search cards, where a title-adjacent banner is
   // read before anything is chosen.
   assert.equal(direct.indexOf("evolve-create-notice") < direct.indexOf("选择搜索算法"), true);
-  // No control carries the consent: the only switch left is the checkpoint one.
-  assert.equal((direct.match(/role="switch"/g) ?? []).length, 1);
+  // No control carries the consent: the switches on the form are the pace and
+  // the parameter scope, and neither can grant it.
+  assert.equal((direct.match(/role="switch"/g) ?? []).length, 2);
 
   // Before the runtime is ready it has not said which isolation it will use,
   // so the dialog states the risk instead of promising one.

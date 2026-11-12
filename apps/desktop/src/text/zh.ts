@@ -1350,6 +1350,17 @@ export const ZH = {
       confirmLabel: "检查点需要人工确认",
       confirmHint: "每个检查点会停下来等你确认后再继续",
       autoHint: "关闭后，助手会连续完成设计与启动；检查点仍会在对话中说明，但不再等待确认。",
+      /* The task the design conversation starts from. It lives here as well as
+         in the composer: the dialog is opened with a sentence already written,
+         and the composer is where it can still be edited before sending. */
+      taskLabel: "任务描述",
+      taskPlaceholder: "待演进的任务详情，包含约束和评估标准，例如：写一对处理文本的压缩和解压代码，往返必须完全无损。分数是压缩后小了多少。",
+      /* The name says what turning it on does — limit what the search may
+         change — and the hint carries the other half: the starting values.
+         “自定义 JSON” named the file format, which is an implementation detail
+         nobody should have to decode before deciding. */
+      parametersLabel: "自定义演进参数",
+      parametersHint: "为参数设定起始值。勾选的参数会由演进自动尝试不同取值；未勾选的始终使用起始值。",
       /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
          横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
          命令发出（`--allow-direct`），不成为会被忘记的设置。 */

@@ -217,18 +217,45 @@
 
 .evolve-create-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 16px;
-  padding: 8px 24px 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The fields are what scroll; the footer is outside this box. A short window
+   used to put 开始设计 below the fold, which made the form's one action the
+   last thing a reader could find. */
+.evolve-create-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 24px;
   overflow-y: auto;
 }
 
+/* The soft edge says the fields continue under the pinned actions. It is
+   drawn only while the scroll is not at its end, so the form's last line
+   never reads as faded. */
+.evolve-create-scroll.is-overflowing {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
+.evolve-create-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0 16px;
+}
+
 .evolve-create-body .modal-footer {
+  flex: 0 0 auto;
   gap: 8px;
-  margin: 0 -24px;
-  padding: 1px 24px 24px;
+  margin: 0;
+  padding: 12px 24px 24px;
   border-top: 0;
-  background: transparent;
+  /* Opaque: the fields scroll up to this edge, and a transparent footer let a
+     half-visible row read as a button colliding with the actions. */
+  background: var(--surface);
 }
 
 /* Amber, because it is an error: the runtime cannot run this search. It is
@@ -310,7 +337,7 @@
   font-weight: 600;
 }
 
-/* ── the algorithm cards ── */
+/* ── the search choice ── */
 
 .evolve-create-algorithms {
   display: flex;
@@ -321,7 +348,7 @@
 }
 
 /* The legend is not a flex item of the fieldset, so the gap above does not
-   reach it: it carries its own distance to the cards. */
+   reach it: it carries its own distance to the chips. */
 .evolve-create-algorithms legend {
   margin-bottom: 8px;
   padding: 0;
@@ -331,56 +358,127 @@
   line-height: 22px;
 }
 
-.evolve-create-algorithms > div {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-/* The card is the radio: the illustration and every line inside it are one
-   target, so a click anywhere means "this search". */
-.evolve-algorithm-choice {
-  position: relative;
+/* The row of chips and the card each one raises on hover or keyboard focus. */
+.evolve-algorithm-picker {
   display: flex;
   flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid #dbdbdb;
-  border-radius: 14px;
+}
+
+/* The two choices share the row edge to edge, starting on the legend's left
+   edge like every other control in the form. Equal halves with one measured
+   gap: the choice spans the form without either button reading as the larger
+   target. */
+.evolve-algorithm-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+/* One chip and the card that belongs to it. The two share this box, so the
+   card opens under the button that raised it rather than under the middle of
+   the row. Both boxes divide the row evenly and shrink with it. */
+.evolve-algorithm-option {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The chip is the radio: one line, one decision, its name centered. The card
+   that explains the search is one hover or Tab away. The height is a floor
+   rather than a fixed 36px: a very narrow dialog may wrap a long name, and
+   clipping it would hide which search the button offers. */
+.evolve-algorithm-chip {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
   background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 20px;
+  transition: border-color .12s ease, background-color .12s ease, color .12s ease;
+}
+
+/* The pointer previews the other search's card, so the chip it is reading
+   follows the pointer: without the tint the card under the row could be
+   mistaken for the checked search's. */
+.evolve-algorithm-chip:hover {
+  border-color: #bdbdbd;
+  background: var(--surface-soft);
   color: var(--text-strong);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color .12s ease;
 }
 
-.evolve-algorithm-choice:hover { border-color: #bdbdbd; }
-
-/* The selected outline is 1.5px in the design, not 2: a one-pixel border plus
-   a half-pixel ring. The ring can only be a box-shadow — Chrome truncates a
-   fractional border-width and an outline to a whole pixel — and it is drawn on
-   a pseudo-element so it paints over the illustration rather than under it.
-   Its radius is the border box's minus the border, so the two curves share one
-   edge instead of doubling at the corners. */
-.evolve-algorithm-choice.is-checked {
+.evolve-algorithm-chip.is-checked {
   border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
 }
 
-.evolve-algorithm-choice.is-checked::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 13px;
-  box-shadow: inset 0 0 0 .5px var(--primary);
-  pointer-events: none;
-}
-
-.evolve-algorithm-choice:focus-visible {
+.evolve-algorithm-chip:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
+/* A dot that fills when the search is chosen: the only mark the chip needs,
+   and it keeps both searches the same size. */
+.evolve-algorithm-mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  transition: background-color .12s ease, box-shadow .12s ease;
+}
+
+.evolve-algorithm-chip.is-checked .evolve-algorithm-mark {
+  background: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-tint);
+}
+
+/* The card is the illustrated one the two-search layout used, raised under the
+   button that owns it on hover or keyboard focus. It floats: a description is
+   a reading, not a step, so it must not take a row and push the task and
+   settings down. Its left edge meets the button's, which keeps the first
+   card inside the dialog and still reads as attached to its own chip. Only
+   the open one is laid out; both stay in the DOM so `aria-describedby` always
+   resolves. */
+.evolve-algorithm-detail {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 10px);
+  left: 0;
+  display: none;
+  flex-direction: column;
+  /* The old card's width, capped by its button: in a narrow dialog the two
+     shrink together rather than one card hanging outside the panel. */
+  width: min(245px, 100%);
+  overflow: hidden;
+  border: 1px solid #dbdbdb;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+}
+
+.evolve-algorithm-detail.is-open {
+  display: flex;
+  animation: evolve-detail-in .14s ease;
+}
+
+@keyframes evolve-detail-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* The card's picture keeps the crop and the pale ground it had beside its
+   twin; both images are the same ratio, so both cards end at one height. */
 .evolve-algorithm-art {
   display: block;
   aspect-ratio: 239 / 119;
@@ -418,6 +516,7 @@
   gap: 8px;
 }
 
+/* The tag keeps the grey chip it wore inside the old card. */
 .evolve-algorithm-tag {
   padding: 0 4px;
   border-radius: 6px;
@@ -452,12 +551,54 @@
   color: var(--muted);
 }
 
+/* ── the task ── */
+
+.evolve-create-task {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evolve-create-task > span {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+/* Three lines is enough for a goal and short enough to keep the form on one
+   screen; the composer is still there for a longer sentence. */
+.evolve-create-task-input {
+  width: 100%;
+  min-height: 82px;
+  max-height: 140px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 21px;
+  resize: none;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+.evolve-create-task-input::placeholder { color: var(--muted-light); }
+
+.evolve-create-task-input:hover { border-color: #c2c2c2; }
+
+.evolve-create-task-input:focus-visible {
+  outline: 0;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-glow);
+}
+
 /* ── the pace ── */
 
 .evolve-create-settings {
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .evolve-create-settings h3,
@@ -468,6 +609,18 @@
   font-weight: 600;
   line-height: 22px;
 }
+
+.evolve-create-settings h3 { margin-bottom: 8px; }
+
+/* One switch and the sentence that explains it. The rows are separated more
+   than the label is from its hint, so two settings never read as one. */
+.evolve-create-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evolve-create-setting + .evolve-create-setting { margin-top: 14px; }
 
 .evolve-create-confirm {
   display: flex;
@@ -515,8 +668,11 @@
   outline-offset: 2px;
 }
 
+/* Indented past the switch so the hint lines up with the label it explains,
+   not with the control. 40px switch + the row's 8px gap. */
 .evolve-create-confirm-hint {
   margin: 0;
+  padding-left: 48px;
   color: #808080;
   font-size: 13px;
   line-height: 20px;
@@ -1642,10 +1798,9 @@
 @media (max-width: 760px) {
   .evolve-run-card { gap: 12px; }
 
-  .evolve-create-algorithms > div { grid-template-columns: 1fr; }
   .evolve-create .modal-header { padding-inline: 20px; }
-  .evolve-create-body { padding: 8px 20px 0; }
-  .evolve-create-body .modal-footer { margin-inline: -20px; padding-inline: 20px; }
+  .evolve-create-scroll { padding-inline: 20px; }
+  .evolve-create-body .modal-footer { padding-inline: 20px; }
   .evolve-runtime-body { padding-inline: 20px; }
   .evolve-unisolated-body { padding-inline: 20px; }
 
@@ -1656,6 +1811,9 @@
 @media (prefers-reduced-motion: reduce) {
   .evolve-dot.is-live { animation: none; }
   .evolve-budget-fill { transition: none; }
+  .evolve-algorithm-detail { animation: none; }
+  .evolve-algorithm-chip,
+  .evolve-algorithm-mark { transition: none; }
 }
 
 /* ── checkpoint cards ───────────────────────────────────────────────────────── */

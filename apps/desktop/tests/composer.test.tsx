@@ -379,10 +379,6 @@ test("sending a seeded design joins the token to the sentence once", async () =>
       <Composer
         attachments={[]}
         landing
-        evolveSetup={{
-          archived: false, initializing: false, onInitialize: () => {},
-          status: { canInitialize: false, sandbox: "bwrap", state: "ready" },
-        }}
         models={[{ id: "m1", name: "测试模型" } as never]}
         onApprovalMode={() => {}}
         onClearAttachments={() => {}}
@@ -410,23 +406,58 @@ test("sending a seeded design joins the token to the sentence once", async () =>
         target: { value: "让压缩比更高，并且要快" },
       });
     });
+    // The dialog keeps the last word on the flags, so sending from the composer
+    // carries the token as seeded — there is no second confirmation dialog.
     const send = view.root.findByProps({ "aria-label": "发送" });
     await act(async () => { (send.props.onClick as () => void)(); });
-    assert.equal(sent.length, 0);
-    const algorithm = view.root.findAllByType("button").find((node) => node.props.role === "radio" && node.props["aria-checked"] === false);
-    assert.ok(algorithm);
-    await act(async () => { algorithm.props.onClick(); });
-    const confirm = view.root.findAllByType("button").find((node) => node.children.includes("开始演进"));
-    assert.ok(confirm);
-    const form = view.root.findByType("form");
-    await act(async () => { form.props.onSubmit({ preventDefault() {} }); });
-    // The selected algorithm and the original sentence travel together once.
     assert.deepEqual(sent, [
-      { command: "/evolve-design --algorithm openevolve", content: "让压缩比更高，并且要快" },
+      { command: "/evolve-design --algorithm puct", content: "让压缩比更高，并且要快" },
     ]);
     // The token belonged to that message: the next draft starts empty.
     assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "");
     assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a seeded design carries the parameters the dialog collected", async () => {
+  // The starting values and the editable set are part of the same message as
+  // the flags: closing the dialog must not leave them behind.
+  const sent: { command?: string; content: string; direction?: unknown }[] = [];
+  const direction = { baseline: '{"ratio": 9}', editable: ["ratio"] };
+  let view;
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        landing
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={(content, command, carried) => { sent.push({ command, content, direction: carried }); }}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        seededCommand={{ command: "/evolve-design --algorithm puct", direction, nonce: 1, text: "让压缩比更高" }}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    );
+  });
+  try {
+    const send = view.root.findByProps({ "aria-label": "发送" });
+    await act(async () => { (send.props.onClick as () => void)(); });
+    assert.deepEqual(sent, [
+      { command: "/evolve-design --algorithm puct", content: "让压缩比更高", direction },
+    ]);
   } finally {
     await act(async () => { view.unmount(); });
   }

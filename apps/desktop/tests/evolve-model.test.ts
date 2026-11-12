@@ -25,6 +25,7 @@ import {
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
+  evolveDraftTask,
   isEvolveCommand,
   isEvolveSkill,
   latestEvolveCheckpointMode,
@@ -236,6 +237,18 @@ test("the command parses only as the first word", () => {
     evolveCommand("puct", "compress better"),
     "/evolve-design --algorithm puct compress better",
   );
+});
+
+test("a draft opens the dialog with the words already written", () => {
+  // A command contributes the sentence after its flags; the flags themselves
+  // are the dialog's own controls and are not re-asked as text.
+  assert.equal(evolveDraftTask("/evolve-design --algorithm openevolve faster"), "faster");
+  assert.equal(evolveDraftTask("/evolve-design"), undefined);
+  // A sentence typed before the surface opened is the task, not noise.
+  assert.equal(evolveDraftTask("  让压缩比更高  "), "让压缩比更高");
+  // A bare slash query is a palette pick, not a task.
+  assert.equal(evolveDraftTask("/evolve"), undefined);
+  assert.equal(evolveDraftTask("   "), undefined);
 });
 
 test("the pace flag is read as a flag, not as part of the goal", () => {

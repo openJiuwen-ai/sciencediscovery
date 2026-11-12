@@ -13,14 +13,22 @@
 // limitations under the License.
 
 /**
- * The way into a search that is not a form.
+ * The way into a search: the task, the search and what it may change.
  *
  * A search is designed, not configured: the agent needs a conversation to
  * write the scoring, check that it can rank candidates, and freeze it. So this
- * dialog collects the one choice a person can make before that conversation —
- * which search suits the shape of the problem — and then places the command in
- * the composer: the flags as a token, for the user to finish with a sentence
- * of their own and send.
+ * dialog collects the choices a person can make before that conversation —
+ * what to improve, which search suits the shape of the problem, and whether
+ * the search may touch parameters — and then places the command in the
+ * composer: the flags as a token, the task as the sentence after it, for the
+ * user to finish or replace and send themselves. The dialog never sends, so
+ * the composer keeps the last word.
+ *
+ * The two searches are chips; hovering or focusing one raises the illustrated
+ * card that used to sit under it, with the picture above the words. The card
+ * floats over the form rather than taking a row of its own: the description is
+ * a reading, not a step, so it must not push the task and the settings down or
+ * keep the dialog from fitting one screen.
  *
  * The form is drawn even when the runtime cannot run it: a person who has
  * already chosen a search should see the choice kept, and the reason the search
@@ -29,7 +37,7 @@
  * lives one click away, in `EvolveRuntimeDialog`.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EvolveStatus } from "../../api/evolve.js";
 import type { EvolveAlgorithm, EvolveCheckpointMode, EvolveDirectionInput } from "@sciencediscovery/schema";
@@ -43,28 +51,32 @@ import { EvolveRuntimeDialog } from "./EvolveRuntimeDialog.js";
 export interface EvolveCreateDialogProps {
   archived: boolean;
   error?: string;
-  /** The search the typed command already chose, carried through the setup
-   *  detour so a `--algorithm openevolve` draft does not come back on the
-   *  dialog's own default. */
+  /** The search a command already chose, carried through the setup detour so
+   *  a `--algorithm openevolve` draft does not come back on the dialog's own
+   *  default. */
   initialAlgorithm?: EvolveAlgorithm;
-  /** The pace the typed command already chose, carried through the setup
-   *  detour so a `--no-confirm` draft does not come back switched on. */
+  /** The pace a command already chose, carried through the setup detour so a
+   *  `--no-confirm` draft does not come back switched on. */
   initialCheckpointMode?: EvolveCheckpointMode;
-  /** A sentence the user already typed after the command, carried through the
-   *  setup detour so it is not lost: it goes back into the composer after the
-   *  token when the dialog closes. */
+  /** The task already written when the dialog opened — the sentence after a
+   *  typed command, or the draft the composer held when the surface was
+   *  opened from 会话设置 — so it is not typed twice. */
   initialGoal?: string;
   initializing: boolean;
   onClose: () => void;
+  /** Drafts starting parameters from the task typed here. Absent when there is
+   *  no open session to ask; uploading a file and adding parameters by hand
+   *  still work. */
+  onGenerateDirection?: (task: string, signal: AbortSignal) => Promise<EvolveDirectionInput>;
   onInitialize: () => void;
+  /** The command with the task after it, plus the confirmed parameters when
+   *  the panel was used. It is placed in the composer, never sent here. */
   onSend: (command: string, direction?: EvolveDirectionInput) => void;
   running: boolean;
   status: EvolveStatus;
-  submission?: {
-    allowDirect: boolean;
-    onGenerate?: (signal: AbortSignal) => Promise<EvolveDirectionInput>;
-  };
 }
+
+const VARIANTS = ["puct", "openevolve"] as const;
 
 export function EvolveCreateDialog({
   archived,
@@ -74,16 +86,17 @@ export function EvolveCreateDialog({
   initialGoal,
   initializing,
   onClose,
+  onGenerateDirection,
   onInitialize,
   onSend,
   running,
   status,
-  submission,
 }: EvolveCreateDialogProps) {
   const [algorithm, setAlgorithm] = useState<EvolveAlgorithm>(initialAlgorithm ?? "puct");
   // Confirm by default: pausing is the safe pace, and an unattended design
   // spends real model calls before the user has seen a single checkpoint.
   const [confirm, setConfirm] = useState(initialCheckpointMode !== "auto");
+  const [goal, setGoal] = useState(initialGoal ?? "");
   const [customScope, setCustomScope] = useState(false);
   const [direction, setDirection] = useState<EvolveDirectionInput>();
   const chinese = getLanguage() === "zh-CN";
@@ -95,6 +108,51 @@ export function EvolveCreateDialog({
   /** The runtime explanation. A separate surface rather than an expanded
    *  banner: the paths are long and the form underneath must keep its place. */
   const [details, setDetails] = useState(false);
+  /** Which search's description is showing. Hover and keyboard focus are kept
+   *  apart: a pointer leaving must not take away a description focus opened,
+   *  and a click — which focuses a chip without asking for details — must not
+   *  leave one open. */
+  const [hovered, setHovered] = useState<EvolveAlgorithm>();
+  const [focused, setFocused] = useState<EvolveAlgorithm>();
+  // Only a pointer or a keyboard asks for the card. Showing one at rest would
+  // float it over the task field the form is asking for, and the chips already
+  // carry the choice.
+  const preview = hovered ?? focused;
+  const task = useRef<HTMLTextAreaElement>(null);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const fields = useRef<HTMLDivElement>(null);
+  /** Whether the fields continue below the fold. The actions stay pinned, so
+   *  without this the form looks complete at the cut and the parameters are
+   *  never found in a short window. */
+  const [overflowing, setOverflowing] = useState(false);
+
+  // The task field is the dialog's first answer, so it takes focus, with the
+  // caret after whatever was carried in: the next keystroke continues the
+  // sentence instead of replacing it.
+  useEffect(() => {
+    const node = task.current;
+    if (node === null) return;
+    const end = node.value.length;
+    node.setSelectionRange(end, end);
+  }, []);
+
+  useEffect(() => {
+    const node = scrollArea.current;
+    const content = fields.current;
+    if (node === null || content === null) return;
+    const update = () => {
+      setOverflowing(node.scrollHeight - node.scrollTop - node.clientHeight > 2);
+    };
+    update();
+    node.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    observer?.observe(node);
+    observer?.observe(content);
+    return () => {
+      node.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -130,28 +188,38 @@ export function EvolveCreateDialog({
   const blocked = archived ? TEXT.evolve.create.blockedArchived
     : running ? TEXT.evolve.create.blockedRunning
       : undefined;
-  const canSend = ready && blocked === undefined && (!customScope || Boolean(direction?.editable.length));
-  // The goal now lives in the composer, after the token. A sentence that came
-  // through the detour goes back with the command so it is not typed twice.
-  const goal = initialGoal ?? "";
+  const canSend = ready && blocked === undefined
+    && goal.trim() !== ""
+    && (!customScope || Boolean(direction?.editable.length));
   const send = (allowDirect = false) => {
     const command = evolveCommand(algorithm, goal, confirm ? "confirm" : "auto", allowDirect);
-    if (customScope) onSend(command, direction);
-    else onSend(command);
+    onSend(command, customScope ? direction : undefined);
+  };
+
+  const descriptions: Record<EvolveAlgorithm, { bullets: readonly string[]; label: string; tags: readonly string[] }> = {
+    openevolve: {
+      bullets: TEXT.evolve.create.openEvolvePoints,
+      label: TEXT.evolve.create.openEvolveName,
+      tags: TEXT.evolve.create.openEvolveTags,
+    },
+    puct: {
+      bullets: TEXT.evolve.create.puctPoints,
+      label: TEXT.evolve.create.puctName,
+      tags: TEXT.evolve.create.puctTags,
+    },
   };
 
   return <>
     <div className="modal-backdrop" onPointerDown={onClose}>
       <div
         aria-labelledby="evolve-create-title"
+        aria-modal="true"
         className="modal-panel evolve-create"
         onPointerDown={(event) => event.stopPropagation()}
         role="dialog"
       >
         <header className="modal-header">
-          <h2 id="evolve-create-title">{submission
-            ? (chinese ? "确认演进设置" : "Confirm evolution settings")
-            : TEXT.evolve.create.title}</h2>
+          <h2 id="evolve-create-title">{TEXT.evolve.create.title}</h2>
           <button aria-label={TEXT.evolve.create.cancel} className="modal-close" onClick={onClose} type="button">
             ×
           </button>
@@ -164,104 +232,180 @@ export function EvolveCreateDialog({
             if (!canSend) return;
             // The alert owns the last word: the command leaves with the flag
             // only after the user answered it.
-            if (unisolated && !submission?.allowDirect) {
+            if (unisolated) {
               setConfirming(true);
               return;
             }
             send(unisolated);
           }}
         >
-          {/* A runtime that cannot run the search is the first thing to know,
-              and it is the only reason this banner is drawn. A ready runtime
-              gets no banner — the absence of the warning states a working
-              setup. */}
-          {ready ? null : <div className="evolve-create-runtime" role="note">
-            <span className="evolve-create-runtime-text">
-              <WarningGlyph />
-              <span>{installing ? TEXT.evolve.setup.bannerInstalling : TEXT.evolve.setup.bannerTitle}</span>
-            </span>
-            <button className="evolve-create-runtime-more" onClick={() => setDetails(true)} type="button">
-              {TEXT.evolve.setup.bannerAction}
-              <ExternalLinkGlyph />
-            </button>
-          </div>}
+          {/* The fields scroll; the actions do not. A short window would
+              otherwise put 开始设计 at the bottom of a scroll and make the one
+              thing the form is for the last thing found. */}
+          <div
+            className={`evolve-create-scroll${overflowing ? " is-overflowing" : ""}`}
+            ref={scrollArea}
+          >
+            <div className="evolve-create-fields" ref={fields}>
+              {/* A runtime that cannot run the search is the first thing to know,
+                  and it is the only reason this banner is drawn. A ready runtime
+                  gets no banner — the absence of the warning states a working
+                  setup. */}
+              {ready ? null : <div className="evolve-create-runtime" role="note">
+                <span className="evolve-create-runtime-text">
+                  <WarningGlyph />
+                  <span>{installing ? TEXT.evolve.setup.bannerInstalling : TEXT.evolve.setup.bannerTitle}</span>
+                </span>
+                <button className="evolve-create-runtime-more" onClick={() => setDetails(true)} type="button">
+                  {TEXT.evolve.setup.bannerAction}
+                  <ExternalLinkGlyph />
+                </button>
+              </div>}
 
-          {/* The no-isolation statement is a fact about this host, not an
-              error to fix, so it stays even when the runtime is ready. Before
-              the runtime reports ready it has not said which isolation it will
-              use, so the dialog states the risk rather than promise one. */}
-          {!ready || unisolated ? <div className="evolve-create-notice" role="note">
-            <span className="evolve-create-notice-icon"><InfoGlyph /></span>
-            <span className="evolve-create-notice-text">
-              <strong>{TEXT.evolve.create.unisolatedBannerTitle}</strong>
-              <span>{TEXT.evolve.create.unisolatedBannerBody}</span>
-            </span>
-          </div> : null}
+              {/* The no-isolation statement is a fact about this host, not an
+                  error to fix, so it stays even when the runtime is ready. Before
+                  the runtime reports ready it has not said which isolation it will
+                  use, so the dialog states the risk rather than promise one. */}
+              {!ready || unisolated ? <div className="evolve-create-notice" role="note">
+                <span className="evolve-create-notice-icon"><InfoGlyph /></span>
+                <span className="evolve-create-notice-text">
+                  <strong>{TEXT.evolve.create.unisolatedBannerTitle}</strong>
+                  <span>{TEXT.evolve.create.unisolatedBannerBody}</span>
+                </span>
+              </div> : null}
 
-          <fieldset className="evolve-create-algorithms">
-            <legend>{TEXT.evolve.create.algorithmLabel}</legend>
-            <div aria-label={TEXT.evolve.create.algorithmLabel} role="radiogroup">
-              <AlgorithmChoice
-                bullets={TEXT.evolve.create.puctPoints}
-                checked={algorithm === "puct"}
-                label={TEXT.evolve.create.puctName}
-                onSelect={() => setAlgorithm("puct")}
-                tags={TEXT.evolve.create.puctTags}
-                variant="puct"
-              />
-              <AlgorithmChoice
-                bullets={TEXT.evolve.create.openEvolvePoints}
-                checked={algorithm === "openevolve"}
-                label={TEXT.evolve.create.openEvolveName}
-                onSelect={() => setAlgorithm("openevolve")}
-                tags={TEXT.evolve.create.openEvolveTags}
-                variant="openevolve"
-              />
+              <fieldset className="evolve-create-algorithms">
+                <legend>{TEXT.evolve.create.algorithmLabel}</legend>
+                <div className="evolve-algorithm-picker">
+                  <div
+                    aria-label={TEXT.evolve.create.algorithmLabel}
+                    className="evolve-algorithm-options"
+                    role="radiogroup"
+                  >
+                    {/* Each chip and its card share a positioning box, so the
+                        card opens under the button it describes rather than
+                        under the middle of the row. */}
+                    {VARIANTS.map((variant) => <div
+                      className="evolve-algorithm-option"
+                      key={variant}
+                      role="presentation"
+                    >
+                      <AlgorithmChip
+                        checked={algorithm === variant}
+                        label={descriptions[variant].label}
+                        onFocusChange={(on) => setFocused((current) => (on ? variant : current === variant ? undefined : current))}
+                        onHover={(on) => setHovered((current) => (on ? variant : current === variant ? undefined : current))}
+                        onSelect={() => setAlgorithm(variant)}
+                        variant={variant}
+                      />
+                      {/* The card is the illustrated one the two-search layout
+                          used, raised on hover or focus: the picture first,
+                          then the name, tags and points in their old type. It
+                          floats clear of the flow, so reading a description
+                          never moves the task under it. Closed cards stay in
+                          the DOM so `aria-describedby` always resolves. */}
+                      <div
+                        className={`evolve-algorithm-detail${preview === variant ? " is-open" : ""}`}
+                        id={`evolve-algorithm-detail-${variant}`}
+                      >
+                        {/* Decoration: the card's name, tags and points already
+                            say which search this is, so the illustration
+                            carries no alternative text. */}
+                        <span aria-hidden="true" className={`evolve-algorithm-art is-${variant}`} />
+                        <span className="evolve-algorithm-body">
+                          <span className="evolve-algorithm-name">{descriptions[variant].label}</span>
+                          <span className="evolve-algorithm-tags">
+                            {descriptions[variant].tags.map((tag) =>
+                              <span className="evolve-algorithm-tag" key={tag}>{tag}</span>)}
+                          </span>
+                          <span className="evolve-algorithm-points">
+                            {descriptions[variant].bullets.map((bullet) => <span key={bullet}>{bullet}</span>)}
+                          </span>
+                        </span>
+                      </div>
+                    </div>)}
+                  </div>
+                </div>
+              </fieldset>
+
+              {/* The task is what the design conversation starts from. It also
+                  travels to the composer, where it stays editable until the user
+                  sends: the dialog collects, it does not commit. */}
+              <label className="evolve-create-task">
+                <span>{TEXT.evolve.create.taskLabel}</span>
+                <textarea
+                  autoFocus
+                  className="evolve-create-task-input"
+                  onChange={(event) => setGoal(event.target.value)}
+                  placeholder={TEXT.evolve.create.taskPlaceholder}
+                  ref={task}
+                  required
+                  rows={3}
+                  value={goal}
+                />
+              </label>
+
+              <div className="evolve-create-settings">
+                <h3>{TEXT.evolve.create.settingsLabel}</h3>
+                <div className="evolve-create-setting">
+                  <label className="evolve-create-confirm">
+                    <input
+                      checked={confirm}
+                      onChange={(event) => setConfirm(event.target.checked)}
+                      role="switch"
+                      type="checkbox"
+                    />
+                    <span>{TEXT.evolve.create.confirmLabel}</span>
+                  </label>
+                  <p className="evolve-create-confirm-hint">
+                    {confirm ? TEXT.evolve.create.confirmHint : TEXT.evolve.create.autoHint}
+                  </p>
+                </div>
+                <div className="evolve-create-setting">
+                  <label className="evolve-create-confirm">
+                    <input
+                      checked={customScope}
+                      onChange={(event) => setCustomScope(event.target.checked)}
+                      role="switch"
+                      type="checkbox"
+                    />
+                    <span>{TEXT.evolve.create.parametersLabel}</span>
+                  </label>
+                  <p className="evolve-create-confirm-hint">{TEXT.evolve.create.parametersHint}</p>
+                </div>
+              </div>
+
+              {/* Kept mounted while closed so the fields the user entered are still
+                  there when the switch goes back on. */}
+              <div
+                className="evolve-create-direction"
+                hidden={!customScope}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault();
+                }}
+              >
+                <DirectionInput
+                  chinese={chinese}
+                  onChange={setDirection}
+                  onGenerate={onGenerateDirection === undefined || goal.trim() === ""
+                    ? undefined
+                    : (signal) => onGenerateDirection(goal.trim(), signal)}
+                />
+              </div>
+
+              {blocked === undefined ? null : <p className="evolve-create-blocked">{blocked}</p>}
             </div>
-          </fieldset>
-
-          <div className="evolve-create-settings">
-            <h3>{TEXT.evolve.create.settingsLabel}</h3>
-            <label className="evolve-create-confirm">
-              <input
-                checked={confirm}
-                onChange={(event) => setConfirm(event.target.checked)}
-                role="switch"
-                type="checkbox"
-              />
-              <span>{TEXT.evolve.create.confirmLabel}</span>
-            </label>
-            <p className="evolve-create-confirm-hint">
-              {confirm ? TEXT.evolve.create.confirmHint : TEXT.evolve.create.autoHint}
-            </p>
-            {submission ? <label className="evolve-create-confirm">
-              <input
-                checked={customScope}
-                onChange={(event) => setCustomScope(event.target.checked)}
-                role="switch"
-                type="checkbox"
-              />
-              <span>{chinese ? "自定义 JSON 与修改范围" : "Custom JSON and edit scope"}</span>
-            </label> : null}
           </div>
-
-          {submission ? <div hidden={!customScope} onKeyDown={(event) => {
-            if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault();
-          }}>
-            <DirectionInput chinese={chinese} onChange={setDirection} onGenerate={submission.onGenerate} />
-          </div> : null}
-
-          {blocked === undefined ? null : <p className="evolve-create-blocked">{blocked}</p>}
 
           <footer className="modal-footer">
             <button className="evolve-create-cancel" onClick={onClose} type="button">
               {TEXT.evolve.create.cancel}
             </button>
-            {/* Greyed, not hidden, while the runtime is unavailable: the choice
-                the user made stays visible, and the reason sits right above the
-                button that cannot send it. */}
+            {/* Greyed, not hidden, while the runtime is unavailable or the task
+                is empty: the choice the user made stays visible, and the reason
+                sits right above the button that cannot send it. */}
             <button className="evolve-create-submit" disabled={!canSend} type="submit">
-              {submission ? (chinese ? "开始演进" : "Start evolution") : TEXT.evolve.create.send}
+              {TEXT.evolve.create.send}
             </button>
           </footer>
         </form>
@@ -326,34 +470,37 @@ export function EvolveCreateDialog({
   </>;
 }
 
-function AlgorithmChoice({ bullets, checked, label, onSelect, tags, variant }: {
-  bullets: readonly string[];
+/** One search as a chip. Its card floats under the row on hover or keyboard
+ *  focus; `aria-describedby` gives a screen reader the same text without
+ *  either. */
+function AlgorithmChip({ checked, label, onFocusChange, onHover, onSelect, variant }: {
   checked: boolean;
   label: string;
+  onFocusChange: (on: boolean) => void;
+  onHover: (on: boolean) => void;
   onSelect: () => void;
-  tags: readonly string[];
-  variant: "puct" | "openevolve";
+  variant: EvolveAlgorithm;
 }) {
   return <button
     aria-checked={checked}
-    className={`evolve-algorithm-choice${checked ? " is-checked" : ""}`}
+    aria-describedby={`evolve-algorithm-detail-${variant}`}
+    className={`evolve-algorithm-chip${checked ? " is-checked" : ""}`}
+    onBlur={() => onFocusChange(false)}
     onClick={onSelect}
+    onFocus={(event) => {
+      // A click focuses the chip too, but it means "choose this", not "tell me
+      // more": only keyboard focus opens the description.
+      if (typeof event.currentTarget.matches !== "function"
+          || event.currentTarget.matches(":focus-visible")) onFocusChange(true);
+    }}
+    onPointerEnter={() => onHover(true)}
+    onPointerLeave={() => onHover(false)}
     role="radio"
     type="button"
   >
-    {/* Decoration: the card's name, tags and points already say which search
-        this is, so the illustration is drawn by the stylesheet and carries no
-        alternative text. */}
-    <span aria-hidden="true" className={`evolve-algorithm-art is-${variant}`} />
-    <span className="evolve-algorithm-body">
-      <span className="evolve-algorithm-name">{label}</span>
-      <span className="evolve-algorithm-tags">
-        {tags.map((tag) => <span className="evolve-algorithm-tag" key={tag}>{tag}</span>)}
-      </span>
-      <span className="evolve-algorithm-points">
-        {bullets.map((bullet) => <span key={bullet}>{bullet}</span>)}
-      </span>
-    </span>
+    {/* Decoration: the chip's name already says which search this is. */}
+    <span aria-hidden="true" className="evolve-algorithm-mark" />
+    <span className="evolve-algorithm-name">{label}</span>
   </button>;
 }
 
