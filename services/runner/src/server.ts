@@ -1194,16 +1194,22 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
   // A dead managed Shell is not "unavailable" for the Python channel, so the
   // check above cannot fire on that branch — the gap the 10-hour capture in
-  // #1108 produced no startup complaint from. Say it once, with the repair text.
-  if (capability.shell?.available === false) {
+  // #1108 produced no startup complaint from. It is reported after the starter
+  // environment has settled, because on a fresh data dir the probe taken here
+  // already says "not configured" and the bootstrap below is about to install
+  // it; warning now taught operators to ignore the one line meant to surface a
+  // genuinely dead Shell (#1118 review 2, F2).
+  const reportDeadManagedShell = async () => {
+    const settled = await readiness.get();
+    if (settled.shell?.available !== false) return;
     logger.warn("managed_shell_unavailable", {
-      runnerInstanceId: capability.instanceId,
-      sandbox: capability.sandbox,
-      readyFor: capability.readyFor,
-      reason: capability.shell.unavailableReason ?? "The managed Shell environment is unavailable",
+      runnerInstanceId: settled.instanceId,
+      sandbox: settled.sandbox,
+      readyFor: settled.readyFor,
+      reason: settled.shell.unavailableReason ?? "The managed Shell environment is unavailable",
     });
-    console.warn(`Managed Shell unavailable on this Runner: Shell routes will be refused until the starter environment is repaired. Python execution is unaffected. ${capability.shell.unavailableReason ?? ""}`.trim());
-  }
+    console.warn(`Managed Shell unavailable on this Runner: Shell routes will be refused until the starter environment is repaired. Python execution is unaffected. ${settled.shell.unavailableReason ?? ""}`.trim());
+  };
   // The operational log is a file. A missing execution dependency is a setup
   // step the operator must take, so it also goes to the starting terminal.
   if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
@@ -1313,9 +1319,20 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     + `execution timeout: ${config.execTimeoutMs === 0 ? "unlimited" : `${config.execTimeoutMs / 1000}s`}`,
   );
   if (config.scientificEnvsEnabled === true) {
-    void environmentStore.setupManagedEnvironments().catch((error) => {
-      logger.warn("scientific_environment_bootstrap_failed", { errorMessage: shortErrorMessage(error) });
-    });
+    // The probe above runs before this bootstrap, so a first launch reports an
+    // unprovisioned Shell as dead. Report once the bootstrap settles, and also
+    // when it fails — the failure is its own line, and a Shell that is still
+    // dead after it is exactly the state this warning exists for.
+    void environmentStore.setupManagedEnvironments()
+      .then(reportDeadManagedShell)
+      .catch(async (error) => {
+        logger.warn("scientific_environment_bootstrap_failed", { errorMessage: shortErrorMessage(error) });
+        await reportDeadManagedShell();
+      });
+  } else {
+    // Nothing will install the Shell on this deployment, so the probe taken at
+    // startup is final.
+    void reportDeadManagedShell();
   }
   return server;
 }

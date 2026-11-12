@@ -143,7 +143,7 @@ for (const scenario of [
     const bindings = createWorkspaceExecutionBindings({
       agentId: "main", executionId: "run", sessionId: "s", workspaceRoot: "/workspace", permissionScopeLabel: "test",
       runnerClient: { executionCapability: async () => capability } as RunnerClient,
-      permission: {} as AgentPermissionRuntime,
+      permission: { requirePrivilege: async () => ({ outcome: "allowed" }) } as unknown as AgentPermissionRuntime,
       provenanceRecorder: {} as ProvenanceRecorder,
       store: { executionBlocks: queue, assertSessionWritable() {}, assertSessionAllowsRunner() {} } as unknown as SessionStore,
     });
@@ -152,6 +152,17 @@ for (const scenario of [
     assert.match(shell.reason, /bubblewrap cannot create a user namespace here/);
     assert.doesNotMatch(shell.reason, /managed Shell environment is unavailable/);
     assert.match(shell.suggestions[0] ?? "", /Inspect the target Runner logs and host\/container sandbox permissions/);
+    // `check` leaves `requiresShell` false, so it cannot pin the clause that
+    // decides a Shell refusal's reason. Drive the Shell route as well: this is
+    // the answer a model gets from `run_shell` on the same capability (#1118
+    // review 2, F1).
+    await assert.rejects(bindings.executeShell!("echo hi", "ephemeral"), (error: Error) => {
+      const refusal = (error as unknown as { result: { runner: { reason: string } } }).result;
+      assert.equal(error.name, "RunnerUnavailableError");
+      assert.match(refusal.runner.reason, /bubblewrap cannot create a user namespace here/);
+      assert.doesNotMatch(refusal.runner.reason, /managed Shell environment is unavailable/i);
+      return true;
+    });
   });
 for (const action of ["retry", "cancel", "switch"] as const) {
   test(`execution readiness ${action} is pre-dispatch and releases the external wait`, async t => {
