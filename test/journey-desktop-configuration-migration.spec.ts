@@ -9,14 +9,14 @@ test.use({ trace: "off" }); // The owned API token must not be retained in reque
 
 type Row = Record<string, any>;
 type HistoricalFixture = { locale: "en" | "zh-CN"; decision: "apply" | "dismiss" | "mixed"; session: Row; request: Row };
-type Runtime = { desktopLegacyReady: 1; sha: string; origin: string; desktopOrigin: string; token: string; executor: string; health: { status: string; runner?: string }; fixtures: HistoricalFixture[] };
+type Runtime = { desktopLegacyReady: 1; sha: string; origin: string; desktopOrigin: string; token: string; executor: string; health: { status: string; runner?: string }; fixtures: HistoricalFixture[]; fixtureModel: Row };
 const words = {
   en: { confirm: "Confirm", decline: "Cancel", refused: "Do not configure",
     legacyApply: "Confirm and enable", legacyDismiss: "Not now", legacyRefused: "Not configured", saved: "Saved" },
   "zh-CN": { confirm: "确认", decline: "取消", refused: "暂不配置",
     legacyApply: "确认并启用", legacyDismiss: "暂不配置", legacyRefused: "未配置", saved: "已保存" },
 };
-const boundary = "Historical records are offline migration fixtures created through the real Store before API startup, not naturally generated current conversations. All later requests, decisions and rendering use the actual API and desktop. Adapter and Runner are not started; no full-stack-health, model, Run, tool execution or continuation claim.";
+const boundary = "Historical records are offline migration fixtures created through the real Store before API startup, not naturally generated current conversations. All later requests, decisions and rendering use the actual API and desktop. Adapter and Runner are not started. One inert credential-free loopback profile unlocks desktop setup; its guard rejects and counts model requests. No full-stack-health, model invocation, Run, tool execution or continuation claim.";
 let child: ChildProcess | undefined, runtime: Runtime;
 const path = (session: Row, card?: Row) => `/api/sessions/${session.id}/configuration-requests${card ? `/${card.id}` : ""}`;
 async function api(url: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<any> {
@@ -66,8 +66,8 @@ async function showReceipt(page: Page, label: string, count: number) {
   await record.scrollIntoViewIfNeeded(); return record;
 }
 const isList = (response: Response, session: Row) => response.request().method() === "GET" && new URL(response.url()).pathname === path(session) && response.status() === 200;
-async function noModelOrRun(session: Row) {
-  expect(await api("/api/models")).toEqual([]); expect(await api(`/api/sessions/${session.id}/runs`)).toEqual([]);
+async function unchangedModelAndNoRun(session: Row) {
+  expect(await api("/api/models")).toEqual([runtime.fixtureModel]); expect(await api(`/api/sessions/${session.id}/runs`)).toEqual([]);
 }
 
 // "mocked" is the existing hermetic/offline-fixture CI lane, not an API/UI/LLM mock.
@@ -111,7 +111,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
      *   3. Resize, complete the value and check its automatic preview revision/digest; refuse both proposals and reload persistent receipts with settings unchanged.
      * Environment: Current committed compiled API plus desktop Vite; owned ephemeral ports/data; pinned Chromium; en/zh-CN at 1440x900 and 390x844, DPR1.
      * Type: mocked
-     * LLM: none; no model profile, scripted response, paid call or Run is created.
+     * LLM: an inert credential-free loopback profile only; the fixture rejects model requests and fails on any invocation; no scripted response, paid call or Run.
      * WebSearch: none
      * PaperSources: none
      * MCP: none
@@ -132,7 +132,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
       const snapshots = (await api(path(session))).items; expect(snapshots).toHaveLength(2);
       const historical = snapshots.find((item: Row) => item.id === legacy.id);
       expect("capabilityId" in historical).toBe(false); expect(historical.state).toBe("awaiting_confirmation");
-      expect(snapshots.filter((item: Row) => "capabilityId" in item)).toHaveLength(1); await noModelOrRun(session);
+      expect(snapshots.filter((item: Row) => "capabilityId" in item)).toHaveLength(1); await unchangedModelAndNoRun(session);
       await boot(page, fixture);
       await page.setViewportSize({ width: 1440, height: 900 });
       const mutations: string[] = [];
@@ -185,7 +185,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
         expect((await api(path(session))).items.find((item: Row) => item.id === legacy.id)).toEqual(historical);
         await expect(panel.getByRole("button", { name: text.confirm, exact: true })).toBeEnabled();
         await expect(panel.getByRole("button", { name: locale === "en" ? "Refresh proposed changes" : "刷新修改方案", exact: true })).toHaveCount(0);
-        expect(await api("/api/timeout-settings")).toEqual(baseline); await noModelOrRun(session);
+        expect(await api("/api/timeout-settings")).toEqual(baseline); await unchangedModelAndNoRun(session);
         await panel.scrollIntoViewIfNeeded(); await expect(panel).toBeInViewport({ ratio: 1 });
       });
       await journey.step("5. Refuse the generic proposal", "Declining persists one generic receipt without saving its unsaved timeout draft.", async () => {
@@ -199,7 +199,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
         await expect.poll(async () => (await api(path(session))).items.find((item: Row) => item.id === legacy.id).state).toBe("dismissed");
         await reload(page, session); await expect(old).toHaveCount(0); await expect(panel).toHaveCount(0); await showReceipt(page, "Web · 网络检索", 2);
         expect((await api(`/api/sessions/${session.id}/settings`)).overrides.enabledConnectorIds).toEqual([]);
-        expect(await api("/api/timeout-settings")).toEqual(baseline); await noModelOrRun(session);
+        expect(await api("/api/timeout-settings")).toEqual(baseline); await unchangedModelAndNoRun(session);
       });
     });
 
@@ -212,7 +212,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
        *   2. Check narrow controls, confirm or refuse, reload one receipt and read formal settings.
        * Environment: Current committed compiled API plus desktop Vite; owned historical migration data; pinned Chromium; en/zh-CN, 1440x1600 and 390x844, DPR1.
        * Type: mocked
-       * LLM: none; no model profile, response, Run or paid provider.
+       * LLM: an inert credential-free loopback profile only; model requests are rejected and must remain zero; no response, Run or paid provider.
        * WebSearch: none; enabling built-in Web changes settings only and does not search.
        * PaperSources: none
        * MCP: none
@@ -225,7 +225,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
         const { session, request: card } = fixture, text = words[locale], snapshots = (await api(path(session))).items;
         expect(snapshots).toHaveLength(1); expect(snapshots[0].id).toBe(card.id);
         for (const key of ["capabilityId", "revision", "previewDigest", "securityConsent"]) expect(key in snapshots[0]).toBe(false);
-        expect(snapshots[0].state).toBe("awaiting_confirmation"); await noModelOrRun(session);
+        expect(snapshots[0].state).toBe("awaiting_confirmation"); await unchangedModelAndNoRun(session);
         journey.scenario({ goal: `Review and ${decision === "apply" ? "confirm" : "refuse"} a historical connector card without a generic companion.`,
           preconditions: [`Frontend/backend ${runtime.sha}; executor ${runtime.executor}`, `${locale}; 1440x1600 and 390x844 CSS px; DPR1`, boundary] });
         journey.note("This is offline-created historical migration data, not a naturally generated current conversation. The actual API owns the decision and the desktop owns its rendering; no generic revision or consent is fabricated.");
@@ -250,7 +250,7 @@ test.describe("Desktop historical configuration migration", { tag: ["@fixture:st
           const record = await showReceipt(page, decision === "apply" ? text.saved : text.legacyRefused, 1);
           await expect(record.getByRole("button", { name: text.legacyApply, exact: true })).toHaveCount(0); await expect(record.getByRole("button", { name: text.legacyDismiss, exact: true })).toHaveCount(0);
           const current = (await api(path(session))).items; expect(current).toHaveLength(1); expect("capabilityId" in current[0]).toBe(false);
-          expect((await api(`/api/sessions/${session.id}/settings`)).overrides.enabledConnectorIds).toEqual(decision === "apply" ? ["web"] : []); await noModelOrRun(session);
+          expect((await api(`/api/sessions/${session.id}/settings`)).overrides.enabledConnectorIds).toEqual(decision === "apply" ? ["web"] : []); await unchangedModelAndNoRun(session);
         });
       });
     }
