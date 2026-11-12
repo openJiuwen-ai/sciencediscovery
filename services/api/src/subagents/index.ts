@@ -106,12 +106,23 @@ export async function prepareSubagentHandoff(store: SessionStore, sessionId: str
   const versions = new VersionStore(store.dataDir);
   const sourceSnapshot = await committedWorkspaceSnapshot(versions, workspaceRoot);
   const sourceFiles = await workspaceSnapshotFiles(versions, sourceSnapshot);
-  await store.recordWorkspaceFileRevisions(sessionId, sourceFiles
+  // The observation carries the file's own mtime, like every other registration
+  // path (`papers.ts`, `recorder.ts`): a clock read after the committed snapshot
+  // never matches `stat` on the next listing, which would append an unattributed
+  // revision over this one (#1125). A file that no longer exists cannot be
+  // observed, so it is skipped rather than stamped with a time that is known to
+  // be wrong.
+  const observed = await Promise.all(sourceFiles
     .filter((file) => !isSubagentPrivateWorkspacePath(file.path) && !file.path.startsWith("tracks/"))
     .filter((file) => !store.getWorkspaceFileProvenance(sessionId, file.path))
-    .map((file) => ({ path: file.path, mode: "observe" as const, origin: "unknown" as const,
-      modifiedAt: new Date().toISOString(), size: file.content.size, contentHash: file.content.digest.slice(7),
-      originMeta: { sourceSnapshotId: sourceSnapshot.digest } })));
+    .map(async (file) => {
+      const live = await stat(resolveWorkspaceFile(workspaceRoot, file.path)).catch(() => undefined);
+      if (!live) return undefined;
+      return { path: file.path, mode: "observe" as const, origin: "unknown" as const,
+        modifiedAt: live.mtime.toISOString(), size: file.content.size, contentHash: file.content.digest.slice(7),
+        originMeta: { sourceSnapshotId: sourceSnapshot.digest } };
+    }));
+  await store.recordWorkspaceFileRevisions(sessionId, observed.filter((revision) => revision !== undefined));
   // Selection, byte limits and both delivery aliases describe the same committed
   // source even if the parent starts another write during this handoff.
   const availableParentInputFiles: WorkspaceFile[] = sourceFiles

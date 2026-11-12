@@ -23,6 +23,8 @@ import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import { RunnerUnavailableError } from "@sciencediscovery/workspace";
 import { epochSandboxNetworkAccess } from "@sciencediscovery/schema";
 import { createHash, randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 import { createOperationalLogger } from "@sciencediscovery/operational-logging";
 
 import { prepareShellExecutionContext, type ProvenanceRecorder } from "@sciencediscovery/provenance";
@@ -527,9 +529,12 @@ export function createWorkspaceExecutionBindings(
         return options.store.transfers.start({ sessionId: options.sessionId, agentId: options.agentId }, input, { resolve,
           committed: async (file, transfer) => {
             if (transfer.targetWorkspaceId !== options.store.workspaceIdentity(options.sessionId, options.agentId).id) return;
+            // Same rule as every other delivery: the file's own mtime keeps the
+            // revision current across a listing refresh (#1125).
+            const delivered = await stat(resolvePath(options.workspaceRoot, file.targetPath));
             await options.store.recordWorkspaceFileRevision(options.sessionId, {
               path: options.artifactPathPrefix ? `${options.artifactPathPrefix}/${file.targetPath}` : file.targetPath,
-              mode: "write", origin: "system", size: file.size, contentHash: file.sha256, modifiedAt: new Date().toISOString(),
+              mode: "write", origin: "system", size: file.size, contentHash: file.sha256, modifiedAt: delivered.mtime.toISOString(),
               ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
               originMeta: { transferId: transfer.id, sourceSnapshotId: transfer.sourceSnapshotId!,
                 sourceWorkspaceId: transfer.sourceWorkspaceId, workspaceId: transfer.targetWorkspaceId },
