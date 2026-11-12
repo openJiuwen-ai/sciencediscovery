@@ -287,3 +287,60 @@ test("parent Step links the child trajectory using the same state and revision m
     assert.ok(refs.head("attempts/child-run/0"));
   } finally { reset(); refs?.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test("a completion record keeps the response id of the call it answers (#1133)", async (t) => {
+  // The recorder holds `responseId` in one field, written synchronously by the
+  // event path and cleared inside the recording queue by `beforeTurn` /
+  // `afterAssembly`. Reading it when the queue drains is therefore a race: a
+  // completion that was still being written could lose an id that had already
+  // been issued for its own call.
+  await mkdir(resolve(".tmp"), { recursive: true });
+  const root = await mkdtemp(resolve(".tmp/versioning-response-id-"));
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  const records: Array<{ name: string; evidence: { turn?: number; responseId?: string } }> = [];
+  const recorder = new AgentVersionRecorder<RuntimeMessage, { history: RuntimeMessage[] }, never>(resolve(root, "data"), workspace, {
+    agentId: "response-id-agent", trajectoryId: "response-id-trajectory", requestExecutionId: "response-id-request",
+    recordEvent: async (event: unknown) => { records.push(event as never); },
+  }, () => ({}));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  try {
+    await recorder.initialize({}, []);
+    await recorder.beforeTurn({ turn: 1, history: [] });
+    await recorder.afterAssembly({ turn: 1, assembly: { history: [], modelInput: { history: [] } } });
+    recorder.event({ type: "response_start", responseId: "r1", turn: 1 } as never);
+    // The write below is queued; opening the next turn clears the field while it
+    // drains, which is the interleaving that dropped the id in production.
+    const completion = recorder.modelCompleted({ ok: true });
+    await recorder.beforeTurn({ turn: 2, history: [] });
+    await completion;
+    const record = records.find((item) => item.name === "model.completed");
+    assert.equal(record?.evidence.responseId, "r1", "the completion names the response it answers");
+    assert.equal(record?.evidence.turn, 1, "and the turn that response belongs to");
+  } finally { recorder.close(); }
+});
+
+test("an identity passed by the caller wins over a recorder field that has moved on (#1133)", async (t) => {
+  // The JiuwenSwarm executor knows the response id per call and passes it, so a
+  // record cannot be attributed to a neighbouring response even when the field
+  // has already been cleared or replaced.
+  await mkdir(resolve(".tmp"), { recursive: true });
+  const root = await mkdtemp(resolve(".tmp/versioning-identity-"));
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  const records: Array<{ name: string; evidence: { turn?: number; responseId?: string } }> = [];
+  const recorder = new AgentVersionRecorder<RuntimeMessage, { history: RuntimeMessage[] }, never>(resolve(root, "data"), workspace, {
+    agentId: "identity-agent", trajectoryId: "identity-trajectory", requestExecutionId: "identity-request",
+    recordEvent: async (event: unknown) => { records.push(event as never); },
+  }, () => ({}));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  try {
+    await recorder.initialize({}, []);
+    await recorder.beforeTurn({ turn: 1, history: [] });
+    await recorder.afterAssembly({ turn: 1, assembly: { history: [], modelInput: { history: [] } } });
+    recorder.event({ type: "response_start", responseId: "r9", turn: 1 } as never);
+    await recorder.beforeTurn({ turn: 2, history: [] });
+    await recorder.modelCompleted({ ok: true }, { turn: 1, responseId: "r9" });
+    const record = records.find((item) => item.name === "model.completed");
+    assert.equal(record?.evidence.responseId, "r9");
+    assert.equal(record?.evidence.turn, 1);
+  } finally { recorder.close(); }
+});
