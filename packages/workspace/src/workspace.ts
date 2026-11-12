@@ -1676,7 +1676,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const checkParameters = Type.Object({ runner_id: Type.Optional(Type.String({ minLength: 1 })) });
     const check: AgentTool<typeof checkParameters> = {
       name: "check_runner", label: "Check Runner", parameters: checkParameters,
-      description: "Refresh execution readiness on an authorized Runner (default local) and update its capability report. Works without a usable sandbox. Reports the platform, Shell, guaranteed utilities, sandbox diagnostics and repair suggestions. Does not execute scientific code, repair the host, grant permission, or wait for user input.",
+      description: "Refresh execution readiness on an authorized Runner (default local) and update its capability report. Works without a usable sandbox. Reports the platform, Shell, guaranteed utilities, sandbox diagnostics and repair suggestions. The verdict is route-scoped: `readyFor.python` covers Python execution (a Shell gap never blocks it) and `readyFor.shell` covers Shell calls, so read the route you intend to use rather than treating `ready` as a green light for both. Does not execute scientific code, repair the host, grant permission, or wait for user input.",
       execute: async (_id, params, signal) => {
         const value = await options.runnerReadiness!.check(params.runner_id, signal);
         return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
