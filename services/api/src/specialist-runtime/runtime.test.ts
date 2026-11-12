@@ -336,6 +336,46 @@ test("fallback handles runtime unavailability, respects opt-out, and never swall
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a specialist fallback names the ceiling the native loop enforced, not the configured budget", async () => {
+  const { SpecialistUnavailableError } = await import("./codex.js");
+  const { effectiveModelTurns } = await import("@sciencediscovery/runtime-core");
+  const root = await mkdtemp(join(tmpdir(), "sd-fallback-bound-"));
+  try {
+    const store = new SessionStore(root); await store.load();
+    const project = await store.createProject("Fallback bound");
+    const session = await store.createSession(project.id, "Bounds", {}, {}, { allowUnconfiguredModel: true });
+    const child = await store.createSubagent(session.id, "lead", { description: "Codex task", prompt: "Produce output" });
+    const workspaceRoot = store.agentWorkspacePath(session.id, child.id);
+    let fallbackConfigured: number | undefined;
+    const createAgent = codexAgentFactory({
+      runtime: { kind: "codex" }, maxTurns: 300,
+      credential: async () => "test-secret",
+      adapter: { invoke: async () => { throw new SpecialistUnavailableError("Auth unavailable"); } },
+      onRuntimeEvent: async () => {},
+      fallbackFactory: options => {
+        fallbackConfigured = options.maxModelTurns;
+        return {
+          abort() {}, beginExternalWait: () => () => undefined,
+          // The engine composes the bound the fallback loop really enforces.
+          enforcedMaxModelTurns: effectiveModelTurns(options.maxModelTurns),
+          async execute() { return { finalMessages: [{ role: "assistant", content: "Native recovery" }] }; },
+          async prompt() {}, subscribe: () => () => undefined,
+        };
+      },
+    });
+    const handle = runSubagentTask({ bindings: { createAgent, workspace: {
+      config: { baseUrl: "http://unused.test", dataDir: root, model: "unused" }, enabledConnectorIds: [], workspaceRoot,
+      executePython: async () => { throw Error("unused"); }, executeShell: async () => { throw Error("unused"); },
+    } }, profile: createSubagentProfile({ connectorIds: [], deniedToolNames: ["task"], gatewayThreadId: child.id, maxModelTurns: 300, presetId: "general-purpose", runTimeoutMs: 30000, workspaceRoot }),
+      prompt: "delegated brief", requestExecutionId: child.id });
+    // Until the external runtime answers, nothing has enforced a ceiling of its own.
+    assert.equal(handle.enforcedMaxModelTurns, undefined, "the external runtime names no ceiling before it runs");
+    await handle.execute();
+    assert.equal(fallbackConfigured, 300, "the fallback receives the declared budget");
+    assert.equal(handle.enforcedMaxModelTurns, 128, "the record can now name the bound the fallback loop enforced");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("direct runtime execution requires an independent consent callback", async () => {
   let invoked = false;
   const adapter = new CodexSpecialistAdapter(factory([events(decision())]));

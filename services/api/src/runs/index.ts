@@ -1711,9 +1711,10 @@ async function executeAgentRun(
         let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
         let progressFlushQueue = Promise.resolve();
         let maxTurnsExceeded = false;
-      /** The bound the executor reported, carried out of the inner scope so the
-       *  failure path can stamp it on the record (#1113 review). */
-      let enforcedMaxModelTurns: number | undefined;
+        /** The handle whose loop actually ran. Kept in this scope so the failure
+         *  path can ask it for the bound it enforced, after `execute()` has
+         *  chosen between an external runtime and its native fallback (#1113). */
+        let subagentBoundHandle: ReturnType<typeof runSubagentTask> | undefined;
         const enqueueProgressFlush = () => {
           const snapshot = structuredClone({ ...subagent, steps });
           progressFlushQueue = progressFlushQueue.then(async () => {
@@ -2220,14 +2221,14 @@ async function executeAgentRun(
           requestExecutionId: childExecution.identity.executionId,
           runContract: subagentExecutionPrompt,
         });
+        subagentBoundHandle = subagentRunHandle;
         externalWaitByExecution.set(
           childExecution.identity.executionId,
           () => subagentRunHandle!.beginExternalWait(),
         );
-        enforcedMaxModelTurns = subagentRunHandle.enforcedMaxModelTurns;
         if (notificationDelivery && !store.notifications.deliveryAllowed(notificationDelivery)) throw new Error("Agent stopped before notification delivery");
         const result = await subagentRunHandle.execute();
-        stampEnforcedBound(subagent, { enforcedMaxModelTurns });
+        stampEnforcedBound(subagent, subagentBoundHandle);
         const contextRef = await versions.putRecord("SubagentContext", { history: closedModelContext(result.finalMessages) });
         const contextRefs = await RefStore.open(versions);
         try {
@@ -2266,7 +2267,7 @@ async function executeAgentRun(
         } catch (error) {
           // The handle knows which loop ran, so record the bound it enforced even
           // when the child stopped by exhausting it (#1113 review).
-          stampEnforcedBound(subagent, { enforcedMaxModelTurns });
+          stampEnforcedBound(subagent, subagentBoundHandle);
           const failureError = wallClockTimeoutSignal.aborted
             ? new Error(`Subagent wall-clock timeout after ${subagentConfig.timeoutSeconds} seconds`)
             : error;
