@@ -30,7 +30,7 @@
  * The provider key is read here, per request, and never leaves this process.
  */
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { completeChatRequest, InvalidModelResponseError, type ChatCompletionRequest } from "@sciencediscovery/model";
@@ -258,7 +258,14 @@ async function recordUsage(
     finishedAt: new Date().toISOString(),
     id: randomBytes(16).toString("hex"),
     inputTokens: reported.inputTokens,
-    invocationId: `evolve:${grant.runId}`,
+    // One identity per proxied completion. `(invocationId, attemptIndex)` is the
+    // attempt axis of a single logical call, not the identity of a run: with a
+    // run-scoped id at a constant `attemptIndex`, the ledger's idempotency key
+    // made calls 2..N look like replays of call 1 and dropped them in silence —
+    // one row per run, 0.8% of the run's tokens recorded (#1132). The run stays
+    // addressable through `runId` below, and `direction-draft.ts` already keys
+    // its own evolve usage per call.
+    invocationId: `evolve:${grant.runId}:${randomUUID()}`,
     // Its own kind: a search's spend is not a chat turn, and the usage page has
     // to be able to say "this month went on evolution" rather than burying it.
     invocationKind: "evolve",

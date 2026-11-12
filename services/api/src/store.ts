@@ -7657,6 +7657,11 @@ export class SessionStore {
           && record.invocationId === usage.invocationId
           && record.invocationKind === usage.invocationKind
           && record.attemptIndex === usage.attemptIndex)) {
+          // Absorbing an intentional replay is correct, but doing it silently made
+          // a writer that keyed distinct calls the same way look like correct
+          // idempotency: an Evolve run recorded one row for 73 calls and nothing
+          // anywhere said so (#1132). The key is named so the caller can be found.
+          console.warn(`model_usage_append_deduplicated: ${usage.invocationKind} ${usage.invocationId} attempt ${usage.attemptIndex} in session ${usage.sessionId}`);
           return;
         }
         records.push(this.normalizeModelInvocationUsage(usage));
