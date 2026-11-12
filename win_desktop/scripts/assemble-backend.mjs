@@ -29,6 +29,7 @@ import { replaceVenvTrampolines, copyVenvRuntimeDlls } from "./lib/venv-launcher
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
 import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
+import { stagedPatchTag, patchVerifyCommand, patchVerifyFailureDetail } from "./lib/patch-consistency.mjs";
 
 const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -918,6 +919,38 @@ if (missingRequired.length > 0) {
   fail(`required payload files missing:\n  ${missingRequired.map((p) => relative(out, p)).join("\n  ")}`);
 }
 say(`required-files manifest OK (${requiredFiles.length} entries)`);
+
+// A2b patch-consistency gate: the staged jw tree must pass the verify the
+// installer will run on every cold start, against the patch set being shipped.
+// Field incident (2026-11-12 build): the jw tree came from the build data dir
+// patched with an OLDER 0004, the patch payload came from the repo's NEW 0004
+// (a7ff1333) — a payload that can never start, invisible to A1/A2/A5 and the
+// runtime probe. See lib/patch-consistency.mjs for the full failure chain.
+// The receipt's tag drives the verify (it describes the tree being shipped);
+// a missing receipt is a hard failure — the runtime verify reads it too.
+{
+  const stagedTag = stagedPatchTag(jwPayload);
+  const command = patchVerifyCommand({
+    jwPython: jwVenvPython,
+    swarmPatchesPy: join(backendOut, "scripts", "swarm-patches.py"),
+    jwPayloadDir: jwPayload,
+    tag: stagedTag,
+  });
+  if (!command) {
+    fail(`payload patch consistency check FAILED: no readable .sciencediscovery-patches.json in the staged jw tree (${relative(out, jwPayload)})`);
+  }
+  try {
+    execFileSync(command.exe, command.args, { env: compileEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024 });
+  } catch (error) {
+    fail(patchVerifyFailureDetail({
+      jwPayloadDir: jwPayload,
+      tag: stagedTag,
+      exitCode: error.status ?? 1,
+      stderr: (error.stderr?.toString?.() ?? "") + (error.message ?? ""),
+    }));
+  }
+  say(`patch consistency OK: staged jw tree verifies against the shipped patch set (tag ${stagedTag})`);
+}
 
 // A5 path-budget gate (SIZEOPT W9 / design D11): W6 burned ALL MAX_PATH headroom
 // (maxRel=228, margin 0) and no existing gate noticed — assemble exit 0 while
