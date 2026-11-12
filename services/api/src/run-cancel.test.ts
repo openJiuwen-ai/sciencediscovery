@@ -540,10 +540,18 @@ async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void>
   assert.equal(api.gatewayRunCount(), expected, "the agent turn reached the gateway and hung there");
 }
 
+/**
+ * Poll until the run reports `status`, at most `attempts` times 25ms.
+ *
+ * The 200-attempt default is 5s, sized for the built-in loop's in-process model call. A run that
+ * delegates to a `task` child under the real JiuwenSwarm adapter pays for the child's own model turn
+ * on top of the parent's, so the delegated case below passes a swarm-sized budget.
+ */
 async function waitForRunStatus(
   api: TestApi, sessionId: string, runId: string, status: SessionRun["status"], requireReplay = false,
+  attempts = 200,
 ): Promise<SessionRun> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const run = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
     if (run?.status === status) {
       if (!requireReplay) return run;
@@ -664,21 +672,27 @@ test("a multi-turn run's usage row is the sum of its turns", { tags: ["swarm:req
   assert.equal(usage.invocations[0]?.turnsRecorded, 2);
 });
 
-// Runs on the built-in loop on purpose. Under the real JiuwenSwarm instance a
-// nested `task` child does not finish against this fixture's gateway, so the
-// parent run never leaves `running` and the file's worker waits out its 600 s
-// timeout (observed in the merge queue: "expected run … to become completed /
-// actual: 'running'"). The row under test is written by the API's run collector,
-// which the executor does not change; the swarm variant still covers the
-// per-turn sum in the case above. Cancelling in `finally` keeps a future
-// failure from hanging teardown the same way (#1119).
-test("a delegated child writes exactly one delegation-track usage row", async (context) => {
+// A delegated run is the only one here that pays for a whole extra agent turn, and under the real
+// JiuwenSwarm adapter the shared 200-attempt (5 s) status poll is not enough: in the merge queue (run
+// 43170129650, group-551, backend jiuwenswarm) the parent was still `running` when those 5 s expired,
+// the file's suite failed on that assertion, and the worker never exited, so the group was killed at
+// its 600 s WORKER_TIMEOUT. The case does pass tagged when it has the time: PR #1119's UT job (run
+// 43162635488, group-549, backend jiuwenswarm) ran this file 11/11 in 48.7 s. So the fix is a budget
+// sized for a delegated turn, not a weaker gate: the case keeps `swarm:required` and takes the 90 s
+// poll below. JiuwenSwarm 0.2.6's documented nested-`task` stall (gap 10,
+// `docs/en/reference/jiuwenswarm-migration-status.md`; `services/api/src/server.test.ts:192`) can still
+// exceed that, so the poll can still fail; the `finally` cancel below then stops the run instead of
+// leaving it `running` (it keeps its old 5 s wait, so a failure path adds no budget here).
+test("a delegated child writes exactly one delegation-track usage row", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "usage-delegated", startDelegatedUsageGateway);
   const sessionId = await createSession(api, "Usage delegated");
 
+  // Swarm-sized only for this case: the delegated child's extra turn is what the 5 s default misses.
+  const statusAttempts = onJiuwenSwarm ? 3_600 : 200;
+
   const run = await createRun(api, sessionId, "Delegate one task");
   try {
-    await waitForRunStatus(api, sessionId, run.id, "completed", true);
+    await waitForRunStatus(api, sessionId, run.id, "completed", true, statusAttempts);
 
     // Delegated spend belongs to the same run but a different invocation, so the
     // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent
