@@ -156,7 +156,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
   // Escape belongs to the topmost layer only: the guide closes, the System
   // configuration dialog underneath it stays open and usable.
   await expect(configuration).toBeVisible();
-  await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
+  await expect(configuration.getByRole("heading", { name: "Network and proxy" })).toBeVisible();
   await guideTrigger.click();
   await expect(guide).toBeVisible();
   await expect(guideTrigger).toHaveAttribute("aria-expanded", "true");
