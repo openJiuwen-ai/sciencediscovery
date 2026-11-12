@@ -160,14 +160,23 @@ api_foreground=0
 # the API reports the flag it received and warns before it reaches it. Same
 # default and variable name as scripts/lib/stack-platform.mjs and
 # services/api/src/heap-budget.ts (scripts/api-heap-budget.test.mjs guards it).
-api_heap_budget_mb="${SCIENCE_AGENT_API_MAX_OLD_SPACE_MB:-3072}"
-case "$api_heap_budget_mb" in
-  ''|*[!0-9]*) echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be an integer number of MiB, got '$api_heap_budget_mb'." >&2; exit 2 ;;
-esac
-if (( api_heap_budget_mb < 256 || api_heap_budget_mb > 32768 )); then
-  echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be between 256 and 32768, got $api_heap_budget_mb." >&2
-  exit 2
-fi
+#
+# Resolved by a function rather than once at load: `prepare_local` sources .env
+# afterwards, so a value that lives only there would otherwise be read as unset
+# and the launch would silently run with the default (#1105 F2). Every mode
+# calls this after it has finished reading configuration.
+api_heap_budget_mb=3072
+resolve_api_heap_budget() {
+  api_heap_budget_mb="${SCIENCE_AGENT_API_MAX_OLD_SPACE_MB:-3072}"
+  case "$api_heap_budget_mb" in
+    ''|*[!0-9]*) echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be an integer number of MiB, got '$api_heap_budget_mb'." >&2; exit 2 ;;
+  esac
+  if (( api_heap_budget_mb < 256 || api_heap_budget_mb > 32768 )); then
+    echo "SCIENCE_AGENT_API_MAX_OLD_SPACE_MB must be between 256 and 32768, got $api_heap_budget_mb." >&2
+    exit 2
+  fi
+}
+resolve_api_heap_budget
 
 cleanup() {
   trap - EXIT INT TERM
@@ -354,6 +363,9 @@ prepare_local() {
     source .env
     set +a
   fi
+  # .env is the documented place for operator settings, so the budget is resolved
+  # after it is read rather than at script load (#1105 F2).
+  resolve_api_heap_budget
 
   configure_backend
 
@@ -552,6 +564,10 @@ prepare_local() {
 
 prepare_docker() {
   configure_backend
+  # The container gets its settings from the environment/compose file, not from a
+  # `.env` this script sources, so resolving here is the same point as in
+  # prepare_local: once configuration is final (#1105 F2).
+  resolve_api_heap_budget
   local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/sciencediscovery/envs}"
   gateway_python="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$envs_root/gateway/bin/python}"
   memory_graph_python="${SCIENCE_AGENT_MEMORY_GRAPH_PYTHON_PATH:-$envs_root/memory-graph/bin/python}"
