@@ -142,8 +142,10 @@ async function main(): Promise<void> {
     (event) => event.type === "tool_execution_end" && event.toolName === "list_files",
   );
   assert(listToolEnd && listToolEnd.type === "tool_execution_end" && !listToolEnd.isError, "list_files tool_execution_end missing");
+  // The terminal usage figure is the run's total, not its last turn (#1109):
+  // this loop reports 28 tokens on its first call and 48 on its second.
   const usage = events.find((event) => event.type === "usage");
-  assert(usage && usage.type === "usage" && usage.usage.totalTokens === 48, "usage event missing or wrong");
+  assert(usage && usage.type === "usage" && usage.usage.totalTokens === 76, `usage event missing or wrong: ${JSON.stringify(usage)}`);
 
   const roles = first.finalMessages.map((message) => message.role);
   assert(
