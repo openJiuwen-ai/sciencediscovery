@@ -31,6 +31,12 @@ import { closeApiServer, createApiServer, type ServerConfig } from "./server.js"
 const authorization = { authorization: "Bearer test-token" };
 const jsonHeaders = { ...authorization, "content-type": "application/json" };
 const onJiuwenSwarm = process.env.SCIENCE_AGENT_EXECUTOR?.trim() === "jiuwenswarm";
+// One real-adapter turn measures 5.0-5.4 s here (see waitForGatewayTurn above), so
+// the 5 s default of `waitForRunStatus` covers less than one round trip. A case
+// that has to watch a run through several of them passes this instead of relaxing
+// the default for every caller: a run that never terminates should still fail in
+// 5 s on the cases that only need one turn (#1128).
+const delegatedRunStatusAttempts = onJiuwenSwarm ? 3_600 : 200;
 
 const RUNNER_HEALTH: RunnerHealth = {
   cgroupDelegated: false,
@@ -542,8 +548,9 @@ async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void>
 
 async function waitForRunStatus(
   api: TestApi, sessionId: string, runId: string, status: SessionRun["status"], requireReplay = false,
+  attempts = 200,
 ): Promise<SessionRun> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const run = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
     if (run?.status === status) {
       if (!requireReplay) return run;
@@ -664,21 +671,21 @@ test("a multi-turn run's usage row is the sum of its turns", { tags: ["swarm:req
   assert.equal(usage.invocations[0]?.turnsRecorded, 2);
 });
 
-// Runs on the built-in loop on purpose. Under the real JiuwenSwarm instance a
-// nested `task` child does not finish against this fixture's gateway, so the
-// parent run never leaves `running` and the file's worker waits out its 600 s
-// timeout (observed in the merge queue: "expected run … to become completed /
-// actual: 'running'"). The row under test is written by the API's run collector,
-// which the executor does not change; the swarm variant still covers the
-// per-turn sum in the case above. Cancelling in `finally` keeps a future
-// failure from hanging teardown the same way (#1119).
-test("a delegated child writes exactly one delegation-track usage row", async (context) => {
+// Three real-adapter round trips: turn 1 answers `task`, turn 2 is the child,
+// turn 3 is the parent finishing. Against the swarm backend that is well past the
+// 5 s default budget below, which is why this case passes a larger one — it is a
+// budget, not a hang. The earlier reading of this failure ("the parent never
+// leaves `running`") is refuted by the same case passing on the same adapter in
+// run 43162635488 / job 130997635702 / `group-549` (11/11, durationMs 48674):
+// what fails is the harness clock, not the product (#1128). Cancelling in
+// `finally` keeps a future failure from eating the worker's 600 s budget.
+test("a delegated child writes exactly one delegation-track usage row", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "usage-delegated", startDelegatedUsageGateway);
   const sessionId = await createSession(api, "Usage delegated");
 
   const run = await createRun(api, sessionId, "Delegate one task");
   try {
-    await waitForRunStatus(api, sessionId, run.id, "completed", true);
+    await waitForRunStatus(api, sessionId, run.id, "completed", true, delegatedRunStatusAttempts);
 
     // Delegated spend belongs to the same run but a different invocation, so the
     // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent
@@ -697,7 +704,7 @@ test("a delegated child writes exactly one delegation-track usage row", async (c
     const current = (await listRuns(api, sessionId)).find((candidate) => candidate.id === run.id);
     if (current && ["queued", "running", "blocked"].includes(current.status)) {
       await cancelRunById(api, sessionId, run.id);
-      await waitForRunStatus(api, sessionId, run.id, "cancelled", true);
+      await waitForRunStatus(api, sessionId, run.id, "cancelled", true, delegatedRunStatusAttempts);
     }
   }
 });
