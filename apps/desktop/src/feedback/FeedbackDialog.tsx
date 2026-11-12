@@ -103,6 +103,10 @@ export function FeedbackDialog() {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [images, setImages] = useState<FeedbackImage[]>([]);
   const [imageError, setImageError] = useState<ImagePrepareError | undefined>(undefined);
+  // How many files the newest pick could not attach because the cap was full.
+  // Kept apart from `imageError`: that one names a file that failed, this one
+  // explains a pick that partly succeeded.
+  const [skippedImages, setSkippedImages] = useState(0);
   const [preparingImages, setPreparingImages] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
@@ -154,6 +158,7 @@ export function FeedbackDialog() {
     setSubmitting(false);
     setImages([]);
     setImageError(undefined);
+    setSkippedImages(0);
     setPreparingImages(false);
     setKind(incoming?.kind ?? draft.kind);
     setBody(incoming?.body ?? draft.body);
@@ -283,6 +288,7 @@ export function FeedbackDialog() {
         setHistory(loadFeedbackHistory(storage()));
         setImages([]);
         setImageError(undefined);
+        setSkippedImages(0);
         setSubmitState({ state: "success", receipt: outcome.receipt });
       } else {
         setSubmitState({ state: "failure", failure: outcome.failure });
@@ -304,6 +310,8 @@ export function FeedbackDialog() {
       const result = await prepareFeedbackImages(Array.from(files), images);
       setImages(result.images);
       setImageError(result.error);
+      // The count describes this pick, so a pick that fits says nothing.
+      setSkippedImages(result.skipped);
     } finally {
       setPreparingImages(false);
       // Clear the input so picking the same file again still fires `change`.
@@ -314,6 +322,9 @@ export function FeedbackDialog() {
   function removeImage(index: number): void {
     setImages((current) => current.filter((_, position) => position !== index));
     setImageError(undefined);
+    // The count described the pick that filled the cap; removing a thumbnail
+    // starts the next pick from a free slot.
+    setSkippedImages(0);
   }
 
   async function copyReceipt(receipt: string): Promise<void> {
@@ -473,6 +484,11 @@ export function FeedbackDialog() {
                 </ul>
               ) : null}
               {preparingImages ? <p className="feedback-hint" role="status">{fb.images.preparing}</p> : null}
+              {skippedImages > 0 ? (
+                <p className="feedback-hint" role="status">
+                  {fb.images.truncated(FEEDBACK_MAX_IMAGES, skippedImages)}
+                </p>
+              ) : null}
               {imageError ? <p className="feedback-inline-error" role="status">{fb.images.error[imageError]}</p> : null}
             </div>
 
