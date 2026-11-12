@@ -268,6 +268,86 @@ function startUsageGateway(context: TestContext): Promise<{ origin: string; runC
   });
 }
 
+/** Two model turns: a tool call, then the final answer. */
+function startMultiTurnUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
+  let runCount = 0;
+  const server = createHttpServer((request, response) => {
+    if (request.url === "/chat/completions" && request.method === "POST") {
+      runCount += 1;
+      const turn = runCount;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (turn === 1) {
+          writeSseEvent(response, {
+            choices: [{ delta: { tool_calls: [{ index: 0, id: "call-read", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "absent.txt" }) } }] } }],
+          });
+          writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+          writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+        } else {
+          writeSseEvent(response, { choices: [{ delta: { content: "Done" } }] });
+          writeSseEvent(response, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } });
+          writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "stop" }] });
+        }
+        response.write("data: [DONE]\n\n");
+        response.end();
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  context.after(() => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }));
+  return new Promise((ready) => {
+    server.listen(0, "127.0.0.1", () => ready({
+      origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      runCount: () => runCount,
+    }));
+  });
+}
+
+/** Delegates one task on the first turn, then answers. */
+function startDelegatedUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
+  let runCount = 0;
+  const server = createHttpServer((request, response) => {
+    if (request.url === "/chat/completions" && request.method === "POST") {
+      runCount += 1;
+      const turn = runCount;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (turn === 1) {
+          writeSseEvent(response, {
+            choices: [{ delta: { tool_calls: [{ index: 0, id: "call-task", type: "function", function: { name: "task", arguments: JSON.stringify({ description: "Check the workspace", prompt: "Reply with the word done and nothing else." }) } }] } }],
+          });
+          writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+          writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+        } else {
+          writeSseEvent(response, { choices: [{ delta: { content: "Done" } }] });
+          writeSseEvent(response, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } });
+          writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "stop" }] });
+        }
+        response.write("data: [DONE]\n\n");
+        response.end();
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  context.after(() => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }));
+  return new Promise((ready) => {
+    server.listen(0, "127.0.0.1", () => ready({
+      origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      runCount: () => runCount,
+    }));
+  });
+}
+
 /** Only `/health` is reached in these tests; no Runner execution is started. */
 function startStubRunner(context: TestContext): Promise<string> {
   const server = createHttpServer((request, response) => {
@@ -554,14 +634,56 @@ test("GET session usage reports gateway token usage for a completed run", { tags
   const usage = await getUsage(api, sessionId);
   assert.equal(usage.sessionId, sessionId);
   assert.equal(usage.totals.invocationCount, 1);
-  // One row per invocation, holding that invocation's spend (#1109). This run
-  // takes two model turns and the gateway reports 7/3/10 on each, so the row is
-  // their sum rather than the last turn it used to keep.
-  assert.equal(usage.totals.inputTokens, 14);
-  assert.equal(usage.totals.outputTokens, 6);
-  assert.equal(usage.totals.totalTokens, 20);
+  // One row per invocation, holding that invocation's spend (#1109). This
+  // gateway answers with `finish_reason: "stop"` and no tool call, so the run is
+  // a single model turn: the row is that turn's 7/3/10, not the whole-loop
+  // summary counted on top of it.
+  assert.equal(usage.totals.inputTokens, 7);
+  assert.equal(usage.totals.outputTokens, 3);
+  assert.equal(usage.totals.totalTokens, 10);
   assert.equal(usage.totals.unreportedInvocationCount, 0);
+  assert.equal(usage.invocations[0]?.turnsRecorded, 1);
+});
+
+test("a multi-turn run's usage row is the sum of its turns", { tags: ["swarm:required"] }, async (context) => {
+  const api = await startApi(context, "usage-multi-turn", startMultiTurnUsageGateway);
+  const sessionId = await createSession(api, "Usage multi turn");
+
+  // The first turn calls a tool and the second answers, so the loop reports
+  // 7/3/10 and then 5/2/7, two reported turns, summed to 12/5/17 once.
+  const run = await createRun(api, sessionId, "Measure a multi-turn run");
+  await waitForRunStatus(api, sessionId, run.id, "completed");
+  assert.equal(api.gatewayRunCount(), 2, "the run took two model turns");
+
+  const usage = await getUsage(api, sessionId);
+  assert.equal(usage.totals.invocationCount, 1);
+  assert.equal(usage.totals.inputTokens, 12);
+  assert.equal(usage.totals.outputTokens, 5);
+  assert.equal(usage.totals.totalTokens, 17);
+  assert.equal(usage.totals.reportedInvocationCount, 1);
   assert.equal(usage.invocations[0]?.turnsRecorded, 2);
+});
+
+test("a delegated child writes exactly one delegation-track usage row", { tags: ["swarm:required"] }, async (context) => {
+  const api = await startApi(context, "usage-delegated", startDelegatedUsageGateway);
+  const sessionId = await createSession(api, "Usage delegated");
+
+  const run = await createRun(api, sessionId, "Delegate one task");
+  await waitForRunStatus(api, sessionId, run.id, "completed", true);
+
+  // Delegated spend belongs to the same run but a different invocation, so the
+  // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent
+  // row keeps the parent's two turns (7/3/10 + 5/2/7).
+  const usage = await getUsage(api, sessionId);
+  const delegated = usage.invocations.filter((invocation) => invocation.invocationKind === "delegation-track");
+  assert.equal(delegated.length, 1);
+  assert.equal(delegated[0]?.runId, run.id);
+  assert.equal(delegated[0]?.totalTokens, 7);
+  assert.equal(delegated[0]?.turnsRecorded, 1);
+  const parent = usage.invocations.find((invocation) => invocation.invocationKind === "task");
+  assert.equal(parent?.totalTokens, 17);
+  assert.equal(parent?.turnsRecorded, 2);
+  assert.equal(usage.totals.invocationCount, 2);
 });
 
 test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:required"] }, async (context) => {
