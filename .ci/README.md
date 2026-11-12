@@ -491,7 +491,12 @@ Per-task status and metrics appear in JSON, Markdown and the GitHub step summary
 The resumable serial driver finishes all first-pass tasks before classified
 evaluation-only/end-to-end recovery, with at most three additional retries per
 task. Failed attempts remain in diagnostic records and separate known-cost
-accounting. Temporary success is not approved capability non-regression.
+accounting. All reported official Judge usage, including failed attempts and
+evaluation-only recovery, counts toward the unchanged token thresholds.
+Only proven transport failures may leave usage unknown after scoring succeeds:
+the known total is a lower bound and always warns; reaching the known-cost
+blocking threshold still blocks. Missing usage from scored or malformed responses
+remains blocking. Temporary success is not approved capability non-regression.
 Explicit candidate and approved compare modes remain available; no run
 automatically approves or replaces a baseline.
 
@@ -538,6 +543,8 @@ worker wall time. Generated tokens use recorded completion/output tokens,
 judge tokens and totals retain their recorded scopes, and no split is inferred
 from a total. Peak RSS bytes are divided by `1024 ** 3` for the fixed memory
 column. Missing optional measurements display `n/a` and do not affect gating.
+Biomni Judge and total token cells with incomplete accounting show `≥` and the
+total cell includes the number of attempts with unknown usage.
 Only identity cells and numeric measurements enter the table and summary.
 
 The table reads the staged projection, whose `execution_metrics` keep only

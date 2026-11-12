@@ -92,6 +92,10 @@ export function caseExecutionSummary(plan, root, verdict) {
       // Ambiguous evidence cannot supply a measurement for this identity.
       const doc = candidates.length === 1 ? candidates[0] : {};
       const m = executionMeasurements(doc), evaluation = doc.evaluation;
+      const lowerBound = doc.benchmark === 'biomnibench-da' && doc.judge_usage?.complete === false;
+      const tokens = value => lowerBound && count(value) !== undefined ? `≥ ${compactTokens(value)}` : compactTokens(value);
+      const unknown = count(doc.judge_usage?.unknown_attempts);
+      const tokenNote = lowerBound && unknown !== undefined ? ` (${unknown} attempts unknown)` : '';
       const score = first(finite(evaluation?.overall_score), finite(evaluation?.total_score), finite(evaluation?.score));
       const duration = number(doc.generation_duration_ms);
       const started = typeof doc.started_at === 'string' ? Date.parse(doc.started_at) : NaN;
@@ -101,8 +105,8 @@ export function caseExecutionSummary(plan, root, verdict) {
         status: outcomeStatus[result?.outcome] ?? status(doc.integration_status) ?? status(doc.integration) ?? 'not_run',
         score: score === undefined ? 'n/a' : String(score),
         peak_memory_gb: m.peak_rss_bytes === undefined ? 'n/a' : (m.peak_rss_bytes / 1024 ** 3).toFixed(2),
-        generated_tokens: compactTokens(m.generated_tokens), judge_tokens: compactTokens(m.judge_tokens),
-        total_tokens: compactTokens(m.total_tokens), tool_calls: m.tool_calls === undefined ? 'n/a' : String(m.tool_calls),
+        generated_tokens: compactTokens(m.generated_tokens), judge_tokens: tokens(m.judge_tokens),
+        total_tokens: tokens(m.total_tokens) + tokenNote, tool_calls: m.tool_calls === undefined ? 'n/a' : String(m.tool_calls),
         duration_min: duration === undefined ? 'n/a' : (duration / 60000).toFixed(1),
       } });
     }

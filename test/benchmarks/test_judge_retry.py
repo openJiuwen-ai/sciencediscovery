@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
+import http.client
 import json
 from pathlib import Path
 import tempfile
@@ -76,11 +77,46 @@ class JudgeRetryTests(unittest.TestCase):
                        HTTPError('https://provider', 503, 'unavailable', {}, None), response()])
         result, _ = self.run_judge(request)
         self.assertEqual(result['judge_recovery']['attempt'], 3)
+        entries = json.loads((self.output / 'attempts.json').read_text())
+        self.assertEqual(entries[0]['failure_kind'], 'network')
+        self.assertEqual(entries[1]['failure_kind'], 'provider_http')
+        self.assertEqual(entries[1]['http_status'], 503)
+
+    def test_two_524s_then_success_preserves_all_attempts_without_a_fourth_call(self):
+        request = Mock(side_effect=[HTTPError('https://provider', 524, 'secret', {}, None),
+                       HTTPError('https://provider', 524, 'secret', {}, None), response()])
+        result, _ = self.run_judge(request)
+        self.assertEqual(result['judge_recovery']['attempt'], 3)
+        self.assertEqual(request.call_count, 3)
+        attempts = json.loads((self.output / 'attempts.json').read_text())
+        self.assertEqual([a['status'] for a in attempts], ['error', 'error', 'scored'])
+        self.assertEqual([a['failure_kind'] for a in attempts[:2]], ['provider_http', 'provider_http'])
+        self.assertTrue(all('usage' not in a for a in attempts[:2]))
+        self.assertNotIn('secret', (self.output / 'attempts.json').read_text())
+
+    def test_transport_classification_does_not_exempt_invalid_responses_or_local_errors(self):
+        for n, failure in enumerate([TimeoutError('timeout'), http.client.IncompleteRead(b'partial'),
+                                     ValueError('invalid JSON'), OSError('local file error')]):
+            with self.subTest(failure=type(failure).__name__):
+                output = Path(self.tmp.name) / f'failure-{n}'
+                judge_with_retries(self.body, Mock(side_effect=[failure, response()]), json.loads,
+                                   output, sleep=self.sleep)
+                attempt = json.loads((output / 'attempts.json').read_text())[0]
+                self.assertEqual(attempt.get('failure_kind'),
+                                 'timeout' if n == 0 else 'network' if n == 1 else None)
 
     def test_existing_attempts_cannot_be_overwritten(self):
         self.run_judge(Mock(return_value=response()))
         with self.assertRaises(FileExistsError):
             self.run_judge(Mock(return_value=response()))
+
+    def test_reported_usage_survives_a_malformed_response(self):
+        raw = {'choices': [], 'usage': {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12}}
+        self.run_judge(Mock(side_effect=[raw, response()]))
+        attempts = json.loads((self.output / 'attempts.json').read_text())
+        self.assertEqual(attempts[0]['status'], 'error')
+        self.assertEqual(attempts[0]['usage'], raw['usage'])
+        self.assertNotIn('failure_kind', attempts[0])
 
     def test_suite_can_defer_retries_without_changing_default_judges(self):
         request = Mock(side_effect=TimeoutError('temporary'))

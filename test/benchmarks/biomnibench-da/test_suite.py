@@ -16,6 +16,7 @@ def load(name):
 
 suite = load('suite')
 rescore = load('rescore')
+from judge_usage import allows_unknown_judge_usage
 
 class SuiteTests(unittest.TestCase):
     def test_failures_are_deferred_until_all_unattempted_cases(self):
@@ -60,6 +61,26 @@ class SuiteTests(unittest.TestCase):
         self.assertTrue(rescore.usage_summary([usage])['complete'])
         self.assertFalse(rescore.usage_summary([])['complete'])
 
+    def test_only_proven_failed_transport_usage_may_warn(self):
+        scored = {'status': 'scored', 'usage': {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12}}
+        timeout = {'status': 'error', 'error_type': 'HTTPError', 'error': 'HTTP 524'}
+        summary = rescore.usage_summary([timeout, timeout, scored])
+        self.assertEqual(summary['total'], 12)
+        self.assertEqual(summary['unknown_attempts'], 2)
+        self.assertEqual(summary['transport_unknown_attempts'], 2)
+        self.assertEqual(summary['blocking_unknown_attempts'], 0)
+        self.assertTrue(allows_unknown_judge_usage(summary))
+        for attempt in [{}, {'status': 'scored'}, {'status': 'error', 'error_type': 'ValueError'},
+                        {'status': 'error', 'error_type': 'HTTPError', 'error': 'HTTP 401'},
+                        {'status': 'error', 'error_type': 'HTTPError', 'error': 'HTTP 429'},
+                        {'status': 'error', 'failure_kind': 'network', 'http_status': 400}]:
+            with self.subTest(attempt=attempt):
+                self.assertFalse(allows_unknown_judge_usage(rescore.usage_summary([attempt, scored])))
+        known = rescore.usage_summary([dict(timeout, usage=scored['usage']), scored])
+        self.assertTrue(known['complete'])
+        self.assertEqual(known['total'], 24)
+        self.assertFalse(allows_unknown_judge_usage(rescore.usage_summary([timeout])))
+
     def test_rescoring_retains_original_evidence_and_unknown_previous_cost(self):
         with tempfile.TemporaryDirectory() as root:
             evidence = Path(root) / 'evidence'
@@ -94,6 +115,43 @@ class SuiteTests(unittest.TestCase):
             with patch.object(rescore, 'require_official'), patch.object(rescore.subprocess, 'run', side_effect=judge):
                 report = rescore.rescore(evidence, Path(root) / 'rubric', output, prior_evaluations=[failed])
             self.assertFalse(report['all_evaluations_usage_complete'])
+            self.assertFalse(allows_unknown_judge_usage(report['all_evaluations_usage']))
+
+    def test_rescore_counts_known_prior_attempts_and_warns_only_for_transport_unknowns(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            evidence = root / 'evidence'; evidence.mkdir()
+            (evidence / 'benchmark-metrics.json').write_text(json.dumps({
+                'case_id': 'da-14-1', 'integration_status': 'passed', 'measurements': {'generation_tokens': 100}}))
+            (evidence / 'research-evidence.json').write_text('{"delivery":{"status":"passed"}}')
+            (evidence / 'trace.md').write_text('original trace')
+            (evidence / 'answer.txt').write_text('original answer')
+            previous = evidence / 'quality-scorecard.attempts'; previous.mkdir()
+            (previous / 'attempts.json').write_text(json.dumps([
+                {'status': 'error', 'error_type': 'HTTPError', 'error': 'HTTP 524'},
+                {'status': 'error', 'usage': {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12}}]))
+            prior = root / 'prior'; (prior / 'quality-scorecard.attempts').mkdir(parents=True)
+            (prior / 'quality-scorecard.attempts/attempts.json').write_text(json.dumps([
+                {'status': 'error', 'failure_kind': 'network'}]))
+            output = root / 'rescored'
+            def judge(*args, **kwargs):
+                (output / 'quality-scorecard.json').write_text('{"status":"scored","score":90}')
+                attempts = output / 'quality-scorecard.attempts'; attempts.mkdir()
+                (attempts / 'attempts.json').write_text(json.dumps([
+                    {'status': 'scored', 'usage': {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12}}]))
+                return type('Result', (), {'returncode': 0})()
+            with patch.object(rescore, 'require_official'), patch.object(rescore.subprocess, 'run', side_effect=judge):
+                report = rescore.rescore(evidence, root / 'rubric', output, prior_evaluations=[prior, prior, evidence, output])
+            recovered = json.loads((output / 'benchmark-metrics.json').read_text())
+            self.assertEqual(recovered['measurements']['judge_tokens'], 24)
+            self.assertEqual(recovered['measurements']['total_tokens'], 124)
+            self.assertEqual(recovered['measurements']['reported_total_tokens'], 124)
+            self.assertEqual(recovered['measurements']['total_tokens_basis'], 'known-lower-bound')
+            self.assertEqual(recovered['judge_usage']['unknown_attempts'], 2)
+            self.assertFalse(recovered['judge_usage']['complete'])
+            self.assertTrue(allows_unknown_judge_usage(report['all_evaluations_usage']))
+            self.assertEqual((evidence / 'trace.md').read_text(), 'original trace')
+            self.assertFalse(report['full_e2e_rerun'])
 
     def test_failures_continue_first_pass_then_three_retries_and_resume_stops(self):
         entries = [{'case': x} for x in ('a', 'b', 'c')]
@@ -146,12 +204,13 @@ class SuiteTests(unittest.TestCase):
             (evidence / 'answer.txt').write_text('answer')
             args = SimpleNamespace(results=root / 'results', runtime=root / 'runtime', data_root=root / 'data',
                 python='python', min_free_gib=1, min_free_inodes=1, idle_seconds=10)
+            accounting = {'complete': True}
             def execute(command, *args):
                 self.assertIn('rescore.py', command[1])
                 output = Path(command[command.index('--output') + 1]); output.mkdir()
                 (output / 'benchmark-metrics.json').write_text(json.dumps({
                     'case_id': 'a', 'integration_status': 'passed', 'evaluation': {'status': 'scored', 'score': 70},
-                    'judge_usage': {'complete': True}}))
+                    'judge_usage': accounting}))
                 return 0
             row = {'phase': 'retry-1'}
             with patch.object(suite, 'execute', side_effect=execute) as run, patch.object(suite, 'check_resources'), patch.object(suite, 'reclaim'):
@@ -160,6 +219,19 @@ class SuiteTests(unittest.TestCase):
             self.assertEqual(result['mode'], 'evaluation-only')
             self.assertEqual(result['exit'], 0)
             self.assertTrue(result['completed'])
+            accounting.update(complete=False, unknown_attempts=2, transport_unknown_attempts=2,
+                              blocking_unknown_attempts=0, reported_attempts=1)
+            with patch.object(suite, 'execute', side_effect=execute), patch.object(suite, 'check_resources'), patch.object(suite, 'reclaim'):
+                result = suite.run_case(args, {}, [], {'case': 'a'}, {'phase': 'retry-2'}, {'exit': 1})
+            self.assertEqual(result['exit'], 0)
+            self.assertIsNone(result['failure_stage'])
+            self.assertFalse(result['resource_accounting_complete'])
+            self.assertEqual(result['warnings'], ['JUDGE_USAGE_INCOMPLETE'])
+            accounting.update(transport_unknown_attempts=1, blocking_unknown_attempts=1)
+            with patch.object(suite, 'execute', side_effect=execute), patch.object(suite, 'check_resources'), patch.object(suite, 'reclaim'):
+                result = suite.run_case(args, {}, [], {'case': 'a'}, {'phase': 'retry-3'}, {'exit': 1})
+            self.assertEqual(result['exit'], 1)
+            self.assertEqual(result['failure_stage'], 'accounting')
 
     def test_run_case_research_failure_downloads_and_runs_without_stopping_other_cases(self):
         with tempfile.TemporaryDirectory() as root:

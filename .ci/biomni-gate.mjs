@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { canonical } from '../test/support/tagged/plan.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
-import { MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
+import { allowsUnknownJudgeUsage, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 
 const manifestBytes = readFileSync(new URL('../test/benchmarks/biomnibench-da/manifest.json', import.meta.url));
 export const dataset = JSON.parse(manifestBytes);
@@ -32,6 +32,9 @@ export function aggregateMetrics(results) {
   const sum = key => measurements.reduce((s, m) => s + m[key], 0);
   return { mean_score: sum('score') / results.length, min_score: Math.min(...measurements.map(m => m.score)),
     total_tokens: sum('total_tokens'), generation_tokens: sum('generation_tokens'), judge_tokens: sum('judge_tokens'),
+    reported_total_tokens: sum('total_tokens'), token_usage_complete: results.every(r => r.judge_usage?.complete !== false),
+    total_tokens_basis: results.some(r => r.judge_usage?.complete === false) ? 'known-lower-bound' : 'complete',
+    unknown_judge_attempts: results.reduce((s, r) => s + (r.judge_usage?.unknown_attempts ?? 0), 0),
     tool_rounds: sum('tool_rounds'), tool_calls: sum('tool_calls'), sum_e2e_ms: sum('e2e_ms'),
     max_peak_rss_bytes: Math.max(...measurements.map(m => m.peak_rss_bytes)),
     p95_peak_rss_gib: percentile(measurements.map(m => m.peak_rss_bytes / 1024 ** 3), 0.95) };
@@ -60,10 +63,13 @@ export function temporaryVerdict(summary, policy) {
       : base + Math.max(base * rule[level], memory ? rule[`${level}_min_gib`] : 0);
     const warning = limit('warning'), block = limit('block'), actual = summary?.[key];
     const crossed = value => key === 'mean_score' ? actual <= value + 1e-9 : actual >= value - 1e-9;
-    const status = actual === undefined ? 'incomplete' : crossed(block) ? 'blocked' : crossed(warning) ? 'warning' : 'passed';
-    metrics.push({ metric: key, historical_baseline: historical, budget_scale: scale, baseline: base, warning, block, actual: actual ?? null, status });
+    const lowerBound = key === 'total_tokens' && summary?.token_usage_complete === false;
+    const status = actual === undefined ? 'incomplete' : crossed(block) ? 'blocked' : crossed(warning) || lowerBound ? 'warning' : 'passed';
+    metrics.push({ metric: key, historical_baseline: historical, budget_scale: scale, baseline: base, warning, block, actual: actual ?? null, status,
+      ...(key === 'total_tokens' ? { usage_complete: !lowerBound, actual_basis: lowerBound ? 'known-lower-bound' : 'complete' } : {}) });
     if (status === 'blocked') problems.push(`${key.toUpperCase()}_REGRESSION`);
-    else if (status === 'warning') warnings.push(`${key.toUpperCase()}_WARNING`);
+    else if (status === 'warning' && crossed(warning)) warnings.push(`${key.toUpperCase()}_WARNING`);
+    if (lowerBound) warnings.push('JUDGE_USAGE_INCOMPLETE');
   }
   return { warnings, problems, metrics, population };
 }
@@ -74,7 +80,7 @@ export function projectMetrics(doc) {
   const out = pick(doc, ['schema_version', 'benchmark', 'case_id', 'key', 'revision', 'integration_status']);
   out.identity = pick(doc.identity, ['dataset_revision', 'manifest_sha256', 'evaluator_revision', 'measurement_version', 'generator_model', 'judge_model', 'backend', 'run_budget_ms', 'workspace_budget_bytes']);
   out.identity.machine = pick(doc.identity?.machine, ['os', 'arch', 'kernel', 'cpu', 'cores', 'memory_bytes', 'node']);
-  out.measurements = pick(doc.measurements, ['score', ...resourceKeys, 'memory_samples', 'memory_interval_ms', 'memory_scope', 'judge_ms', 'generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']);
+  out.measurements = pick(doc.measurements, ['score', ...resourceKeys, 'reported_total_tokens', 'total_tokens_basis', 'memory_samples', 'memory_interval_ms', 'memory_scope', 'judge_ms', 'generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']);
   out.evaluation = pick(doc.evaluation, ['status', 'score', 'gating']);
   if (doc.evaluation?.rubric) out.evaluation.rubric = rubricProjection(doc.evaluation.rubric);
   // Informational only. Never put a local score into measurements.score.
@@ -82,7 +88,7 @@ export function projectMetrics(doc) {
     out.local_evaluation = { ...pick(doc.local_evaluation, ['status', 'score']), gating: false,
       rubric: rubricProjection(doc.local_evaluation.rubric) };
   }
-  if (doc.judge_usage) out.judge_usage = pick(doc.judge_usage, ['complete', 'unknown_attempts', 'reported_attempts', 'scope']);
+  if (doc.judge_usage) out.judge_usage = pick(doc.judge_usage, ['complete', 'unknown_attempts', 'reported_attempts', 'transport_unknown_attempts', 'blocking_unknown_attempts', 'scope']);
   return out;
 }
 
@@ -95,7 +101,7 @@ export function validateMetrics(doc, entry, plan) {
     if (rubric.channel !== 'official' || rubric.version !== `upstream-${dataset.revision}`
         || rubric.git_blob_oid !== pin?.oid) throw new Error('OFFICIAL_RUBRIC_REQUIRED');
   }
-  if (doc?.judge_usage?.complete === false) throw new Error('UNREPORTED_JUDGE_TOKENS');
+  if (doc?.judge_usage?.complete === false && !allowsUnknownJudgeUsage(doc.judge_usage)) throw new Error('UNREPORTED_JUDGE_TOKENS');
   if (doc?.schema_version !== 2 || doc.benchmark !== 'biomnibench-da' || doc.case_id !== biomniCase(entry)
       || doc.key !== entry.key || doc.revision !== plan.revision || doc.integration_status !== 'passed') throw new Error('METRIC_IDENTITY_OR_DELIVERY');
   const id = doc.identity, m = doc.measurements;
@@ -109,6 +115,11 @@ export function validateMetrics(doc, entry, plan) {
   if (resourceKeys.some(k => !positive(m[k])) || !positive(m.memory_samples) || !positive(m.memory_interval_ms)
       || m.memory_scope !== 'isolated-local-worker-rss-sum' || m.tool_rounds > m.tool_calls
       || m.total_tokens !== m.generation_tokens + m.judge_tokens) throw new Error('MISSING_RESOURCE_METRICS');
+  if ((m.reported_total_tokens !== undefined && m.reported_total_tokens !== m.total_tokens)
+      || (m.total_tokens_basis !== undefined && m.total_tokens_basis !== (doc.judge_usage?.complete === false ? 'known-lower-bound' : 'complete'))
+      || (doc.judge_usage?.complete === false && (m.reported_total_tokens !== m.total_tokens || m.total_tokens_basis !== 'known-lower-bound'))) {
+    throw new Error('INVALID_TOKEN_USAGE_BASIS');
+  }
   if (!positive(m.judge_ms) || ['generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']
       .some(k => !Number.isSafeInteger(m[k]) || m[k] < 0)) throw new Error('INCOMPLETE_TOKEN_OR_JUDGE_METRICS');
   for (const k of ['tool_calls', 'tool_rounds', 'peak_rss_bytes', 'generation_tokens', 'judge_tokens', 'total_tokens', 'memory_samples']) {
@@ -129,6 +140,7 @@ export function evaluateSuite(plan, documents, policy, baseline) {
     const state = { case_id: biomniCase(entry), status: 'incomplete', delivery: matches[0]?.integration_status ?? 'missing',
       evaluation: matches[0]?.evaluation?.status ?? 'missing', measurements: matches.length === 1 ? projectMetrics(matches[0]).measurements : {},
       local_evaluation: matches.length === 1 ? projectMetrics(matches[0]).local_evaluation : undefined, reason: null };
+    if (matches.length === 1) state.judge_usage = projectMetrics(matches[0]).judge_usage;
     caseStatuses.push(state);
     if (matches.length !== 1) { state.reason = 'MISSING_OR_DUPLICATE_METRICS'; problems.push(`${biomniCase(entry)}: ${state.reason}`); continue; }
     try { results.push(validateMetrics(matches[0], entry, plan)); state.status = 'completed'; }
@@ -141,6 +153,7 @@ export function evaluateSuite(plan, documents, policy, baseline) {
     if (![policy.score_drop_points, policy.resource_increase_ratio].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0)) problems.push('INVALID_BASELINE_TOLERANCE');
     if (!problems.length) for (const current of results) {
       const previous = baseline.cases.find(c => c.case_id === current.case_id);
+      if (previous.judge_usage?.complete === false) { problems.push(`${current.case_id}: INCOMPLETE_BASELINE_TOKEN_USAGE`); continue; }
       // Baseline product revision differs; input/evaluator/model/machine/budgets must not.
       try { validateMetrics({ ...previous, key: current.key, revision: plan.revision }, expected.find(e => biomniCase(e) === current.case_id), plan); }
       catch { problems.push(`${current.case_id}: INVALID_BASELINE_METRICS`); continue; }
@@ -151,12 +164,13 @@ export function evaluateSuite(plan, documents, policy, baseline) {
   }
   const summary = aggregateMetrics(results);
   const thresholds = policy?.mode === 'temporary' ? temporaryVerdict(results.length === l5Tasks.length ? summary : null, policy) : { warnings: [], problems: [], metrics: [] };
+  if (summary?.token_usage_complete === false && !thresholds.warnings.includes('JUDGE_USAGE_INCOMPLETE')) thresholds.warnings.push('JUDGE_USAGE_INCOMPLETE');
   problems.push(...thresholds.problems);
   const complete = problems.length === 0;
   return { schema_version: 1, benchmark: 'biomnibench-da', scope: `public-${l5Tasks.length}-active`, dataset_scope: dataset.scope,
     excluded_case_ids: [...excludedL5CaseIds], revision: plan.revision,
-    status: complete ? policy.mode === 'candidate' ? 'baseline_candidate' : policy.mode === 'temporary' ? thresholds.warnings.length ? 'temporary_baseline_warning' : 'temporary_baseline_passed' : 'non_regression_passed' : 'failed',
-    non_regression_certified: complete && policy.mode === 'compare', expected: l5Tasks.length, measured: results.length,
+    status: complete ? policy.mode === 'candidate' ? 'baseline_candidate' : policy.mode === 'temporary' ? thresholds.warnings.length ? 'temporary_baseline_warning' : 'temporary_baseline_passed' : thresholds.warnings.length ? 'non_regression_warning' : 'non_regression_passed' : 'failed',
+    non_regression_certified: complete && policy.mode === 'compare' && summary?.token_usage_complete !== false, expected: l5Tasks.length, measured: results.length,
     problems, warnings: thresholds.warnings, thresholds: thresholds.metrics, case_statuses: caseStatuses,
     baseline_kind: policy?.mode, baseline_population: thresholds.population, cases: results, summary,
     summary_complete: results.length === l5Tasks.length };
@@ -164,14 +178,15 @@ export function evaluateSuite(plan, documents, policy, baseline) {
 
 export function renderSuite(report) {
   const format = value => Number.isFinite(value) ? String(Math.round(value * 1000) / 1000) : '—';
-  const limits = report.thresholds.map(m => `| ${m.metric} | ${format(m.actual)} | ${format(m.historical_baseline)} | ${format(m.budget_scale)} | ${format(m.baseline)} | ${format(m.warning)} | ${format(m.block)} | ${m.status} |`).join('\n');
+  const limits = report.thresholds.map(m => `| ${m.metric} | ${m.actual_basis === 'known-lower-bound' ? '≥ ' : ''}${format(m.actual)} | ${format(m.historical_baseline)} | ${format(m.budget_scale)} | ${format(m.baseline)} | ${format(m.warning)} | ${format(m.block)} | ${m.status} |`).join('\n');
   const population = report.baseline_population;
   const provenance = population ? ` Historical reference: ${population.reference_case_count} cases; active population: ${population.active_case_count}. Additive resource budgets scale by ${population.sum_budget_scale}. Mean score and P95 retain the historical reference and have not been remeasured on the active population.` : '';
   const rows = report.case_statuses.map(c => {
     const m = c.measurements, value = (key, scale = 1) => Number.isFinite(m[key]) ? (m[key] / scale).toFixed(2) : '—';
     const local = c.local_evaluation;
     const localScore = local?.status === 'scored' && Number.isFinite(local.score) ? format(local.score) : '—';
-    return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${value('total_tokens')} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
+    const tokenNote = c.judge_usage?.complete === false ? `≥ ${value('total_tokens')} (${c.judge_usage.unknown_attempts} attempts unknown)` : value('total_tokens');
+    return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${tokenNote} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
   });
   return `### Biomni L5 active cases: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}.${provenance} Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Historical reference | Budget scale | Effective reference | Warning | Block | Status |\n|---|---|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
 }
