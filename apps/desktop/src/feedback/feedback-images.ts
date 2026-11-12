@@ -112,17 +112,20 @@ export async function prepareFeedbackImage(
 }
 
 /** Attach as many files as there is room for; stops at the first failure so the
- *  dialog can show the reason instead of silently dropping the rest. */
+ *  dialog can show the reason instead of silently dropping the rest. Picks left
+ *  over once the cap is reached are counted in `skipped` — one multi-select is
+ *  reported as a whole, and none of them is decoded — so the dialog can say how
+ *  many files it could not attach. */
 export async function prepareFeedbackImages(
   files: File[],
   current: FeedbackImage[],
-): Promise<{ images: FeedbackImage[]; error?: ImagePrepareError }> {
+): Promise<{ images: FeedbackImage[]; error?: ImagePrepareError; skipped: number }> {
   const images = [...current];
-  for (const file of files) {
-    if (images.length >= FEEDBACK_MAX_IMAGES) break;
+  for (const [index, file] of files.entries()) {
+    if (images.length >= FEEDBACK_MAX_IMAGES) return { images, skipped: files.length - index };
     const result = await prepareFeedbackImage(file);
-    if (!result.ok) return { images, error: result.error };
+    if (!result.ok) return { images, error: result.error, skipped: 0 };
     images.push(result.image);
   }
-  return { images };
+  return { images, skipped: 0 };
 }
