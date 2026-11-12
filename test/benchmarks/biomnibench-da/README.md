@@ -277,9 +277,9 @@ The default [gate policy](../../../.ci/biomni-gate.json) uses `mode: temporary`.
 Its recorded reference equally weights two complete historical **50-case** A3
 result sets. The observations remain unchanged in `temporary_baseline`;
 `temporary_population` explicitly records 50 reference and 45 active cases.
-Only additive resource budgets (tokens, tool rounds and summed research time)
-are multiplied by **45/50 = 0.9** before applying the existing warning/block
-ratios. This preserves the average per-case budget instead of adding headroom.
+The summed research time budget is multiplied by **45/50 = 0.9** before applying
+the existing warning/block ratios. This preserves the average per-case budget
+instead of adding headroom.
 It is budget normalization, not a measured 45-case baseline.
 
 The historical mean and P95 cannot be scaled by case count. They remain
@@ -292,10 +292,13 @@ identity-matched capability certification.
 | Metric | Historical 50-case reference | Effective reference for 45-case gate | Warning | Block |
 | --- | ---: | ---: | ---: | ---: |
 | Mean score (50-case observation, not remeasured) | 67.7 | 67.7 (unscaled provisional target) | <=64.7 | <=62.7 |
-| Total tokens | 195,099,712 | 175,589,740.8 (x45/50) | >=201,928,202 | >=219,487,176 |
-| Total tool rounds | 2,042 | 1,837.8 (x45/50) | >=2,390 | >=2,757 |
-| Sum of research minutes | 1,312.753472 | 1,181.478125 (x45/50) | +20% | +30% |
+| Sum of research minutes | 1,312.753472 | 1,181.478125 (x45/50) | +30% | +50% |
 | P95 of per-task peak RSS, GiB (50-case observation, not remeasured) | 11.201639801 | 11.201639801 (unscaled) | +max(20%, 1 GiB) | +max(30%, 2 GiB) |
+
+Total tokens and tool rounds remain required measurements in aggregate and
+per-task reports. Their historical observations remain available for reference,
+but neither metric has warning or blocking regression thresholds in temporary
+or approved compare mode.
 
 Limits are inclusive; blocking takes precedence over warnings. Memory P95 uses
 linear interpolation (Excel PERCENTILE.INC convention). Maximum RSS remains

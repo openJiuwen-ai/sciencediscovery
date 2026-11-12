@@ -12,8 +12,7 @@ import { MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.m
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'os:windows', 'os:macos', 'arch:amd64', 'arch:arm64'] });
 const policy = JSON.parse(readFileSync(new URL('./biomni-gate.json', import.meta.url)));
 const historical = policy.temporary_baseline;
-const baseline = { ...historical, total_tokens: historical.total_tokens * 45 / 50,
-  tool_rounds: historical.tool_rounds * 45 / 50, sum_e2e_ms: historical.sum_e2e_ms * 45 / 50 };
+const baseline = { ...historical, sum_e2e_ms: historical.sum_e2e_ms * 45 / 50 };
 function fixture() {
   const plan = { profile: 'release', revision: 'candidate', evaluatorRevision: 'evaluator',
     execution: { backend: 'jiuwenswarm', model: 'generator', judge: 'judge' },
@@ -35,7 +34,7 @@ test('active sum budgets preserve per-case headroom without relabelling historic
   const verdict = temporaryVerdict(baseline, policy);
   for (const metric of verdict.metrics) {
     assert.equal(metric.historical_baseline, historical[metric.metric]);
-    const additive = ['total_tokens', 'tool_rounds', 'sum_e2e_ms'].includes(metric.metric);
+    const additive = metric.metric === 'sum_e2e_ms';
     assert.equal(metric.budget_scale, additive ? 0.9 : 1);
     if (additive) {
       const rule = policy.thresholds[metric.metric];
@@ -61,7 +60,7 @@ test('each resource has independent inclusive warning and block boundaries', () 
     const blocked = temporaryVerdict({ ...baseline, [metric.metric]: metric.block }, policy);
     assert.equal(blocked.metrics.find(m => m.metric === metric.metric).status, 'blocked');
   }
-  const bad = structuredClone(policy); bad.thresholds.total_tokens.block = NaN;
+  const bad = structuredClone(policy); bad.thresholds.sum_e2e_ms.block = NaN;
   assert.ok(temporaryVerdict(baseline, bad).problems.includes('INVALID_TEMPORARY_BASELINE_POLICY'));
 });
 

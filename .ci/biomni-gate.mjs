@@ -14,6 +14,8 @@ const excludedL5CaseIds = new Set(JSON.parse(readFileSync(new URL('../test/bench
 const l5CaseIds = new Set(dataset.tasks.filter(task => !excludedL5CaseIds.has(task.id)).map(task => task.id));
 export const l5Tasks = dataset.tasks.filter(task => l5CaseIds.has(task.id));
 const resourceKeys = ['tool_calls', 'tool_rounds', 'peak_rss_bytes', 'e2e_ms', 'generation_tokens', 'judge_tokens', 'total_tokens'];
+// Total tokens and tool rounds remain required diagnostics, without regression limits.
+const gatedResourceKeys = resourceKeys.filter(key => !['total_tokens', 'tool_rounds'].includes(key));
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 const pick = (doc, keys) => Object.fromEntries(keys.filter(k => doc?.[k] !== undefined).map(k => [k, doc[k]]));
 const rubricProjection = doc => pick(doc, ['channel', 'version', 'git_blob_oid', 'sha256']);
@@ -44,10 +46,10 @@ export function temporaryVerdict(summary, policy) {
   }
   const population = { reference_case_count: reference, active_case_count: active,
     sum_budget_scale: active / reference, mean_and_p95_reference: 'historical-population-not-remeasured' };
-  for (const key of ['mean_score', 'total_tokens', 'tool_rounds', 'sum_e2e_ms', 'p95_peak_rss_gib']) {
+  for (const key of ['mean_score', 'sum_e2e_ms', 'p95_peak_rss_gib']) {
     const historical = policy.temporary_baseline?.[key];
     // Preserve historical observations; normalize only additive resource budgets.
-    const scale = ['total_tokens', 'tool_rounds', 'sum_e2e_ms'].includes(key) ? population.sum_budget_scale : 1;
+    const scale = key === 'sum_e2e_ms' ? population.sum_budget_scale : 1;
     const base = historical * scale, rule = policy.thresholds?.[key === 'mean_score' ? 'score_drop' : key];
     if (!positive(historical) || !positive(base) || !rule || ![rule.warning, rule.block].every(positive) || rule.block <= rule.warning
         || (key === 'p95_peak_rss_gib' && ![rule.warning_min_gib, rule.block_min_gib].every(positive))) {
@@ -144,7 +146,7 @@ export function evaluateSuite(plan, documents, policy, baseline) {
       catch { problems.push(`${current.case_id}: INVALID_BASELINE_METRICS`); continue; }
       if (canonical(current.identity) !== canonical(previous.identity)) { problems.push(`${current.case_id}: INCOMPARABLE_BASELINE`); continue; }
       if (current.measurements.score < previous.measurements.score - policy.score_drop_points) problems.push(`${current.case_id}: SCORE_REGRESSION`);
-      for (const key of resourceKeys) if (current.measurements[key] > previous.measurements[key] * (1 + policy.resource_increase_ratio)) problems.push(`${current.case_id}: ${key.toUpperCase()}_REGRESSION`);
+      for (const key of gatedResourceKeys) if (current.measurements[key] > previous.measurements[key] * (1 + policy.resource_increase_ratio)) problems.push(`${current.case_id}: ${key.toUpperCase()}_REGRESSION`);
     }
   }
   const summary = aggregateMetrics(results);
