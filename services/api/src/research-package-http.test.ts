@@ -259,11 +259,12 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
-function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false) {
+function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false, withEvolveCandidateSource = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
   const notebook = Buffer.from('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}');
   const evolveSource = Buffer.from("print(1)\n");
+  const evolveCandidateSource = Buffer.from("print('candidate source')\n");
   const version = (id: string, index: number, object: Buffer) => ({
     id, artifactId: "artifact-source", sessionId: "source-one", projectId: "source-project", version: index,
     createdAt: date, content: { hash: sha256(object), size: object.length }, mediaType: "text/csv", sourcePath: "results/result.csv",
@@ -296,7 +297,7 @@ function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = fa
         status: "succeeded", startedAt: date, finishedAt: date, candidates: 2, costCents: 0, tokens: 0, createdAt: date,
       },
       events: [{ sequence: 1, createdAt: date, event: { type: "log", level: "info", message: "started" } }],
-    }] } } : {}),
+    }], ...(withEvolveCandidateSource ? { candidates: [{ runId: "evolve-run-source", hash: sha256(evolveCandidateSource), objectPath: sha256(evolveCandidateSource) }] } : {}) } } : {}),
     artifacts: [
       { id: "artifact-source", projectId: "source-project", createdInSessionId: "source-one", createdInSessionTitle: "原始研究", sessionId: "source-one", name: "results/result.csv", logicalName: "results/result.csv", kind: "dataset", origin: "user_upload", currentVersion: 2, createdAt: date, updatedAt: date, versions: [version("version-one", 1, first), version("version-two", 2, latest)] },
       // A run's result is published as `evolve/<run>/<entrypoint>` with
@@ -318,7 +319,7 @@ function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = fa
         }],
       }] : []),
     ],
-  }, objects: [first, latest, notebook, ...(withEvolve ? [evolveSource] : [])].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
+  }, objects: [first, latest, notebook, ...(withEvolve ? [evolveSource] : []), ...(withEvolveCandidateSource ? [evolveCandidateSource] : [])].map((bytes) => ({ path: sha256(bytes), bytes })) }).bytes;
 }
 
 test("complete package restores conversations, files, versions and reviews across projects without leaking into sibling sessions", async (context) => {
@@ -416,6 +417,21 @@ test("a package carrying the evolve runs and their artifact reports no search lo
   // from the local EvolutionStore the import wrote it into.
   const restoredRun = JSON.parse(await readFile(resolve(root, "evolution", "runs", "evolve-run-source", "run.json"), "utf8")) as { sessionId: string };
   assert.equal(restoredRun.sessionId, target.firstSession.id, "the carried run is restored under the imported session");
+});
+
+test("a package carrying evolve candidate source restores it beside the imported run", async (context) => {
+  const { request, project, root } = await fixture(context);
+  const target = await project();
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true)),
+  })).json() as { omissions: string[] };
+  assert.equal(receipt.omissions.some((item) => item.includes("candidate source files are not carried")), false);
+  const digest = sha256(Buffer.from("print('candidate source')\n")).replace(/^sha256:/, "");
+  assert.equal(await readFile(resolve(root, "evolve-candidates", "evolve-run-source", `${digest}.py`), "utf8"), "print('candidate source')\n");
+  const exported = importResearchPackage(new Uint8Array(await (await request(`/api/projects/${target.id}/research-package?sessionId=${target.firstSession.id}&level=complete`)).arrayBuffer()));
+  const evolve = (exported.records as { evolve?: { candidates?: Array<{ hash: string; objectPath: string; runId: string }> } }).evolve;
+  assert.deepEqual(evolve?.candidates, [{ hash: `sha256:${digest}`, objectPath: digest, runId: "evolve-run-source" }]);
+  assert.equal(Buffer.from(exported.objects.get(digest)!).toString("utf8"), "print('candidate source')\n");
 });
 
 test("a package without an evolve artifact reports no such loss", async (context) => {
