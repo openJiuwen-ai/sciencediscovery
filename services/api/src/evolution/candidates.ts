@@ -87,8 +87,15 @@ export class CandidateSources {
     const path = candidatePath(this.root, runId, hash);
     if (!path || !digest || typeof source !== "string" || sourceHash(source) !== digest) return false;
     await mkdir(resolve(this.root, runId), { recursive: true });
-    await writeFile(path, source, { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
+    await writeFile(path, source, { flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error;
+      // The name is the digest of the content, so an existing file that does not
+      // hash to it is a leftover from a crash or a partial import: replacing it
+      // is the repair. Accepting whatever is there reported a truncated file as
+      // restored while the reader got bytes that never hashed to its name.
+      const existing = await readFile(path, "utf-8").catch(() => undefined);
+      if (existing === source) return;
+      await writeFile(path, source);
     });
     return true;
   }
