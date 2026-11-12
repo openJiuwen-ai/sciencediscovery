@@ -94,9 +94,9 @@ test("the run handle reports the bound only when the executor can name one", asy
         async prompt() {},
         subscribe() { return () => undefined; },
       }),
-      workspace: { enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); } },
+      workspace: workspaceBindings(),
     },
-    { agentRunId: "run-native", history: [], prompt: "work", purpose: "task" },
+    { agentRunId: "run-native", history: [], prompt: "work", purpose: "subagent_task", requestExecutionId: "execution-native" },
   );
   assert.equal(native.enforcedMaxModelTurns, 128, "the native loop names the bound it ran");
 
@@ -115,9 +115,9 @@ test("the run handle reports the bound only when the executor can name one", asy
         async prompt() {},
         subscribe() { return () => undefined; },
       }),
-      workspace: { enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); } },
+      workspace: workspaceBindings(),
     },
-    { agentRunId: "run-external", history: [], prompt: "work", purpose: "task" },
+    { agentRunId: "run-external", history: [], prompt: "work", purpose: "subagent_task", requestExecutionId: "execution-external" },
   );
   assert.equal(external.enforcedMaxModelTurns, undefined, "an executor without a turn budget reports none");
 });
