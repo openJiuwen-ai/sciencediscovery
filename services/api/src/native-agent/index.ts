@@ -413,7 +413,7 @@ class NativeAgent implements NativeAgentHandle {
     this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);
     // Reasoning models bill hidden thought against the same `max_tokens` as
     // the answer, and on some endpoints the agent loop spends a whole turn on
-    // it 鈥?tens of thousands of characters, no visible text, no tool call.
+    // it — tens of thousands of characters, no visible text, no tool call.
     // Raising the token ceiling only buys a longer spiral, so the lever is the
     // toggle itself. Left unset by default: for most models the loop's own
     // reasoning is what makes it work. This belongs on the model profile
