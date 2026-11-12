@@ -1210,6 +1210,30 @@ test("usage normalization tolerates provider spellings", () => {
   assert.equal(normalizeUsage(null), undefined);
 });
 
+for (const missingUsage of [false, true]) {
+  test(`chat completion survives mixed or missing accounting (missing=${missingUsage})`, async () => {
+    await withServer(async (request, response) => {
+      await readBody(request);
+      sse(response, [
+        { choices: [{ delta: { content: "OK" }, finish_reason: "stop" }] },
+        { choices: [], usage: missingUsage ? null : {
+          prompt_tokens: 35, completion_tokens: 31, total_tokens: 66,
+          input_tokens: 35, output_tokens: 0, usage_source: "anthropic",
+        } },
+      ]);
+    }, async (baseUrl) => {
+      const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+        "s", [], [], policy, new AbortController().signal);
+      assert.equal(turn.assistantMessage.content, "OK");
+      // The requested dialect supplies both counts: a competing `output_tokens: 0`
+      // from a proxy cannot zero the completion the provider reported.
+      assert.deepEqual(turn.usage, missingUsage ? undefined : {
+        inputTokens: 35, outputTokens: 31, reasoningTokens: null, totalTokens: 66, cacheReadTokens: null, cacheWriteTokens: null,
+      });
+    });
+  });
+}
+
 for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
   test(`${protocol} counts the last cumulative usage once using its own fields`, async () => {
     const usage = { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 8, output_tokens: 5, total_tokens: protocol === "openai-chat-completions" ? 30477 : 13 };

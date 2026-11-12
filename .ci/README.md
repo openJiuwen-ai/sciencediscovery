@@ -300,8 +300,9 @@ and public APIs; it does not import either backend's agent internals.
 | `workspace` | Write a relative filename in one Session; another Session in the same Project keeps its same-named file unchanged | Real LLM + workspace tools |
 | `cancel` | Cancel after actual streamed output begins; reach cancelled state, complete another request and leave no active Run | Real LLM, including a cancelled request |
 
-Every completed Run must have nonzero product-reported input/output token usage and retains
-the provider usage ledger, including on failure. These replace the former MCP
+Every completed Run records the provider's reported input/output token usage in
+the product ledger and retains it, including on failure; a missing or zero count
+is diagnostic evidence and does not fail the case. These replace the former MCP
 echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
 basic Project disables optional skill, planning and delegation plugins through
@@ -317,6 +318,13 @@ card recovery after a browser reload and cancellation returned to the model.
 The basic worker has no suite request or token budget and does not override
 per-request model token settings. Its ledger records forwarded requests,
 payload bytes and provider-reported input/output tokens across worker restarts.
+Provider usage is diagnostic evidence, not a real-E2E success or scoring gate.
+An absent, zero or unreported count must not fail an otherwise completed task,
+and missing accounting is not evidence of zero cost; a usage endpoint that
+cannot answer at all is still a failure. Protocol parsing correctness
+remains enforced by deterministic model-client and gateway tests. Chat
+Completions reads `prompt_tokens`/`completion_tokens`, while Responses reads
+`input_tokens`/`output_tokens`; competing extra fields cannot override them.
 Cancelled calls or responses without usage stay in `unreportedCalls`; measured
 totals are incomplete when that count is nonzero. No token count is inferred
 from payload bytes. A fresh isolated run uses a fresh runtime root.
