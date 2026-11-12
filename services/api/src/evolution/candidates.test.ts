@@ -20,19 +20,21 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 
 import { CandidateSources } from "./candidates.js";
 
-const DIGEST = "a".repeat(64);
+const SOURCE = "def train_and_predict(a, b): ...";
+const DIGEST = createHash("sha256").update(SOURCE, "utf8").digest("hex");
 
 async function store(): Promise<{ root: string; sources: CandidateSources }> {
   const root = await mkdtemp(resolve(tmpdir(), "evolve-candidates-"));
   await mkdir(resolve(root, "run-1"), { recursive: true });
-  await writeFile(resolve(root, "run-1", `${DIGEST}.py`), "def train_and_predict(a, b): ...", "utf-8");
+  await writeFile(resolve(root, "run-1", `${DIGEST}.py`), SOURCE, "utf-8");
   return { root, sources: new CandidateSources("/unused", root) };
 }
 
@@ -63,4 +65,16 @@ test("a hash this run never wrote is absent, not an error", async () => {
   // The ordinary case: a pruned run, or a hash from another search.
   assert.equal(await sources.read("run-1", "b".repeat(64)), undefined);
   assert.equal(await sources.read("run-missing", DIGEST), undefined);
+});
+
+test("candidate sources can be listed and restored without accepting path traversal", async () => {
+  const { root, sources } = await store();
+  const copied = new CandidateSources("/unused", resolve(root, "imported"));
+
+  assert.deepEqual((await sources.list("run-1")).map((candidate) => candidate.hash), [`sha256:${DIGEST}`]);
+  assert.equal(await copied.write("run-2", `sha256:${DIGEST}`, "print('restored')\n"), true);
+  assert.equal(await copied.read("run-2", DIGEST), "print('restored')\n");
+  assert.equal(await copied.write("../escape", DIGEST, "nope"), false);
+  assert.equal(await copied.write("run-2", "../escape", "nope"), false);
+  await rm(root, { force: true, recursive: true });
 });

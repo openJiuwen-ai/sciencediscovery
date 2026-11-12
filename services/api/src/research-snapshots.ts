@@ -45,7 +45,7 @@ import { sessionTrajectory } from "./trajectory.js";
 import { emptyPackageTrajectory, importedTrajectoryAccess, remapPackageTrajectory, validatePackageTrajectory, writePackageTrajectory, type PackageTrajectory } from "./research-package-trajectory.js";
 import { casHashes, versionRefs, remapRunEvent, remapRunStreamId, remapReferences, remapMessages, exportHistory, ResearchPackageIds, restoreHistory, restoreEvidenceItems, remapMemorySnapshot, remapWorkspaceProvenance, type PackageHistory } from "./research-package-history.js";
 
-type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder" | "evolutionStore">;
+type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder" | "evolutionStore" | "evolveCandidates">;
 type PreviewSizing = {
   objectSizes: Map<string, number>; additionalRecordBytes: number;
   hashes: Set<string>; refs: Map<string, ObjectRef>;
@@ -238,12 +238,28 @@ export function packageCarriesEvolveCandidates(payload: unknown): boolean {
   });
 }
 
+function packageCarriesEvolveCandidateSources(payload: unknown): boolean {
+  const container = typeof payload === "object" && payload !== null ? payload as { candidates?: unknown } : {};
+  return Array.isArray(container.candidates);
+}
+
+function packageEvolveCandidateSourcesFor(payload: unknown, runIds: Set<string>): Array<{ hash: string; objectPath: string; runId: string }> {
+  const container = typeof payload === "object" && payload !== null ? payload as { candidates?: unknown } : {};
+  if (!Array.isArray(container.candidates)) return [];
+  return container.candidates.flatMap((entry) => {
+    const source = typeof entry === "object" && entry !== null ? entry as { hash?: unknown; objectPath?: unknown; runId?: unknown } : undefined;
+    if (!source || typeof source.runId !== "string" || !runIds.has(source.runId)
+      || typeof source.hash !== "string" || typeof source.objectPath !== "string") return [];
+    return [{ hash: source.hash, objectPath: source.objectPath, runId: source.runId }];
+  });
+}
+
 export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefined): boolean {
   return (artifacts ?? []).some((artifact) =>
     typeof artifact.name === "string" && artifact.name.startsWith("evolve/"));
 }
 
-export function createResearchSnapshots({ store, evolutionStore, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
+export function createResearchSnapshots({ store, evolutionStore, evolveCandidates, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
   const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
   const previewDependencies = new Map<string, Set<string>>();
   const previewRevision = async (projectId: string, sessionId?: string): Promise<string> => {
@@ -466,6 +482,20 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
     if (evolveRuns.truncated > 0) {
       omissions.push(`Evolution (evolve) search runs were capped at ${MAX_RUNS}: ${evolveRuns.truncated} older runs are not carried.`);
     }
+    const evolveCandidateSources: Array<{ hash: string; objectPath: string; runId: string }> = [];
+    for (const { run } of evolveRuns.runs) {
+      try {
+        for (const candidate of await evolveCandidates.list(run.id)) {
+          const bytes = Buffer.from(candidate.source, "utf8");
+          const objectPath = previewObjectSizes
+            ? addPreviewObject(sha256(bytes), bytes.byteLength, "log")
+            : await addObject(bytes, "log");
+          evolveCandidateSources.push({ hash: candidate.hash, objectPath, runId: run.id });
+        }
+      } catch {
+        omissions.push(`evolve:${run.id}:candidate source files could not be read while exporting.`);
+      }
+    }
     const inheritedMemorySummary = sessions.map((session) => session.researchSnapshot?.scientificMemorySummary).find((summary): summary is ScientificMemorySummary => Boolean(summary));
     const availableMemoryGraph = memoryGraph?.nodes.length === 0 && inheritedMemorySummary ? undefined : memoryGraph;
 
@@ -570,7 +600,7 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
     if (level === "necessary") omissions.push("必要导出保留当前结果及依赖证据；不包含完整历史版本、思考分片和原始事件流。直接溯源引用的执行代码和日志保留原文，其余历史执行默认不带。继续研究仅复制本包已有内容。");
     const usedEnvironments = new Set(selectedSessionRecords.flatMap((record) => [...(record.executionRuns ?? []), ...(record.shellExecutions ?? []).flatMap((row) => row.result ? [row.result] : [])].flatMap((run) => run.environmentRevisionId ? [run.environmentRevisionId] : [])));
     const environmentRevisions = store.listEnvironmentRevisions().filter((revision) => usedEnvironments.has(revision.id));
-    const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }), ...(preview?.hashes ?? [])]);
+    const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...evolveCandidateSources.map((source) => source.objectPath), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }), ...(preview?.hashes ?? [])]);
     for (const hash of objects.keys()) if (!needed.has(hash)) objects.delete(hash);
     for (const hash of needed) {
       signal.throwIfAborted();
@@ -610,7 +640,7 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
         exportLevel: level, exportProfile,
         project: { ...project, settingsOverrides: undefined }, sessions: selectedSessionRecords, artifacts: selectedArtifacts,
         environmentRevisions, versionObjects: [...versionObjects.values()],
-        ...(evolveRuns.runs.length ? { evolve: { runs: evolveRuns.runs } } : {}),
+        ...(evolveRuns.runs.length ? { evolve: { runs: evolveRuns.runs, candidates: evolveCandidateSources } } : {}),
         ...(packageMemoryGraph ? { memoryGraph: packageMemoryGraph } : {}),
         ...(memoryGraphSummary ? { memoryGraphSummary } : {}),
       },
@@ -768,7 +798,7 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
         const ranEvolve = packageRanEvolve(records.artifacts);
         if (ranEvolve && !carriedEvolveRuns && !omissions.some((item) => item.includes("does not carry evolution (evolve) search runs"))) {
           omissions.push("This package does not carry evolution (evolve) search runs: their candidate trees, scores and budgets are not restored. Re-run the search at the source, or export again from a version that includes them.");
-        } else if (carriedEvolveRuns && packageCarriesEvolveCandidates(records.evolve) && !omissions.some((item) => item.includes("candidate source"))) {
+        } else if (carriedEvolveRuns && packageCarriesEvolveCandidates(records.evolve) && !packageCarriesEvolveCandidateSources(records.evolve) && !omissions.some((item) => item.includes("candidate source"))) {
           omissions.push("Evolution (evolve) candidate source files are not carried in this package: their candidates are restored as references without the source code.");
         }
         if (!records.memoryGraph && !records.memoryGraphSummary) omissions.push("This package contains no scientific memory snapshot; export it again from the source with the updated version to restore scientific memory.");
@@ -885,6 +915,21 @@ export function createResearchSnapshots({ store, evolutionStore, memoryGraphClie
           if (packedEvolve.length) {
             const restoredEvolve = await restoreEvolveRuns(evolutionStore, { projectId, sessionId: target.id }, { runs: packedEvolve });
             omissions.push(...restoredEvolve.omissions);
+            const restoredRunIds = new Set<string>();
+            for (const entry of packedEvolve) {
+              const run = typeof entry === "object" && entry !== null ? (entry as { run?: { id?: unknown } }).run : undefined;
+              if (typeof run?.id === "string" && (await evolutionStore.readRun(run.id))?.sessionId === target.id) restoredRunIds.add(run.id);
+            }
+            for (const candidate of packageEvolveCandidateSourcesFor(records.evolve, restoredRunIds)) {
+              const object = imported.objects.get(candidate.objectPath.replace(/^objects\//, ""));
+              if (!object) {
+                omissions.push(`evolve:${candidate.runId}:${candidate.hash}:missing candidate source object`);
+                continue;
+              }
+              if (!await evolveCandidates.write(candidate.runId, candidate.hash, Buffer.from(object).toString("utf8"))) {
+                omissions.push(`evolve:${candidate.runId}:${candidate.hash}:invalid candidate source record`);
+              }
+            }
           }
         }
 
