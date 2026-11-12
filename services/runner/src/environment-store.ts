@@ -37,6 +37,15 @@ import {
 
 import micromambaManifest from "./micromamba-releases.json" with { type: "json" };
 import { EnvironmentAccess } from "./environment-access.js";
+import {
+  MAX_PATH_USABLE,
+  PathBudgetExceededError,
+  defaultPackageCacheRoot,
+  describePathBudgetProblems,
+  inspectPathBudget,
+  looksLikePathLengthFailure,
+  windowsLongPathsEnabled,
+} from "./environment-paths.js";
 // [windows-desktop] win-64 binary name (.exe), conda interpreter layout
 // and rename retry live in the platform adaptation layer ().
 import { environmentInterpreterPath, environmentShellPath, environmentShellUtilityPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
@@ -335,6 +344,8 @@ export class EnvironmentStore {
   private catalog = emptyCatalog();
   private initialized = false;
   private readonly catalogPath: string;
+  /** Where packages are extracted; `CONDA_PKGS_DIRS` for every provisioner call. */
+  private readonly packagesRoot: string | undefined;
   private readonly revisionsRoot: string;
   private readonly snapshotsRoot: string;
   private readonly wheelsRoot: string;
@@ -363,6 +374,11 @@ export class EnvironmentStore {
     this.snapshotsRoot = resolve(config.root, "snapshots");
     this.wheelsRoot = resolve(config.root, "wheels");
     this.provisionerPath = config.provisionerPath ?? resolve(config.root, "bin", micromambaBinaryName);
+    // The cache root is the operator's only lever on the Windows path budget, so
+    // it is resolved once and never inferred from the data directory again
+    // (#1104). A configured directory keeps its documented offline meaning;
+    // the platform default only relocates, it does not restrict channels.
+    this.packagesRoot = config.packageCacheDir ?? defaultPackageCacheRoot(config.platform ?? process.platform, process.env);
     this.setupState = config.enabled ? "not-configured" : "disabled";
     this.setupPhase = config.enabled ? "pending" : "disabled";
     this.setupMessage = config.enabled
@@ -387,7 +403,7 @@ export class EnvironmentStore {
       return executeEnvironmentCommand(provisionerPath, arguments_, {
         ...(environment ?? process.env),
         MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
-        ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
+        ...(this.packagesRoot ? { CONDA_PKGS_DIRS: this.packagesRoot } : {}),
       });
     });
   }
@@ -538,6 +554,7 @@ export class EnvironmentStore {
       this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
       component = "conda";
       if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
+      this.assertPathBudget("python");
       const pythonStarterExisted = this.catalog.environments.some((environment) => environment.id === "starter-python");
       if (!pythonStarterExisted) {
         this.updateSetup("installing", "creating-python-base", "Creating the managed Python base environment");
@@ -922,7 +939,7 @@ export class EnvironmentStore {
     } catch (error) {
       this.catalog = previousCatalog;
       await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
-      throw error;
+      throw await this.explainProvisioningFailure(error);
     }
   }
 
@@ -1091,6 +1108,57 @@ export class EnvironmentStore {
         ? ` Known revisions: ${known.slice(0, 10).join(", ")}${known.length > 10 ? ", …" : ""}`
         : " No environment revisions exist yet; create one before running against it."),
     );
+  }
+
+  /**
+   * Refuse a layout whose deepest member cannot be addressed, before micromamba
+   * runs (#1104). Windows-only: MAX_PATH does not bound POSIX paths, so the same
+   * numbers there would reject installations that work.
+   */
+  private assertPathBudget(language: ScientificLanguage): void {
+    const platform = this.config.platform ?? process.platform;
+    if (platform !== "win32") return;
+    const problems = inspectPathBudget({
+      cacheRoot: this.packagesRoot ?? resolve(this.config.root, "provisioner", "pkgs"),
+      channels: this.config.allowedChannels,
+      // A real revision id is 36 characters; the placeholder keeps the length honest.
+      revisionPrefix: this.revisionPath(`starter-${language}`, `rev-${"0".repeat(36)}`),
+      platform,
+    });
+    if (!problems.length) return;
+    throw new PathBudgetExceededError(problems, describePathBudgetProblems(problems, windowsLongPathsEnabled(platform)));
+  }
+
+  /**
+   * Turn libmamba's "the file it just wrote is missing" trail into the reason and
+   * the remedy, and clear the shared cache once when it is the managed default.
+   *
+   * The validation and removal happen inside the pinned binary, so the message is
+   * what this repository owns. Left as written it reports a corrupt cache, which
+   * invites wiping and re-downloading into the same too-deep layout.
+   */
+  private async explainProvisioningFailure(error: unknown): Promise<unknown> {
+    if ((this.config.platform ?? process.platform) !== "win32") return error;
+    const detail = [error instanceof Error ? error.message : String(error),
+      (error as { stdout?: string }).stdout ?? "", (error as { stderr?: string }).stderr ?? ""].join("\n");
+    if (!looksLikePathLengthFailure(detail)) return error;
+    const root = this.packagesRoot;
+    let reset = "";
+    // Only a directory the Runner owns is cleared; a configured cache may hold
+    // seeds the operator put there, and re-extracting into it is their call.
+    if (root && !this.config.packageCacheDir) {
+      await rm(root, { force: true, recursive: true });
+      await mkdir(root, { recursive: true });
+      reset = ` The managed package cache at ${root} was reset, so the next attempt starts from a clean extract.`;
+    }
+    const longPaths = windowsLongPathsEnabled();
+    const diagnostic = [
+      "The provisioner reported over-long paths as missing files; the package cache could not be validated, which is not a download or disk failure.",
+      `Cache root: ${root ?? "unset"}`,
+      `LongPathsEnabled: ${longPaths === true ? "1" : longPaths === false ? "0" : "unknown on this host"}`,
+      `A member path must stay at or under ${MAX_PATH_USABLE} characters; shorten the cache root (SCIENCE_AGENT_PACKAGE_CACHE_DIR) or the Runner data directory.${reset}`,
+    ].join("\n");
+    return new Error(`${diagnostic}\n\nOriginal output:\n${detail.slice(0, 1200)}`);
   }
 
   private revisionPath(environmentId: string, revisionId: string): string {

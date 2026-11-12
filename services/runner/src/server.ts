@@ -578,7 +578,11 @@ export function createRunnerServer(
           sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config), gateways),
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
           seccompBaseline: executorSandboxKind(config) === "bubblewrap" ? SECCOMP_BASELINE_VERSION : null,
-          status: "ok",
+          // A setup that reached a terminal failure is not "ok": when the managed
+          // scientific environment is dead, every run_shell call returns
+          // RUNNER_UNAVAILABLE while the process keeps answering, and a headline
+          // that says ok is what made the outage invisible (#1104).
+          status: environmentStore?.setup.state === "failed" ? "degraded" : "ok",
           workerConcurrency: null,
         } satisfies RunnerHealth);
         return;
