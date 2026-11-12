@@ -288,11 +288,11 @@ maintain the measuring apparatus yourself, so every mistake in it is yours. Judg
   learning signal, and `frozenGlobs` **must** include the test paths, or the shortest way to a
   higher score is to weaken the tests. Shards ≤ half the case count.
 If the user's command includes an `evolve-input` block, it records the JSON baseline and
-top-level fields they confirmed in the app. The initial setup chooses the algorithm. When the user sends the task from the composer, the
-second card lets them adjust the algorithm, draft starting fields from the task, or import a user
-file before the task is submitted. Use the confirmed baseline for scoring design and respect
-their field selection. Do not substitute a new baseline or expand the selection. Ask the user
-to start a new design with the updated input if they want to change either. For a local `custom_script` scorer,
+top-level fields they confirmed in the app. The setup dialog collects the task, the algorithm,
+the checkpoint pace and that block; the command then reaches the composer as flags the user
+still edits and sends. Use the confirmed baseline for scoring design and respect their field
+selection. Do not substitute a new baseline or expand the selection. Ask the user to start a new
+design with the updated input if they want to change either. For a local `custom_script` scorer,
 read the candidate JSON from `SCIENCE_AGENT_CANDIDATE` with `json.load`. Do not import
 the candidate as a Python module when the user confirmed a JSON baseline.
 

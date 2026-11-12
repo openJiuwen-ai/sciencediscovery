@@ -71,6 +71,20 @@ export function evolveCommandGoal(text: string): string | undefined {
   return afterCommand(text).slice(leadingFlags(text).length).trim();
 }
 
+/** The task a composer draft carries into the setup dialog.
+ *
+ *  A command contributes the sentence after its flags. Any other draft that is
+ *  not a slash command is a sentence the person wrote before opening the
+ *  surface, and it becomes the task rather than being thrown away. A bare
+ *  slash query is a palette pick, not a task. */
+export function evolveDraftTask(text: string): string | undefined {
+  const goal = evolveCommandGoal(text);
+  if (goal !== undefined) return goal === "" ? undefined : goal;
+  const draft = text.trim();
+  if (draft === "" || draft.startsWith("/")) return undefined;
+  return draft;
+}
+
 /** Whether the design pauses at each checkpoint, as the command says.
  *
  *  Read here so the setup detour keeps the choice: a command typed with

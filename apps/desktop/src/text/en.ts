@@ -1283,7 +1283,7 @@ export const EN: Text = {
     create: {
       title: "New evolution run",
       algorithmLabel: "Choose a search algorithm",
-      puctName: "PUCT algorithm",
+      puctName: "PUCT",
       puctTags: ["Refines step by step", "Narrow search space"],
       puctPoints: [
         "PUCT expands the nodes most likely to pay off first",
@@ -1291,7 +1291,7 @@ export const EN: Text = {
         "Visit counts and rank steer where the search goes next",
         "A single tree keeps refining the candidates it holds",
       ],
-      openEvolveName: "OpenEvolve algorithm",
+      openEvolveName: "OpenEvolve",
       openEvolveTags: ["Wide search space", "Avoids early convergence"],
       openEvolvePoints: [
         "A MAP-Elites grid keeps a diverse set of good candidates",
@@ -1303,6 +1303,10 @@ export const EN: Text = {
       confirmLabel: "Pause at each checkpoint",
       confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
       autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      taskLabel: "Task",
+      taskPlaceholder: "The task to evolve, with its constraints and how it is scored. For example: write a compressor and decompressor for text whose round trip is exactly lossless; the score is how much smaller the output gets.",
+      parametersLabel: "Custom evolution parameters",
+      parametersHint: "Set a starting value for each parameter. The search tries different values for ticked ones; unticked ones always keep their starting value.",
       /* Windows has no bwrap/seatbelt. There is no switch here, only two
          warnings: a banner under the title so the risk is seen at a glance,
          and an alert that asks again when the search is started. The answer

@@ -51,6 +51,7 @@ import {
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
+  evolveDraftTask,
   isEvolveSkill,
   latestEvolveCheckpointMode,
   splitEvolveCommand,
@@ -630,15 +631,18 @@ export function App({ initialToken }: Props) {
     actions.retryBoot();
   };
 
-  /** The command is a way into the surface, not only a message. While the
-   *  runtime is not ready the goal typed after it is carried into the setup
-   *  dialog instead of being sent to a server that cannot run it; a bare
-   *  command opens the dialog that asks for one. On a host with no sandbox
-   *  every command detours there, including one that already carries
-   *  `--allow-direct`: a pasted flag is a word the user typed without the
-   *  warning on screen, and the dialog is where that warning is read and
-   *  answered. So the dialog is the only writer of the flag — a command that
-   *  reaches the server with it is one the user confirmed here.
+  /** The command is a way into the surface, not only a message.
+   *
+   *  A command typed as text — pasted, or written without picking the skill
+   *  from the palette — always opens the setup dialog rather than being sent.
+   *  The dialog is the one place the task, the search, the pace and the
+   *  parameters are visible together, and on a host with no sandbox it is the
+   *  only writer of `--allow-direct`: a pasted flag is a word typed without
+   *  the warning on screen, and the dialog is where that warning is read and
+   *  answered. The sentence typed after the command rides along, so it is not
+   *  written twice. A token the dialog already placed in the composer takes
+   *  the branch above instead — sending it is the user's final word, and it
+   *  must not reopen the dialog.
    *
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
@@ -658,19 +662,13 @@ export function App({ initialToken }: Props) {
       return;
     }
     const goal = evolveCommandGoal(content);
-    if (goal !== undefined
-        && (goal === "" || evolve.status.state !== "ready"
-            || evolve.status.sandbox === "direct")) {
+    if (goal !== undefined) {
       setEvolveCreate({
         algorithm: evolveCommandAlgorithm(content),
         checkpointMode: evolveCommandCheckpointMode(content),
         goal: goal === "" ? undefined : goal,
       });
       return;
-    }
-    if (goal !== undefined) {
-      awaitingSince.current = Date.now();
-      setAwaitingRun(true);
     }
     void actions.send(content);
   };
@@ -851,10 +849,12 @@ export function App({ initialToken }: Props) {
   };
 
   /** 会话设置's row goes to the search that wants attention — a running one,
-   *  else the newest — and starts one only when the session has none. */
-  const openEvolve = () => {
+   *  else the newest — and starts one only when the session has none. The
+   *  composer's draft rides into the new design's task field: a sentence
+   *  already written is the one the design would start from. */
+  const openEvolve = (draft?: string) => {
     const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
-    if (target === undefined) setEvolveCreate({});
+    if (target === undefined) setEvolveCreate({ goal: evolveDraftTask(draft ?? "") });
     else showEvolveRun(target.id);
   };
 
@@ -924,21 +924,13 @@ export function App({ initialToken }: Props) {
     onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
     onEvolve: openEvolve,
-    evolveSetup: {
-      archived: state.detail?.archivedAt !== undefined,
-      error: evolve.error,
-      initializing: evolve.initializing,
-      onInitialize: () => void evolve.initialize(),
-      status: evolve.status,
-    },
-    canConfirmTypedEvolve: evolve.status.state === "ready" && evolve.status.sandbox !== "direct",
-    onGenerateEvolveDirection: state.detail ? (task, signal) => draftEvolveDirection(client, state.detail!.id, task, signal) : undefined,
     onOpenSettings: () => openSettings("models"),
     // A skill that has a setup surface opens it instead of dropping its
     // command into the draft — the same dialog 会话设置's evolve row opens.
-    onPickSkill: (skill) => {
+    // The draft is the task it was going to replace.
+    onPickSkill: (skill, draft) => {
       if (!isEvolveSkill(skill)) return false;
-      setEvolveCreate({});
+      setEvolveCreate({ goal: evolveDraftTask(draft) });
       return true;
     },
     onRemoveAttachment: actions.removeAttachment,
@@ -1150,15 +1142,19 @@ export function App({ initialToken }: Props) {
           initialGoal={evolveCreate.goal}
           initializing={evolve.initializing}
           onClose={closeEvolveCreate}
+          onGenerateDirection={state.detail
+            ? (task, signal) => draftEvolveDirection(client, state.detail!.id, task, signal)
+            : undefined}
           onInitialize={() => void evolve.initialize()}
-          onSend={(command) => {
+          onSend={(command, direction) => {
             closeEvolveCreate();
-            // The flags become a token in the composer and the goal becomes
-            // the sentence after it. The message leaves when the user says so,
-            // not when the dialog closes: the design usually needs a sentence
-            // of its own added after the goal.
+            // The flags become a token in the composer, the task the sentence
+            // after it, and the confirmed parameters ride with the token until
+            // the user sends. The message leaves when the user says so, not
+            // when the dialog closes: the design usually needs a sentence of
+            // its own added after the task.
             const draft = splitEvolveCommand(command);
-            setSeededCommand({ command: draft.command, nonce: Date.now(), text: draft.goal });
+            setSeededCommand({ command: draft.command, direction, nonce: Date.now(), text: draft.goal });
           }}
           running={state.running}
           status={evolve.status}

@@ -41,8 +41,8 @@ function toJson(value: Value): unknown {
 }
 
 const copy = {
-  zh: { title: "起始字段", needSession: "会话尚未就绪：先在会话输入框发送一条消息，「生成起始字段」就会启用。", draft: "生成起始字段", drafting: "正在生成…", upload: "上传 JSON", add: "添加字段", addItem: "添加元素", empty: "根据任务生成起始字段、导入文件，或直接添加字段。", name: "字段名", value: "初始值", scope: "允许修改", remove: "删除", type: "值类型", invalid: "请检查字段名是否为空或重复，以及数值是否有效。", readError: "无法导入。请选择包含 JSON 对象的文件。", draftError: "未能生成起始字段，请重试或上传文件。", locked: "未勾选的字段将保持原值", types: ["文本", "数字", "布尔值", "空值", "对象", "数组"] },
-  en: { title: "Starting fields", needSession: "This session is not ready yet: send a message in the composer and Generate starting fields becomes available.", draft: "Generate starting fields", drafting: "Generating…", upload: "Upload JSON", add: "Add field", addItem: "Add item", empty: "Generate starting fields from your task, upload a file, or add fields.", name: "Field name", value: "Initial value", scope: "Allow edits", remove: "Remove", type: "Value type", invalid: "Check for empty or duplicate field names and invalid numbers.", readError: "Could not import the file. Choose a JSON object.", draftError: "Could not generate starting fields. Retry or upload a file.", locked: "Unchecked fields stay fixed", types: ["Text", "Number", "Boolean", "Null", "Object", "Array"] },
+  zh: { title: "参数", needTask: "无法自动生成，请上传 JSON 或手动添加参数。", draft: "生成起始参数", drafting: "正在生成…", upload: "上传 JSON", add: "添加参数", addItem: "添加元素", empty: "根据任务生成起始参数、导入文件，或直接添加参数。", name: "参数名", value: "起始值", scope: "参与搜索", remove: "删除", type: "值类型", invalid: "请检查参数名是否为空或重复，以及数值是否有效。", readError: "无法导入。请选择包含 JSON 对象的文件。", draftError: "未能生成起始参数，请重试或上传文件。", types: ["文本", "数字", "布尔值", "空值", "对象", "数组"] },
+  en: { title: "Parameters", needTask: "Automatic generation is unavailable — upload a JSON file or add parameters manually.", draft: "Generate starting values", drafting: "Generating…", upload: "Upload JSON", add: "Add parameter", addItem: "Add item", empty: "Generate starting parameters from the task, upload a file, or add them directly.", name: "Parameter", value: "Starting value", scope: "Vary", remove: "Remove", type: "Value type", invalid: "Check for empty or duplicate parameter names and invalid numbers.", readError: "Could not import the file. Choose a JSON object.", draftError: "Could not generate starting parameters. Retry or upload a file.", types: ["Text", "Number", "Boolean", "Null", "Object", "Array"] },
 };
 const kinds: Kind[] = ["string", "number", "boolean", "null", "object", "array"];
 type Labels = typeof copy.en;
@@ -138,7 +138,7 @@ export function DirectionInput({ chinese, onChange, onGenerate, value }: {
   const changeRow = (id: number, next: Row) => apply(rows.map((row) => row.id === id ? next : row));
 
   return <section aria-labelledby={id} className="evolve-direction-input">
-    <header className="evolve-json-header"><div><h3 id={id}>{labels.title}</h3><p>{labels.locked}</p></div>
+    <header className="evolve-json-header"><div><h3 id={id}>{labels.title}</h3></div>
       <div className="evolve-json-tools">
         <button type="button" disabled={busy || !onGenerate} onClick={() => void generate()}>{busy ? labels.drafting : labels.draft}</button>
         <label className="evolve-json-upload">{labels.upload}<input aria-label={labels.upload} accept=".json,application/json" type="file" disabled={busy}
@@ -154,10 +154,10 @@ export function DirectionInput({ chinese, onChange, onGenerate, value }: {
           }} /></label>
       </div>
     </header>
-    {/* `onGenerate` is absent because the session has no loaded detail yet —
-        App.tsx hands it over only while `state.detail` exists — so the hint
-        names that reason rather than the task the user already typed (#1091). */}
-    {!onGenerate ? <p className="evolve-json-file">{labels.needSession}</p> : null}
+    {/* `onGenerate` is absent while the setup dialog has no session detail to
+        draft from or no task text yet — App.tsx hands it over only when both
+        exist — so the hint names what the user can do instead. */}
+    {!onGenerate ? <p className="evolve-json-file">{labels.needTask}</p> : null}
     {fileName ? <p className="evolve-json-file">{fileName}</p> : null}
     {error ? <p role="alert" className="evolve-json-error">{error === "read" ? labels.readError : error === "draft" ? labels.draftError : labels.invalid}</p> : null}
     <fieldset disabled={busy} className="evolve-json-fieldset">
@@ -174,7 +174,7 @@ export function DirectionInput({ chinese, onChange, onGenerate, value }: {
         </div>)}
       </div> : <p className="evolve-json-empty">{labels.empty}</p>}
       <footer className="evolve-json-footer"><button type="button" onClick={() => apply([...rows, makeRow("", "")])}>＋ {labels.add}</button>
-        <span role="status">{chinese ? `已允许修改 ${selected} 项` : `${selected} editable`}</span>
+        <span role="status">{chinese ? `已参与搜索 ${selected} 项` : `${selected} in search`}</span>
       </footer>
     </fieldset>
   </section>;
