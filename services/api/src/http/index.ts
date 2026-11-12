@@ -30,7 +30,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
-import { sessionTrajectory } from "../trajectory.js";
+import { sessionTrajectory, trajectoryMaxEvents } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
 import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
@@ -244,6 +244,7 @@ import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { draftEvolveDirection } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
 import { createMemoryWatch } from "../memory-watch.js";
+import { heapBudget } from "../heap-budget.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { createPromptManifest } from "../prompt-manifest.js";
 import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
@@ -1386,9 +1387,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const researchPackageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package(?:\/(inspect|import|preview))?$/);
       if (researchPackageMatch) {
         const projectId = decodeURIComponent(researchPackageMatch[1]!);
-        if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
         const sessionId = url.searchParams.get("sessionId") ?? undefined;
-        if (request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview")) {
+        const previewRead = request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview");
+        // Only the polling shape (`defaults=1`, what a mounted panel asks every
+        // 3 s) ends quietly. A one-shot preview read keeps its status: there the
+        // caller asked once, and a deleted scope is worth reporting.
+        const previewPoll = previewRead && researchPackageMatch[2] === "preview" && url.searchParams.get("defaults") === "1";
+        const packagePreviewGone = () => !store.getProject(projectId)
+          || (sessionId !== undefined && sessionId !== "" && !store.getSession(sessionId));
+        // A mounted panel polls the preview of the Session it is showing. When
+        // that Session or Project has been deleted, the honest answer to the
+        // poll is "there is nothing left to preview" — not a 404, which the
+        // browser reports as a console error and which a polling client would
+        // keep asking for (#1072). The panel stops on this answer. Downloads
+        // keep their 404 below: asking for a package that is gone is a mistake
+        // worth reporting, asking after a polled preview is not.
+        if (previewPoll && packagePreviewGone()) return sendJson(response, 200, { state: "deleted" as const });
+        if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
+        if (previewRead) {
           const requestedLevel = url.searchParams.get("level");
           const level = requestedLevel === "complete" ? "complete" : "necessary";
           const includeFullTrajectory = url.searchParams.get("includeFullTrajectory") !== "0";
@@ -1403,6 +1419,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               }
               return sendJson(response, 200, await previewResearchPackage(projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph));
             } catch (error) {
+              // The scope can disappear while a preview is being calculated —
+              // teardown, or another client deleting the Project/Session. That
+              // ends the poll; it is not a failure of the page still showing it.
+              // An ENOENT counts only when the scope is really gone, so a
+              // missing input of a live Project still surfaces as an error.
+              if (previewPoll && ((error instanceof ApiStatusError && error.code === "EXPORT_PREVIEW_RESOURCE_DELETED")
+                || (packagePreviewGone() && (error as NodeJS.ErrnoException).code === "ENOENT")))
+                return sendJson(response, 200, { state: "deleted" as const });
               // Pending is expected while a run changes evidence. Opt-in clients can
               // wait without turning that state into a browser resource error.
               const preferAsync = [request.headers.prefer].flat().join(",").split(",").some((preference) => preference.trim().toLowerCase() === "respond-async");
@@ -4742,6 +4766,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 }
 
 export async function startApiServer(config = loadServerConfig()): Promise<Server> {
+  // Resolve and validate the foot-guns before the socket exists. A bad
+  // `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB` used to throw here, after `listen`, and
+  // the entry point's catch only logs and sets `process.exitCode`: the process
+  // kept the socket open, answered /api/health with 200, and never registered
+  // SIGTERM handling or the memory watch (#1105 F1).
+  const budget = heapBudget();
+  const trajectoryEvents = trajectoryMaxEvents();
   const server = createApiServer(config);
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
@@ -4756,8 +4787,9 @@ export async function startApiServer(config = loadServerConfig()): Promise<Serve
   // The budget and the sampled heap belong to the launched service, not to a
   // server created in a test: a fixture gets no 30 s timeline and no boot line
   // it did not ask for (#1063).
-  const stopMemoryWatch = createMemoryWatch({ log: apiLog }).start();
+  const stopMemoryWatch = createMemoryWatch({ log: apiLog, budget }).start();
   server.once("close", stopMemoryWatch);
+  apiLog.info("api_trajectory_budget", { maxEvents: trajectoryEvents });
   console.log(`ScienceDiscovery listening on http://${config.host}:${port}`);
   for (const line of accessTokenBanner({ ...config, port: config.publicPort ?? port })) console.log(line);
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1") {

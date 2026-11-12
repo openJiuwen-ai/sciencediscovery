@@ -84,15 +84,17 @@ test("no start path launches the API without the flag", async () => {
  */
 test("the shell budget block continues on a valid value and refuses a bad one", async () => {
   const shell = await read("scripts/start-stack.sh");
-  const start = shell.indexOf('api_heap_budget_mb="${SCIENCE_AGENT_API_MAX_OLD_SPACE_MB');
-  assert.ok(start > 0, "the budget block must exist in start-stack.sh");
-  const rangeCheck = shell.indexOf("if (( api_heap_budget_mb < ", start);
-  assert.ok(rangeCheck > start, "the range check must follow the variable");
-  const end = shell.indexOf("\nfi\n", rangeCheck);
-  assert.ok(end > rangeCheck, "the range check must be closed");
-  const block = shell.slice(start, end + 4);
+  // The resolver is a function so a mode can run it after it has read .env
+  // (#1105 F2); take its body verbatim, whatever its indentation.
+  const start = shell.indexOf("resolve_api_heap_budget() {");
+  assert.ok(start > 0, "start-stack.sh must resolve the budget in resolve_api_heap_budget");
+  const end = shell.indexOf("\n}\n", start);
+  assert.ok(end > start, "resolve_api_heap_budget must be closed");
+  const block = `${shell.slice(start, end + 3)}\nresolve_api_heap_budget`;
+  assert.match(block, /SCIENCE_AGENT_API_MAX_OLD_SPACE_MB:-3072/, "the resolver must read the variable with its default");
 
-  const run = (value) => execFileSync("bash", ["-c", `${block}\necho CONTINUED`], {
+  // Print the resolved value, so the fallback is observable rather than inferred.
+  const run = (value) => execFileSync("bash", ["-c", `${block}\nprintf 'CONTINUED budget=%s\\n' "$api_heap_budget_mb"`], {
     encoding: "utf8",
     env: { ...process.env, SCIENCE_AGENT_API_MAX_OLD_SPACE_MB: value },
     stdio: ["ignore", "pipe", "pipe"],
@@ -106,10 +108,12 @@ test("the shell budget block continues on a valid value and refuses a bad one", 
     }
   };
 
-  assert.match(run("3072"), /CONTINUED/, "the default value must not stop the launch");
-  assert.match(run("4096"), /CONTINUED/, "a valid override must not stop the launch");
+  assert.match(run("3072"), /CONTINUED budget=3072/, "the default value must not stop the launch");
+  assert.match(run("4096"), /CONTINUED budget=4096/, "a valid override must reach the launch");
   assert.equal(fails("abc"), true, "a non-numeric override must exit 2");
-  // An empty override is not a refusal: `${VAR:-default}` treats it as unset, so it\n  // must fall through to the default. What must never pass is a case subject that\n  // is not the variable at all, which the mutation below covers.\n  assert.match(run(""), /CONTINUED budget=3072/, "an empty override must fall back to the default");
+  // An empty override is not a refusal: `${VAR:-default}` treats it as unset, so
+  // it must fall through to the default.
+  assert.match(run(""), /CONTINUED budget=3072/, "an empty override must fall back to the default");
   assert.equal(fails("1"), true, "an out-of-range override must exit 2");
   assert.throws(() => run("abc"), /got 'abc'/, "the message must name the value it refused");
 });

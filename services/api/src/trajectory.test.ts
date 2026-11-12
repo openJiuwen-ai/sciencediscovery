@@ -21,8 +21,22 @@ const signal = () => new AbortController().signal;
 
 async function sessionWithRuns(context: { after: (fn: () => Promise<void>) => void }, runs: number, perRun: number) {
   const root = resolve(process.cwd(), ".tmp", `trajectory-budget-${randomUUID()}`);
-  context.after(() => rm(root, { recursive: true, force: true }));
   const store = new SessionStore(root);
+  // SQLite keeps the catalog open; close it before removing the directory, and
+  // tolerate a host that releases the handle a moment late (Windows reports
+  // EBUSY for a file another handle still holds). Nothing here asserts on the
+  // cleanup, so a failed unlink must not be reported as a test failure.
+  context.after(async () => {
+    store.close();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await rm(root, { recursive: true, force: true });
+        return;
+      } catch {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      }
+    }
+  });
   await store.load();
   const project = await store.createProject("Trajectory budget");
   const session = await store.createSession(project.id, "Long session", {}, {}, { allowUnconfiguredModel: true });
