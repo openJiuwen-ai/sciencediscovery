@@ -40,7 +40,15 @@ BASE_URL = _base_url()
 MAX_RESPONSE_BYTES = 2_000_000
 
 
+def _fold_separators(path: str) -> str:
+    """The Wiki index, and its echoes, may spell a page path with Windows separators."""
+    return path.replace("\\", "/")
+
+
 def _page_path(path: str) -> str:
+    # Fold once here, before any check, so a page id search returned is usable
+    # by every tool and one page has one spelling.
+    path = _fold_separators(path)
     if (not 0 < len(path) <= 500 or any(c in path for c in "\\%?#:")
             or any(ord(c) < 32 for c in path)
             or any(part in {"", ".", ".."} for part in path.split("/"))):
@@ -85,14 +93,18 @@ async def get_pages(
     max_tokens: Annotated[int, Field(ge=100, le=16000)] = 8000,
 ) -> dict[str, Any]:
     """Read selected Wiki pages within a token budget and report omitted paths."""
+    # Normalize once: the request body and the comparison below must agree, or a
+    # returned page is reported as omitted because it came back in slash form.
+    normalized = [_page_path(path) for path in paths]
     result = await _request("POST", "wiki/pages/batch", json={
-        "paths": [_page_path(path) for path in paths],
-        "max_tokens": max_tokens, "token_budget_enabled": True,
+        "paths": normalized, "max_tokens": max_tokens, "token_budget_enabled": True,
     })
-    # Derive truncation from returned paths rather than the provider's budget flag.
-    returned = {page["path"] for page in result["pages"]}
-    missing = set(result["missing"])
-    result["omitted_paths"] = [path for path in paths if path not in returned and path not in missing]
+    # Derive truncation from returned paths rather than the provider's budget flag,
+    # comparing in the folded form so a provider that echoes the Windows spelling
+    # of a page it returned is not mistaken for one that omitted it.
+    returned = {_fold_separators(page["path"]) for page in result["pages"]}
+    missing = {_fold_separators(path) for path in result["missing"]}
+    result["omitted_paths"] = [path for path in normalized if path not in returned and path not in missing]
     result["truncated_by_budget"] = bool(result["omitted_paths"])
     return result
 

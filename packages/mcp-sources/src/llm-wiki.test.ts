@@ -29,7 +29,7 @@ function normalize(toolId: string, payload: JsonValue, textOnly = false) {
 }
 
 test("Wiki input bounds reject traversal, unknown arguments and oversized batches", () => {
-  for (const path of ["../secret", "/etc/passwd", "a/../b", "a\\b", "%2e%2e/x", "a?x", "a#x", "https://evil.test", "a\n", "a//b"]) {
+  for (const path of ["../secret", "/etc/passwd", "a/../b", "a\\..\\b", "%2e%2e/x", "a?x", "a#x", "https://evil.test", "a\n", "a//b"]) {
     assert.equal(source.validateInput("get_page", { path }).valid, false, path);
     assert.equal(source.validateInput("get_pages", { paths: [path] }).valid, false, path);
   }
@@ -44,6 +44,27 @@ test("Wiki input bounds reject traversal, unknown arguments and oversized batche
   assert.equal(source.manifest.cache.enabled, false);
   assert.equal(source.manifest.cache.scope, "session");
   assert.equal(source.manifest.governance.dataClassification, "private");
+});
+
+test("Windows-style page ids from search are accepted and returned normalized by both tools", () => {
+  // Verbatim search outputs: the provider's index spellings the connector must accept.
+  assert.deepEqual(source.validateInput("get_page", { path: "debates\\fusion_v3_1_3_二烯.md" }),
+    { valid: true, input: { path: "debates/fusion_v3_1_3_二烯.md" } });
+  assert.deepEqual(source.validateInput("get_page", { path: "concepts\\mechanisms\\phase-transfer-catalysis.md" }),
+    { valid: true, input: { path: "concepts/mechanisms/phase-transfer-catalysis.md" } });
+  assert.deepEqual(source.validateInput("get_page", { path: "sources\\sub/a.md" }),
+    { valid: true, input: { path: "sources/sub/a.md" } });
+  assert.deepEqual(source.validateInput("get_pages", { paths: ["a\\b.md", "c.md"] }),
+    { valid: true, input: { paths: ["a/b.md", "c.md"], max_tokens: 8000 } });
+  assert.deepEqual(source.validateInput("get_pages", { paths: ["source\\page.md"], max_tokens: 100 }),
+    { valid: true, input: { paths: ["source/page.md"], max_tokens: 100 } });
+});
+
+test("folding separators before validation refuses nothing less", () => {
+  for (const path of ["a\\..\\b", "..\\x", "a\\x\\..\\y", "a%5Cb", "C:\\Windows\\win.ini", "a\\b\n", "a".repeat(501)]) {
+    assert.equal(source.validateInput("get_page", { path }).valid, false, path);
+    assert.equal(source.validateInput("get_pages", { paths: [path] }).valid, false, path);
+  }
 });
 
 test("search keeps Wiki identity and original references without claiming paper full text", async () => {

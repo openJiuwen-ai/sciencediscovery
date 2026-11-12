@@ -51,9 +51,70 @@ class LlmWikiTests(unittest.IsolatedAsyncioTestCase):
         with self.client(handle):
             result = await wiki.get_page("知识/Overview 1.md")
         self.assertEqual(result["content"], "body")
-        for path in ["../x", "/x", "a/../x", "a\\x", "%2e%2e/x", "a?x"]:
+        for path in ["../x", "/x", "a/../x", "a\\..\\x", "%2e%2e/x", "a?x"]:
             with self.assertRaises(ValueError):
                 await wiki.get_page(path)
+
+    async def test_windows_style_page_ids_from_search_round_trip_through_both_tools(self):
+        requests = []
+
+        def handle(request):
+            requests.append((request.method, request.url.path, json.loads(request.content or b"null")))
+            if request.method == "GET":
+                return httpx.Response(200, json={"path": "sources/photoinduced-copper-catalyzed-asymmetric-c-o-c.md", "content": "body"})
+            return httpx.Response(200, json={"pages": [{"path": "debates/fusion_v3_1_3_二烯.md", "content": "page"}], "missing": []})
+
+        # Verbatim search outputs: the provider's index spellings this bridge must accept.
+        windows_ids = [
+            "sources\\photoinduced-copper-catalyzed-asymmetric-c-o-c.md",
+            "debates\\fusion_v3_1_3_二烯.md",
+            "concepts\\mechanisms\\phase-transfer-catalysis.md",
+        ]
+        with self.client(handle):
+            page = await wiki.get_page(windows_ids[0])
+            batch = await wiki.get_pages([windows_ids[1]])
+        self.assertEqual(page["content"], "body")
+        self.assertEqual(requests, [
+            ("GET", "/api/v1/wiki/sources/photoinduced-copper-catalyzed-asymmetric-c-o-c.md", None),
+            ("POST", "/api/v1/wiki/pages/batch", {
+                "paths": ["debates/fusion_v3_1_3_二烯.md"], "max_tokens": 8000, "token_budget_enabled": True,
+            }),
+        ])
+        # A requested backslash path that came back in slash form is not omitted.
+        self.assertEqual(batch["omitted_paths"], [])
+        self.assertFalse(batch["truncated_by_budget"])
+
+    async def test_batch_counts_a_page_the_provider_echoes_with_windows_separators_as_returned(self):
+        def handle(request):
+            return httpx.Response(200, json={
+                "pages": [{"path": "debates\\fusion_v3_1_3_二烯.md", "content": "page"}], "missing": [],
+            })
+        with self.client(handle):
+            result = await wiki.get_pages(["debates\\fusion_v3_1_3_二烯.md"])
+        self.assertEqual(result["omitted_paths"], [])
+        self.assertFalse(result["truncated_by_budget"])
+
+    async def test_both_tools_accept_and_refuse_the_same_page_paths(self):
+        def handle(request):
+            if request.method == "GET":
+                return httpx.Response(200, json={"path": "a.md", "content": "body"})
+            body = json.loads(request.content)
+            return httpx.Response(200, json={"pages": [{"path": path, "content": "body"} for path in body["paths"]], "missing": []})
+
+        accepted = ["sources/a.md", "sources\\a.md", "sources\\sub/a.md", "知识\\Overview 1.md"]
+        refused = ["../secret", "/etc/passwd", "a/../b", "a//b", "a\\x\\..\\y", "..\\x",
+                   "%2e%2e/x", "a%5Cb", "a?x", "a#x", "a:b", "C:\\Windows\\win.ini", "a\nb", "", "a" * 501]
+        with self.client(handle):
+            for path in accepted:
+                result = await wiki.get_page(path)
+                self.assertEqual(result["content"], "body", path)
+                batched = await wiki.get_pages([path])
+                self.assertFalse(batched["truncated_by_budget"], path)
+            for path in refused:
+                with self.assertRaises(ValueError, msg=path):
+                    await wiki.get_page(path)
+                with self.assertRaises(ValueError, msg=path):
+                    await wiki.get_pages([path])
 
     async def test_batch_reports_unvisited_paths_and_corrects_budget_flag(self):
         def handle(request):
