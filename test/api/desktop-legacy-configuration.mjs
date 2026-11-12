@@ -5,13 +5,13 @@
  * Steps: prepare owned historical records before startup; open the desktop; confirm/refuse; reload receipts and read formal settings.
  * Environment: Linux, committed API build and desktop source, own ephemeral loopback ports/data, pinned .e2e Chromium.
  * Type: mocked
- * LLM: none; no prompt or run is submitted.
+ * LLM: an inert credential-free loopback profile unlocks desktop setup; all model requests are rejected and must remain zero; no prompt or run is submitted.
  * WebSearch: none; enabling built-in Web does not call it.
  * PaperSources: none
  * MCP: none
  * OtherExternal: none; browser egress is restricted to the owned origins.
  * Credentials: generated owned API token, never persisted in reports.
- * CostSideEffects: owned Project/Session records only; data and processes are removed in finally.
+ * CostSideEffects: owned model profile and Project/Session records only; data and processes are removed in finally.
  * Run: E2E_LEGACY_DESKTOP_ISOLATED=1 node test/api/desktop-legacy-configuration.mjs
  * Preconditions: build API dependencies, install desktop dependencies, assemble .e2e and install its pinned Chromium.
  * Boundary: historical fixtures are seeded offline because no public endpoint creates legacy requests anymore.
@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -30,7 +31,15 @@ import { pathToFileURL } from "node:url";
 const directory = resolve(".tmp", `desktop-legacy-${randomUUID()}`), data = resolve(directory, "data");
 await mkdir(directory, { recursive: true });
 const token = randomUUID(), steps = [], children = [], fixtures = [], network = [];
-let sha, origin, desktopOrigin, store, browser, context, result = "BLOCKED", logs = "";
+let sha, origin, desktopOrigin, store, browser, context, fixtureModel, result = "BLOCKED", logs = "";
+let modelRequests = 0;
+// A saved profile satisfies mandatory desktop setup without offering an LLM.
+// Any accidental provider request fails the fixture, including during cleanup.
+const modelGuard = createHttpServer((_request, response) => {
+  modelRequests += 1;
+  response.writeHead(503, { "content-type": "application/json", "connection": "close" });
+  response.end(JSON.stringify({ error: "Model execution is forbidden in this configuration-only fixture" }));
+});
 const browserMode = process.argv.includes("--browser");
 let stopping = false;
 const stopped = browserMode ? new Promise(done => {
@@ -73,6 +82,12 @@ try {
     execFileSync(process.execPath, ["test/sync-e2e.mjs", "--check"], { stdio: "pipe" });
     const { SessionStore } = await import(pathToFileURL(resolve("services/api/dist/store.js")).href);
     store = new SessionStore(data); await store.load();
+    await new Promise((done, reject) => { modelGuard.once("error", reject); modelGuard.listen(0, "127.0.0.1", done); });
+    const modelAddress = modelGuard.address();
+    assert.ok(modelAddress && typeof modelAddress !== "string");
+    fixtureModel = await store.createModel({ name: "Offline migration fixture", model: "no-execution",
+      baseUrl: `http://127.0.0.1:${modelAddress.port}/v1`, proxyPolicy: "none" });
+    assert.equal(fixtureModel.hasApiToken, false);
     const project = await store.createProject(`Legacy desktop ${randomUUID()}`);
     for (const locale of ["en", "zh-CN"]) for (const decision of browserMode ? ["apply", "dismiss", "mixed"] : ["apply", "dismiss"]) {
       const session = await store.createSession(project.id, `${locale} ${decision} historical card`, { enabledConnectorIds: [] }, {}, { allowUnconfiguredModel: true });
@@ -88,7 +103,7 @@ try {
       SCIENCE_AGENT_EXECUTOR: process.env.SCIENCE_AGENT_EXECUTOR ?? (process.env.CI_E2E_BACKEND === "jiuwenswarm" ? "jiuwenswarm" : "native"),
       // Configuration-only journey: retain CI's executor without contacting its
       // shared adapter. The adapter and Runner are intentionally unavailable;
-      // no model/Run is created and no execution or full-stack claim is made.
+      // only an inert model profile exists; no Run, execution or full-stack claim is made.
       SCIENCE_AGENT_ADAPTER_URL: "http://127.0.0.1:1",
       SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "0", SCIENCE_AGENT_MEMORY_GRAPH_URL: "http://127.0.0.1:1", SCIENCE_AGENT_RUNNER_URL: "http://127.0.0.1:1" };
     for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[key] = "";
@@ -101,7 +116,15 @@ try {
       assert.equal(items.length, 1); assert.equal(items[0].id, fixture.request.id); assert.equal("capabilityId" in items[0], false);
       assert.deepEqual(await api(`/api/sessions/${fixture.session.id}/runs`), []);
     }
-    assert.deepEqual(await api("/api/models"), []);
+    const persistedModels = await api("/api/models");
+    assert.equal(persistedModels.length, 1);
+    assert.equal(persistedModels[0].id, fixtureModel.id);
+    assert.equal(persistedModels[0].baseUrl, fixtureModel.baseUrl);
+    assert.equal(persistedModels[0].hasApiToken, false);
+    // Store reload may attach provider metadata to the offline-created profile.
+    // Freeze the public snapshot so each journey can detect later mutations.
+    fixtureModel = persistedModels[0];
+    assert.equal(modelRequests, 0, "Preparing migration data must not call a model");
     if (browserMode) return;
     const require = createRequire(resolve(".e2e/package.json"));
     try { browser = await require("@playwright/test").chromium.launch({ headless: true }); }
@@ -111,10 +134,10 @@ try {
     const health = await api("/health");
     // Consumed only from a private child pipe, never printed by the journey.
     // This is readiness, not a passing browser result. The Playwright fixture owns that verdict.
-    console.log(JSON.stringify({ desktopLegacyReady: 1, sha, origin, desktopOrigin, token, fixtures,
+    console.log(JSON.stringify({ desktopLegacyReady: 1, sha, origin, desktopOrigin, token, fixtures, fixtureModel,
       executor: process.env.SCIENCE_AGENT_EXECUTOR ?? (process.env.CI_E2E_BACKEND === "jiuwenswarm" ? "jiuwenswarm" : "native"),
       health: { status: health.status, runner: health.runner?.status },
-      boundary: "Offline historical migration fixtures; actual product API and desktop. Adapter and Runner are not started; no model, Run, tool execution or full-stack-health claim." }));
+      boundary: "Offline historical migration fixtures; actual product API and desktop. Adapter and Runner are not started. An inert credential-free profile unlocks setup; no model invocation, Run, tool execution or full-stack-health claim." }));
     await stopped;
     result = "PREPARED";
   } else {
@@ -171,9 +194,17 @@ try {
     kill("SIGTERM"); await Promise.race([new Promise(done => child.once("exit", done)), new Promise(done => setTimeout(done, 5_000))]);
     if (child.exitCode === null && child.signalCode === null) { kill("SIGKILL"); await new Promise(done => child.once("exit", done)); }
   }
+  if (modelGuard.listening) {
+    modelGuard.closeAllConnections();
+    await new Promise(done => modelGuard.close(done));
+  }
+  if (modelRequests !== 0) {
+    result = "FAIL"; process.exitCode = 1;
+    steps.push({ name: "No model invocation", expected: "Zero requests to the inert model profile", result: "FAIL", error: `${modelRequests} unexpected model request(s)` });
+  }
   await rm(data, { recursive: true, force: true });
   await writeFile(resolve(directory, "startup.log"), logs);
-  await writeFile(resolve(directory, "report.json"), JSON.stringify({ result, sha, steps, blockedOrigins: network,
+  await writeFile(resolve(directory, "report.json"), JSON.stringify({ result, sha, steps, modelRequests, blockedOrigins: network,
     boundary: "Historical offline fixture setup, actual API and desktop; no real model, tool execution or bound-task continuation.", command: "E2E_LEGACY_DESKTOP_ISOLATED=1 node test/api/desktop-legacy-configuration.mjs" }, null, 2));
   await writeFile(resolve(directory, "report.md"), `# Desktop legacy connector requests: ${result}\n\nCommit: ${sha ?? "unknown"}\n\n${steps.map(item => `- ${item.name}: ${item.result}. Expected: ${item.expected}${item.error ? ` Error: ${item.error}` : ""}`).join("\n")}\n`);
   console.log(JSON.stringify({ result, sha, report: resolve(directory, "report.md") }));
