@@ -45,6 +45,10 @@ const DEFERRED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "artifact_review.completed",
   "idea_research.created",
   "idea_tree.phase",
+  // One record per model turn, persisted by the API so a run's spend can be
+  // recomputed from its stream (#1109). The transcript shows tokens through the
+  // turn summary, not through this record, and nothing in the fold consumes it.
+  "model.usage",
   "plan.updated",
   "remote_job.proposed",
   "reviewer_checkpoint.updated",

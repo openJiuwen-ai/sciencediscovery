@@ -156,8 +156,10 @@ export async function appendDelegatedModelUsage(
   options: {
     finishedAt: string;
     invocationId: string;
+    model: string;
+    modelProfileId: string;
+    modelProfileName: string;
     parentRunId: string;
-    promptManifest: PromptManifest;
     sessionId: string;
     startedAt: string;
     turnsRecorded?: number;
@@ -175,12 +177,11 @@ export async function appendDelegatedModelUsage(
     inputTokens: options.usage.inputTokens,
     invocationId: options.invocationId,
     invocationKind: "delegation-track",
-    model: options.promptManifest.model,
-    modelProfileId: options.promptManifest.modelProfileId,
-    modelProfileName: options.promptManifest.modelProfileName,
+    model: options.model,
+    modelProfileId: options.modelProfileId,
+    modelProfileName: options.modelProfileName,
     outcome: "completed",
     outputTokens: options.usage.outputTokens,
-    promptManifestId: options.promptManifest.id,
     ...(session?.projectId ? { projectId: session.projectId } : {}),
     reasoningTokens: options.usage.reasoningTokens,
     runId: options.parentRunId,
