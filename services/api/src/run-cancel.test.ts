@@ -554,10 +554,14 @@ test("GET session usage reports gateway token usage for a completed run", { tags
   const usage = await getUsage(api, sessionId);
   assert.equal(usage.sessionId, sessionId);
   assert.equal(usage.totals.invocationCount, 1);
-  assert.equal(usage.totals.inputTokens, 7);
-  assert.equal(usage.totals.outputTokens, 3);
-  assert.equal(usage.totals.totalTokens, 10);
+  // One row per invocation, holding that invocation's spend (#1109). This run
+  // takes two model turns and the gateway reports 7/3/10 on each, so the row is
+  // their sum rather than the last turn it used to keep.
+  assert.equal(usage.totals.inputTokens, 14);
+  assert.equal(usage.totals.outputTokens, 6);
+  assert.equal(usage.totals.totalTokens, 20);
   assert.equal(usage.totals.unreportedInvocationCount, 0);
+  assert.equal(usage.invocations[0]?.turnsRecorded, 2);
 });
 
 test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:required"] }, async (context) => {
