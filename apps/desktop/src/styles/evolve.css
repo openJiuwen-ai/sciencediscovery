@@ -1866,13 +1866,13 @@
 
 .evolve-checkpoint.is-folded > .evolve-checkpoint-body { padding: 16px 24px; }
 
-.evolve-direction-input { display: grid; gap: 12px; min-width: 0; }
+.evolve-direction-input { display: grid; gap: 12px; min-width: 0; container-type: inline-size; }
 .evolve-direction-input p { margin: 0; }
 .evolve-json-tools, .evolve-json-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .evolve-json-header { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 8px; }
 .evolve-json-header p, .evolve-json-footer span, .evolve-json-file, .evolve-json-column-labels { color: var(--muted); font-size: 12px; }
 .evolve-json-tools { flex-wrap: wrap; justify-content: flex-start; }
-.evolve-json-tools button, .evolve-json-upload, .evolve-json-footer button, .evolve-json-children button {
+.evolve-json-tools button, .evolve-json-upload, .evolve-json-footer button {
   position: relative; display: inline-flex; align-items: center; min-height: 34px; padding: 4px 10px;
   border: 1px solid var(--border, #d9e0eb); border-radius: 8px; background: var(--surface); color: inherit; cursor: pointer; font: inherit;
 }
@@ -1888,39 +1888,106 @@
 .evolve-json-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .evolve-json-upload:focus-within { outline: 2px solid var(--primary, #2563eb); outline-offset: 2px; }
 .evolve-json-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-.evolve-json-list { border: 1px solid var(--border, #d9e0eb); border-radius: 12px; overflow: hidden; }
+.evolve-json-list {
+  --evolve-json-scope-width: 64px;
+  --evolve-json-name-inset: calc(18px + var(--evolve-json-scope-width));
+  --evolve-json-type-width: 96px;
+  --evolve-json-columns: minmax(0, 1fr) minmax(0, 1.55fr) var(--evolve-json-type-width) 28px;
+  border: 1px solid var(--border, #d9e0eb);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.evolve-json-entry {
+  --evolve-json-indent: min(calc(var(--evolve-json-depth) * 12px), 60px);
+  --evolve-json-child-indent: min(calc((var(--evolve-json-depth) + 1) * 12px), 60px);
+}
 .evolve-json-row, .evolve-json-column-labels {
-  display: grid; grid-template-columns: 58px minmax(100px, 1fr) minmax(130px, 1.8fr) 30px;
+  display: grid;
+  grid-template-columns: var(--evolve-json-scope-width) var(--evolve-json-columns);
   align-items: center; gap: 8px; padding: 8px 10px;
 }
-.evolve-json-column-labels { background: var(--surface-soft, #f6f8fc); }
-.evolve-json-row { border-top: 1px solid var(--border, #d9e0eb); }
-.evolve-json-row[data-editable="true"] { background: color-mix(in srgb, var(--primary, #2563eb) 7%, var(--surface)); }
-.evolve-json-row > input[type="checkbox"] { justify-self: center; width: 17px; height: 17px; accent-color: var(--primary, #2563eb); }
-.evolve-json-row input:not([type="checkbox"]), .evolve-json-value select, .evolve-json-child > input {
+.evolve-json-column-labels {
+  background: var(--surface-soft, #f6f8fc);
+  border-bottom: 1px solid var(--border, #d9e0eb);
+}
+.evolve-json-column-labels > :first-child { text-align: center; }
+.evolve-json-column-labels > :last-child { grid-column: 3 / 5; }
+.evolve-json-list > .evolve-json-entry + .evolve-json-entry { border-top: 1px solid var(--border, #d9e0eb); }
+.evolve-json-entry[data-editable="true"] > .evolve-json-row {
+  background: color-mix(in srgb, var(--primary, #2563eb) 7%, var(--surface));
+}
+.evolve-json-row[data-root="false"] {
+  grid-template-columns: var(--evolve-json-columns);
+  padding: 4px 10px 4px calc(var(--evolve-json-name-inset) + var(--evolve-json-indent));
+}
+.evolve-json-scope {
+  justify-self: center; width: 17px; height: 17px; margin: 0; accent-color: var(--primary, #2563eb);
+}
+.evolve-json-row input:not([type="checkbox"]), .evolve-json-row select {
   min-width: 0; width: 100%; min-height: 32px; box-sizing: border-box; padding: 4px 7px;
   border: 1px solid var(--border, #d9e0eb); border-radius: 7px; background: var(--surface); color: inherit; font: inherit;
 }
-.evolve-json-value { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-.evolve-json-value > select:last-child { width: auto; max-width: 44%; }
-.evolve-json-value > :first-child { flex: 1; min-width: 0; }
-.evolve-json-remove, .evolve-json-child > button { border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; }
+.evolve-json-value { min-width: 0; }
+.evolve-json-index, .evolve-json-null { color: var(--muted); padding-inline: 7px; }
+.evolve-json-index { font-variant-numeric: tabular-nums; }
+.evolve-json-remove {
+  display: grid; place-items: center; min-height: 32px; padding: 0;
+  border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px;
+}
 .evolve-json-remove:hover { color: var(--danger, #b42318); background: var(--surface-soft, #f6f8fc); }
+.evolve-json-disclosure {
+  display: inline-flex; align-items: center; gap: 9px; min-height: 32px; max-width: 100%;
+  padding: 4px 8px; border: 1px solid var(--border, #d9e0eb); border-radius: 7px;
+  background: var(--surface); color: inherit; cursor: pointer; font: inherit; text-align: start;
+}
+.evolve-json-disclosure:hover, .evolve-json-disclosure[aria-expanded="true"] {
+  background: var(--surface-soft, #f6f8fc);
+}
+.evolve-json-chevron {
+  flex: 0 0 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+}
+.evolve-json-disclosure[aria-expanded="true"] .evolve-json-chevron { transform: rotate(45deg); }
+.evolve-json-children {
+  position: relative;
+  padding-block: 1px 3px;
+  background: color-mix(in srgb, var(--surface-soft, #f6f8fc) 65%, var(--surface));
+}
+.evolve-json-children::after {
+  content: ""; position: absolute; pointer-events: none;
+  inset-block: 4px 10px;
+  inset-inline-start: calc(var(--evolve-json-name-inset) + var(--evolve-json-child-indent) - 7px);
+  border-inline-start: 1px solid var(--border, #d9e0eb);
+}
+.evolve-json-add-row {
+  padding: 0 10px 2px calc(var(--evolve-json-name-inset) + var(--evolve-json-child-indent));
+}
+.evolve-json-add-row > button {
+  min-height: 28px; padding: 2px 7px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 0.875em;
+}
+.evolve-json-add-row > button:hover { background: var(--surface-hover, var(--surface)); color: var(--text, inherit); }
 .evolve-json-empty { padding: 24px 14px; border: 1px dashed var(--border, #d9e0eb); border-radius: 12px; color: var(--muted); text-align: center; }
 .evolve-json-footer { margin-top: 10px; }
 .evolve-json-file { overflow-wrap: anywhere; }
 .evolve-json-error { color: var(--danger, #b42318); }
-.evolve-json-nested > summary { cursor: pointer; padding: 5px 0; }
-.evolve-json-children { display: grid; gap: 6px; padding-left: 6px; border-left: 1px solid var(--border, #d9e0eb); }
-.evolve-json-child { display: flex; gap: 5px; flex-wrap: wrap; }
-.evolve-json-child > input { flex: 1 1 65px; }
-.evolve-json-child > .evolve-json-value { flex: 2 1 105px; }
-@media (max-width: 560px) {
+@container (max-width: 440px) {
   .evolve-json-header { grid-template-columns: minmax(0, 1fr); }
   .evolve-json-column-labels { display: none; }
-  .evolve-json-row { grid-template-columns: 24px minmax(0, 1fr) 30px; }
-  .evolve-json-row > .evolve-json-value { grid-column: 2; grid-row: 2; }
-  .evolve-json-row > .evolve-json-remove { grid-column: 3; grid-row: 1; }
+  .evolve-json-list {
+    --evolve-json-scope-width: 22px;
+    --evolve-json-columns: minmax(0, 1fr) var(--evolve-json-type-width) 28px;
+  }
+  .evolve-json-row {
+    grid-template-areas: "scope name type remove" ". value value value";
+    row-gap: 6px;
+  }
+  .evolve-json-row[data-root="false"] { grid-template-areas: "name type remove" "value value value"; }
+  .evolve-json-scope { grid-area: scope; }
+  .evolve-json-name { grid-area: name; }
+  .evolve-json-type { grid-area: type; }
+  .evolve-json-remove { grid-area: remove; }
+  .evolve-json-value { grid-area: value; }
 }
 
 /* The band's one warning: the client carried this step once and stopped. It
