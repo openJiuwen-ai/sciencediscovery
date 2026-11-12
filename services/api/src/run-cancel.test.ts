@@ -664,26 +664,42 @@ test("a multi-turn run's usage row is the sum of its turns", { tags: ["swarm:req
   assert.equal(usage.invocations[0]?.turnsRecorded, 2);
 });
 
-test("a delegated child writes exactly one delegation-track usage row", { tags: ["swarm:required"] }, async (context) => {
+// Runs on the built-in loop on purpose. Under the real JiuwenSwarm instance a
+// nested `task` child does not finish against this fixture's gateway, so the
+// parent run never leaves `running` and the file's worker waits out its 600 s
+// timeout (observed in the merge queue: "expected run … to become completed /
+// actual: 'running'"). The row under test is written by the API's run collector,
+// which the executor does not change; the swarm variant still covers the
+// per-turn sum in the case above. Cancelling in `finally` keeps a future
+// failure from hanging teardown the same way (#1119).
+test("a delegated child writes exactly one delegation-track usage row", async (context) => {
   const api = await startApi(context, "usage-delegated", startDelegatedUsageGateway);
   const sessionId = await createSession(api, "Usage delegated");
 
   const run = await createRun(api, sessionId, "Delegate one task");
-  await waitForRunStatus(api, sessionId, run.id, "completed", true);
+  try {
+    await waitForRunStatus(api, sessionId, run.id, "completed", true);
 
-  // Delegated spend belongs to the same run but a different invocation, so the
-  // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent
-  // row keeps the parent's two turns (7/3/10 + 5/2/7).
-  const usage = await getUsage(api, sessionId);
-  const delegated = usage.invocations.filter((invocation) => invocation.invocationKind === "delegation-track");
-  assert.equal(delegated.length, 1);
-  assert.equal(delegated[0]?.runId, run.id);
-  assert.equal(delegated[0]?.totalTokens, 7);
-  assert.equal(delegated[0]?.turnsRecorded, 1);
-  const parent = usage.invocations.find((invocation) => invocation.invocationKind === "task");
-  assert.equal(parent?.totalTokens, 17);
-  assert.equal(parent?.turnsRecorded, 2);
-  assert.equal(usage.totals.invocationCount, 2);
+    // Delegated spend belongs to the same run but a different invocation, so the
+    // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent
+    // row keeps the parent's two turns (7/3/10 + 5/2/7).
+    const usage = await getUsage(api, sessionId);
+    const delegated = usage.invocations.filter((invocation) => invocation.invocationKind === "delegation-track");
+    assert.equal(delegated.length, 1);
+    assert.equal(delegated[0]?.runId, run.id);
+    assert.equal(delegated[0]?.totalTokens, 7);
+    assert.equal(delegated[0]?.turnsRecorded, 1);
+    const parent = usage.invocations.find((invocation) => invocation.invocationKind === "task");
+    assert.equal(parent?.totalTokens, 17);
+    assert.equal(parent?.turnsRecorded, 2);
+    assert.equal(usage.totals.invocationCount, 2);
+  } finally {
+    const current = (await listRuns(api, sessionId)).find((candidate) => candidate.id === run.id);
+    if (current && ["queued", "running", "blocked"].includes(current.status)) {
+      await cancelRunById(api, sessionId, run.id);
+      await waitForRunStatus(api, sessionId, run.id, "cancelled", true);
+    }
+  }
 });
 
 test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:required"] }, async (context) => {
