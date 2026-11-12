@@ -3,6 +3,8 @@
 
 import type { RemoteWorkspaceSyncRecord, RemoteWorkspaceSyncRequest, WorkspaceTransfer } from "@sciencediscovery/schema";
 import type { RunnerClient } from "@sciencediscovery/executor";
+import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
 import type { SessionStore } from "./store.js";
 import type { TransferEndpoint } from "./workspace-transfers.js";
@@ -56,9 +58,13 @@ export async function syncRemoteWorkspace(options: {
     },
     committed: async (file, job) => {
       if (direction !== "pull") return;
+      // A pull lands the file in the local root, so its mtime is what a later
+      // listing compares against; a clock read here is always a few
+      // milliseconds later and demotes the attribution (#1125).
+      const delivered = await stat(resolve(root, file.targetPath));
       await store.recordWorkspaceFileRevision(sessionId, {
         path: options.agentId ? `subagents/${options.agentId}/${file.targetPath}` : file.targetPath,
-        mode: "write", origin: "system", modifiedAt: new Date().toISOString(), size: file.size, contentHash: file.sha256,
+        mode: "write", origin: "system", modifiedAt: delivered.mtime.toISOString(), size: file.size, contentHash: file.sha256,
         ...(options.agentId ? { subagentId: options.agentId } : {}),
         originMeta: { source: "runner_pull", runnerId: hostId, agentId,
           sourceWorkspaceId: job.sourceWorkspaceId, workspaceId: job.targetWorkspaceId,

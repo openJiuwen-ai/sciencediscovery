@@ -7,8 +7,81 @@ import { dirname, join } from "node:path";
 import { CasStore } from "@sciencediscovery/cas";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 import { SessionStore } from "../store.js";
+import { listWorkspaceFiles } from "./index.js";
 import { materializeArtifact } from "./materialize.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+
+test("a promoted version keeps its attribution across the listing that follows", async t => {
+  // The defect (#1125): the revision was stamped with `new Date()` taken after
+  // the copy, while the file kept its own mtime — and with `reuseIdentical` the
+  // copy never touches the file at all. The next listing therefore saw a change,
+  // appended a revision with `origin: "unknown"` and no `parentRevisionId`, and
+  // moved `currentRevisionId` onto it: the attribution, the lineage and the
+  // Artifact link all disappeared from a file whose bytes never changed.
+  const root = await mkdtemp(join(tmpdir(), "artifact-listing-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); store.setAvailableSkillIds([]); await store.load();
+  const project = await store.createProject("listing");
+  const session = await store.createSession(project.id, "lead", {}, {}, { allowUnconfiguredModel: true });
+  const cas = new CasStore(root);
+  const bytes = Buffer.from("delivered report\n".repeat(500));
+  const version = await store.createArtifactVersion({ sessionId: session.id, content: await cas.put(bytes),
+    kind: "other", logicalName: "delivered.md", mediaType: "text/markdown", origin: "llm_declared" });
+  const input = { sessionId: session.id, workspaceRoot: store.workspacePath(session.id),
+    artifactId: version.artifact.id, version: 1, path: "delivered.md" };
+  await materializeArtifact(store, input);
+  const delivered = store.getWorkspaceFileProvenance(session.id, "delivered.md")!;
+  assert.equal(delivered.currentRevision.origin, "system");
+  assert.equal(delivered.currentRevision.contentHash, version.version.content.hash);
+  assert.deepEqual(delivered.currentRevision.artifactVersionIds, [version.version.id]);
+  assert.equal(delivered.artifacts.length, 1, "the delivery is linked to the Artifact version");
+
+  // Two listings, because the first refresh is what used to append the empty
+  // revision; a second one proves the fix is stable rather than deferred.
+  for (let pass = 0; pass < 2; pass += 1) {
+    await listWorkspaceFiles(store, session.id);
+    const after = store.getWorkspaceFileProvenance(session.id, "delivered.md")!;
+    assert.equal(after.currentRevision.id, delivered.currentRevision.id,
+      `listing pass ${pass + 1} must not replace the delivered revision`);
+    assert.equal(after.currentRevision.origin, "system");
+    assert.equal(after.currentRevision.contentHash, version.version.content.hash);
+    assert.deepEqual(after.currentRevision.artifactVersionIds, [version.version.id]);
+    assert.equal(after.revisions.length, delivered.revisions.length, "no revision is appended for an unchanged file");
+    assert.equal(after.lineage.length, delivered.lineage.length, "the lineage survives the listing");
+    assert.deepEqual(after.artifacts, delivered.artifacts, "the Artifact link survives the listing");
+  }
+
+  // Re-materializing the identical bytes returns early without touching the
+  // file, which is the branch that made the mismatch unconditional.
+  await materializeArtifact(store, input);
+  await listWorkspaceFiles(store, session.id);
+  const retried = store.getWorkspaceFileProvenance(session.id, "delivered.md")!;
+  assert.equal(retried.currentRevision.origin, "system", "a re-materialized identical copy stays attributed");
+  assert.deepEqual(retried.currentRevision.artifactVersionIds, [version.version.id]);
+});
+
+test("a same-size edit on disk still degrades to unknown", async t => {
+  // The reason the fix is at the write sites and not in the reconcile branch:
+  // reconciliation sees only path/mtime/size, so it cannot tell a clock that ran
+  // late from a real edit. This is the behaviour that must not be traded away.
+  const root = await mkdtemp(join(tmpdir(), "artifact-listing-edit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); store.setAvailableSkillIds([]); await store.load();
+  const project = await store.createProject("listing-edit");
+  const session = await store.createSession(project.id, "lead", {}, {}, { allowUnconfiguredModel: true });
+  const cas = new CasStore(root);
+  const bytes = Buffer.from("delivered report\n".repeat(500));
+  const version = await store.createArtifactVersion({ sessionId: session.id, content: await cas.put(bytes),
+    kind: "other", logicalName: "edited.md", mediaType: "text/markdown", origin: "llm_declared" });
+  await materializeArtifact(store, { sessionId: session.id, workspaceRoot: store.workspacePath(session.id),
+    artifactId: version.artifact.id, version: 1, path: "edited.md" });
+  const edited = Buffer.from(bytes); edited[0] = (edited[0]! + 1) % 256;
+  await writeFile(join(store.workspacePath(session.id), "edited.md"), edited);
+  await listWorkspaceFiles(store, session.id);
+  const after = store.getWorkspaceFileProvenance(session.id, "edited.md")!;
+  assert.equal(after.currentRevision.origin, "unknown", "an unrecorded external edit is not credited to the Artifact");
+  assert.deepEqual(after.currentRevision.artifactVersionIds, []);
+});
 
 for (const binary of [false, true]) test(`immutable artifact edit roundtrip, binary=${binary}`, async t => {
   const root = await mkdtemp(join(tmpdir(), "artifact-edit-"));
