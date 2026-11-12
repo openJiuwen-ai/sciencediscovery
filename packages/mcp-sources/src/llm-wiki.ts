@@ -54,10 +54,18 @@ const definitions = {
   properties: Record<string, unknown>; required: string[];
 }>;
 
+// The provider's index can spell a page id with Windows separators; fold them
+// once, here, so validation and every request see a single spelling.
+function normalizePagePath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
 function isPagePath(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 500
-    && !/[\\%?#\x00-\x1f:]/.test(value)
-    && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+  if (typeof value !== "string" || value.length === 0) return false;
+  const path = normalizePagePath(value);
+  return path.length <= 500
+    && !/[\\%?#\x00-\x1f:]/.test(path)
+    && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
 function isObject(value: unknown): value is Record<string, JsonValue> {
@@ -115,11 +123,13 @@ export function createLlmWikiSource(
           && Number.isInteger(limit) && Number(limit) >= 1 && Number(limit) <= 25
           ? { valid: true, input: { query: input.query.trim(), limit } } : invalid;
       }
-      if (toolId === "get_page") return isPagePath(input.path) ? { valid: true, input: { path: input.path } } : invalid;
+      if (toolId === "get_page") {
+        return isPagePath(input.path) ? { valid: true, input: { path: normalizePagePath(input.path) } } : invalid;
+      }
       const maxTokens = input.max_tokens ?? 8000;
       return Array.isArray(input.paths) && input.paths.length > 0 && input.paths.length <= 20 && input.paths.every(isPagePath)
         && Number.isInteger(maxTokens) && Number(maxTokens) >= 100 && Number(maxTokens) <= 16000
-        ? { valid: true, input: { paths: input.paths, max_tokens: maxTokens } } : invalid;
+        ? { valid: true, input: { paths: input.paths.map(normalizePagePath), max_tokens: maxTokens } } : invalid;
     },
     async normalizeResult(context, raw) {
       const text = raw.content.find((block) => block.type === "text");
@@ -132,7 +142,7 @@ export function createLlmWikiSource(
         // Search results carry the provider's index paths, which may use Windows
         // separators; normalize them so page lookups round-trip cleanly.
         const rawPath = page.page_id ?? page.path;
-        const path = typeof rawPath === "string" ? rawPath.replaceAll("\\", "/") : rawPath;
+        const path = typeof rawPath === "string" ? normalizePagePath(rawPath) : rawPath;
         if (!isPagePath(path)) throw new Error("Invalid LLM Wiki page path");
         const title = typeof page.title === "string" && page.title ? page.title : path;
         const encodedPath = path.split("/").map(encodeURIComponent).join("/").replaceAll("(", "%28").replaceAll(")", "%29");
