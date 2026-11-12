@@ -127,3 +127,23 @@ test("USG-024 exchange rates label custom sources by host", async () => {
   assert.equal(rates[0]?.provider, "rates.example.test");
   assert.equal(rates[1]?.provider, "rates.example.test");
 });
+
+test("USG-025 exchange rates read the AllRatesToday open endpoint", async () => {
+  const provider = new UsageExchangeRateProvider({
+    config: { ...config, sourceUrl: "https://allratestoday.com/api/open/latest/USD" },
+    dataDir: dataDir("usage-rates-allratestoday"),
+    fetchImpl: async () => new Response(JSON.stringify({
+      result: "success",
+      base_code: "USD",
+      date: "2026-09-08",
+      rates: { CNY: 6.72, EUR: 0.89, USD: 1 },
+    })),
+    now: () => new Date("2026-09-08T00:00:00.000Z"),
+  });
+
+  const rates = await provider.rates();
+
+  assert.equal(rates.find((rate) => rate.baseCurrency === "USD" && rate.quoteCurrency === "CNY")?.rate, 6.72);
+  assert.equal(rates[0]?.effectiveDate, "2026-09-08");
+  assert.equal(rates[0]?.provider, "AllRatesToday");
+});
