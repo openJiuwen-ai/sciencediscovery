@@ -238,9 +238,32 @@ export function packageCarriesEvolveCandidates(payload: unknown): boolean {
   });
 }
 
+/**
+ * Whether the package carries sources for the runs that claim candidates.
+ *
+ * An array being present is not enough: the exporter always emits
+ * `evolve.candidates`, empty included, so a run whose files were pruned or never
+ * written shipped "no sources" as if it had shipped them, and the receipt stayed
+ * silent about a loss (#1136 review 2). A run that claims candidates needs at
+ * least one carried source for the package to count as carrying them.
+ */
 function packageCarriesEvolveCandidateSources(payload: unknown): boolean {
-  const container = typeof payload === "object" && payload !== null ? payload as { candidates?: unknown } : {};
-  return Array.isArray(container.candidates);
+  const container = typeof payload === "object" && payload !== null ? payload as { candidates?: unknown; runs?: unknown } : {};
+  if (!Array.isArray(container.candidates)) return false;
+  const carried = new Map<string, number>();
+  for (const entry of container.candidates) {
+    const source = typeof entry === "object" && entry !== null ? entry as { runId?: unknown } : undefined;
+    if (!source || typeof source.runId !== "string") continue;
+    carried.set(source.runId, (carried.get(source.runId) ?? 0) + 1);
+  }
+  const runs = Array.isArray(container.runs) ? container.runs : [];
+  return runs.every((entry) => {
+    const run = typeof entry === "object" && entry !== null ? (entry as { run?: unknown }).run : undefined;
+    const candidates = typeof run === "object" && run !== null ? (run as { candidates?: unknown }).candidates : undefined;
+    if (typeof candidates !== "number" || !Number.isInteger(candidates) || candidates <= 0) return true;
+    const id = (run as { id?: unknown }).id;
+    return typeof id === "string" && (carried.get(id) ?? 0) > 0;
+  });
 }
 
 function packageEvolveCandidateSourcesFor(payload: unknown, runIds: Set<string>): Array<{ hash: string; objectPath: string; runId: string }> {
@@ -485,7 +508,16 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     const evolveCandidateSources: Array<{ hash: string; objectPath: string; runId: string }> = [];
     for (const { run } of evolveRuns.runs) {
       try {
-        for (const candidate of await evolveCandidates.list(run.id)) {
+        const listed = await evolveCandidates.list(run.id);
+        // The run says it produced candidates, so an empty list means the files
+        // are gone (pruned, unreadable, or a digest that no longer matches its
+        // name) rather than that there is nothing to carry. Say so here, where
+        // the reason is still known, instead of leaving the receipt to guess
+        // from an empty array (#1136 review 2).
+        if (!listed.length && run.candidates > 0) {
+          omissions.push(`evolve:${run.id}:candidate source files are no longer on disk; this run's ${run.candidates} candidate(s) are carried as references without their source.`);
+        }
+        for (const candidate of listed) {
           const bytes = Buffer.from(candidate.source, "utf8");
           const objectPath = previewObjectSizes
             ? addPreviewObject(sha256(bytes), bytes.byteLength, "log")

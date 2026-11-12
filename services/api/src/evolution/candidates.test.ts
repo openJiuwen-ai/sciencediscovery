@@ -72,8 +72,21 @@ test("candidate sources can be listed and restored without accepting path traver
   const copied = new CandidateSources("/unused", resolve(root, "imported"));
 
   assert.deepEqual((await sources.list("run-1")).map((candidate) => candidate.hash), [`sha256:${DIGEST}`]);
-  assert.equal(await copied.write("run-2", `sha256:${DIGEST}`, "print('restored')\n"), true);
-  assert.equal(await copied.read("run-2", DIGEST), "print('restored')\n");
+  // The hash has to be the hash of the text being restored: `write` recomputes
+  // it and refuses a source whose digest does not match its name, which is the
+  // whole point of the check (#1136 review 1).
+  const restored = "print('restored')\n";
+  const restoredDigest = createHash("sha256").update(restored, "utf8").digest("hex");
+  assert.equal(await copied.write("run-2", `sha256:${restoredDigest}`, restored), true);
+  assert.equal(await copied.read("run-2", restoredDigest), restored);
+  // A source that does not match its name is refused, not stored under a name it
+  // does not hash to.
+  assert.equal(await copied.write("run-2", `sha256:${DIGEST}`, restored), false);
+  assert.equal(await copied.read("run-2", DIGEST), undefined);
+  // Restoring the same verified source twice is idempotent, and a file left
+  // truncated by an earlier crash is replaced rather than reported as restored.
+  assert.equal(await copied.write("run-2", `sha256:${restoredDigest}`, restored), true);
+  assert.equal(await copied.read("run-2", restoredDigest), restored);
   assert.equal(await copied.write("../escape", DIGEST, "nope"), false);
   assert.equal(await copied.write("run-2", "../escape", "nope"), false);
   await rm(root, { force: true, recursive: true });
