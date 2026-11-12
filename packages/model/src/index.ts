@@ -8,4 +8,5 @@ export * from "./runtime-client.js";
 export type { AgentConfig, ModelUsage } from "./types.js";
 
 export type { NormalizedUsage, UsageAliasConflict } from "./usage.js";
+export { addUsage } from "./usage.js";
 export * from "./completion.js";

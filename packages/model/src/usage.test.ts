@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { normalizeUsage } from "./client.js";
+import { addUsage } from "./usage.js";
 
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
@@ -102,4 +103,21 @@ test("reasoning tokens are preserved separately from output across compatible re
   assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 7, total_tokens: 17,
     output_tokens_details: { reasoning_tokens: 5 } }, "openai-responses")?.reasoningTokens, 5);
   assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 7, total_tokens: 17 }, "openai-responses")?.reasoningTokens, null);
+});
+
+test("summing turns keeps the run total and leaves unknown fields unknown", () => {
+  const first = { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 100, outputTokens: 20, reasoningTokens: null, totalTokens: 120 };
+  const second = { cacheReadTokens: 5, cacheWriteTokens: null, inputTokens: 300, outputTokens: 40, reasoningTokens: 7, totalTokens: 340 };
+  const total = addUsage(first, second);
+  // Token counts add, so one row per invocation can carry the invocation's spend
+  // instead of one turn's (#1109).
+  assert.equal(total.inputTokens, 400);
+  assert.equal(total.outputTokens, 60);
+  assert.equal(total.totalTokens, 460);
+  assert.equal(total.cacheReadTokens, 15);
+  assert.equal(total.reasoningTokens, 7);
+  // A provider that never reports a field must not gain a zero for it.
+  assert.equal(total.cacheWriteTokens, null);
+  // The first turn has nothing to add to.
+  assert.deepEqual(addUsage(undefined, second), second);
 });

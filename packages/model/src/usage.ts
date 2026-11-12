@@ -104,3 +104,27 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     } } : {}),
   };
 }
+
+/**
+ * Add one turn's usage to a run's running total.
+ *
+ * The agent loop emits one figure per model turn and used to keep only the last
+ * one, so a persisted row described a single turn while its timestamps described
+ * the whole run (#1109). The loop cannot add `ModelUsage` itself - the generic
+ * runtime does not know the shape - so it takes this adder.
+ */
+export function addUsage(previous: ModelUsage | undefined, next: ModelUsage): ModelUsage {
+  if (!previous) return next;
+  const sum = (left: number | null | undefined, right: number | null | undefined) =>
+    left === undefined && right === undefined ? undefined
+      : left == null && right == null ? null
+      : (left ?? 0) + (right ?? 0);
+  return {
+    cacheReadTokens: sum(previous.cacheReadTokens, next.cacheReadTokens),
+    cacheWriteTokens: sum(previous.cacheWriteTokens, next.cacheWriteTokens),
+    inputTokens: previous.inputTokens + next.inputTokens,
+    outputTokens: previous.outputTokens + next.outputTokens,
+    reasoningTokens: sum(previous.reasoningTokens, next.reasoningTokens),
+    totalTokens: previous.totalTokens + next.totalTokens,
+  };
+}
