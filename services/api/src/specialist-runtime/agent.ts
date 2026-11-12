@@ -95,6 +95,11 @@ export function codexAgentFactory(config: {
     };
     return { execute, prompt: async text => { await execute(text); }, abort: () => { controller.abort(); fallback?.abort(); },
       beginExternalWait: () => fallback?.beginExternalWait() ?? (() => undefined),
+      // Which loop ran is only known once `execute()` has decided: the external
+      // runtime enforces `maxTurns` itself and names no ceiling, while the native
+      // fallback enforces the engine's. Read the fallback's bound here so the
+      // record and the handoff name the loop that actually ran (#1113 review).
+      get enforcedMaxModelTurns() { return fallback?.enforcedMaxModelTurns; },
       subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
   };
 }

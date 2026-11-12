@@ -124,9 +124,14 @@ export function createAgentRun(
   return {
     abort,
     beginExternalWait: () => agent.beginExternalWait(),
-    ...((agent as NativeAgentHandle).enforcedMaxModelTurns !== undefined
-      ? { enforcedMaxModelTurns: (agent as NativeAgentHandle).enforcedMaxModelTurns }
-      : {}),
+    // Read the bound from the executor every time instead of snapshotting it
+    // here: a specialist whose external runtime reports itself unavailable only
+    // builds its native fallback inside `execute()`, so a value captured at this
+    // point would be missing for exactly the path that enforces the ceiling
+    // (#1113 review).
+    get enforcedMaxModelTurns() {
+      return (agent as NativeAgentHandle).enforcedMaxModelTurns;
+    },
     async execute() {
       if (executed) throw new Error(`AgentRun ${input.agentRunId} has already been executed`);
       executed = true;
