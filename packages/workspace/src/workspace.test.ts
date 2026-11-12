@@ -2282,8 +2282,11 @@ test("an oversized child result says what it left out and where the rest is", as
       steps: [{
         content: full, createdAt: timestamp, id: "assistant-big", kind: "assistant", status: "completed",
       }],
+      timeoutSeconds: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
       turnCount: 128,
     }),
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
     saveSubagentResult: async (text) => { stored = text; return { ref: "tool-output-abc" }; },
   });
   const task = tools.find((tool) => tool.name === "task")!;
