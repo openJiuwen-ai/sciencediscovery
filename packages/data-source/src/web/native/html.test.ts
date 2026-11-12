@@ -64,3 +64,38 @@ test("leaves references it does not know, and out-of-range scalars, untouched", 
   assert.equal(decodeEntities("&#1114112;"), "&#1114112;");
   assert.equal(decodeEntities("bare & ampersand"), "bare & ampersand");
 });
+
+test("decodes the typographic, Latin-1 and maths names the table carries", () => {
+  const named: ReadonlyArray<readonly [string, string]> = [
+    ["&mdash;", "\u2014"],
+    ["&ndash;", "\u2013"],
+    ["&hellip;", "\u2026"],
+    ["&rsquo;", "\u2019"],
+    ["&lsquo;", "\u2018"],
+    ["&ldquo;", "\u201C"],
+    ["&rdquo;", "\u201D"],
+    ["&eacute;", "\u00E9"],
+    ["&egrave;", "\u00E8"],
+    ["&ouml;", "\u00F6"],
+    ["&apos;", "'"],
+    ["&middot;", "\u00B7"],
+    ["&times;", "\u00D7"],
+    ["&deg;", "\u00B0"],
+    ["&plusmn;", "\u00B1"],
+  ];
+  for (const [reference, expected] of named) assert.equal(decodeEntities(reference), expected, reference);
+
+  // The shape the free engines actually hand over: a European title and a range.
+  assert.equal(
+    textOf("Caf&eacute; culture &mdash; 5&ndash;10 &hellip; O&apos;Brien"),
+    "Café culture — 5–10 … O'Brien",
+  );
+});
+
+test("keeps a name outside the table, and a reference without its semicolon, literal", () => {
+  // Not carried: the bounded table is documented, so an unlisted name is still text.
+  assert.equal(decodeEntities("&diams;"), "&diams;");
+  // A semicolon is what ends a reference; without it the ampersand is plain text.
+  assert.equal(decodeEntities("&amp"), "&amp");
+  assert.equal(decodeEntities("&mdash"), "&mdash");
+});
