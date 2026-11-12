@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import time
+from judge_usage import allows_unknown_judge_usage
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 
@@ -220,10 +221,12 @@ def run_case(args, env, selection, entry, row, previous):
         if doc:
             row['metrics_path'] = str(metric_files[0])
         accounting = doc.get('judge_usage', {}).get('complete', True)
-        row.update(exit=0 if completed and accounting else code or 1,
+        accounting_ok = accounting or allows_unknown_judge_usage(doc.get('judge_usage', {}))
+        row.update(exit=0 if completed and accounting_ok else code or 1,
             completed=bool(completed), resource_accounting_complete=doc.get('judge_usage', {}).get('complete', False),
-            failure_stage='accounting' if completed and not accounting else None if completed else 'evaluation' if evidence or recoverable_evidence(attempt, case) else 'research',
-            reason='UNREPORTED_JUDGE_TOKENS' if completed and not accounting else None if completed else doc.get('error', f'{row["mode"]} exit={code}'))
+            warnings=['JUDGE_USAGE_INCOMPLETE'] if completed and accounting_ok and not accounting else [],
+            failure_stage='accounting' if completed and not accounting_ok else None if completed else 'evaluation' if evidence or recoverable_evidence(attempt, case) else 'research',
+            reason='UNREPORTED_JUDGE_TOKENS' if completed and not accounting_ok else None if completed else doc.get('error', f'{row["mode"]} exit={code}'))
         return row
     finally:
         try:

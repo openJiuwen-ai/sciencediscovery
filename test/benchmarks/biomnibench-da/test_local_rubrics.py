@@ -130,8 +130,9 @@ class LocalRubricRegistryTests(unittest.TestCase):
                 published = json.loads((output / 'benchmark-metrics.json').read_text())
                 self.assertEqual(report['evaluation']['score'], 87)
                 self.assertEqual(published['measurements']['score'], 87)
-                self.assertEqual(published['measurements']['judge_tokens'], 7)
-                self.assertEqual(published['measurements']['total_tokens'], 107)
+                # Original and recovery official usage both count; local usage is informational.
+                self.assertEqual(published['measurements']['judge_tokens'], 14)
+                self.assertEqual(published['measurements']['total_tokens'], 114)
                 self.assertEqual(published['local_evaluation']['score'], 100)
                 self.assertFalse(published['local_evaluation']['gating'])
                 self.assertEqual(published['local_evaluation']['rubric']['channel'], 'local-variant')

@@ -22,15 +22,33 @@ export function generationTokens(usage, beforeIds = []) {
 export function judgeTokens(attempts) {
   if (!Array.isArray(attempts) || !attempts.length) throw new Error('MISSING_JUDGE_ATTEMPTS');
   const totals = { input: 0, output: 0, total: 0, invocations: attempts.length,
-    complete: true, unknown_attempts: 0, reported_attempts: 0 };
-  for (const { usage } of attempts) {
+    complete: true, unknown_attempts: 0, reported_attempts: 0,
+    transport_unknown_attempts: 0, blocking_unknown_attempts: 0 };
+  for (const attempt of attempts) {
+    const usage = attempt?.usage;
     if (![usage?.prompt_tokens, usage?.completion_tokens, usage?.total_tokens].every(count)) {
-      totals.complete = false; totals.unknown_attempts++; continue;
+      totals.complete = false; totals.unknown_attempts++;
+      // Only explicit failed transport attempts qualify. A scored response,
+      // missing history or malformed 200 response still requires usable usage.
+      const status = attempt?.http_status ?? (attempt?.error_type === 'HTTPError'
+        ? Number(/^HTTP (\d{3})$/.exec(attempt.error ?? '')?.[1]) : undefined);
+      const transport = attempt?.status === 'error' && (count(status) && (status === 408 || (status >= 500 && status < 600))
+        || (status === undefined && ['timeout', 'network'].includes(attempt.failure_kind)));
+      if (transport) totals.transport_unknown_attempts++;
+      else totals.blocking_unknown_attempts++;
+      continue;
     }
     totals.reported_attempts++;
     totals.input += usage.prompt_tokens; totals.output += usage.completion_tokens; totals.total += usage.total_tokens;
   }
   return totals;
+}
+
+/** Missing usage may warn only when every unknown attempt is a proven transport failure. */
+export function allowsUnknownJudgeUsage(usage) {
+  return usage?.complete === false && count(usage.reported_attempts) && usage.reported_attempts > 0
+    && count(usage.unknown_attempts) && usage.unknown_attempts > 0
+    && usage.transport_unknown_attempts === usage.unknown_attempts && usage.blocking_unknown_attempts === 0;
 }
 
 export function toolMetrics(records) {

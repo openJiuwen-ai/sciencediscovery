@@ -1,14 +1,16 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
-import { evaluateSuite, temporaryVerdict, percentile, renderSuite, dataset, l5Tasks, manifestHash } from './biomni-gate.mjs';
-import { MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
+import { evaluateSuite, temporaryVerdict, percentile, renderSuite, dataset, l5Tasks, manifestHash, validateMetrics, projectMetrics } from './biomni-gate.mjs';
+import { allowsUnknownJudgeUsage, judgeTokens, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
+import { caseExecutionSummary, renderCaseExecution } from './case-execution.mjs';
+import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'os:windows', 'os:macos', 'arch:amd64', 'arch:arm64'] });
 const policy = JSON.parse(readFileSync(new URL('./biomni-gate.json', import.meta.url)));
 const historical = policy.temporary_baseline;
@@ -102,6 +104,115 @@ test('evaluation failure and unknown usage expose metrics without claiming compl
   assert.equal(report.case_statuses[0].status, 'incomplete');
 });
 
+const usage = { prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 };
+const timeoutAttempt = { status: 'error', error_type: 'HTTPError', error: 'HTTP 524' };
+function withTransportFailure(doc) {
+  doc.judge_usage = { ...judgeTokens([timeoutAttempt, timeoutAttempt, { status: 'scored', usage }]), scope: 'all-evaluation-attempts' };
+  doc.measurements.reported_total_tokens = doc.measurements.total_tokens;
+  doc.measurements.total_tokens_basis = 'known-lower-bound';
+  return doc;
+}
+
+test('524, 524, scored retains unknown spend and passes with a cost warning', () => {
+  const { plan, documents } = fixture();
+  withTransportFailure(documents[0]);
+  const report = evaluateSuite(plan, documents, policy);
+  assert.equal(report.status, 'temporary_baseline_warning');
+  assert.deepEqual(report.problems, []);
+  assert.deepEqual(report.warnings, ['JUDGE_USAGE_INCOMPLETE']);
+  assert.equal(report.measured, 45);
+  assert.equal(report.summary.total_tokens, 45 * 120);
+  assert.equal(report.summary.reported_total_tokens, report.summary.total_tokens);
+  assert.equal(report.summary.token_usage_complete, false);
+  assert.equal(report.summary.total_tokens_basis, 'known-lower-bound');
+  assert.equal(report.summary.unknown_judge_attempts, 2);
+  assert.equal(report.thresholds.some(m => m.metric === 'total_tokens'), false,
+    'current main policy keeps token usage diagnostic-only');
+  assert.match(renderSuite(report), /≥ 120.00 \(2 attempts unknown\)/);
+  assert.match(renderSuite(report), /JUDGE_USAGE_INCOMPLETE/);
+  assert.equal(projectMetrics(documents[0]).judge_usage.transport_unknown_attempts, 2);
+});
+
+test('known and unknown token usage remain visible while current main policy gates other resources', () => {
+  const { plan, documents } = fixture();
+  withTransportFailure(documents[0]);
+  const report = evaluateSuite(plan, documents, policy);
+  assert.equal(report.status, 'temporary_baseline_warning');
+  assert.ok(report.warnings.includes('JUDGE_USAGE_INCOMPLETE'));
+  assert.equal(report.summary.reported_total_tokens, report.summary.total_tokens);
+  const expensive = fixture();
+  expensive.documents[0].measurements.e2e_ms = 10 ** 12;
+  const blocked = evaluateSuite(expensive.plan, expensive.documents, policy);
+  assert.equal(blocked.status, 'failed');
+  assert.ok(blocked.problems.includes('SUM_E2E_MS_REGRESSION'));
+});
+
+test('staging and the case execution dashboard preserve known lower bounds without changing pass counts', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'biomni-dashboard-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { plan, documents } = fixture();
+  plan.entries = [ { ...plan.entries[0], tags: ['tier:l5'] } ];
+  const doc = withTransportFailure(documents[0]);
+  mkdirSync(join(root, '.ci-results/e2e-real'), { recursive: true });
+  writeFileSync(join(root, '.ci-results/e2e-real/benchmark-metrics.json'), JSON.stringify(doc));
+  await prepareRealE2EResults(root);
+  const staged = readFileSync(join(root, '.tmp/real-e2e-results/e2e-real/benchmark-metrics.json'));
+  mkdirSync(join(root, 'real-e2e-results-research-1'), { recursive: true });
+  writeFileSync(join(root, 'real-e2e-results-research-1/benchmark-metrics.json'), staged);
+  const verdict = { passed: 1, results: [{ key: doc.key, outcome: 'PASS' }] };
+  const summary = caseExecutionSummary(plan, root, verdict), row = summary.table.rows[0];
+  assert.equal(summary.passed, 1);
+  assert.equal(row.status, 'passed');
+  assert.equal(row.generated_tokens, '10');
+  assert.equal(row.judge_tokens, '≥ 20');
+  assert.equal(row.total_tokens, '≥ 120 (2 attempts unknown)');
+  assert.match(renderCaseExecution(summary.table), /≥ 120 \(2 attempts unknown\)/);
+});
+
+test('failed requests with usage count toward known cost; missing successful or unproven usage still blocks', () => {
+  const known = judgeTokens([{ ...timeoutAttempt, usage }, { status: 'scored', usage }]);
+  assert.equal(known.complete, true);
+  assert.equal(known.total, 40);
+  for (const attempt of [
+    { status: 'scored' }, { status: 'scored', failure_kind: 'network' },
+    { status: 'error' }, { status: 'error', error_type: 'ValueError', error: 'Invalid JSON' },
+    { status: 'error', error_type: 'HTTPError', error: 'HTTP 401' },
+    { status: 'error', error_type: 'HTTPError', error: 'HTTP 429' },
+    { status: 'error', failure_kind: 'network', http_status: 400 },
+  ]) {
+    const summary = judgeTokens([attempt, { status: 'scored', usage }]);
+    assert.equal(allowsUnknownJudgeUsage(summary), false);
+    const { plan, documents } = fixture();
+    documents[0].judge_usage = summary;
+    assert.throws(() => validateMetrics(documents[0], plan.entries[0], plan), /UNREPORTED_JUDGE_TOKENS/);
+  }
+  for (const attempt of [timeoutAttempt, { status: 'error', failure_kind: 'timeout' },
+    { status: 'error', failure_kind: 'network' }, { status: 'error', http_status: 503 }]) {
+    assert.equal(allowsUnknownJudgeUsage(judgeTokens([attempt, { status: 'scored', usage }])), true);
+  }
+  assert.equal(allowsUnknownJudgeUsage(judgeTokens([timeoutAttempt])), false, 'no reported usage cannot qualify');
+});
+
+test('incomplete usage cannot be labelled complete or certified as a comparable baseline', () => {
+  const { plan, documents } = fixture();
+  withTransportFailure(documents[0]);
+  for (const bad of [
+    { total_tokens_basis: 'complete' }, { reported_total_tokens: 0 },
+    { total_tokens_basis: undefined },
+  ]) {
+    const doc = structuredClone(documents[0]); Object.assign(doc.measurements, bad);
+    assert.throws(() => validateMetrics(doc, plan.entries[0], plan), /INVALID_TOKEN_USAGE_BASIS/);
+  }
+  const approved = { ...evaluateSuite(plan, fixture().documents, { mode: 'candidate', baseline: null }),
+    status: 'approved', approved_by: 'maintainer', approved_at: '2026-11-12' };
+  const compare = { mode: 'compare', score_drop_points: 0, resource_increase_ratio: 0 };
+  const report = evaluateSuite(plan, documents, compare, approved);
+  assert.equal(report.status, 'non_regression_warning');
+  assert.equal(report.non_regression_certified, false);
+  approved.cases[0] = projectMetrics(documents[0]);
+  assert.match(evaluateSuite(plan, documents, compare, approved).problems.join(), /INCOMPLETE_BASELINE_TOKEN_USAGE/);
+});
+
 test('serial CLI emits both JSON and Markdown, and returns failure for an incomplete suite', t => {
   const root = mkdtempSync(join(tmpdir(), 'biomni-report-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const { plan, documents } = fixture();
@@ -113,6 +224,13 @@ test('serial CLI emits both JSON and Markdown, and returns failure for an incomp
   };
   assert.equal(run(documents).status, 0);
   assert.match(readFileSync(join(root, 'biomni-gate.md'), 'utf8'), /45\/45/);
+  withTransportFailure(documents[0]);
+  assert.equal(run(documents).status, 0, 'recovered scoring with unknown transport spend is a warning');
+  assert.equal(JSON.parse(readFileSync(join(root, 'biomni-gate.json'))).status, 'temporary_baseline_warning');
+  documents[0].measurements.generation_tokens = Math.ceil(baseline.total_tokens * 1.25);
+  documents[0].measurements.total_tokens = documents[0].measurements.generation_tokens + documents[0].measurements.judge_tokens;
+  documents[0].measurements.reported_total_tokens = documents[0].measurements.total_tokens;
+  assert.equal(run(documents).status, 0, 'token usage is diagnostic-only under the current main policy');
   assert.equal(run(documents.slice(1)).status, 1);
   assert.equal(JSON.parse(readFileSync(join(root, 'biomni-gate.json'))).status, 'failed');
 });

@@ -82,9 +82,12 @@ python test/benchmarks/biomnibench-da/rescore.py \
 
 The original evidence is immutable. A valid score is retained even if an
 earlier request timed out without usage. Reported token counts are known costs,
-not a claim that an unknown-cost request was free. Missing usage remains an
-accounting failure for the resource baseline; independent scoring never turns
-the original failed E2E into a pass. Neither driver approves a baseline.
+not a claim that an unknown-cost request was free. A valid scored recovery may
+pass with `JUDGE_USAGE_INCOMPLETE` when only explicitly failed transport attempts
+(HTTP 408/5xx, network breaks or timeouts) lack usage. Missing usage on a scored
+response, malformed response or missing attempt history still blocks. Recovery
+counts known usage from the original and prior official evaluations exactly once;
+it preserves the original failed E2E evidence. Neither driver approves a baseline.
 
 ### Offline repeat grading (no research generation)
 
@@ -230,7 +233,24 @@ including using its available scientific tools.
 | End-to-end time | From task submission to readable final artifacts after all Runs, children, executions, transfers and timers settle, including a 5-second stability window |
 | Generation tokens | Provider-reported input/output/total tokens for new Session invocations, including subagents and retries; pre-task setup invocations are excluded |
 | Judge tokens | Sum of provider-reported tokens across **all** scoring attempts, including unsuccessful retries |
-| Total tokens | Generation plus Judge tokens |
+| Total tokens | Generation plus all reported Judge tokens; a known lower bound when failed transport attempts have unknown usage |
+| Reported total tokens | The same measured sum, explicitly labelled as known spend; unknown attempts are never assigned zero |
+
+`measurements.total_tokens` remains numeric for existing report consumers and
+equals `reported_total_tokens`. `total_tokens_basis` is `complete` or
+`known-lower-bound`; `judge_usage.complete` and `unknown_attempts` retain the
+accounting gap. Suite summaries also expose `token_usage_complete` and the
+number of unknown Judge attempts. Markdown shows lower bounds with `≥`.
+Only fully reported totals can support a complete cost comparison or become
+an approved cost baseline; an incomplete current run is never certified as
+non-regressing on cost.
+
+Token thresholds compare this known sum with the existing effective baseline:
+at or above the block threshold still blocks, at or above the warning threshold
+warns. An incomplete total below the warning threshold also warns about unknown
+spend; it does not claim the true cost is within budget. Score, tool, time and
+memory thresholds retain their existing rules. The 15%/25% token thresholds
+and population scaling are unchanged.
 
 Memory includes API, Runner, adapter, Swarm, browser and sandbox processes.
 It excludes remote model-server memory and the later Judge phase. Shared RSS
@@ -249,8 +269,9 @@ final chat reply need not repeat a link. Only the named scoring inputs are
 downloaded, so large supplementary artifacts do not exhaust verifier memory.
 Timeout, cancelled or
 failed final delivery, Judge failure, truncated tool history, missing turn
-identity, unreported tokens or missing memory samples fail the gate. Unknown
-usage is never converted to zero. The serial driver applies the bounded, deferred
+identity, unreported generation tokens, missing scored-response usage or missing
+memory samples fail the gate. Unknown failed-transport Judge usage warns as
+described above and is never converted to zero. The serial driver applies the bounded, deferred
 recovery policy above; standalone test invocations do not retry generation.
 
 The score is a **local OpenAI-compatible rubric-adapter score**, not the upstream
