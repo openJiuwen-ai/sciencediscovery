@@ -251,12 +251,35 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     return this.evidence();
   }
 
-  async modelCompleted(result: unknown): Promise<void> {
+  async modelCompleted(result: unknown, identity?: { turn?: number; responseId?: string }): Promise<void> {
+    // Snapshot the identity of the call that just answered, here, rather than
+    // when the recording queue drains. `beforeTurn`/`afterAssembly` clear
+    // `responseId` from inside that queue, so a later read could stamp this
+    // record with a turn that had already moved on — and drop a response id
+    // that had been issued for this very call (#1133).
+    const evidence = this.completedEvidence(identity);
     await this.pending;
     // Persist the authoritative action once, before tools run (including failures).
     // Both the Run event and the committed Step reference this same object.
     this.modelAction = await this.store.putRecord("ModelAction", jsonValue({ modelContext: this.modelContext, result }));
-    await this.record("model.completed", undefined, undefined, this.evidence(), this.modelAction);
+    await this.record("model.completed", undefined, undefined, evidence, this.modelAction);
+  }
+
+  /**
+   * Evidence for a completion record, bound to the call that produced it.
+   *
+   * A caller that knows the response id passes it — the executor does, because
+   * it is the side that sees `assistant.response.started`. A supplied identity
+   * wins over the recorder's field, and `responseId: undefined` means "this
+   * call has none", so a stale value is dropped instead of attributing the
+   * record to a neighbouring response.
+   */
+  private completedEvidence(identity?: { turn?: number; responseId?: string }): AgentEventEvidence {
+    const evidence = this.evidence();
+    if (identity === undefined) return evidence;
+    const { responseId: _stale, ...rest } = evidence;
+    return { ...rest, turn: identity.turn ?? evidence.turn,
+      ...(identity.responseId ? { responseId: identity.responseId } : {}) };
   }
 
   childCompleted(agentId: string): void {
