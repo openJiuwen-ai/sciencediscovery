@@ -554,7 +554,7 @@ export class EnvironmentStore {
       this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
       component = "conda";
       if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
-      this.assertPathBudget("python");
+      this.assertPathBudget();
       const pythonStarterExisted = this.catalog.environments.some((environment) => environment.id === "starter-python");
       if (!pythonStarterExisted) {
         this.updateSetup("installing", "creating-python-base", "Creating the managed Python base environment");
@@ -840,8 +840,11 @@ export class EnvironmentStore {
     } catch (error) {
       await this.failUpdate(environment, previousRevision.id);
       // [windows-desktop] on win32 a missing conda-forge build gets
-      // actionable guidance appended; elsewhere the error passes through.
-      throw withPackageInstallGuidance(error);
+      // actionable guidance appended; elsewhere the error passes through. A
+      // path-length failure is translated first, so an install that hits the
+      // same libmamba state as the starter bootstrap reports the budget and not
+      // a corrupt cache (#1104 review).
+      throw withPackageInstallGuidance(await this.explainProvisioningFailure(error));
     }
   }
 
@@ -1115,14 +1118,17 @@ export class EnvironmentStore {
    * runs (#1104). Windows-only: MAX_PATH does not bound POSIX paths, so the same
    * numbers there would reject installations that work.
    */
-  private assertPathBudget(language: ScientificLanguage): void {
+  private assertPathBudget(): void {
     const platform = this.config.platform ?? process.platform;
     if (platform !== "win32") return;
     const problems = inspectPathBudget({
       cacheRoot: this.packagesRoot ?? resolve(this.config.root, "provisioner", "pkgs"),
       channels: this.config.allowedChannels,
-      // A real revision id is 36 characters; the placeholder keeps the length honest.
-      revisionPrefix: this.revisionPath(`starter-${language}`, `rev-${"0".repeat(36)}`),
+      // The deepest prefix any environment will use, not the one being set up:
+      // `task-<uuid>` is 41 characters against `starter-python`'s 14, so a check
+      // against the starter would pass a data directory that later overflows when
+      // a task environment is created (#1104 review).
+      revisionPrefix: this.revisionPath(`task-${"0".repeat(36)}`, `rev-${"0".repeat(36)}`),
       platform,
     });
     if (!problems.length) return;

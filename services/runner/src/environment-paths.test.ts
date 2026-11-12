@@ -81,6 +81,35 @@ test("the diagnostic names the path, both lengths, the platform policy and the r
   assert.equal(error.message, text);
 });
 
+test("a URL channel is measured by its own cache layout, and the remedy follows it", () => {
+  // micromamba keys the cache by source, so an `https://host/path` channel lands
+  // under `https/<host>/<path>` rather than `conda.anaconda.org/<name>`. The
+  // built-in TUNA/USTC presets are full URLs, so measuring them as bare names
+  // would understate the deepest directory and produce the wrong ceiling.
+  const root = "C:\\pkgs";
+  assert.equal(channelDirectory(root, "conda-forge", "win32"), "C:\\pkgs\\https\\conda.anaconda.org\\conda-forge\\win-64");
+  assert.equal(channelDirectory(root, "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge", "win32"),
+    "C:\\pkgs\\https\\mirrors.tuna.tsinghua.edu.cn\\anaconda\\cloud\\conda-forge\\win-64");
+  // The URL channel is deeper, so a root that fits the default one can still be
+  // reported — and the ceiling it quotes is its own, not the default's.
+  const problems = inspectPathBudget({
+    cacheRoot: cacheRootOfLength(70), channels: ["conda-forge"], platform: "win32", revisionPrefix: "C:\\short",
+  });
+  assert.deepEqual(problems, [], "70 characters still fits the default channel layout");
+  const urlProblems = inspectPathBudget({
+    cacheRoot: cacheRootOfLength(70), channels: ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"],
+    platform: "win32", revisionPrefix: "C:\\short",
+  });
+  assert.equal(urlProblems.length, 1);
+  const text = describePathBudgetProblems(urlProblems, false);
+  const match = /directory of at most (\d+) characters/.exec(text);
+  assert.ok(match, text);
+  const ceiling = Number(match[1]);
+  assert.ok(ceiling < 72, `the URL channel's ceiling ${ceiling} must be below the default channel's 72`);
+  assert.equal(channelDirectory(cacheRootOfLength(ceiling), "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge", "win32").length
+    + CACHE_MEMBER_TAIL_CHARS, MAX_PATH_USABLE, "the quoted ceiling is exactly what fits");
+});
+
 test("the libmamba path-length signature is recognised, an ordinary solver error is not", () => {
   // Translated rather than fixed: the validation and removal happen inside the
   // pinned binary, so what this repository owns is the message the operator

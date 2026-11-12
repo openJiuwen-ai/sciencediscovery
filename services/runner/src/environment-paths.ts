@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { posix, win32 } from "node:path";
 
 /**
  * Windows path-budget accounting for the provisioner's package cache (#1104).
@@ -25,10 +25,12 @@ export const MAX_PATH_USABLE = 259;
 
 /**
  * `\https\conda.anaconda.org\conda-forge\win-64` between the cache root and an
- * entry. The report's "77" is this plus `\scientific-envs\provisioner\pkgs`,
- * which only applies while the cache lives under the data directory.
+ * entry, for the default channel only — a URL channel has its own layout, so
+ * every measurement uses `channelDirectory` rather than this. The report's "77"
+ * is this plus `\scientific-envs\provisioner\pkgs`, which applies only while the
+ * cache lives under the data directory.
  */
-export const CHANNEL_SUFFIX_CHARS = 44;
+export const DEFAULT_CHANNEL_SUFFIX_CHARS = 44;
 
 /**
  * Deepest member below the channel directory in the starter package set
@@ -53,6 +55,37 @@ export interface PathBudgetProblem {
   /** Total this tree reaches, i.e. `length + tail`. */
   reach: number;
   limit: number;
+  /**
+   * Characters between the operator's root and `path` — the channel layout for
+   * the cache, nothing for a revision prefix. The remedy subtracts this instead
+   * of a constant, because a URL channel's layout is not the default one.
+   */
+  suffix: number;
+}
+
+/**
+ * The separator of the *target* platform, not of the host running the check.
+ * A Windows budget measured with the POSIX implementation on a Linux CI host
+ * turns `C:\ProgramData` into a relative path and shifts every length, which is
+ * how the first version of this file passed on Windows and failed on Linux.
+ */
+function pathOf(platform: string): typeof posix {
+  return platform === "win32" ? win32 : posix;
+}
+
+/** The sub-directory a channel's packages are cached under. */
+export function platformDirectoryName(platform: string): string {
+  return platform === "win32" ? "win-64" : "linux-64";
+}
+
+/** A channel may be a bare name or a full URL; only the URL part is interesting. */
+function channelUrl(channel: string): URL | undefined {
+  if (!/^https?:\/\//i.test(channel)) return undefined;
+  try {
+    return new URL(channel);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -67,14 +100,28 @@ export interface PathBudgetProblem {
 export function defaultPackageCacheRoot(platform: string, env: NodeJS.ProcessEnv): string | undefined {
   if (platform !== "win32") return undefined;
   const programData = env.ProgramData?.trim() || env.PROGRAMDATA?.trim();
-  if (programData) return resolve(programData, "ScienceDiscovery", "pkgs");
+  if (programData) return win32.join(programData, "ScienceDiscovery", "pkgs");
   const systemDrive = env.SystemDrive?.trim() || "C:";
-  return resolve(`${systemDrive}\\`, "ProgramData", "ScienceDiscovery", "pkgs");
+  return win32.join(`${systemDrive}\\`, "ProgramData", "ScienceDiscovery", "pkgs");
 }
 
-/** The channel directory the provisioner extracts entries beneath. */
+/**
+ * The channel directory the provisioner extracts entries beneath.
+ *
+ * micromamba keys its cache by source, so a bare channel name lands under
+ * `https/conda.anaconda.org/<name>` while an `https://host/path` channel lands
+ * under `https/<host>/<path>` — the built-in TUNA/USTC presets are full URLs, so
+ * measuring every channel as if it were named would understate those.
+ */
 export function channelDirectory(cacheRoot: string, channel: string, platform: string): string {
-  return resolve(cacheRoot, "https", "conda.anaconda.org", channel, platform === "win32" ? "win-64" : "linux-64");
+  const join = pathOf(platform).join;
+  const platformDir = platformDirectoryName(platform);
+  const url = channelUrl(channel);
+  if (url) {
+    const segments = url.pathname.split("/").filter(Boolean);
+    return join(cacheRoot, url.protocol.replace(":", ""), url.hostname, ...segments, platformDir);
+  }
+  return join(cacheRoot, "https", "conda.anaconda.org", channel, platformDir);
 }
 
 /**
@@ -93,7 +140,10 @@ export function inspectPathBudget(input: {
     const length = path.length;
     const reach = length + CACHE_MEMBER_TAIL_CHARS;
     if (reach > MAX_PATH_USABLE) {
-      problems.push({ area: "package-cache", path, length, tail: CACHE_MEMBER_TAIL_CHARS, reach, limit: MAX_PATH_USABLE });
+      problems.push({
+        area: "package-cache", path, length, tail: CACHE_MEMBER_TAIL_CHARS, reach, limit: MAX_PATH_USABLE,
+        suffix: length - input.cacheRoot.length,
+      });
     }
   }
   const prefixLength = input.revisionPrefix.length;
@@ -101,7 +151,7 @@ export function inspectPathBudget(input: {
   if (prefixReach > MAX_PATH_USABLE) {
     problems.push({
       area: "environment-prefix", path: input.revisionPrefix, length: prefixLength,
-      tail: PREFIX_MEMBER_TAIL_CHARS, reach: prefixReach, limit: MAX_PATH_USABLE,
+      tail: PREFIX_MEMBER_TAIL_CHARS, reach: prefixReach, limit: MAX_PATH_USABLE, suffix: 0,
     });
   }
   return problems;
@@ -114,8 +164,8 @@ export function inspectPathBudget(input: {
 function remedyFor(problem: PathBudgetProblem): string {
   const overBy = problem.reach - problem.limit;
   if (problem.area === "package-cache") {
-    // 77 characters are fixed by the channel layout, so the root is what shrinks.
-    const ceiling = problem.limit - problem.tail - CHANNEL_SUFFIX_CHARS;
+    // The channel layout is fixed for a given channel, so the root is what shrinks.
+    const ceiling = problem.limit - problem.tail - problem.suffix;
     return `Set SCIENCE_AGENT_PACKAGE_CACHE_DIR to a directory of at most ${ceiling} characters `
       + `(this one would need to lose ${overBy}).`;
   }
