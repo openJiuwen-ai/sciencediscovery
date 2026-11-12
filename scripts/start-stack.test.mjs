@@ -104,7 +104,15 @@ test("a SIGTERM during a mirror sync waits for uv, then restores the lockfile", 
     await chmod(join(bin, "uv"), 0o755);
 
     const run = launch(root, bin, []);
-    await waitFor(() => existsSync(uvPidFile), "the fake uv to start");
+    // Wait for the pid the fake uv wrote, not for the file to exist: `echo $$ >
+    // file` creates and truncates the target before the shell writes the
+    // number, so an existence poll can return on a zero-length file and the
+    // read below would then see nothing (#1135 has the same shape at the
+    // lockfile fixture).
+    await waitFor(
+      async () => Number((await readFile(uvPidFile, "utf8").catch(() => "")).trim()) > 0,
+      "the fake uv to record its pid",
+    );
     await waitFor(
       async () => (await readFile(join(root, "uv.lock"), "utf8")) === MIRROR,
       "uv to rewrite the lockfile",
@@ -134,14 +142,24 @@ test("a leftover backup from a hard kill is restored on the next start", async (
     await writeFile(join(root, "uv.lock"), MIRROR);
     await writeFile(join(root, "uv.lock.stack-backup"), PRISTINE);
     const seenFile = join(root, "uv-seen-lock.txt");
+    // The fake uv publishes the copy under a temporary name and renames it into
+    // place, so the path the test polls only ever exists complete: a shell
+    // `>` redirection truncates the target before `cat` writes it, and the
+    // window where that file exists at length 0 is what made this case fail
+    // intermittently (#1135).
     await writeFile(
       join(bin, "uv"),
-      `#!/bin/sh\ncat uv.lock > "${seenFile}"\nexit 0\n`,
+      `#!/bin/sh\ncat uv.lock > "${seenFile}.tmp"\nmv "${seenFile}.tmp" "${seenFile}"\nexit 0\n`,
     );
     await chmod(join(bin, "uv"), 0o755);
 
     const run = launch(root, bin, []);
-    await waitFor(() => existsSync(seenFile), "the first sync to run");
+    // Content, not existence: the poll and the assertion below must agree on
+    // what "the sync ran" means.
+    await waitFor(
+      async () => (await readFile(seenFile, "utf8").catch(() => "")) === PRISTINE,
+      "the first sync to read the restored lockfile",
+    );
     assert.equal(await readFile(seenFile, "utf8"), PRISTINE,
       "the recovery happens before the first sync, so uv never resolves against the mirror content");
     assert.match(run.output(), /restored uv\.lock from a sync that a previous run did not finish/);
