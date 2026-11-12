@@ -73,6 +73,55 @@ test("createAgentRun forwards capability-package context factories through the c
   assert.equal(received?.[0], factory);
 });
 
+test("the run handle reports the bound only when the executor can name one", async () => {
+  // A native loop knows the bound it composed; the JiuwenSwarm backend leaves the
+  // turn budget to its own loop and reports nothing, so the record keeps the
+  // configured value there instead of claiming a ceiling that never applied
+  // (#1113 review).
+  const native = createAgentRun(
+    createMainAgentProfile({
+      connectorIds: ["pubmed"],
+      gatewayThreadId: "session-1",
+      runTimeoutMs: 30_000,
+      workspaceRoot: "/workspace",
+    }),
+    {
+      createAgent: (options): NativeAgentHandle => ({
+        abort() {},
+        beginExternalWait: () => () => undefined,
+        enforcedMaxModelTurns: options.maxModelTurns ?? 128,
+        async execute() { return { finalMessages: [{ role: "assistant", content: "done" }] }; },
+        async prompt() {},
+        subscribe() { return () => undefined; },
+      }),
+      workspace: { enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); } },
+    },
+    { agentRunId: "run-native", history: [], prompt: "work", purpose: "task" },
+  );
+  assert.equal(native.enforcedMaxModelTurns, 128, "the native loop names the bound it ran");
+
+  const external = createAgentRun(
+    createMainAgentProfile({
+      connectorIds: ["pubmed"],
+      gatewayThreadId: "session-1",
+      runTimeoutMs: 30_000,
+      workspaceRoot: "/workspace",
+    }),
+    {
+      createAgent: (): NativeAgentHandle => ({
+        abort() {},
+        beginExternalWait: () => () => undefined,
+        async execute() { return { finalMessages: [{ role: "assistant", content: "done" }] }; },
+        async prompt() {},
+        subscribe() { return () => undefined; },
+      }),
+      workspace: { enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); } },
+    },
+    { agentRunId: "run-external", history: [], prompt: "work", purpose: "task" },
+  );
+  assert.equal(external.enforcedMaxModelTurns, undefined, "an executor without a turn budget reports none");
+});
+
 test("createAgentRun executes once and returns the canonical final history", async () => {
   const observed: AgentEvent[] = [];
   const histories: AgentHistoryMessage[][] = [];

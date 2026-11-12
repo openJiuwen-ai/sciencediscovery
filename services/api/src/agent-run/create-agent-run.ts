@@ -49,6 +49,10 @@ export interface AgentRunHandle {
   abort(): void;
   beginExternalWait(): () => void;
   execute(): Promise<AgentRunResult>;
+  /** The turn bound the executor actually enforced, when it can name one. A
+   *  native loop reports its composed bound; an external runtime cannot, so the
+   *  caller keeps the configured value there (#1113 review). */
+  readonly enforcedMaxModelTurns?: number;
 }
 
 /** The native loop, unless the deployment selected the JiuwenSwarm executor. */
@@ -120,6 +124,9 @@ export function createAgentRun(
   return {
     abort,
     beginExternalWait: () => agent.beginExternalWait(),
+    ...((agent as NativeAgentHandle).enforcedMaxModelTurns !== undefined
+      ? { enforcedMaxModelTurns: (agent as NativeAgentHandle).enforcedMaxModelTurns }
+      : {}),
     async execute() {
       if (executed) throw new Error(`AgentRun ${input.agentRunId} has already been executed`);
       executed = true;

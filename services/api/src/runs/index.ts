@@ -276,6 +276,23 @@ function formatSubagentToolInput(args: Record<string, unknown>): string {
   return JSON.stringify(args);
 }
 
+/** Record the turn bound the executor actually enforced.
+ *
+ * Only a native loop can name one: JiuwenSwarm and a specialist's external
+ * runtime enforce the configured value through the `turn_start` observer, and the
+ * fallback native loop that replaces an unavailable external runtime reports its
+ * own clamped bound — which is why this reads the handle the run used instead of
+ * predicting the executor when the record is created (#1113 review).
+ */
+function stampEnforcedBound(
+  subagent: Subagent,
+  handle: { enforcedMaxModelTurns?: number } | undefined,
+): void {
+  const enforced = handle?.enforcedMaxModelTurns;
+  if (enforced === undefined) delete subagent.effectiveMaxTurns;
+  else subagent.effectiveMaxTurns = enforced;
+}
+
 export function cloneRunEventDetails(details: unknown): unknown | undefined {
   try {
     return structuredClone(details);
@@ -1637,13 +1654,6 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
-          // Only the native loop clamps to its own ceiling. JiuwenSwarm and a
-          // specialist's external runtime enforce the configured value through the
-          // `turn_start` observer instead, so claiming 128 there would describe a
-          // bound that never applied (#1113 review).
-          ...(!jiuwenSwarmConfigFromEnv() && !effectiveCodexRuntime
-            ? { effectiveMaxTurns: effectiveModelTurns(subagentConfig.maxTurns) }
-            : {}),
           model: codexRuntime
             ? { id: codexRuntime.kind, model: codexRuntime.model ?? `${codexRuntime.kind} default`, name: codexRuntime.kind }
             : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
@@ -1701,6 +1711,9 @@ async function executeAgentRun(
         let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
         let progressFlushQueue = Promise.resolve();
         let maxTurnsExceeded = false;
+      /** The bound the executor reported, carried out of the inner scope so the
+       *  failure path can stamp it on the record (#1113 review). */
+      let enforcedMaxModelTurns: number | undefined;
         const enqueueProgressFlush = () => {
           const snapshot = structuredClone({ ...subagent, steps });
           progressFlushQueue = progressFlushQueue.then(async () => {
@@ -2211,8 +2224,10 @@ async function executeAgentRun(
           childExecution.identity.executionId,
           () => subagentRunHandle!.beginExternalWait(),
         );
+        enforcedMaxModelTurns = subagentRunHandle.enforcedMaxModelTurns;
         if (notificationDelivery && !store.notifications.deliveryAllowed(notificationDelivery)) throw new Error("Agent stopped before notification delivery");
         const result = await subagentRunHandle.execute();
+        stampEnforcedBound(subagent, { enforcedMaxModelTurns });
         const contextRef = await versions.putRecord("SubagentContext", { history: closedModelContext(result.finalMessages) });
         const contextRefs = await RefStore.open(versions);
         try {
@@ -2249,6 +2264,9 @@ async function executeAgentRun(
           };
         }
         } catch (error) {
+          // The handle knows which loop ran, so record the bound it enforced even
+          // when the child stopped by exhausting it (#1113 review).
+          stampEnforcedBound(subagent, { enforcedMaxModelTurns });
           const failureError = wallClockTimeoutSignal.aborted
             ? new Error(`Subagent wall-clock timeout after ${subagentConfig.timeoutSeconds} seconds`)
             : error;

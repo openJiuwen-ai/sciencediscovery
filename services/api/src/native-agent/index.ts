@@ -151,6 +151,12 @@ export interface NativeAgentRunResult {
 
 export interface NativeAgentHandle extends Agent {
   execute(text: string): Promise<NativeAgentRunResult>;
+  /** The turn bound this loop was composed with, after the ceiling clamp. The
+   *  caller records this rather than re-deriving it, so the number reported for a
+   *  run is the number that ran. Absent on an executor that cannot name a bound
+   *  (the JiuwenSwarm backend leaves the turn budget to its own loop)
+   *  (#1106, #1113 review). */
+  readonly enforcedMaxModelTurns?: number;
 }
 
 /** Test seam: replaces the model-turn transport without a live endpoint. */
@@ -351,6 +357,8 @@ export function composeSystemPrompt(
 }
 
 class NativeAgent implements NativeAgentHandle {
+  /** The bound `composeRuntime` receives; reported so callers never re-derive it. */
+  readonly enforcedMaxModelTurns: number;
   private readonly listeners = new Set<Listener>();
   private toolRegistry!: ToolRegistry<WireMessage>;
   private systemPrompt!: string;
@@ -375,6 +383,7 @@ class NativeAgent implements NativeAgentHandle {
   private plugins?: Awaited<ReturnType<typeof createRuntimePluginScope<WireMessage>>>;
 
   constructor(private readonly options: NativeAgentOptions) {
+    this.enforcedMaxModelTurns = effectiveModelTurns(options.maxModelTurns);
     this.contextId = `${options.sessionId}:${randomUUID()}`;
     this.durableContext = new DurableContextStore({
       history: options.gatewayHistory,
