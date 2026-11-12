@@ -2137,18 +2137,23 @@ async function executeAgentRun(
             finalizeMessageStep();
             void emit({ subagentId: subagent.id, type: "subagent.usage", usage: event.usage });
             scheduleProgressFlush();
-            // Delegated spend is spend of this run, so it gets its own ledger row
-            // instead of vanishing (#1109). `delegation-track` was declared for
-            // exactly this and had no writer; the child's own window and turn
-            // count keep the row's scope and its figures in agreement.
+            // Delegated spend is spend of this run, so it gets its own ledger
+            // row instead of vanishing (#1109). `delegation-track` was declared
+            // for exactly this and had no writer. The row cannot wait for the
+            // parent's prompt manifest: that is created only after the main loop
+            // returns, while this event fires during it. It names the child's
+            // own model and window, because a specialist may run a runtime
+            // model that differs from the parent's profile.
             const subagentTurns = Math.max(1, subagent.turnCount - startingTurn);
-            if (promptManifest) void appendDelegatedModelUsage(store, {
+            void appendDelegatedModelUsage(store, {
+              finishedAt: new Date().toISOString(),
               invocationId: `subagent:${subagent.id}`,
+              model: subagent.model?.model ?? selectedModel.model,
+              modelProfileId: subagent.model?.id ?? selectedModel.id,
+              modelProfileName: subagent.model?.name ?? selectedModel.name,
               parentRunId: runId,
-              promptManifest,
               sessionId,
               startedAt: subagent.createdAt,
-              finishedAt: new Date().toISOString(),
               turnsRecorded: subagentTurns,
               usage: capturedModelUsage({ usage: event.usage, usageReported: true }),
             }).catch((error: unknown) => {
@@ -2442,7 +2447,11 @@ async function executeAgentRun(
       // them a stored figure could not be recomputed from the record directory.
       const captured = capturedModelUsage(event);
       lastAgentUsage = addCapturedModelUsage(lastAgentUsage, captured);
-      if (captured.usageStatus === "reported") modelTurnsRecorded += 1;
+      // A turn that reported nothing adds nothing and is not a recorded turn,
+      // and the persisted record keeps `usage` required by its schema, so only
+      // a reported turn is published.
+      if (captured.usageStatus !== "reported") return;
+      modelTurnsRecorded += 1;
       void publish({ type: "model.usage", turn: turnNumber, usage: event.usage! });
       return;
     }

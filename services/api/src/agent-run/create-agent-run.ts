@@ -111,9 +111,17 @@ export function createAgentRun(
     },
     workspaceRoot: profile.workspaceRoot,
   });
+  // Both backends report one `model_usage` per model turn and then one
+  // whole-loop `usage` summary. A run observer sums every `model_usage` it
+  // receives, so forwarding that summary as another `model_usage` counted each
+  // turn twice (#1109). Forward it only when the backend reported no per-turn
+  // figure at all, which keeps such a backend's total and nothing more.
+  let sawTurnUsage = false;
   const unsubscribe = bindings.observer ? agent.subscribe((event) => {
-    // Run observers retain one invocation record. The final summary is the whole loop, not its last call.
-    if (event.type === "usage") bindings.observer!({ ...event, type: "model_usage", usageReported: true });
+    if (event.type === "model_usage") sawTurnUsage = true;
+    if (event.type === "usage" && !sawTurnUsage) {
+      bindings.observer!({ ...event, type: "model_usage", usageReported: true });
+    }
     bindings.observer!(event);
   }) : () => undefined;
   const abort = () => agent.abort();
