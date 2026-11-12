@@ -22,7 +22,7 @@
  * changes: no blocks matched → no results → the aggregation moves on.
  */
 
-import { NAMED_ENTITIES } from "./html-entities.js";
+import { NAMED_ENTITIES } from "./html-named-entities.js";
 
 /** Matches one reference in the source; its replacement is never scanned again,
  *  which is what keeps `&amp;lt;` at the two characters `&lt;`. */
