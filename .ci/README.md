@@ -29,10 +29,10 @@ No workflow maintains its own list of case titles.
 | Tier | Event / authorization | Workflow jobs | Gate / job ceiling |
 | --- | --- | --- | --- |
 | L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + binary smoke and Docker distribution gates; mocked and real E2E are skipped; no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
-| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L1/UT/ST rerun on the group SHA + mocked E2E + nine short real API journeys (including Runner wait/finish decisions); binary and Docker jobs are skipped | Required before automatic merge; mock E2E 90 minutes; basic worker 60 minutes including setup, target 10–15 minutes of test time |
-| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + binary smoke and Docker distribution gates + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + Linux binary and Docker distribution gates; mocked and real E2E are skipped; no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
+| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L1/UT/ST rerun on the group SHA + mocked E2E + nine short real API journeys (including Runner wait/finish decisions); Linux binary, Windows desktop and Docker jobs are skipped | Required before automatic merge; mock E2E 90 minutes; basic worker 60 minutes including setup, target 10–15 minutes of test time |
+| L4 (`daily`) | Nightly workflow at 16:00 UTC, or explicit dispatch | L3 + Linux binary, Windows desktop installer and Docker distribution gates + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
+| L5 (`release`) | Version release tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -41,8 +41,9 @@ must not be worked around by moving the tag.
 
 The local test profiles remain cumulative. Workflow job selection is separate:
 PR runs build distributions without E2E; the merge queue runs E2E without
-distribution builds; daily/release run both. `pnpm ci:e2e` still runs the mocked
-slice locally with the default `pr` profile.
+distribution builds; only the nightly workflow (`daily`) and version release
+(`release`) profiles build the Windows desktop installer. `pnpm ci:e2e` still
+runs the mocked slice locally with the default `pr` profile.
 
 Run only the desired slice, or the complete cumulative profile:
 
@@ -209,7 +210,7 @@ Markdown elsewhere (including `skills/`) also keeps it. PR diffs use the merge
 base; push and merge-group diffs use the event's base and head SHAs.
 
 For a documentation-only change, L1 runs only `pnpm docs:check` (`check:docs`).
-UT, ST, mocked planning/E2E, coverage, real E2E, binary and Docker are skipped.
+UT, ST, mocked planning/E2E, coverage, real E2E, Linux binary, Windows desktop and Docker are skipped.
 The stable `merge-gate` still requires successful policy and documentation
 checks on non-draft PRs, pushes and merge groups, without downloading E2E
 artifacts. Drafts still check documentation and keep their existing gate skip.
@@ -226,7 +227,12 @@ does not make CI required; without required checks, it need not wait for L3.
 Require approval of the current PR head and dismiss stale approvals. Start
 with queue build concurrency 1 and **Only merge non-failing pull requests**.
 Allow enough queue status-check time for L1/UT/ST + mocked and real setup/testing.
-Binary and Docker distribution jobs run in PR and daily/release profiles.
+Linux binary and Docker distribution jobs run in PR and daily/release profiles.
+The Windows desktop installer runs only in the nightly workflow (`daily` profile)
+and version release (`release` profile); PR and merge queue runs skip it. It uses
+the checked-in `win_desktop` NSIS build on `windows-latest`, provisioning the
+shared Python environment, the pinned JiuwenSwarm runtime and the verified
+Windows micromamba before uploading the installer.
 Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.

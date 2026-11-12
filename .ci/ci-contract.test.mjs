@@ -382,6 +382,24 @@ test("mocked E2E keeps the complete HTML and results upload", async () => {
   assert.equal(upload.retention, 14);
 });
 
+test("Windows distribution gate builds the native Electron installer", async () => {
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const job = workflowJobs(ci)["windows-desktop"];
+  assert.ok(job, "windows-desktop job was not found");
+  assert.match(job, /runs-on: windows-latest/);
+  assert.match(job, /needs\.policy\.outputs\.windows_desktop == 'true'/);
+  assert.match(job, /PYTHONUTF8:\s*["']1["']/,
+    "Windows JiuwenSwarm setup must force Python UTF-8 stdio");
+  assert.match(job, /uv sync --locked --extra candidates/);
+  assert.match(job, /node scripts\/jiuwenswarm\.mjs setup/);
+  assert.match(job, /fetch-managed-micromamba\.mjs[\s\S]*--platform win32/);
+  assert.match(job, /pnpm --dir win_desktop dist/);
+  const installer = artifactUploads(job).find((upload) => upload.artifact === "windows-desktop-installer");
+  assert.ok(installer, "Windows installer artifact was not found");
+  assert.deepEqual(installer.paths, ["win_desktop/release"]);
+  assert.equal(installer.missing, "error");
+});
+
 async function filesBelow(root, relative = "") {
   const files = [];
   for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {

@@ -23,7 +23,7 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # Drafts run policy and L1. UT/ST, coverage, binary, Docker and
+  # Drafts run policy and L1. UT/ST, coverage, Linux binary, Docker and
   # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
   # events enable the remaining jobs according to the selected profile.
   pull_request:
@@ -97,6 +97,7 @@ jobs:
       mocked: ${{ steps.policy.outputs.mocked }}
       real: ${{ steps.policy.outputs.real }}
       distribution: ${{ steps.policy.outputs.distribution }}
+      windows_desktop: ${{ steps.policy.outputs.windows_desktop }}
       docs_only: ${{ steps.policy.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
@@ -869,9 +870,102 @@ jobs:
         if: always()
         run: docker compose down
 
+  # The Windows desktop installer has a separate Electron workspace and a
+  # Windows-only payload (Python venv, JiuwenSwarm and micromamba). Build it on
+  # the native runner so the same command that produces the user-facing NSIS
+  # installer is exercised on nightly and release profiles.
+  windows-desktop:
+    needs: [policy, l1]
+    if: ${{ needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.windows_desktop == 'true' }}
+    name: Windows desktop installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # JiuwenSwarm initialization reports its selected language in Chinese.
+      # Windows runners default Python's stdio to cp1252, which crashes before
+      # the Electron build unless Python is explicitly put in UTF-8 mode.
+      PYTHONUTF8: "1"
+    steps:
+      - name: Enable long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Cache Windows packaging inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            .sciencediscovery-data
+            ~\AppData\Local\electron-builder\Cache
+          key: windows-desktop-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'uv.lock', 'scripts/jiuwenswarm.mjs', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**', 'services/runner/src/micromamba-releases.json', 'win_desktop/pnpm-lock.yaml') }}
+
+      - name: Install the backend workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the backend workspace
+        run: pnpm build
+
+      - name: Provision the shared Python environment
+        shell: pwsh
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}\.sciencediscovery-data\envs\sd-services
+        run: uv sync --locked --extra candidates
+
+      - name: Install the pinned JiuwenSwarm runtime
+        run: node scripts/jiuwenswarm.mjs setup
+
+      - name: Fetch the pinned Windows micromamba
+        shell: pwsh
+        run: >-
+          node scripts/fetch-managed-micromamba.mjs
+          --arch x64 --platform win32
+          --output .sciencediscovery-data\scientific-envs\bin\micromamba.exe
+
+      - name: Install the Electron workspace
+        run: pnpm --dir win_desktop install --frozen-lockfile
+
+      - name: Test and typecheck the desktop shell
+        run: |
+          pnpm --dir win_desktop test
+          pnpm --dir win_desktop typecheck
+
+      - name: Build the Windows installer
+        run: pnpm --dir win_desktop dist
+
+      - name: Verify and upload the Windows installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-installer
+          path: win_desktop/release
+          if-no-files-found: error
+          retention-days: 7
+
   merge-gate:
     name: merge-gate
-    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker]
+    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker, windows-desktop]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

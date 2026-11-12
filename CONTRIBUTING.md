@@ -208,7 +208,7 @@ Integration/E2E tests under `test/` are **not** part of `pnpm check`.
 
 There is one plan with five cumulative tiers and disjoint job slices. `pnpm test:shared`
 runs the whole plan. L1, UT, ST and mocked E2E together are exactly the default
-local `pr` test plan. GitHub schedules only L1/UT/ST plus binary/Docker builds
+local `pr` test plan. GitHub schedules only L1/UT/ST plus Linux binary and Docker builds
 on PRs; mocked and real E2E run in the merge queue and daily/release profiles:
 
 ```bash
@@ -320,10 +320,10 @@ mirror: nothing runs there.
 | Tier / profile | Trigger and added coverage |
 | --- | --- |
 | L1 | Every PR, including drafts, on open, update, reopen and ready for review: light static/catalog/document checks |
-| L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: hermetic UT/ST and binary/Docker distribution gates; no E2E |
-| L3 / `merge` | Reviewed PR enters merge queue: rerun L1/UT/ST on group SHA, mocked E2E and basic real APIs; binary and Docker jobs are skipped |
-| L4 / `daily` | Nightly at 16:00 UTC: L3 plus binary/Docker distribution gates and all ten previously eligible nightly cases (17 real cases total) |
-| L5 / `release` | Version tag: same current cases and evaluation modes as L4; independent profile for future additions; no historical baseline gate |
+| L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: hermetic UT/ST and Linux binary/Docker distribution gates; no E2E |
+| L3 / `merge` | Reviewed PR enters merge queue: rerun L1/UT/ST on group SHA, mocked E2E and basic real APIs; Linux binary, Windows desktop and Docker jobs are skipped |
+| L4 / `daily` | Nightly at 16:00 UTC: L3 plus Linux binary, Windows desktop installer and Docker distribution gates and all ten previously eligible nightly cases (17 real cases total) |
+| L5 / `release` | Version release tag: same current cases and evaluation modes as L4, including the Windows desktop installer; independent profile for future additions; no historical baseline gate |
 
 `nightly.yml` and `release.yml` reuse `ci.yml`. The stable required check is
 `merge-gate`; queue success merges automatically, without Environment approval
@@ -478,7 +478,7 @@ The `gh pr create` above opens the pull request as a draft (`--draft`); keep
 it a draft until it is ready. From there, the path into `main` is:
 
 1. Opening or pushing to a draft runs L1 for lightweight static feedback;
-   L2 / `pr` (UT/ST and binary/Docker builds) waits until the PR is ready.
+   L2 / `pr` (UT/ST and Linux binary/Docker builds) waits until the PR is ready.
    GitHub Actions runs L1 and then those jobs, without E2E, on the PR head
    when a PR is opened as non-draft, marked ready for review,
    pushed to after becoming ready, or reopened as non-draft (see

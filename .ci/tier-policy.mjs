@@ -6,6 +6,7 @@ import { backendName } from '../test/support/tagged/execution.mjs';
 import { changedPaths, documentationOnly } from './changed-paths.mjs';
 
 const distributionProfiles = ['pr', 'daily', 'release'];
+const windowsDesktopProfiles = ['daily', 'release'];
 
 export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = null) {
   if (!['pr', 'merge', 'daily', 'release'].includes(requested)) throw new Error(`Unknown CI profile: ${requested}`);
@@ -13,14 +14,14 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = 
   // candidates always receive L3, even when there is just one queued PR.
   const profile = event === 'pull_request' ? 'pr' : event === 'merge_group' ? 'merge' : requested;
   const docs_only = ['pull_request', 'push', 'merge_group'].includes(event) && documentationOnly(paths);
-  return { profile, backend: backendName(backend), mocked: profile !== 'pr', real: profile !== 'pr', distribution: distributionProfiles.includes(profile), docs_only };
+  return { profile, backend: backendName(backend), mocked: profile !== 'pr', real: profile !== 'pr', distribution: distributionProfiles.includes(profile), windows_desktop: windowsDesktopProfiles.includes(profile), docs_only };
 }
 
 export function gate(profile, needs) {
   if (needs.policy?.outputs?.docs_only === 'true') {
     const problems = ['policy', 'l1'].filter(name => needs[name]?.result !== 'success')
       .map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
-    for (const name of ['ut', 'st', 'e2e-plan', 'e2e', 'real-merge', 'real-scheduled', 'binary', 'docker']) {
+    for (const name of ['ut', 'st', 'e2e-plan', 'e2e', 'real-merge', 'real-scheduled', 'binary', 'docker', 'windows-desktop']) {
       if (needs[name]?.result !== 'skipped') problems.push(`${name}: expected skipped for documentation-only changes`);
     }
     return problems;
@@ -29,13 +30,16 @@ export function gate(profile, needs) {
   if (profile !== 'pr') required.push('e2e-plan', 'e2e');
   const realJob = profile === 'merge' ? 'real-merge' : profile === 'pr' ? null : 'real-scheduled';
   if (realJob) required.push(realJob);
-  // Build distributions on PRs and nightly/release, without repeating them in the queue.
+  // Linux/Docker distributions run on PRs and nightly/release; the Windows
+  // desktop installer is reserved for nightly/release and never repeats in the queue.
   if (distributionProfiles.includes(profile)) required.push('binary', 'docker');
+  if (windowsDesktopProfiles.includes(profile)) required.push('windows-desktop');
   const problems = required.filter(name => needs[name]?.result !== 'success').map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
   // A scheduled job may not quietly run (or fail) outside the selected policy.
   const inactive = ['real-merge', 'real-scheduled'].filter(name => name !== realJob);
   if (profile === 'pr') inactive.push('e2e-plan', 'e2e');
   if (!distributionProfiles.includes(profile)) inactive.push('binary', 'docker');
+  if (!windowsDesktopProfiles.includes(profile)) inactive.push('windows-desktop');
   for (const name of inactive) {
     if (needs[name]?.result !== 'skipped') problems.push(`${name}: expected skipped in ${profile} policy`);
   }
