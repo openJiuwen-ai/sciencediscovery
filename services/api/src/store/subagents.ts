@@ -148,6 +148,11 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
       && typeof value.contextRef.digest === "string" && /^sha256:[a-f0-9]{64}$/.test(value.contextRef.digest)
       && typeof value.contextRef.size === "number" && typeof value.contextRef.mediaType === "string"
       ? { contextRef: value.contextRef as unknown as NonNullable<Subagent["contextRef"]> } : {}),
+    // The bound the engine enforced has to survive the reload this normalizer is
+    // the only reader for, or a ceiling stop reverts to the configured budget in
+    // the handoff and the classifier (#1113 review F3).
+    ...(typeof value.effectiveMaxTurns === "number" && value.effectiveMaxTurns > 0
+      ? { effectiveMaxTurns: value.effectiveMaxTurns } : {}),
     ...(error ? { error } : {}),
     ...(finishedAt ? { finishedAt } : {}),
     ...(handoff ? { handoff } : {}),

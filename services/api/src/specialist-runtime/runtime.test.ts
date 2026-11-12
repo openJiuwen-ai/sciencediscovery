@@ -86,6 +86,21 @@ test("Store create/update/reload preserves metadata and frozen hash; credentials
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a recorded ceiling survives a reload, so the handoff keeps naming the bound the loop enforced", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sd-bound-reload-"));
+  try {
+    const store = new SessionStore(root); await store.load();
+    const project = await store.createProject("Bound reload");
+    const session = await store.createSession(project.id, "Reload", {}, {}, { allowUnconfiguredModel: true });
+    const child = await store.createSubagent(session.id, "run", { description: "Work", prompt: "Work" }, { maxTurns: 300, effectiveMaxTurns: 128 });
+    assert.equal(normalizePersistedSubagent(child)?.effectiveMaxTurns, 128, "the normalizer keeps the field it is the only reader for");
+    const reopened = new SessionStore(root); await reopened.load();
+    const reloaded = reopened.listSubagents(session.id).find(item => item.id === child.id);
+    assert.equal(reloaded?.maxTurns, 300);
+    assert.equal(reloaded?.effectiveMaxTurns, 128, "a reloaded ceiling stop still reports 128, not the configured 300");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("adapter maps SDK events, validates tool requests, accumulates usage and accepts only platform artifacts", async () => {
   const observed: SpecialistRuntimeEvent[] = [];
   let calls = 0;
