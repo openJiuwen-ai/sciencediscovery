@@ -276,13 +276,26 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   };
   /** Called only after the tool batch and its durable Step have committed. */
   suspendAfterTurn?: (input: { turn: number; history: TMessage[] }) => boolean | Promise<boolean>;
+  /**
+   * How to add one turn's usage to the run's running total.
+   *
+   * `usage` on the result used to be the last turn's figure, overwritten every
+   * turn (#1109), which made one row of the usage ledger describe one turn while
+   * its timestamps described the whole run. The loop cannot add `TUsage` itself
+   * — it does not know the shape — so a caller that wants a total supplies this;
+   * without it the previous behaviour is kept for callers that mean "latest".
+   */
+  accumulateUsage?: (previous: TUsage | undefined, next: TUsage) => TUsage;
 }
 
 export interface AgentLoopResult<TMessage extends RuntimeMessage, TUsage> {
   history: TMessage[];
   suspended?: boolean;
   turns: number;
+  /** The run's usage when `accumulateUsage` is supplied, otherwise the last turn's. */
   usage?: TUsage;
+  /** How many turns reported usage; absent when the caller did not ask for a total. */
+  turnsWithUsage?: number;
 }
 
 export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
@@ -308,6 +321,14 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
     if (this.state.phase !== "idle") throw new Error("AgentLoop instances execute exactly once");
     this.state = { history: structuredClone([...history]), phase: "idle", turn: 0 };
     let usage: TUsage | undefined;
+    let turnsWithUsage = 0;
+    // One figure per turn, added into the run's total when the caller supplied a
+    // shape-aware adder (#1109). Without one, `usage` keeps its old meaning.
+    const recordUsage = (next: TUsage) => {
+      turnsWithUsage += 1;
+      usage = this.options.accumulateUsage ? this.options.accumulateUsage(usage, next) : next;
+      this.emit({ type: "model_usage", usage: next });
+    };
     const unsubscribeWait = this.options.waitController?.subscribe((activeCount) => {
       if (this.isTerminal(this.state.phase)) return;
       if (activeCount > 0 && this.state.phase !== "waiting_external") {
@@ -355,10 +376,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           this.transition("calling_model", turn);
           modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
         }
-        if (modelTurn.usage !== undefined) {
-          usage = modelTurn.usage;
-          this.emit({ type: "model_usage", usage });
-        }
+        if (modelTurn.usage !== undefined) recordUsage(modelTurn.usage);
         this.raiseForAbort(signal);
         onProgress();
         if (this.options.outputRecovery) {
@@ -388,10 +406,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
             this.raiseForAbort(signal);
             this.transition("calling_model", turn);
             modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
-            if (modelTurn.usage !== undefined) {
-              usage = modelTurn.usage;
-              this.emit({ type: "model_usage", usage });
-            }
+            if (modelTurn.usage !== undefined) recordUsage(modelTurn.usage);
             this.raiseForAbort(signal);
             onProgress();
           }
@@ -406,7 +421,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
             ...(usage !== undefined ? { usage } : {}),
             ...(modelTurn.truncated ? { truncated: true } : {}),
           });
-          return { history: structuredClone(this.state.history), turns: turn + 1, ...(usage !== undefined ? { usage } : {}) };
+          return { history: structuredClone(this.state.history), turns: turn + 1, ...(usage !== undefined ? { usage } : {}), ...(this.options.accumulateUsage ? { turnsWithUsage } : {}) };
         }
 
         this.transition("executing_tools", turn);
@@ -440,7 +455,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           this.raiseForAbort(signal);
           this.transition("suspended", turn);
           return { history: structuredClone(this.state.history), turns: turn + 1,
-            suspended: true, ...(usage !== undefined ? { usage } : {}) };
+            suspended: true, ...(usage !== undefined ? { usage } : {}), ...(this.options.accumulateUsage ? { turnsWithUsage } : {}) };
         }
       }
 
@@ -507,6 +522,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
   private outputRecovery?: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"];
   private suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
+  private accumulateUsage?: AgentLoopOptions<TMessage, TModelInput, TUsage>["accumulateUsage"];
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
@@ -518,6 +534,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
   withOutputRecovery(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"]): this { this.outputRecovery = value; return this; }
   withSuspendAfterTurn(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"]): this { this.suspendAfterTurn = value; return this; }
+  withAccumulateUsage(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["accumulateUsage"]): this { this.accumulateUsage = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
     const missing = [
@@ -538,6 +555,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
       ...(this.outputRecovery ? { outputRecovery: this.outputRecovery } : {}),
       ...(this.suspendAfterTurn ? { suspendAfterTurn: this.suspendAfterTurn } : {}),
+      ...(this.accumulateUsage ? { accumulateUsage: this.accumulateUsage } : {}),
     });
   }
 }
