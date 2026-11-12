@@ -1711,6 +1711,10 @@ async function executeAgentRun(
         const releaseParentWait = continuation ? undefined : mainExecution?.beginExternalWait();
         let assistantOutput = "";
         let activeMessageStep: { id: string; kind: Extract<SubagentStep["kind"], "assistant" | "thinking"> } | undefined;
+        /** Turns the child actually reported a figure for, which is what its
+         *  ledger row sums — `turnCount` also counts a turn that started and
+         *  was aborted before its model call (#1109 review). */
+        let subagentReportedTurns = 0;
         let progressFlushFailure: unknown;
         let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
         let progressFlushQueue = Promise.resolve();
@@ -2132,6 +2136,7 @@ async function executeAgentRun(
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
             publishStep(buildSubagentToolStep(event, runningStep), event.evidence);
           }
+          if (event.type === "model_usage" && event.usageReported) subagentReportedTurns += 1;
           if (event.type === "usage") {
             subagent.usage = event.usage;
             finalizeMessageStep();
@@ -2143,18 +2148,19 @@ async function executeAgentRun(
             // parent's prompt manifest: that is created only after the main loop
             // returns, while this event fires during it. It names the child's
             // own model and window, because a specialist may run a runtime
-            // model that differs from the parent's profile.
-            const subagentTurns = Math.max(1, subagent.turnCount - startingTurn);
+            // model that differs from the parent's profile, and its
+            // `invocationId` names one execution so a resumed child appends its
+            // own row instead of a second one under the same id (#1109 review).
             void appendDelegatedModelUsage(store, {
               finishedAt: new Date().toISOString(),
-              invocationId: `subagent:${subagent.id}`,
+              invocationId: `subagent:${subagent.id}:${runId}`,
               model: subagent.model?.model ?? selectedModel.model,
               modelProfileId: subagent.model?.id ?? selectedModel.id,
               modelProfileName: subagent.model?.name ?? selectedModel.name,
               parentRunId: runId,
               sessionId,
               startedAt: subagent.createdAt,
-              turnsRecorded: subagentTurns,
+              turnsRecorded: Math.max(1, subagentReportedTurns),
               usage: capturedModelUsage({ usage: event.usage, usageReported: true }),
             }).catch((error: unknown) => {
               runLog.warn("subagent_usage_persist_failed", { errorMessage: shortErrorMessage(error), subagentId: subagent.id });

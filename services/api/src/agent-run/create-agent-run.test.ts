@@ -384,7 +384,7 @@ test("runSubagentTask returns an unstarted handle visible before synchronous max
 });
 
 
-test("the retained invocation uses the complete loop summary instead of only its last model call", async () => {
+test("each reported turn keeps its own figure for the run's total", async () => {
   let listener: ((event: AgentEvent) => void) | undefined;
   let retained: unknown;
   const profile = createMainAgentProfile({ connectorIds: [], gatewayThreadId: "usage-test", runTimeoutMs: 1000, workspaceRoot: "/workspace" });
@@ -403,6 +403,30 @@ test("the retained invocation uses the complete loop summary instead of only its
       },
     }; },
   }, { agentRunId: "usage-loop", history: [], prompt: "inspect", purpose: "initial", requestExecutionId: "usage-execution" });
+  await handle.execute();
+  // The loop summary is not a second figure: when the backend reported per-turn
+  // figures, the observer keeps the turns themselves and must not also receive
+  // the sum (#1109).
+  assert.deepEqual(retained, { ...usage, inputTokens: 20, outputTokens: 2, totalTokens: 22 });
+});
+
+test("a backend that reports only the loop summary still reaches the run's total", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  let retained: unknown;
+  const profile = createMainAgentProfile({ connectorIds: [], gatewayThreadId: "usage-summary", runTimeoutMs: 1000, workspaceRoot: "/workspace" });
+  const usage = { inputTokens: 30, outputTokens: 3, totalTokens: 33, cacheReadTokens: null, cacheWriteTokens: null };
+  const handle = createAgentRun(profile, {
+    workspace: workspaceBindings(),
+    observer(event) { if (event.type === "model_usage") retained = event.usage; },
+    createAgent() { return {
+      abort() {}, beginExternalWait: () => () => undefined, async prompt() {},
+      subscribe(next) { listener = next; return () => undefined; },
+      async execute() {
+        listener!({ type: "usage", usage } as AgentEvent);
+        return { finalMessages: [] };
+      },
+    }; },
+  }, { agentRunId: "usage-summary", history: [], prompt: "inspect", purpose: "initial", requestExecutionId: "usage-summary-execution" });
   await handle.execute();
   assert.deepEqual(retained, usage);
 });
