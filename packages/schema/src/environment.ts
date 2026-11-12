@@ -606,7 +606,14 @@ export interface RunnerHealth {
   scientificEnvs: ScientificEnvsCapability;
   /** Linux syscall filter; not applicable to macOS Seatbelt. */
   seccompBaseline: "multiarch-v1-profile-aware" | null;
-  status: "ok";
+  /**
+   * `ok` when every enabled subsystem came up. `degraded` when the Runner is
+   * serving but an enabled subsystem reached a terminal failure — currently the
+   * managed scientific environment, whose absence leaves `run_shell` unable to
+   * execute anything while the process itself is healthy (#1104). Callers that
+   * only need liveness should use `scientificEnvs`/`execution` for capability.
+   */
+  status: "ok" | "degraded";
   /** `null` means no global cap; positive numbers are retained for older Runner compatibility. */
   workerConcurrency: number | null;
 }
