@@ -80,6 +80,14 @@ export class JiuwenSwarmTrajectory {
    * turn-0 records, which numbering from 1 left with no turn 0 at all.
    */
   private turn = -1;
+  /**
+   * The response id this call announced, captured synchronously from
+   * `assistant.response.started` and handed to the completion record as data.
+   * The recorder's own field is cleared from inside the recording queue, so
+   * reading it when that queue drains could lose the id for the call that had
+   * just answered (#1133).
+   */
+  private callResponseId?: string;
   private sequence = 0;
   private pending?: { history: unknown[]; modelTurn: ModelTurn; turn: number };
   private readonly results = new Map<string, { content: string; details?: unknown; isError: boolean }>();
@@ -173,6 +181,7 @@ export class JiuwenSwarmTrajectory {
     return this.run("model_request", async () => {
       await this.stage("commit_pending", () => this.commitPending());
       this.turn += 1;
+      this.callResponseId = undefined;
       const history = input.history as never[];
       await this.stage("before_turn", () => this.recorder!.beforeTurn({ turn: this.turn, history }));
       // Same order as the built-in loop: the turn opens, then its context assembler captures the
@@ -191,8 +200,12 @@ export class JiuwenSwarmTrajectory {
   /** The model answered the current call. */
   modelCompleted(turn: ModelTurn, history: unknown[]): Promise<void> {
     if (!this.recorder) return Promise.resolve();
+    // Captured now, while this call is still the current one: the queued write
+    // below must not have to reconstruct the identity from a field another turn
+    // may already have cleared.
+    const identity = { turn: this.turn, ...(this.callResponseId ? { responseId: this.callResponseId } : {}) };
     return this.run("model_completed", async () => {
-      await this.stage("model_completed", () => this.recorder!.modelCompleted(turn));
+      await this.stage("model_completed", () => this.recorder!.modelCompleted(turn, identity));
       this.pending = { history: [...history, turn.assistantMessage], modelTurn: turn, turn: this.turn };
     });
   }
@@ -216,6 +229,9 @@ export class JiuwenSwarmTrajectory {
     const runEvent = event.type === "response_start"
       ? { type: "response_start", responseId: String(event.responseId), turn: this.turn }
       : { type: event.type, turn: this.turn };
+    // Remembered for the completion record of this same call; the recorder's
+    // copy of the field lives only until the next turn's `beforeTurn` clears it.
+    if (event.type === "response_start") this.callResponseId = String(event.responseId);
     return this.recorder.event(runEvent as never);
   }
 
