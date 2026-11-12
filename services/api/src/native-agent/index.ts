@@ -58,6 +58,7 @@ import {
   type ModelClientPolicy,
   type ModelEndpoint,
   type ModelUsage,
+  addUsage,
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import type { PlanStore } from "@sciencediscovery/plan";
@@ -412,7 +413,7 @@ class NativeAgent implements NativeAgentHandle {
     this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);
     // Reasoning models bill hidden thought against the same `max_tokens` as
     // the answer, and on some endpoints the agent loop spends a whole turn on
-    // it — tens of thousands of characters, no visible text, no tool call.
+    // it 鈥?tens of thousands of characters, no visible text, no tool call.
     // Raising the token ceiling only buys a longer spiral, so the lever is the
     // toggle itself. Left unset by default: for most models the loop's own
     // reasoning is what makes it work. This belongs on the model profile
@@ -663,6 +664,10 @@ class NativeAgent implements NativeAgentHandle {
       // what "completed" means.
       let truncatedTerminalTurn = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
+        // Sum the per-turn figures into the run's total (#1109). Without this the
+        // loop returns the last turn's usage and one ledger row describes one
+        // turn while its timestamps describe the whole run.
+        accumulateUsage: addUsage,
         maxModelTurns: effectiveModelTurns(this.options.maxModelTurns),
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
         contextAssembler: {

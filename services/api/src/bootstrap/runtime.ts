@@ -25,6 +25,7 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
   outputRecovery?: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"];
   suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
+  accumulateUsage?: AgentLoopOptions<TMessage, TModelInput, TUsage>["accumulateUsage"];
 }
 
 /** API composition root: adapters are registered here, not looked up by the core. */
@@ -40,6 +41,7 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withTurnLifecycle(composition.turnLifecycle)
     .withOutputRecovery(composition.outputRecovery)
     .withSuspendAfterTurn(composition.suspendAfterTurn)
+    .withAccumulateUsage(composition.accumulateUsage)
     .withMaxModelTurns(composition.maxModelTurns)
     .withMaxParallelToolCalls(composition.maxParallelToolCalls)
     .build();
