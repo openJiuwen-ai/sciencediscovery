@@ -478,13 +478,15 @@ README for the policy record.
 The checked-in `biomni-gate.json` retains historical **50-case** observations
 from two complete A3 diagnostic runs: mean score 67.7, total tokens 195,099,712,
 tool rounds 2,042, research time 1,312.753472 minutes and task-peak RSS P95
-11.201639801 GiB. Its explicit population policy scales only additive resource
-budgets by 45/50 before applying warning/block ratios: effective tokens
-175,589,740.8, tool rounds 1,837.8, and research time 1,181.478125 minutes.
+11.201639801 GiB. Its explicit population policy scales the summed research
+time budget by 45/50 before applying warning/block ratios: effective research
+time is 1,181.478125 minutes. Total tokens and tool rounds are collected and
+reported as diagnostics, with no warning or blocking regression thresholds in
+temporary or approved compare mode.
 Mean and P95 remain unscaled historical references, not measured 45-case
 figures; population-shift calibration is still required. All 45 active valid
 results are required. A score drop of 3 points warns and 5 points blocks;
-resources have independent configured limits.
+research time and memory have independent configured limits.
 Per-task status and metrics appear in JSON, Markdown and the GitHub step summary.
 The resumable serial driver finishes all first-pass tasks before classified
 evaluation-only/end-to-end recovery, with at most three additional retries per

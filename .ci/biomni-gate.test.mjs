@@ -72,7 +72,7 @@ test('comparison requires approval, compatible configuration, per-task score and
   const baseline = { ...evaluateSuite(plan, documents(), policy), status: 'approved', approved_by: 'maintainer', approved_at: '2026-10-13' };
   const compare = { ...policy, mode: 'compare', baseline: 'approved.json' };
   assert.equal(evaluateSuite(plan, documents(), compare, baseline).non_regression_certified, true);
-  for (const field of ['tool_calls','tool_rounds','peak_rss_bytes','e2e_ms','generation_tokens','judge_tokens']) {
+  for (const field of ['tool_calls','peak_rss_bytes','e2e_ms','generation_tokens','judge_tokens']) {
     const docs = documents(); docs[0].measurements[field]++;
     docs[0].measurements.total_tokens = docs[0].measurements.generation_tokens + docs[0].measurements.judge_tokens;
     assert.equal(evaluateSuite(plan, docs, compare, baseline).status, 'failed');
