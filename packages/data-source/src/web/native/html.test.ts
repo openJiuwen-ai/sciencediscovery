@@ -24,6 +24,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import { decodeEntities, textOf } from "./html.js";
+import { NAMED_ENTITIES } from "./html-named-entities.js";
 
 test("decodes each character reference once instead of rescanning its output", () => {
   assert.equal(decodeEntities("&amp;lt;"), "&lt;");
@@ -98,4 +99,18 @@ test("keeps a name outside the table, and a reference without its semicolon, lit
   // A semicolon is what ends a reference; without it the ampersand is plain text.
   assert.equal(decodeEntities("&amp"), "&amp");
   assert.equal(decodeEntities("&mdash"), "&mdash");
+});
+
+test("states every table entry exactly once, one scalar each", () => {
+  // The table is written as text, so a malformed pair would silently shrink it;
+  // pin the size and the shape every entry has to end up with.
+  assert.equal(NAMED_ENTITIES.size, 131);
+  for (const [name, value] of NAMED_ENTITIES) {
+    assert.match(name, /^[A-Za-z][A-Za-z0-9]*$/, name);
+    assert.equal([...value].length, 1, name);
+  }
+  assert.equal(NAMED_ENTITIES.get("amp"), "&");
+  assert.equal(NAMED_ENTITIES.get("nbsp"), " ");
+  assert.equal(NAMED_ENTITIES.get("euro"), "\u20AC");
+  assert.equal(NAMED_ENTITIES.get("prod"), "\u220F");
 });
