@@ -188,18 +188,37 @@ export function createWorkspaceExecutionBindings(
     let result: RunnerCheckResult;
     try {
       const capability = await resolveExecutionTarget(runnerId).runnerClient.executionCapability(refresh, signal);
-      // An absent `shell` field is an older Runner that cannot report it, so
-      // only an explicit `available: false` narrows readiness.
-      const shellUnavailableReason = requiresShell && capability.shell?.available === false
-        ? capability.shell.unavailableReason ?? "The managed Shell environment is unavailable"
+      // An absent `shell` field is an older Runner that cannot report it, so it
+      // stays unknown rather than counting as unavailable. A Runner that reports
+      // `readyFor` answers both routes; an older one has only `ready`, which is
+      // the Python channel, so the Shell route narrows on `shell.available`.
+      const shellUnavailable = capability.shell?.available === false;
+      const routeReady = {
+        python: capability.readyFor?.python ?? capability.ready === true,
+        shell: capability.readyFor?.shell ?? (capability.ready === true && !shellUnavailable),
+      };
+      // Only a Runner that really reported a dead managed Shell may be described
+      // as one. On a sandboxed Runner `readyFor.shell` is false because the
+      // sandbox is unusable and `capability.shell` is absent, and reporting that
+      // as "the managed Shell is unavailable" hid the sandbox diagnosis the
+      // caller needs (#1118 review 1).
+      const shellUnavailableReason = requiresShell && shellUnavailable && !routeReady.shell
+        ? capability.shell?.unavailableReason ?? "The managed Shell environment is unavailable"
         : undefined;
-      const ready = capability.ready === true && shellUnavailableReason === undefined;
+      const ready = requiresShell ? routeReady.shell : routeReady.python;
       result = { runnerId, checkedAt: capability.checkedAt ?? new Date().toISOString(), connected: true, ready,
+        readyFor: routeReady,
+        // Never the bare word "ready" while the same object carries a dead
+        // managed Shell: the headline names the gap even for the Python route,
+        // which stays usable (#1108 criterion 1).
         reason: shellUnavailableReason
-          || (ready ? "ready" : capability.detail || capability.reason || "Runner execution readiness is unknown"),
+          || (ready ? (shellUnavailable ? "shell-unavailable" : "ready") : capability.detail || capability.reason || "Runner execution readiness is unknown"),
         capability,
-        suggestions: ready && capability.shell?.available !== false ? [] : [capability.shell?.available === false
-          ? `${capability.shell.unavailableReason ?? "The managed shell environment is unavailable"}. Recreate or update the starter environment on the target Runner to repair managed Bash and its required utilities.`
+        suggestions: ready && !shellUnavailable ? [] : [shellUnavailable
+          // The transcript itself stays in `capability.shell.unavailableReason`
+          // (bounded by the Runner); repeating it here put the same text in three
+          // places of one result (#1108 criterion 8).
+          ? "Recreate or update the starter environment on the target Runner to repair managed Bash and its required utilities (see capability.shell.unavailableReason for the provisioning error)."
           : capability.reason === "dependency-unavailable"
           ? "Install or repair the sandbox executable on the target Runner; check its configured path."
           : "Inspect the target Runner logs and host/container sandbox permissions. Do not disable isolation automatically.",
@@ -442,6 +461,9 @@ export function createWorkspaceExecutionBindings(
           options.store.assertSessionWritable(options.sessionId);
           executionLogger().info("execution_decision", { ...blocked, decision });
           if (decision.action === "cancel") return { action: "cancel", operationId, dispatched: false,
+            // No fresh check runs on this branch, so naming `check_runner` as
+            // the way to recheck a blocker it cannot report would send the
+            // caller in a circle (#1108 criterion 7).
             instruction: "This operation was cancelled or the wait expired. Do not resubmit it without a new user request. You may continue unrelated work." };
           const runner = await checkRunner(decision.action === "switch" ? decision.runnerId : operation.runner.runnerId,
             signal, true, operation.requiresShell);
