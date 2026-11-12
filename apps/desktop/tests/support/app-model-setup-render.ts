@@ -98,6 +98,7 @@ globalThis.fetch = async (input, init = {}) => {
     assert.ok(projectId);
     result = method === "POST" ? newSession(projectId) : data.sessions.filter(session => session.projectId === projectId);
   } else if (/^\/api\/sessions\/[^/]+\/(artifact-outputs|files|runs)$/u.test(path)) result = [];
+  else if (method === "GET" && /^\/api\/sessions\/[^/]+\/configuration-requests$/u.test(path)) result = { items: [] };
   else if (/^\/api\/sessions\/[^/]+\/settings$/u.test(path)) result = settings(data.sessions.find(session => path.includes(session.id)));
   else if (/^\/api\/sessions\/[^/]+$/u.test(path)) result = { ...data.sessions.find(session => path.endsWith(session.id)), messages: [] };
   else {
