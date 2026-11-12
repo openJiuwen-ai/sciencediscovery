@@ -344,3 +344,53 @@ test("an identity passed by the caller wins over a recorder field that has moved
     assert.equal(record?.evidence.turn, 1);
   } finally { recorder.close(); }
 });
+test("a response id minted after the completion was requested still reaches it (#1133)", async (t) => {
+  // A call with no text and no reasoning opens its response in the adapter,
+  // after this record has been requested; that id belongs to this row and the
+  // write must pick it up rather than persist "no id".
+  await mkdir(resolve(".tmp"), { recursive: true });
+  const root = await mkdtemp(resolve(".tmp/versioning-late-id-"));
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  const records: Array<{ name: string; evidence: { turn?: number; responseId?: string } }> = [];
+  const recorder = new AgentVersionRecorder<RuntimeMessage, { history: RuntimeMessage[] }, never>(resolve(root, "data"), workspace, {
+    agentId: "late-id-agent", trajectoryId: "late-id-trajectory", requestExecutionId: "late-id-request",
+    recordEvent: async (event: unknown) => { records.push(event as never); },
+  }, () => ({}));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  try {
+    await recorder.initialize({}, []);
+    await recorder.beforeTurn({ turn: 1, history: [] });
+    await recorder.afterAssembly({ turn: 1, assembly: { history: [], modelInput: { history: [] } } });
+    const completion = recorder.modelCompleted({ toolCalls: ["x"] }, { turn: 1 });
+    recorder.event({ type: "response_start", responseId: "late-1", turn: 1 } as never);
+    await completion;
+    const record = records.find((item) => item.name === "model.completed");
+    assert.equal(record?.evidence.responseId, "late-1");
+    assert.equal(record?.evidence.turn, 1);
+  } finally { recorder.close(); }
+});
+
+test("a leftover id from another turn is never attributed to this record (#1133)", async (t) => {
+  await mkdir(resolve(".tmp"), { recursive: true });
+  const root = await mkdtemp(resolve(".tmp/versioning-foreign-id-"));
+  const workspace = resolve(root, "workspace"); await mkdir(workspace);
+  const records: Array<{ name: string; evidence: { turn?: number; responseId?: string } }> = [];
+  const recorder = new AgentVersionRecorder<RuntimeMessage, { history: RuntimeMessage[] }, never>(resolve(root, "data"), workspace, {
+    agentId: "foreign-id-agent", trajectoryId: "foreign-id-trajectory", requestExecutionId: "foreign-id-request",
+    recordEvent: async (event: unknown) => { records.push(event as never); },
+  }, () => ({}));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  try {
+    await recorder.initialize({}, []);
+    await recorder.beforeTurn({ turn: 1, history: [] });
+    await recorder.afterAssembly({ turn: 1, assembly: { history: [], modelInput: { history: [] } } });
+    recorder.event({ type: "response_start", responseId: "r-one", turn: 1 } as never);
+    await recorder.beforeTurn({ turn: 2, history: [] });
+    await recorder.afterAssembly({ turn: 2, assembly: { history: [], modelInput: { history: [] } } });
+    recorder.event({ type: "response_start", responseId: "r-two", turn: 2 } as never);
+    await recorder.modelCompleted({ ok: true }, { turn: 1 });
+    const record = records.find((item) => item.name === "model.completed");
+    assert.notEqual(record?.evidence.responseId, "r-two", "the other turn's id must not be reused");
+    assert.equal(record?.evidence.responseId, undefined);
+  } finally { recorder.close(); }
+});

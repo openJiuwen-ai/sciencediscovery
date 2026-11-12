@@ -154,6 +154,8 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   private assemblyTrace: unknown = null;
   private currentTurn = 0;
   private responseId?: string;
+  /** The turn esponseId was announced for, so a late id is only reused by its own record. */
+  private responseIdTurn?: number;
   private pending = Promise.resolve();
   private readonly assembler: AgentStateAssembler;
   private inputView?: StateView;
@@ -187,6 +189,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     this.currentTurn = turn;
     this.activeContext = undefined;
     this.responseId = undefined;
+    this.responseIdTurn = undefined;
     this.children = [];
     this.assemblyTrace = null;
     this.before = await this.state(turn, "before", history);
@@ -213,6 +216,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   async afterAssembly({ turn, assembly }: Parameters<TurnLifecycle<M, I, U>["afterAssembly"]>[0]): Promise<void> {
     // The new response ID is allocated by the loop after assembly, including retries.
     this.responseId = undefined;
+    this.responseIdTurn = undefined;
     this.modelContext = await this.store.putRecord("ModelContextSnapshot", jsonValue({
       boundary: "ProviderModelClient.invoke", input: assembly.modelInput,
     } satisfies ModelContextSnapshot<I>));
@@ -244,7 +248,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   event(event: RunEvent<U>): AgentEventEvidence {
     if (event.type === "turn_start") this.currentTurn = event.turn;
-    if (event.type === "response_start") this.responseId = event.responseId;
+    if (event.type === "response_start") { this.responseId = event.responseId; this.responseIdTurn = event.turn; }
     if (event.type === "context_recovery") {
       void this.record("context_recovery", jsonValue(event));
     }
@@ -252,13 +256,22 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   }
 
   async modelCompleted(result: unknown, identity?: { turn?: number; responseId?: string }): Promise<void> {
-    // Snapshot the identity of the call that just answered, here, rather than
-    // when the recording queue drains. `beforeTurn`/`afterAssembly` clear
+    // Snapshot the identity the caller knew, here, rather than when the
+    // recording queue drains: `beforeTurn`/`afterAssembly` clear the recorder's
     // `responseId` from inside that queue, so a later read could stamp this
     // record with a turn that had already moved on — and drop a response id
     // that had been issued for this very call (#1133).
-    const evidence = this.completedEvidence(identity);
+    // The built-in loop has already seen its `response_start` when it gets
+    // here, so reading now is reading this call's own id and a later read
+    // would only see the next turn's clearing.
+    const snapshot = identity === undefined ? this.completedEvidence(undefined) : undefined;
+    const supplied = identity?.responseId ? this.completedEvidence(identity) : undefined;
     await this.pending;
+    // A call that produced no text and no reasoning gets its response opened
+    // later, by the adapter, so its id is minted *after* this method was
+    // called. When the caller had no id to give, read the recorder now instead
+    // of writing "none": that is the only moment such an id can still be seen.
+    const evidence = snapshot ?? supplied ?? this.completedEvidence(identity);
     // Persist the authoritative action once, before tools run (including failures).
     // Both the Run event and the committed Step reference this same object.
     this.modelAction = await this.store.putRecord("ModelAction", jsonValue({ modelContext: this.modelContext, result }));
@@ -269,17 +282,23 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
    * Evidence for a completion record, bound to the call that produced it.
    *
    * A caller that knows the response id passes it — the executor does, because
-   * it is the side that sees `assistant.response.started`. A supplied identity
-   * wins over the recorder's field, and `responseId: undefined` means "this
-   * call has none", so a stale value is dropped instead of attributing the
-   * record to a neighbouring response.
+   * it is the side that sees `assistant.response.started`. A supplied id wins
+   * over the recorder's field. Without one, the recorder's own value is used:
+   * a tool-only call has its response opened later, and dropping that late id
+   * would leave the record exactly as anonymous as the rows #1133 measured.
    */
   private completedEvidence(identity?: { turn?: number; responseId?: string }): AgentEventEvidence {
     const evidence = this.evidence();
     if (identity === undefined) return evidence;
-    const { responseId: _stale, ...rest } = evidence;
-    return { ...rest, turn: identity.turn ?? evidence.turn,
-      ...(identity.responseId ? { responseId: identity.responseId } : {}) };
+    const turn = identity.turn ?? evidence.turn;
+    // The caller's id wins. Without one, the recorder's value is used only when
+    // it was announced for this same turn: a tool-only call opens its response
+    // after this record was requested, and that late id belongs here, while a
+    // value left over from another turn must not be attributed to this record.
+    const late = this.responseIdTurn === turn ? this.responseId : undefined;
+    const responseId = identity.responseId ?? late;
+    const { responseId: _field, ...rest } = evidence;
+    return { ...rest, turn, ...(responseId ? { responseId } : {}) };
   }
 
   childCompleted(agentId: string): void {
