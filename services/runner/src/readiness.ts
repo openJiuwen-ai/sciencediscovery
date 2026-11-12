@@ -33,15 +33,22 @@ export class RunnerReadiness {
   private async probe(): Promise<RunnerExecutionCapability> {
     if (this.sandbox === "none") {
       // [windows-desktop] direct execution has no sandbox dependency to
-      // probe. A missing managed shell must not block Python execution.
-      // Shell routes check shell.available separately; sandboxUsable stays false so the
-      // UI/API can still surface that isolation is absent (F6 tightens
-      // permissions to compensate).
+      // probe. A missing managed shell must not block Python execution, but it
+      // must also not be reported as a general green light: `ready`/`reason` are
+      // derived from the probe rather than fixed at "ready", and `readyFor` says
+      // which route the verdict applies to (#1108). An absent `shell` field is an
+      // older Runner that cannot report it, so it stays unknown rather than
+      // counting as unavailable.
       const shell = await this.shellProbe?.();
+      const shellUnavailable = shell?.available === false;
       return {
         instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: "none",
-        dependencyAvailable: true, sandboxUsable: false, ready: true,
-        reason: "ready",
+        dependencyAvailable: true, sandboxUsable: false,
+        // `ready` stays the Python channel, which a Shell gap must never block;
+        // `reason` and `readyFor` are what tell a caller the routes apart.
+        ready: true,
+        reason: shellUnavailable ? "shell-unavailable" : "ready",
+        readyFor: { python: true, shell: !shellUnavailable },
         detail: shell?.unavailableReason ?? "unsandboxed direct execution",
         platform: process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux",
         ...(shell ? { shell } : {}),
@@ -50,6 +57,7 @@ export class RunnerReadiness {
     const report: RunnerExecutionCapability = {
       instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: this.sandbox,
       dependencyAvailable: false, sandboxUsable: false, ready: false, reason: "dependency-unavailable",
+      readyFor: { python: false, shell: false },
     };
     try {
       const result = await execute(this.executable, this.sandbox === "bubblewrap" ? ["--help"] : ["-h"],
@@ -77,6 +85,10 @@ export class RunnerReadiness {
         : await this.probeBubblewrap();
       return { ...report, checkedAt: new Date().toISOString(), sandboxUsable: capability.sandboxUsable,
         ready: capability.sandboxUsable, reason: capability.sandboxUsable ? "ready" : "sandbox-unusable",
+        // A sandboxed Runner reports the managed Shell only on Windows direct
+        // execution, so an absent field means "not probed here" and shell
+        // readiness follows the sandbox verdict.
+        readyFor: { python: capability.sandboxUsable, shell: capability.sandboxUsable },
         ...(capability.detail ? { detail: capability.detail } : {}) };
     } catch (error) {
       return { ...report, reason: "sandbox-unusable", detail: String(error) };

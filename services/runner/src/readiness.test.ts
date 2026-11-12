@@ -52,6 +52,9 @@ test("none-provider readiness without a managed shell probe stays ready", async 
   assert.equal(capability.ready, true);
   assert.equal(capability.dependencyAvailable, true);
   assert.equal(capability.reason, "ready");
+  assert.deepEqual(capability.readyFor, { python: true, shell: true });
+  // An absent `shell` field is an older Runner that cannot report it, so it stays
+  // unknown rather than counting as unavailable.
   assert.equal(capability.shell, undefined);
 });
 
@@ -66,12 +69,18 @@ test("none-provider readiness reports and rechecks its managed shell contract", 
   const missing = await readiness.get();
   assert.equal(missing.ready, true);
   assert.equal(missing.dependencyAvailable, true);
-  assert.equal(missing.reason, "ready");
+  // The Python channel stays ready, but the verdict is no longer presented as a
+  // general green light: `reason` names the Shell gap and `readyFor` says which
+  // route is which (#1108).
+  assert.equal(missing.reason, "shell-unavailable");
+  assert.deepEqual(missing.readyFor, { python: true, shell: false });
   assert.equal(missing.detail, "Managed Bash is missing required utilities: head");
   assert.equal(missing.shell?.available, false);
   available = true;
   const repaired = await readiness.get();
   assert.equal(repaired.ready, true);
+  assert.equal(repaired.reason, "ready");
+  assert.deepEqual(repaired.readyFor, { python: true, shell: true });
   assert.equal(repaired.shell?.utilities.includes("head"), true);
   assert.equal(repaired.platform, "linux");
 });
@@ -127,6 +136,8 @@ for (const unavailableReason of [
     const capability = await request("POST", "/execution-capability");
     assert.equal(capability.status, 200);
     assert.equal(capability.body.ready, true);
+    assert.equal(capability.body.reason, "shell-unavailable");
+    assert.deepEqual(capability.body.readyFor, { python: true, shell: false });
     // The synchronous route has no execution record to settle, so it fails closed.
     const synchronous = await request("POST", "/execute-shell");
     assert.equal(synchronous.status, 503);
