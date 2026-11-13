@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "tsx --test tests/*.test.ts tests/*.test.tsx",
+    "test": "node ../../scripts/ensure-workspace-dist.mjs . && tsx --test tests/*.test.ts tests/*.test.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
