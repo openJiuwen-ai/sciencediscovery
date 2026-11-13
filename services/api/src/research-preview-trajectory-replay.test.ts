@@ -86,17 +86,22 @@ test("a seeded full-trajectory sizing entry is what the preview adds, not the re
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
-test("without a seeded entry the same session adds nothing, so the value above came from the map", async (t) => {
-  // The reverse of the case above: this session has no trajectory records at all,
-  // so a walk of its own would contribute zero. Reading FABRICATED_BYTES in the
-  // first case therefore cannot have come from walking anything.
+test("a full-trajectory walk writes its measurements, so the next profile can replay them", async (t) => {
+  // The reverse of the case above, plus the write path: this session has no
+  // trajectory records, so a walk contributes zero bytes — but it must still
+  // record that fact under `full:<sessionId>`. Gating that write on `summarize`
+  // (the bug this PR fixed) left every assertion here green before, because
+  // nothing looked at the map after the call.
   const f = await sessionFixture();
   try {
-    const empty = sizing(new Map());
+    const cache = new Map();
+    const empty = sizing(cache);
     await f.snapshots.buildResearchPackageInput(f.project.id, f.session.id, "complete", undefined, undefined,
       empty, true, false);
     assert.equal((empty as { additionalRecordBytes: number }).additionalRecordBytes, 0,
       "an empty cache means no recorded trajectory bytes for a session that has none");
+    assert.ok(cache.has("full:" + f.session.id),
+      "the walk recorded its measurements under the full-trajectory shape");
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
