@@ -17,28 +17,15 @@ export type DefaultExportPreviews = {
 type WarmMemo = { revision?: string; allowed?: boolean; pendingRevision?: string; pending?: Promise<boolean> };
 const WATCH_IDLE_MS = 30_000;
 
-/**
- * How long a `defaults=1` request may hold its socket open before it answers the
- * pending contract instead.
- *
- * The five profiles a dialog asks for are not cheap on a long session — two of
- * them walk the whole trajectory closure, which has been measured at ~56 s each
- * — and the browser gives up anyway. Holding the request for a minute produces
- * a 200 that nobody receives, which is why the server log looked healthy while
- * the dialog showed a failure (#1140). Answering 202 with `Prefer: respond-async`
- * is the contract this route already implements and the client already maps to a
- * localized "still calculating, it will retry" message.
- *
- * The work itself keeps running on the queue and is memoized, so the next poll
- * usually finds it done instead of starting over.
- */
 // There is deliberately no wall-clock budget on `defaults()`. A slow preview and a
 // pathological one look identical from the clock: the first-install fixture in
 // `research-package-http.test.ts` takes ~49 s for one dialog's five profiles, so a
-// threshold low enough to cut the reported ~112 s case also answers 202 to work
-// that was about to finish. What the dialog needed was to stop lying about it —
-// the client names its own cancellation and shows a retrying state — and what the
-// service needed was to stop serialising every session behind one chain.
+// threshold low enough to cut a genuinely pathological preview also answers 202 to
+// work that was about to finish. What the dialog needed was to stop lying about
+// the wait — the client names its own cancellation and shows a retrying state —
+// and what the service needed was to stop serialising every session behind one
+// chain. A pending-for-slow rule has to key off queue starvation rather than
+// elapsed time, and that is a separate change.
 
 const isMissingPreviewFile = (error: unknown): boolean =>
   typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
