@@ -103,7 +103,10 @@ export async function fetchJina(url: string, options: ProviderCallOptions): Prom
 }
 
 function document(title: string, text: string): string {
-  return `# ${title}\n\n${text.slice(0, MAX_DOCUMENT_CHARS)}`;
+  // A UTF-16 cut can land inside a surrogate pair; drop the half character so
+  // the body handed to the model never ends in a lone high surrogate.
+  const body = text.slice(0, MAX_DOCUMENT_CHARS).replace(/[\ud800-\udbff]$/u, "");
+  return `# ${title}\n\n${body}`;
 }
 
 /** Tavily extract. Returns the vendor's `Error: ...` string on a failed page. */
