@@ -17,6 +17,43 @@ export type DefaultExportPreviews = {
 type WarmMemo = { revision?: string; allowed?: boolean; pendingRevision?: string; pending?: Promise<boolean> };
 const WATCH_IDLE_MS = 30_000;
 
+/**
+ * How long a `defaults=1` request may hold its socket open before it answers the
+ * pending contract instead.
+ *
+ * The five profiles a dialog asks for are not cheap on a long session — two of
+ * them walk the whole trajectory closure, which has been measured at ~56 s each
+ * — and the browser gives up anyway. Holding the request for a minute produces
+ * a 200 that nobody receives, which is why the server log looked healthy while
+ * the dialog showed a failure (#1140). Answering 202 with `Prefer: respond-async`
+ * is the contract this route already implements and the client already maps to a
+ * localized "still calculating, it will retry" message.
+ *
+ * The work itself keeps running on the queue and is memoized, so the next poll
+ * usually finds it done instead of starting over.
+ */
+const DEFAULT_PREVIEW_BUDGET_MS = 20_000;
+
+/**
+ * Resolve `work` or answer the pending contract after `budgetMs`, whichever is
+ * first. The abandoned work keeps a handler attached, so a late rejection is not
+ * an unhandled one.
+ */
+async function withBudget<T>(work: Promise<T>, budgetMs: number): Promise<T> {
+  if (budgetMs <= 0) return await work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new ExportPreviewInvalidatedError()), budgetMs);
+    timer.unref?.();
+  });
+  void work.catch(() => undefined);
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const isMissingPreviewFile = (error: unknown): boolean =>
   typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
 
@@ -34,7 +71,17 @@ export class ResearchExportPreviews {
   private readonly watching = new Map<string, { projectId: string; sessionId: string; lastSeenAt: number }>();
   private readonly revisions = new Map<string, Promise<string>>();
   private readonly controllers = new Map<AbortController, ExportPreviewOptions>();
-  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * One serial chain *per session*, not one for the whole service.
+   *
+   * The five profiles a dialog asks for share a session's evidence and must stay
+   * ordered against each other — the intra-session hazard below (awaiting a
+   * queue entry admitted later would deadlock) is unchanged, because within one
+   * session the ordering is exactly what it was. What changes is that session A's
+   * dialog no longer serialises behind session B's, and an aborted dialog cannot
+   * make the next session wait behind work nobody wants (#1140 §7.5).
+   */
+  private readonly queues = new Map<string, Promise<unknown>>();
   private closed = false;
   private ticking = false;
   constructor(private readonly revision: (projectId: string, sessionId?: string) => Promise<string>,
@@ -136,7 +183,9 @@ export class ResearchExportPreviews {
     const controller = new AbortController();
     this.controllers.set(controller, options);
     const signal = controller.signal;
-    const work = this.queue.then(async () => {
+    const queueKey = `${options.projectId}:${options.sessionId ?? ""}`;
+    const tail = this.queues.get(queueKey) ?? Promise.resolve();
+    const work = tail.then(async () => {
       await setImmediate();
       signal.throwIfAborted();
       if (this.closed) throw serviceClosed();
@@ -177,7 +226,11 @@ export class ResearchExportPreviews {
       signal.throwIfAborted();
       throw error;
     });
-    this.queue = work.catch(() => undefined);
+    const next = work.catch(() => undefined);
+    this.queues.set(queueKey, next);
+    // Drop the chain once it is idle, so a long-lived service does not keep one
+    // settled promise per session it has ever served.
+    void next.then(() => { if (this.queues.get(queueKey) === next) this.queues.delete(queueKey); });
     this.remember(key, work);
     void work.finally(() => this.controllers.delete(controller)).catch(() => {
       if (this.entries.get(key) === work) this.entries.delete(key);
@@ -185,7 +238,12 @@ export class ResearchExportPreviews {
     return work;
   }
 
-  async defaults(projectId: string, sessionId: string, deferWhileRunning = false, memo: WarmMemo = {}): Promise<DefaultExportPreviews> {
+  async defaults(projectId: string, sessionId: string, deferWhileRunning = false, memo: WarmMemo = {},
+    budgetMs = DEFAULT_PREVIEW_BUDGET_MS): Promise<DefaultExportPreviews> {
+    return await withBudget(this.defaultsWithin(projectId, sessionId, deferWhileRunning, memo), budgetMs);
+  }
+
+  private async defaultsWithin(projectId: string, sessionId: string, deferWhileRunning: boolean, memo: WarmMemo): Promise<DefaultExportPreviews> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const [necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph] = await Promise.all([
         this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo),
@@ -236,6 +294,6 @@ export class ResearchExportPreviews {
     this.closed = true; this.watching.clear(); this.entries.clear();
     for (const controller of this.controllers.keys()) controller.abort(serviceClosed());
     // Finish admitted work before its store or workspace can be disposed.
-    await Promise.allSettled([this.queue, ...this.revisions.values()]);
+    await Promise.allSettled([...this.queues.values(), ...this.revisions.values()]);
   }
 }

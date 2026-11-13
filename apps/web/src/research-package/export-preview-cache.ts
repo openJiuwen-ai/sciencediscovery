@@ -5,6 +5,23 @@ type Preview = Awaited<ReturnType<ApiClient["previewResearchPackage"]>>;
 export type DefaultPreviews = Awaited<ReturnType<ApiClient["getResearchPackagePreviews"]>>;
 type Client = Pick<ApiClient, "previewResearchPackage" | "getResearchPackagePreviews">;
 type CacheState = { entries: Map<string, Promise<Preview>>; defaults: Map<string, DefaultPreviews>; pending: Map<string, Promise<DefaultPreviews>>; controllers: Map<string, AbortController>; listeners: Set<() => void>; generations: Map<string, number>; sessionRevisions: Map<string, string> };
+/**
+ * How long the dialog waits before giving up on a preview and asking again.
+ *
+ * The server answers a preview it cannot finish in its own budget with the
+ * existing pending contract, so this is the client's belt on top of that: it
+ * covers a request that is merely slow rather than refused.
+ */
+export const PREVIEW_BUDGET_MS = 10_000;
+
+/** The dialog's own budget expiry: an abort, not a failure. */
+export class PreviewBudgetExpired extends Error {
+  constructor() {
+    super("preview-budget-expired");
+    this.name = "AbortError";
+  }
+}
+
 /** Per-client cache; results live until their evidence revision changes. */
 export class ExportPreviewCache {
   private static states = new WeakMap<Client, CacheState>();
@@ -46,7 +63,13 @@ export class ExportPreviewCache {
     const generation = this.state.generations.get(key) ?? 0;
     const controller = new AbortController();
     this.state.controllers.set(key, controller);
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    // A preview of a long-trajectory session can take longer than a dialog
+    // should block, so the caller gives up after a budget — but it has to name
+    // that decision. Without a reason the rejection is the browser's internal
+    // "signal is aborted without reason", which the dialog rendered verbatim to
+    // the user (#1140). The name `AbortError` is what `isAbortError` matches, so
+    // the dialog can tell its own cancellation from a failure.
+    const timeout = setTimeout(() => controller.abort(new PreviewBudgetExpired()), PREVIEW_BUDGET_MS);
     const work = this.client.getResearchPackagePreviews(projectId, sessionId, controller.signal).then((result) => {
       if ((this.state.generations.get(key) ?? 0) === generation && this.state.defaults.get(key)?.revision !== result.revision) {
         this.state.defaults.set(key, result);

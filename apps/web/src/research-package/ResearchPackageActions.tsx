@@ -4,8 +4,9 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 import type { ResearchPackageExportProfileView as ResearchPackageExportProfile } from "../api/plugins.js";
 import { trackResearchPackageExport } from "./ResearchPackageExportTasks.js";
 import { ContinueResearchButton } from "./ContinueResearchButton.js";
-import { ExportPreviewCache } from "./export-preview-cache.js";
+import { ExportPreviewCache, PreviewBudgetExpired } from "./export-preview-cache.js";
 import { ApiRequestError } from "../api/auth.js";
+import { isAbortError } from "../api/client.js";
 import { translateActive, useLocale } from "../i18n/index.js";
 
 export type ResearchPackageDialogTarget = { projectId: string; sessionId: string; kind: "conversation" | "package" | "import" };
@@ -115,6 +116,10 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  // "Not answered yet" and "the server says there are none" are different states.
+  // Conflating them is what let a slow preview claim the session had no files
+  // while it had 176 of them (#1140).
+  const [preparing, setPreparing] = useState(false);
   // The scope this dialog previews can be deleted while the dialog is open (another
   // client, another tab, a teardown). The poll then answers `deleted`; the last
   // estimate stays on screen as the pre-deletion snapshot, but exporting it would
@@ -146,16 +151,29 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       if (!active) return;
       const next = previewCache.peekDefaults(target.projectId, target.sessionId);
       setDefaults(next);
-      if (!next) setPreview(undefined);
+      if (!next) setPreview(undefined); else setPreparing(false);
     });
     setScopeGone(false);
-    const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).catch((reason: unknown) => {
+    const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).then(() => {
+      if (active) setPreparing(false);
+    }).catch((reason: unknown) => {
       if (!active) return;
       // The dialog renders this state from its own snapshot, so the wording can
       // match what is actually on screen; the rejection's message is not used.
       if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_RESOURCE_DELETED") {
-        setScopeGone(true); setError(undefined); return;
+        setScopeGone(true); setError(undefined); setPreparing(false); return;
       }
+      // Our own budget expiring is not a failure and must never be shown as one:
+      // it is the same state as "still working", and the poll asks again.
+      if (reason instanceof PreviewBudgetExpired || isAbortError(reason)) {
+        setPreparing(true); setError(undefined); return;
+      }
+      // The server's pending answer means the same thing, with the localized
+      // copy the async contract already produces.
+      if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_PENDING") {
+        setPreparing(true); setError(undefined); return;
+      }
+      setPreparing(false);
       setError(errorText(reason));
     }); };
     refresh();
@@ -232,12 +250,18 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {preview?.exportProfile ? <PackageScope profile={preview.exportProfile} /> : null}
       <details className="research-export-details"><summary>{t("researchPackage.customContent")}</summary><p>{t("researchPackage.customContentNote")}</p><div className="research-message-picker">
         {files.map((file) => <label key={file.path}><input checked={checkedPaths.includes(file.path)} onChange={(event) => setSelectedPaths((current) => { const paths = current ?? checkedPaths; return event.target.checked ? [...new Set([...paths, file.path])] : paths.filter((path) => path !== file.path); })} type="checkbox" /><span>{file.path} <small>{formatSize(file.size)}</small></span></label>)}
-        {!files.length ? <p>{t("researchPackage.noWorkspaceFiles")}</p> : null}
+        {!files.length ? <p>{preview
+          // Only a successful preview may claim the scope is empty: a preview that
+          // has not arrived yet is "not determined", and saying "no files" for it
+          // was the second false statement in the dialog (#1140).
+          ? t("researchPackage.noWorkspaceFiles")
+          : t("researchPackage.scopeNotDetermined")}</p> : null}
       </div></details>
       {level === "complete" ? <label className="research-export-toggle"><input checked={includeFullTrajectory} onChange={(event) => setIncludeFullTrajectory(event.target.checked)} type="checkbox" /><span><strong>{t("researchPackage.fullTrajectory")}</strong><small>{t("researchPackage.fullTrajectoryHint")}</small></span></label> : null}
       {level === "complete" ? <label className="research-export-toggle"><input checked={includeFullMemoryGraph} onChange={(event) => setIncludeFullMemoryGraph(event.target.checked)} type="checkbox" /><span><strong>{t("researchPackage.fullMemoryGraph")}</strong><small>{t("researchPackage.fullMemoryGraphHint")}</small></span></label> : null}
       <p className="research-export-note">{t("researchPackage.completeNote")}</p>
       {preview?.omissions.length ? <details className="research-export-details"><summary>{t("researchPackage.omissions", { count: preview.omissions.length })}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
+      {preparing && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
       {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
     <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
