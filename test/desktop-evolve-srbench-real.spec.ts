@@ -321,12 +321,11 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       await expect(page.locator(".composer-command")).toContainText("/evolve-design");
       const before = new Set((await api<DesktopRun[]>(page, sessionRuns())).map((run) => run.id));
       await area.press("Enter");
-      const confirmation = page.getByRole("dialog", { name: /^(Confirm evolution settings|确认演进设置)$/ });
-      await confirmation.getByRole("button", { name: /^(Start evolution|开始演进)$/ }).click();
-      await expect.poll(async () => await unisolated.isVisible() || !(await confirmation.isVisible())).toBe(true);
-      if (await unisolated.isVisible()) await unisolated.click();
-      await expect(confirmation).toBeHidden();
-
+      // The setup dialog replaced the second "确认演进设置" card: the composer's
+      // send is the confirmation now, so nothing stands between Enter and the
+      // Run it creates. Waiting for that card would never return — the click
+      // has no timeout of its own, so the case would sit there until its whole
+      // budget ran out, on a design that had already started.
       runId = (await waitForNewRun(page, fixture!.session.id, before)).id;
       metrics.turns.push({ id: runId, kind: "design", prompt: PROBLEM });
     });
