@@ -427,25 +427,36 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       const retained = new Set<string>();
       const unreadable: string[] = [];
       let counted = 0;
-      const replayed = preview?.trajectorySizing?.get(record.session.id);
+      // Keyed by walk shape as well as session: the summarized walk and the full
+      // one measure different byte counts, so replaying across them would
+      // under-count `estimatedBytes`. Only the two `complete` full-trajectory
+      // profiles share a key, which is exactly the pair this cache exists for.
+      const sizingKey = `${summarize ? "summary" : "full"}:${record.session.id}`;
+      const replayed = preview ? preview.trajectorySizing?.get(sizingKey) : undefined;
       if (replayed) {
-        // This revision's closure was already walked for another profile. Replaying
-        // the recorded numbers produces the identical `estimatedBytes`, including
-        // the comma accounting that depends on order.
+        // This revision's closure was already walked for another profile with the
+        // same shape. Replaying the recorded numbers reproduces `estimatedBytes`
+        // exactly, including the comma accounting that depends on entry order.
         for (const item of replayed) {
           if ("unreadable" in item) { unreadable.push(item.unreadable); continue; }
           retained.add(item.id);
-          preview!.additionalRecordBytes += item.bytes + (counted++ ? 1 : 0);
-          for (const hash of item.hashes) preview!.hashes.add(hash);
-          for (const [key, ref] of item.refs) preview!.refs.set(key, ref);
+          if (!preview) continue;
+          preview.additionalRecordBytes += item.bytes + (counted++ ? 1 : 0);
+          for (const hash of item.hashes) preview.hashes.add(hash);
+          for (const [key, ref] of item.refs) preview.refs.set(key, ref);
         }
-        if (summarize) { /* recorded values already carry the summarized size */ }
       } else {
         const measured: TrajectorySizingEntry[] = [];
         for (const entry of entries) {
           signal.throwIfAborted();
           let message: string | undefined;
-          const detail = await readTrajectoryDetail(view, entry, record.session.id, (text) => { message = text; }, signal);
+          const detail = await readTrajectoryDetail(view, entry, record.session.id, (text) => {
+            // Every walk reports what it could not read, preview or export, replayed
+            // or not: an entry silently dropped from the index with no omission is
+            // the loss #1083 fixed.
+            message = text;
+            unreadable.push(text);
+          }, signal);
           if (!detail) {
             if (message) measured.push({ unreadable: message });
             continue;
@@ -466,7 +477,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
             if (counted % 32 === 0) await setImmediate();
           } else details.push(detail);
         }
-        if (preview && summarize) preview.trajectorySizing?.set(record.session.id, measured);
+        if (preview) preview.trajectorySizing?.set(sizingKey, measured);
       }
       // Bound the receipt: a session whose trajectory store is unavailable would
       // otherwise add one line per entry to both the package and the preview.
