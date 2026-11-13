@@ -8,7 +8,7 @@
 
 Read the literature, form hypotheses, write and run code, conduct experiments, and tune parameters — all in one place. Every step leaves a record, and every result is traceable.
 
-[![Release](https://img.shields.io/badge/Release-0.4.0.rc1-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/v0.4.0.rc1)
+[![Release](https://img.shields.io/badge/Release-0.4.0.rc1-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/v0.4.0-rc1)
 [![License](https://img.shields.io/badge/License-Apache%202.0-1f6feb?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-6e7781?style=flat-square)](#requirements)
 [![Docs](https://img.shields.io/badge/Docs-EN%20%7C%20ZH-6e7781?style=flat-square)](https://sciencediscovery.github.io/docs/)
