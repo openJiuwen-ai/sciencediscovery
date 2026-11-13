@@ -174,6 +174,10 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
   await form.getByRole("button", { name: "Cancel" }).click();
   await expect(form).toBeHidden();
 
+  // Module policies fold behind their own <details> (see the editor's advanced
+  // and module sections); the select inside is hidden until it is expanded.
+  const moduleDetails = configuration.locator("details").filter({ has: configuration.locator("summary", { hasText: "Module proxy policies" }) });
+  if (!(await moduleDetails.evaluate(element => (element as HTMLDetailsElement).open))) await moduleDetails.locator("summary").click();
   await expect(configuration.getByLabel("WebSearch proxy")).toBeVisible();
   await configuration.getByRole("heading", { name: "Network and proxy" }).scrollIntoViewIfNeeded();
   await page.screenshot({
