@@ -1281,6 +1281,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return sendJson(response, 200, await evolveStatusPayload(true));
       }
       if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
+          && !(request.method === "GET" && /^\/api\/evolve\/runs(?:\/[^/]+\/(?:events|candidates\/[^/]+))?$/.test(url.pathname))
           && (await evolveAvailability.refresh()).state !== "ready") {
         return sendError(response, 503, "Evolve is not initialized or unavailable. Select Init Evolve or check the configured service.");
       }
