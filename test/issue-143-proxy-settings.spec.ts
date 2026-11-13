@@ -176,7 +176,9 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
 
   // Module policies fold behind their own <details> (see the editor's advanced
   // and module sections); the select inside is hidden until it is expanded.
-  const moduleDetails = configuration.locator("details").filter({ has: configuration.locator("summary", { hasText: "Module proxy policies" }) });
+  // The inner locator must stay page-rooted: filter({ has }) matches it
+  // relative to the whole document, so rooting it at the dialog finds nothing.
+  const moduleDetails = configuration.locator("details").filter({ has: page.locator("summary", { hasText: "Module proxy policies" }) });
   if (!(await moduleDetails.evaluate(element => (element as HTMLDetailsElement).open))) await moduleDetails.locator("summary").click();
   await expect(configuration.getByLabel("WebSearch proxy")).toBeVisible();
   await configuration.getByRole("heading", { name: "Network and proxy" }).scrollIntoViewIfNeeded();
