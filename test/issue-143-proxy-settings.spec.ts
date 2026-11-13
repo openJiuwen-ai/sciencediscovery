@@ -85,7 +85,7 @@ async function expectOverlayWithinDialogAndViewport(page: Page, dialog: Locator,
  * E2E-META
  * Purpose: 代理设置把默认代理与注册表放在最前，URL 格式帮助稳定可操作，且 WebSearch 代理策略只有一处入口。
  * Steps:
- *   1. 在系统设置中打开 Network proxies。
+ *   1. 在系统设置中打开 Network and proxy（网络与代理）。
  *   2. 断言 Default proxy 位于 Proxy server list 之前，旧式 URL 指南入口不存在。
  *   3. 打开添加表单，展开 URL 格式帮助，断言内容、表单几何稳定与浮层边界。
  *   4. 断言帮助可悬停、聚焦、Escape 与点击切换，并在 environment/system 类型下隐藏。
@@ -186,7 +186,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
     mask: [configuration.locator(".proxy-effective-value, .proxy-server-url")],
   });
   await configuration.getByRole("button", { name: "Web providers" }).click();
-  await expect(configuration.getByText(/WebSearch proxy selection is managed in Network proxies/)).toBeVisible();
+  await expect(configuration.getByText(/WebSearch proxy selection is managed in Network and proxy/)).toBeVisible();
   await expect(configuration.getByLabel("Web proxy")).toHaveCount(0);
 });
 
@@ -194,7 +194,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
  * E2E-META
  * Purpose: 390×844 窄屏下代理设置仍可用：帮助浮层不撑破对话框与视口，页面不产生横向溢出。
  * Steps:
- *   1. 在 390×844 打开 Network proxies。
+ *   1. 在 390×844 打开 Network and proxy（网络与代理）。
  *   2. 打开添加表单并展开 URL 格式帮助。
  *   3. 断言表单几何稳定、浮层落在对话框与视口内。
  *   4. 断言对话框与页面都没有横向溢出。
