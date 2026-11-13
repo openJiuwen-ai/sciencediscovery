@@ -533,7 +533,7 @@ class AgentRunner:
                 # A private connection routes this run's tools and prompt without
                 # changing the real model name or the global model configuration.
                 hidden = frozenset(request.hiddenJiuwenSwarmTools) | JIUWENSWARM_HOST_TOOLS
-                llm_token = self.routes.add(LlmRoute(
+                llm_token = self.routes.add(route := LlmRoute(
                     base_url=request.model.baseUrl.rstrip("/"), api_key=request.model.apiKey, model=request.model.model,
                     tool_prefix=f"mcp_{name}_", tool_names=frozenset(t.name for t in request.tools),
                     tool_specs={t.name: {"description": t.description, "parameters": t.inputSchema} for t in request.tools},
@@ -542,6 +542,8 @@ class AgentRunner:
                     native_tools=frozenset(request.nativeTools) - hidden, all_native_tools=request.jiuwenSwarmTools == "all",
                     hidden_native_tools=hidden, run_tag=token,
                 ))
+                # The gateway names each call it dispatches; announce its responses with those ids (#1133).
+                mapper.response_ids = route.response_ids
                 params["model_name"] = request.model.model
                 # Private, in-memory session binding. Never publish per-run credentials
                 # into Swarm's global model list or trigger a global model reload.

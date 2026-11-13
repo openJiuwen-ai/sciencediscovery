@@ -210,13 +210,25 @@ const toolCallsOf = (turn: ModelTurn) => turn.toolCalls.map((call, index) => ({
 }));
 
 /**
+ * The identity of one model call, minted here before the request leaves and carried through to the
+ * record that call produces. It is an object, not a value, so two calls in flight cannot be confused
+ * whichever order they finish in (#1133).
+ */
+export interface ModelCallIdentity {
+  responseId: string;
+}
+
+/**
  * Told about each task model call of the run (not Swarm housekeeping or compaction):
  * its exact input before it is made, the answer after. The run's trajectory is recorded from these.
  */
 export interface ModelCallObserver {
-  request(input: { history: unknown[]; systemPrompt: string; tools: WireToolSpec[] }): Promise<void>;
-  completed(turn: ModelTurn, history: unknown[]): Promise<void>;
+  request(input: { history: unknown[]; systemPrompt: string; tools: WireToolSpec[]; call?: ModelCallIdentity }): Promise<void>;
+  completed(turn: ModelTurn, history: unknown[], call?: ModelCallIdentity): Promise<void>;
 }
+
+/** Header carrying the call's response id back to the adapter that proxies the request (#1133). */
+export const MODEL_RESPONSE_ID_HEADER = "x-sciencediscovery-response-id";
 
 /** Run control is independent of optional, best-effort trajectory logging. */
 export interface ModelGatewayLifecycle {
@@ -355,6 +367,11 @@ export async function startModelGateway(
     if (signal.aborted) abort();
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
+    // The call's identity, minted by the side that writes the completion record — not by the
+    // adapter, whose `assistant.response.started` can only be emitted once the answer has produced
+    // something to show. A tool-only call reaches its record first, which is how #1133 lost 54 of
+    // 303 ids. Housekeeping is not recorded, so it gets no identity.
+    const call: ModelCallIdentity | undefined = auxiliary ? undefined : { responseId: randomUUID() };
     if (!auxiliary) lastFailure = undefined;
     // One line per model request into the API log (and so the real-E2E
     // stack.log evidence). It is counts, timings and classifications only:
@@ -465,13 +482,15 @@ export async function startModelGateway(
       controller.signal.throwIfAborted();
     };
     const prepare = async () => {
-      if (observed) await observe("input", () => observed.request({ history, systemPrompt, tools }));
+      // The identity goes with the input, so the trajectory binds it to the turn this call opens
+      // rather than to a field a later call could overwrite.
+      if (observed) await observe("input", () => observed.request({ history, systemPrompt, tools, ...(call ? { call } : {}) }));
       controller.signal.throwIfAborted();
       phase = "upstream_dispatched";
       trace("upstream_dispatched", true);
     };
     const record = async (turn: ModelTurn) => {
-      if (observed) await observe("completion", () => observed.completed(turn, history));
+      if (observed) await observe("completion", () => observed.completed(turn, history, call));
     };
     const streamTurn = async (
       makeCallbacks: (attempt: number) => NonNullable<Parameters<Streamer>[6]>,
@@ -507,7 +526,10 @@ export async function startModelGateway(
         const start = () => {
           if (started) return;
           started = true;
-          response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+          response.writeHead(200, {
+            "content-type": "text/event-stream", "cache-control": "no-cache",
+            ...(call ? { [MODEL_RESPONSE_ID_HEADER]: call.responseId } : {}),
+          });
           response.write(chunk({ role: "assistant" }));
         };
         const writeDelta = (delta: Record<string, unknown>) => {
@@ -583,7 +605,10 @@ export async function startModelGateway(
       const withheld = turn.truncated && turn.toolCalls.length ? WITHHELD_TOOLS : invalid.length ? withheldNotice(turn, invalid) : "";
       const usage = usageOf(turn);
       reportWire();
-      response.writeHead(200, { "content-type": "application/json" });
+      response.writeHead(200, {
+        "content-type": "application/json",
+        ...(call ? { [MODEL_RESPONSE_ID_HEADER]: call.responseId } : {}),
+      });
       response.end(JSON.stringify({
         id, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: endpoint.model,
         choices: [{ index: 0, finish_reason: invalid.length ? "length" : finishReason(turn), message: { role: "assistant", content: content + withheld, ...(!turn.truncated && !invalid.length && turn.toolCalls.length ? { tool_calls: toolCallsOf(turn).map(({ index: _index, ...call }) => call) } : {}) } }],
