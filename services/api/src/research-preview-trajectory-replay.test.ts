@@ -83,7 +83,7 @@ test("a seeded full-trajectory sizing entry is what the preview adds, not the re
       replayed, true, false);
     assert.equal((replayed as { additionalRecordBytes: number }).additionalRecordBytes, FABRICATED_BYTES,
       "the replay branch adds the number it finds in the map, so the map is the source");
-  } finally { await rm(f.root, { recursive: true, force: true }); }
+  } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
 });
 
 test("a full-trajectory walk writes its measurements, so the next profile can replay them", async (t) => {
@@ -102,9 +102,35 @@ test("a full-trajectory walk writes its measurements, so the next profile can re
       "an empty cache means no recorded trajectory bytes for a session that has none");
     assert.ok(cache.has("full:" + f.session.id),
       "the walk recorded its measurements under the full-trajectory shape");
-  } finally { await rm(f.root, { recursive: true, force: true }); }
+  } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
 });
 
+test("an entry whose record cannot be read is reported in omissions, preview or export", async (t) => {
+  // The omission path, driven the way the reviewers asked: a trajectory entry that
+  // exists in the index but whose payload object is not on disk. The loader is
+  // `store.readRecord(event.payloadRef)` in packages/trajectory/src/server.ts:312,
+  // so a digest that was never written is the disturbance — no test hook.
+  const root = await mkdtemp(resolve(tmpdir(), "preview-omission-"));
+  const store = new SessionStore(root); store.setAvailableSkillIds([]); await store.load();
+  try {
+    const project = await store.createProject("omission");
+    const session = await store.createSession(project.id, "omission", {}, {}, { allowUnconfiguredModel: true });
+    const run = await store.createSessionRun({ sessionId: session.id, prompt: "record something", settingsSnapshot: {} as never });
+    await store.appendRunStreamEvent(session.id, run.id, "main", {
+      type: "agent.record",
+      // Never written, so the loader above throws instead of returning a payload.
+      payloadRef: { pool: "agent-state", digest: `sha256:${"0".repeat(64)}`, size: 1,
+        mediaType: "application/vnd.sciencediscovery.record.v1+json" },
+      evidence: { recordedAt: new Date().toISOString() },
+    } as never);
+
+    const snapshots = await snapshotsFor(root, store);
+    const input = await snapshots.buildResearchPackageInput(project.id, session.id, "complete");
+    const omissions = (input as { omissions?: string[] }).omissions ?? [];
+    assert.ok(omissions.some((item) => item.startsWith(`trajectory:${session.id}:`)),
+      `the export names the entry it could not read, got: ${JSON.stringify(omissions)}`);
+  } finally { await rm(root, { recursive: true, force: true }).catch(() => undefined); }
+});
 test("a summary-shaped entry does not feed a full-trajectory walk", async (t) => {
   // The defect the reviewers caught: one key per session let a summarized walk
   // hand its smaller numbers to a full one. The key is per walk shape now, so a
@@ -119,5 +145,5 @@ test("a summary-shaped entry does not feed a full-trajectory walk", async (t) =>
       preview, true, false);
     assert.equal((preview as { additionalRecordBytes: number }).additionalRecordBytes, 0,
       "a summarized entry is not replayed into a full-trajectory walk");
-  } finally { await rm(f.root, { recursive: true, force: true }); }
+  } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
 });
