@@ -32,27 +32,13 @@ const WATCH_IDLE_MS = 30_000;
  * The work itself keeps running on the queue and is memoized, so the next poll
  * usually finds it done instead of starting over.
  */
-const DEFAULT_PREVIEW_BUDGET_MS = 20_000;
-
-/**
- * Resolve `work` or answer the pending contract after `budgetMs`, whichever is
- * first. The abandoned work keeps a handler attached, so a late rejection is not
- * an unhandled one.
- */
-async function withBudget<T>(work: Promise<T>, budgetMs: number): Promise<T> {
-  if (budgetMs <= 0) return await work;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new ExportPreviewInvalidatedError()), budgetMs);
-    timer.unref?.();
-  });
-  void work.catch(() => undefined);
-  try {
-    return await Promise.race([work, expired]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
+// There is deliberately no wall-clock budget on `defaults()`. A slow preview and a
+// pathological one look identical from the clock: the first-install fixture in
+// `research-package-http.test.ts` takes ~49 s for one dialog's five profiles, so a
+// threshold low enough to cut the reported ~112 s case also answers 202 to work
+// that was about to finish. What the dialog needed was to stop lying about it —
+// the client names its own cancellation and shows a retrying state — and what the
+// service needed was to stop serialising every session behind one chain.
 
 const isMissingPreviewFile = (error: unknown): boolean =>
   typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -238,12 +224,7 @@ export class ResearchExportPreviews {
     return work;
   }
 
-  async defaults(projectId: string, sessionId: string, deferWhileRunning = false, memo: WarmMemo = {},
-    budgetMs = DEFAULT_PREVIEW_BUDGET_MS): Promise<DefaultExportPreviews> {
-    return await withBudget(this.defaultsWithin(projectId, sessionId, deferWhileRunning, memo), budgetMs);
-  }
-
-  private async defaultsWithin(projectId: string, sessionId: string, deferWhileRunning: boolean, memo: WarmMemo): Promise<DefaultExportPreviews> {
+  async defaults(projectId: string, sessionId: string, deferWhileRunning = false, memo: WarmMemo = {}): Promise<DefaultExportPreviews> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const [necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph] = await Promise.all([
         this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo),
