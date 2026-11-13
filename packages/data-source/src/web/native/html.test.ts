@@ -23,7 +23,7 @@ import { createTest } from "../../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { decodeEntities, textOf } from "./html.js";
+import { decodeEntities, NAMED_ENTITIES, textOf } from "./html.js";
 
 test("decodes each character reference once instead of rescanning its output", () => {
   assert.equal(decodeEntities("&amp;lt;"), "&lt;");
@@ -45,6 +45,36 @@ test("decodes named, decimal and hexadecimal references in that same single pass
   assert.equal(decodeEntities("&#x27;"), "'");
 });
 
+test("decodes the named references a browser renders in titles and snippets", () => {
+  // What the free engines actually put in front of the model: a page title with
+  // typographic and Latin-1 references. These were the five-name table's gaps.
+  assert.equal(
+    decodeEntities("caf&eacute; &mdash; 5&ndash;10 &hellip; O&apos;Brien"),
+    "caf\u00e9 \u2014 5\u201310 \u2026 O'Brien",
+  );
+  assert.equal(decodeEntities("&diams; &hellip; &rsquo;"), "\u2666 \u2026 \u2019");
+  assert.equal(decodeEntities("&ldquo;A&rdquo; &lsquo;B&rsquo;"), "\u201cA\u201d \u2018B\u2019");
+  assert.equal(decodeEntities("&copy; &reg; &euro; &trade;"), "\u00a9 \u00ae \u20ac \u2122");
+  assert.equal(textOf("<b>Caf&eacute; &mdash; a review</b>"), "Caf\u00e9 \u2014 a review");
+});
+
+test("decodes names case-sensitively and leaves an unknown name literal", () => {
+  // The HTML set is case-sensitive: Auml and auml are different characters.
+  assert.equal(decodeEntities("&Auml;&auml;"), "\u00c4\u00e4");
+  assert.equal(decodeEntities("&Alpha;&alpha;"), "\u0391\u03b1");
+  // A name the table does not carry is not guessed at.
+  assert.equal(decodeEntities("&notanentity;"), "&notanentity;");
+});
+
+test("a decoded ampersand does not start a second decode pass", () => {
+  // The single-pass guarantee also holds for names added after the original
+  // five: decoding `&amp;` yields `&`, and the rest of the source is not
+  // reconsidered as a reference.
+  assert.equal(decodeEntities("&amp;eacute;"), "&eacute;");
+  assert.equal(decodeEntities("&amp;mdash;"), "&mdash;");
+  assert.equal(decodeEntities("&amp;amp;lt;"), "&amp;lt;");
+});
+
 test("leaves surrogate and non-character scalars as literal text", () => {
   // A lone surrogate cannot be encoded as UTF-8 or carried in JSON output.
   for (const reference of ["&#55296;", "&#xDFFF;", "&#57343;"]) {
@@ -63,4 +93,14 @@ test("leaves references it does not know, and out-of-range scalars, untouched", 
   assert.equal(decodeEntities("&#0;"), "&#0;");
   assert.equal(decodeEntities("&#1114112;"), "&#1114112;");
   assert.equal(decodeEntities("bare & ampersand"), "bare & ampersand");
+});
+
+test("keeps every entry of the generated WHATWG table", () => {
+  // The table is one packed constant expanded at load, so a dropped or
+  // mis-chunked line would still decode most pages and only widen the old gap
+  // silently. Pin the count the standard has, plus one value that is two
+  // scalars, so a bad split cannot pass as a shorter table.
+  assert.equal(NAMED_ENTITIES.size, 2125);
+  assert.equal(NAMED_ENTITIES.get("amp"), "&");
+  assert.equal(NAMED_ENTITIES.get("NotEqualTilde"), "\u2242\u0338");
 });
