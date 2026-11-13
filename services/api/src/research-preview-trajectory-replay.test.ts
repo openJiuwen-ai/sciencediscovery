@@ -28,7 +28,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:amd64", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 import { SessionStore } from "./store.js";
