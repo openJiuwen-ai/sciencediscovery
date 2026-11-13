@@ -455,6 +455,22 @@ def test_an_approval_card_shows_the_arguments_that_run_with_the_command():
     assert request["summary"] == "run_shell: python -c 'print('\"'\"'hi'\"'\"')'"
 
 
+async def test_the_dispatched_response_id_is_kept_for_the_run_and_not_forwarded_to_swarm():
+    """The run's model gateway names every call it dispatches; the mapper stamps the response it
+    announces with that id, so both sides name the same response (#1133)."""
+    route = replace(ROUTE)
+    routes = LlmRoutes()
+    token = routes.add(route)
+    body = b"data: " + json.dumps({"choices": [{"delta": {"content": "hi"}}]}).encode() + b"\n\n"
+    app = FastAPI()
+    app.include_router(llm_router(routes, lambda: httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _request: streamed(200, body, {"content-type": "text/event-stream",
+                                              "x-sciencediscovery-response-id": "r-dispatched"})))))
+    response = await post(app, token, {"stream": True, "messages": []})
+    assert response.headers.get("x-sciencediscovery-response-id") is None, "Swarm has no use for it"
+    assert route.response_ids == ["r-dispatched"], "the mapper claims it from the route's queue"
+
+
 async def test_a_loopback_model_endpoint_stays_direct_under_a_broken_outbound_proxy(monkeypatch):
     # Regression: a user-configured model endpoint may be a local server (an
     # Ollama on 127.0.0.1). It must be reached directly even when the adapter

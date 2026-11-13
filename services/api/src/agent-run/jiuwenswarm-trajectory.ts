@@ -21,12 +21,15 @@ import type { AgentEventEvidence } from "@sciencediscovery/schema";
 
 import type { NativeAgentOptions } from "../native-agent/index.js";
 import { AgentVersionRecorder, jsonValue } from "../native-agent/versioning.js";
+import type { ModelCallIdentity } from "./jiuwenswarm-model-gateway.js";
 
 /** What the model was given for one call: the system prompt, the conversation and the tools, as sent. */
 export interface ModelCallInput {
   history: unknown[];
   systemPrompt: string;
   tools: unknown[];
+  /** The identity the gateway minted for this call, when it named it. */
+  call?: ModelCallIdentity;
 }
 
 /**
@@ -88,6 +91,10 @@ export class JiuwenSwarmTrajectory {
    * just answered (#1133).
    */
   private callResponseId?: string;
+  /** The id this turn's `model.completed` was recorded with, until its announcement arrives. */
+  private recordedResponseId?: { turn: number; responseId: string };
+  /** The turn each dispatched call was given, keyed by the identity the gateway minted for it. */
+  private readonly callTurns = new Map<ModelCallIdentity, number>();
   private sequence = 0;
   private pending?: { history: unknown[]; modelTurn: ModelTurn; turn: number };
   private readonly results = new Map<string, { content: string; details?: unknown; isError: boolean }>();
@@ -181,32 +188,45 @@ export class JiuwenSwarmTrajectory {
     return this.run("model_request", async () => {
       await this.stage("commit_pending", () => this.commitPending());
       this.turn += 1;
+      // The call's own number, taken while this queued step owns the counter. Held against the
+      // identity the gateway minted, so a call that finishes after a later one was dispatched still
+      // reports its own turn and id (#1133).
+      const turn = this.turn;
+      if (input.call) this.callTurns.set(input.call, turn);
       this.callResponseId = undefined;
       const history = input.history as never[];
-      await this.stage("before_turn", () => this.recorder!.beforeTurn({ turn: this.turn, history }));
+      await this.stage("before_turn", () => this.recorder!.beforeTurn({ turn, history }));
       // Same order as the built-in loop: the turn opens, then its context assembler captures the
       // input state and hands the view to the recorder, which is what puts a checkpoint in the
       // snapshot `beforeTurn` just took without one.
-      const view = await this.stage("capture_state", () => this.captureState(this.turn));
-      if (view) await this.stage("capture_input_state", () => this.recorder!.captureInputState(view, this.turn, history));
+      const view = await this.stage("capture_state", () => this.captureState(turn));
+      if (view) await this.stage("capture_input_state", () => this.recorder!.captureInputState(view, turn, history));
       // The trace is a separate entry point, not part of the assembly argument: `afterAssembly`
       // reads only `modelInput` and folds in whatever `trace()` last recorded. The built-in loop
       // calls them in this order too (its assembler's onTrace runs before the turn is assembled).
       this.recorder!.trace(assemblyTrace(input));
-      await this.stage("after_assembly", () => this.recorder!.afterAssembly({ turn: this.turn, assembly: { history, modelInput: input } }));
+      await this.stage("after_assembly", () => this.recorder!.afterAssembly({ turn, assembly: { history, modelInput: input } }));
     });
   }
 
-  /** The model answered the current call. */
-  modelCompleted(turn: ModelTurn, history: unknown[]): Promise<void> {
+  /** The model answered the call named by `call`, if the gateway named it. */
+  modelCompleted(turn: ModelTurn, history: unknown[], call?: ModelCallIdentity): Promise<void> {
     if (!this.recorder) return Promise.resolve();
-    // Captured now, while this call is still the current one: the queued write
-    // below must not have to reconstruct the identity from a field another turn
-    // may already have cleared.
-    const identity = { turn: this.turn, ...(this.callResponseId ? { responseId: this.callResponseId } : {}) };
+    // Bound to this call, never to the shared field: JiuwenSwarm's own sub-agents share the run's
+    // gateway (`jiuwenswarm-model-gateway.ts`, `recoversWithheldCalls`), so two observed calls can be
+    // in flight — dispatch A, dispatch B, complete A must still record A's id and A's turn. The
+    // field is only the fallback for a call the gateway did not name.
+    const boundTurn = call ? this.callTurns.get(call) ?? this.turn : this.turn;
+    const responseId = call?.responseId ?? this.callResponseId;
+    if (call) this.callTurns.delete(call);
+    // What this turn's record was written with, kept beside the fallback rather than in it: an
+    // announcement that arrives afterwards is compared against this, so an adapter from before the
+    // id was minted upstream is reported instead of silently naming the response twice.
+    if (responseId) this.recordedResponseId = { turn: boundTurn, responseId };
+    const identity = { turn: boundTurn, ...(responseId ? { responseId } : {}) };
     return this.run("model_completed", async () => {
       await this.stage("model_completed", () => this.recorder!.modelCompleted(turn, identity));
-      this.pending = { history: [...history, turn.assistantMessage], modelTurn: turn, turn: this.turn };
+      this.pending = { history: [...history, turn.assistantMessage], modelTurn: turn, turn: boundTurn };
     });
   }
 
@@ -231,7 +251,19 @@ export class JiuwenSwarmTrajectory {
       : { type: event.type, turn: this.turn };
     // Remembered for the completion record of this same call; the recorder's
     // copy of the field lives only until the next turn's `beforeTurn` clears it.
-    if (event.type === "response_start") this.callResponseId = String(event.responseId);
+    // An adapter from before the id was minted upstream announces its own, which
+    // no longer matches the record this call already wrote: say so instead of
+    // silently recording two names for one response. Only the turn that record was
+    // written for is compared — in an overlapping run the announcement can belong
+    // to an earlier call, and a false alarm would be worse than no alarm.
+    if (event.type === "response_start") {
+      const announced = String(event.responseId);
+      const recorded = this.recordedResponseId;
+      if (recorded && recorded.turn === this.turn && recorded.responseId !== announced) {
+        console.warn(`[jiuwenswarm-trajectory] adapter announced ${announced} for a call recorded as ${recorded.responseId}`);
+      }
+      this.callResponseId = announced;
+    }
     return this.recorder.event(runEvent as never);
   }
 

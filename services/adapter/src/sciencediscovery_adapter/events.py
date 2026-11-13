@@ -117,6 +117,10 @@ class RunEventMapper:
     unmapped: list[str] = field(default_factory=list)
     session_id: str = ""
     _response_id: str | None = None
+    # Ids the run's model gateway minted for calls it has dispatched and that no announced response has
+    # claimed yet, oldest first. A call that answers with only a tool call is named from here rather than
+    # from a uuid this side invents afterwards (#1133).
+    response_ids: list[str] | None = None
     # Whether the current model call has produced a response yet. The native agent announces a
     # response for every model call, even one that only ends in a tool call or an error.
     _turn_has_response: bool = False
@@ -157,7 +161,11 @@ class RunEventMapper:
         elif self._awaiting_response:
             self.turn += 1
         self._awaiting_response = False
-        self._response_id = str(uuid.uuid4())  # the same shape the native agent uses
+        # The run's model gateway named this call before it dispatched it, so its completion record and
+        # this announcement describe one response. A Swarm pointed somewhere else dispatches no id, and
+        # keeps the locally minted shape the native agent also uses.
+        claimed = self.response_ids.pop(0) if self.response_ids else None
+        self._response_id = claimed or str(uuid.uuid4())
         self._turn_has_response = True
         return [{"type": "assistant.response.started", "responseId": self._response_id, "turn": self.turn}]
 

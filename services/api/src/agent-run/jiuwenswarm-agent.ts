@@ -393,7 +393,12 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "task" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
-      trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
+      trajectory.enabled ? {
+        request: (input) => trajectory.modelRequest(input),
+        // The gateway names each call before it sends it and passes the identity back here, so this
+        // call's record carries its own id even when another call is in flight (#1133).
+        completed: (turn, history, call) => trajectory.modelCompleted(turn, history, call),
+      } : undefined,
       { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }),
         // Only the run's own instance has the output-recovery boundary; JiuwenSwarm's sub-agents do not.
         recoversWithheldCalls: !jiuwenSwarmSubagents,

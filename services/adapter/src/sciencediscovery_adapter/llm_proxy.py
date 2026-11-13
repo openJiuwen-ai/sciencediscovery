@@ -78,6 +78,10 @@ class LlmRoute:
     # The calls the model made, oldest first, as JiuwenSwarm is asked to run them (name, arguments without the run
     # tag): an approval question from JiuwenSwarm names the tool but not the arguments, which the user needs to see.
     recent_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Response ids the run's model gateway minted for calls it has dispatched, oldest first, waiting to be
+    # claimed by the event that announces that response. The gateway writes the id before the answer can
+    # produce anything, so a call that only ends in a tool call is named as well (#1133).
+    response_ids: list[str] = field(default_factory=list)
 
     def take_call(self, question: str) -> tuple[str, dict[str, Any]] | None:
         """The oldest call not yet asked about whose tool the question names (longest name first, so that
@@ -288,6 +292,9 @@ def rewrite_response(payload: dict[str, Any], route: LlmRoute) -> dict[str, Any]
 
 
 _HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host"}
+# Set by the run's model gateway on every task call it dispatches: the identity its records use for
+# this call. Read here so the event mapper can name the same response (#1133).
+_RESPONSE_ID_HEADER = "x-sciencediscovery-response-id"
 
 
 class StreamingToolRewriter:
@@ -393,7 +400,14 @@ def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
             upstream = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as error:
             return JSONResponse({"error": {"message": f"model endpoint unreachable: {type(error).__name__}"}}, status_code=502)
-        headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+        # The gateway names the call it dispatched. Kept for the run's event mapper, which stamps the
+        # response it announces with it, so both sides name the same response (#1133). Swarm does not
+        # need it, so it does not go on with the forwarded headers.
+        dispatched_id = upstream.headers.get(_RESPONSE_ID_HEADER)
+        if restore_names and dispatched_id:
+            route.response_ids.append(dispatched_id)
+        headers = {k: v for k, v in upstream.headers.items()
+                   if k.lower() not in _HOP_BY_HOP and k.lower() != _RESPONSE_ID_HEADER}
         if "text/event-stream" in upstream.headers.get("content-type", ""):
             stream = _rewrite_stream(upstream, route) if restore_names else upstream.aiter_raw()
             return StreamingResponse(

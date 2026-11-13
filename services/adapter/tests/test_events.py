@@ -415,3 +415,21 @@ def test_finite_integral_float_usage_counts_remain_usable():
         "metadata": {"usage_metadata": {"input_tokens": 1.0, "output_tokens": 2.0}}}})
     assert events[0]["usage"]["totalTokens"] == 3
     assert events[0]["usage"]["outputTokens"] == 2
+
+
+def test_a_response_is_announced_with_the_id_the_gateway_minted_for_the_call():
+    """A tool-only turn is recorded by the API before Swarm announces its response, so the mapper
+    names that response with the id the gateway minted instead of inventing one afterwards (#1133)."""
+    mapper = RunEventMapper(response_ids=["dispatched-1"])
+    events = mapper.feed({"type": "event", "event": "chat.tool_call", "payload": {
+        "tool_call": {"name": "test", "tool_call_id": "1", "arguments": "{}"}}})
+    started = [event for event in events if event["type"] == "assistant.response.started"]
+    assert [event["responseId"] for event in started] == ["dispatched-1"]
+    assert mapper.response_ids == [], "the dispatched id is claimed once"
+
+
+def test_without_a_dispatched_id_the_mapper_still_names_its_own_response():
+    """A Swarm pointed at something other than this run's gateway dispatches no id."""
+    events = RunEventMapper().feed({"type": "event", "event": "chat.delta", "payload": {"content": "hi"}})
+    started = [event for event in events if event["type"] == "assistant.response.started"]
+    assert len(started) == 1 and started[0]["responseId"]

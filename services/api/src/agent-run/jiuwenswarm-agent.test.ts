@@ -2258,18 +2258,23 @@ test("the run's trajectory is recorded from the model calls JiuwenSwarm makes, a
   const workspaceRoot = await mkdtemp(join(tmpdir(), "jw-workspace-"));
   const turn = { assistantMessage: { role: "assistant", content: "Answer." }, toolCalls: [] };
   const streamer = (async () => turn) as never;
+  const issued: Array<string | null> = [];
   const adapter = await fakeAdapter(async ({ body }, response) => {
     response.writeHead(200);
     // Housekeeping is explicitly marked by the adapter's default-model route.
     for (const tools of [[{ type: "function", function: { name: "echo", description: "e", parameters: { type: "object" } } }], []]) {
-      await fetch(`${body.model.baseUrl}/chat/completions`, {
+      const reply = await fetch(`${body.model.baseUrl}/chat/completions`, {
         method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}`,
           ...(!tools.length ? { "x-sciencediscovery-model-purpose": "housekeeping" } : {}) },
         body: JSON.stringify({ stream: false, tools, messages: [{ role: "system", content: "sys" }, { role: "user", content: "go" }] }),
-      }).then((reply) => reply.text());
+      });
+      issued.push(reply.headers.get("x-sciencediscovery-response-id"));
+      await reply.text();
     }
-    response.write(line({ event: { type: "assistant.response.started", responseId: "r1", turn: 1 } }));
-    response.write(line({ event: { type: "assistant.delta", responseId: "r1", delta: "Answer.", turn: 1 } }));
+    // The adapter announces the id the gateway minted, which is what the proxied route does with
+    // the response header — the whole loop, not just its two halves.
+    response.write(line({ event: { type: "assistant.response.started", responseId: issued[0], turn: 1 } }));
+    response.write(line({ event: { type: "assistant.delta", responseId: issued[0], delta: "Answer.", turn: 1 } }));
     response.end(line({ done: { finalText: "Answer." } }));
   });
   try {
@@ -2286,8 +2291,81 @@ test("the run's trajectory is recorded from the model calls JiuwenSwarm makes, a
     assert.ok(records[0].evidence.contextRef?.digest, "the captured context is in the version store");
     const started = events.find((event) => event.type === "response_start") as any;
     assert.equal(started.evidence?.contextRef?.digest, records[0].evidence.contextRef.digest, "the response is tied to the model input it answered");
+    // The adapter announced its response only after the answer was complete, which for a tool-only
+    // call is after this record was written. The record must still name the call (#1133).
+    const completion = records.find((record) => record.name === "model.completed");
+    assert.equal(completion.evidence.responseId, issued[0], "the completion carries the id the gateway minted for this call");
+    assert.equal(started.evidence?.responseId, issued[0], "and the adapter announced that same id, not one of its own");
+    assert.equal(issued[1], null, "housekeeping is not recorded, so it is not named");
   } finally {
     await adapter.close();
+    await remove(dataDir, { recursive: true, force: true });
+    await remove(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+
+test("an id minted for a call stays with that call when a later one is already in flight", async () => {
+  const { mkdtemp, rm: remove } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { JiuwenSwarmTrajectory } = await import("./jiuwenswarm-trajectory.js");
+  const dataDir = await mkdtemp(join(tmpdir(), "jw-call-ids-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "jw-call-ids-ws-"));
+  const records: any[] = [];
+  const trajectory = new JiuwenSwarmTrajectory(options({
+    config: { dataDir },
+    workspaceRoot,
+    versioning: { agentId: "main:session-1", trajectoryId: "run-1", requestExecutionId: "run-1",
+      recordEvent: async (event: unknown) => { records.push(event); } },
+  } as never));
+  try {
+    await trajectory.start({});
+    const a = { responseId: "id-a" };
+    const b = { responseId: "id-b" };
+    // Dispatch A, dispatch B, then let A answer. A shared field would stamp A's record with B's id
+    // and B's turn; JiuwenSwarm's own sub-agents share the run's gateway, so this overlap is real.
+    await trajectory.modelRequest({ history: [], systemPrompt: "sys", tools: [], call: a });
+    await trajectory.modelRequest({ history: [], systemPrompt: "sys", tools: [], call: b });
+    const answer = (content: string) => ({ assistantMessage: { role: "assistant", content }, toolCalls: [] });
+    await trajectory.modelCompleted(answer("a") as never, [], a);
+    await trajectory.modelCompleted(answer("b") as never, [], b);
+    const completions = records.filter((record) => record.name === "model.completed");
+    assert.deepEqual(completions.map((record) => [record.evidence.turn, record.evidence.responseId]),
+      [[0, "id-a"], [1, "id-b"]], "each call keeps its own id and its own turn");
+  } finally {
+    // The recorder holds the version store open; release it before the temp directory goes.
+    await trajectory.finish().catch(() => undefined);
+    await remove(dataDir, { recursive: true, force: true });
+    await remove(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+
+test("a stale adapter's announcement is reported against the id its record carries", { timeout: 3000 }, async (t) => {
+  const { mkdtemp, rm: remove } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { JiuwenSwarmTrajectory } = await import("./jiuwenswarm-trajectory.js");
+  const dataDir = await mkdtemp(join(tmpdir(), "jw-stale-adapter-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "jw-stale-adapter-ws-"));
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (line: string) => { warnings.push(line); });
+  const trajectory = new JiuwenSwarmTrajectory(options({
+    config: { dataDir }, workspaceRoot,
+    versioning: { agentId: "main:session-1", trajectoryId: "run-1", requestExecutionId: "run-1", recordEvent: async () => undefined },
+  } as never));
+  try {
+    await trajectory.start({});
+    const call = { responseId: "recorded-id" };
+    await trajectory.modelRequest({ history: [], systemPrompt: "sys", tools: [], call });
+    await trajectory.modelCompleted({ assistantMessage: { role: "assistant", content: "a" }, toolCalls: [] } as never, [], call);
+    // An adapter built before the id was minted upstream announces one of its own.
+    trajectory.evidence({ type: "response_start", responseId: "adapter-own" });
+    assert.ok(warnings.some((line) => line.includes("adapter-own") && line.includes("recorded-id")),
+      "the mismatch is reported instead of silently naming the response twice");
+  } finally {
+    await trajectory.finish().catch(() => undefined);
     await remove(dataDir, { recursive: true, force: true });
     await remove(workspaceRoot, { recursive: true, force: true });
   }
