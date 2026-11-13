@@ -25,7 +25,7 @@ The global default can only be `none` or `proxy:<id>`, to avoid recursive inheri
 Open **System configuration**:
 
 1. Open **Network and proxy** and choose environment configuration (default), a specified HTTP/SOCKS5 proxy, or direct connection. Normally leave module policies at **Inherit global default**.
-2. Use **Save** or **Save and close** to apply changes. Switching sections preserves drafts, including an unfinished proxy form; **Cancel and close** and the close icon discard unsaved changes. The form's Add/Update buttons only stage entries.
+2. Use **Save** or **Save and close** to apply changes. Switching sections preserves drafts, including an unfinished proxy form; **Cancel and close** and the close icon discard unsaved changes. The form's Add/Update buttons only stage entries. Adding a new entry also points the global default at it, so the first configured proxy takes effect without a second step; adjust the default in section 1 if that is not what you want.
 3. **Test connection (without saving)** tests the draft against the download source, not model authentication or every destination. It does not save settings. Stage a new entry first to test it; the footer can save a new form directly.
 4. Advanced sections retain named proxy records, WebSearch/MCP overrides and a comma-separated bypass list. Existing model-specific overrides remain compatible in Model registry. Referenced entries cannot be deleted until their references are changed.
 
