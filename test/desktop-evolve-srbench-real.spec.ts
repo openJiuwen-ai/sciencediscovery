@@ -263,6 +263,11 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       await expect(dialog).toContainText("新建程序演进实验");
 
       const start = dialog.getByRole("button", { name: "开始设计" });
+      // The submit is greyed for two independent reasons now: no task yet, or
+      // no ready runtime. Write the task first, so what the probe below reads
+      // is the runtime alone — with an empty task the button never enables and
+      // a ready host would still be mistaken for a missing install.
+      await dialog.getByLabel("任务描述").fill(PROBLEM);
       // The submit stays greyed until the runtime reports ready, and that read
       // lands after the dialog opens — the banner is drawn meanwhile, so
       // "banner is up" is not the same as "the runtime is missing". Give the
@@ -305,20 +310,22 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       if (await unisolated.isVisible().catch(() => false)) await unisolated.click();
       await expect(dialog).toBeHidden({ timeout: 60_000 });
 
-      // The dialog places its flags as a token in the composer and stops
-      // there: the goal is the sentence after the token, and the message
-      // leaves once the user confirms the settings for that task.
+      // The dialog places its flags as a token in the composer and the task as
+      // the sentence after it, and stops there: the message leaves once the
+      // user confirms the settings for that task. The task was written in the
+      // dialog, so the composer already holds it — retyping it here would
+      // prove nothing about the handoff.
       const area = page.locator("#composer-textarea");
       await expect(area).toBeVisible({ timeout: 30_000 });
-      await area.fill(PROBLEM);
+      await expect(area).toHaveValue(PROBLEM);
+      await expect(page.locator(".composer-command")).toContainText("/evolve-design");
       const before = new Set((await api<DesktopRun[]>(page, sessionRuns())).map((run) => run.id));
       await area.press("Enter");
-      const confirmation = page.getByRole("dialog", { name: /^(Confirm evolution settings|确认演进设置)$/ });
-      await confirmation.getByRole("button", { name: /^(Start evolution|开始演进)$/ }).click();
-      await expect.poll(async () => await unisolated.isVisible() || !(await confirmation.isVisible())).toBe(true);
-      if (await unisolated.isVisible()) await unisolated.click();
-      await expect(confirmation).toBeHidden();
-
+      // The setup dialog replaced the second "确认演进设置" card: the composer's
+      // send is the confirmation now, so nothing stands between Enter and the
+      // Run it creates. Waiting for that card would never return — the click
+      // has no timeout of its own, so the case would sit there until its whole
+      // budget ran out, on a design that had already started.
       runId = (await waitForNewRun(page, fixture!.session.id, before)).id;
       metrics.turns.push({ id: runId, kind: "design", prompt: PROBLEM });
     });
