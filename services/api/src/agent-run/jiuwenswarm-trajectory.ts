@@ -91,8 +91,8 @@ export class JiuwenSwarmTrajectory {
    * just answered (#1133).
    */
   private callResponseId?: string;
-  /** The id this turn's `model.completed` was recorded with, until its announcement arrives. */
-  private recordedResponseId?: { turn: number; responseId: string };
+  /** Ids the completion records for a turn carry, awaiting that turn's announcement. */
+  private readonly recordedResponseIds = new Map<number, Set<string>>();
   /** The turn each dispatched call was given, keyed by the identity the gateway minted for it. */
   private readonly callTurns = new Map<ModelCallIdentity, number>();
   private sequence = 0;
@@ -222,7 +222,11 @@ export class JiuwenSwarmTrajectory {
     // What this turn's record was written with, kept beside the fallback rather than in it: an
     // announcement that arrives afterwards is compared against this, so an adapter from before the
     // id was minted upstream is reported instead of silently naming the response twice.
-    if (responseId) this.recordedResponseId = { turn: boundTurn, responseId };
+    if (responseId) {
+      const recorded = this.recordedResponseIds.get(boundTurn) ?? new Set<string>();
+      recorded.add(responseId);
+      this.recordedResponseIds.set(boundTurn, recorded);
+    }
     const identity = { turn: boundTurn, ...(responseId ? { responseId } : {}) };
     return this.run("model_completed", async () => {
       await this.stage("model_completed", () => this.recorder!.modelCompleted(turn, identity));
@@ -253,14 +257,22 @@ export class JiuwenSwarmTrajectory {
     // copy of the field lives only until the next turn's `beforeTurn` clears it.
     // An adapter from before the id was minted upstream announces its own, which
     // no longer matches the record this call already wrote: say so instead of
-    // silently recording two names for one response. Only the turn that record was
-    // written for is compared — in an overlapping run the announcement can belong
-    // to an earlier call, and a false alarm would be worse than no alarm.
+    // silently recording two names for one response. The comparison needs an
+    // unambiguous record, so it waits until no other turn is awaiting an
+    // announcement — an overlapping run would otherwise alarm about an id that
+    // belongs to the call still in flight.
     if (event.type === "response_start") {
       const announced = String(event.responseId);
-      const recorded = this.recordedResponseId;
-      if (recorded && recorded.turn === this.turn && recorded.responseId !== announced) {
-        console.warn(`[jiuwenswarm-trajectory] adapter announced ${announced} for a call recorded as ${recorded.responseId}`);
+      const recorded = this.recordedResponseIds.get(this.turn);
+      if (recorded !== undefined) {
+        const ids = [...recorded];
+        this.recordedResponseIds.delete(this.turn);
+        // Only an unambiguous record can be compared: with another call still in
+        // flight the announcement may belong to that one, and a false alarm sends
+        // an operator after an id swap that did not happen.
+        if (this.recordedResponseIds.size === 0 && ids.length > 0 && !ids.includes(announced)) {
+          console.warn(`[jiuwenswarm-trajectory] adapter announced ${announced} for a call recorded as ${ids.join(", ")}`);
+        }
       }
       this.callResponseId = announced;
     }

@@ -2371,6 +2371,40 @@ test("a stale adapter's announcement is reported against the id its record carri
   }
 });
 
+test("completions that land before their announcements do not raise a false mismatch", { timeout: 3000 }, async (t) => {
+  const { mkdtemp, rm: remove } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { JiuwenSwarmTrajectory } = await import("./jiuwenswarm-trajectory.js");
+  const dataDir = await mkdtemp(join(tmpdir(), "jw-overlap-adapter-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "jw-overlap-adapter-ws-"));
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (line: string) => { warnings.push(line); });
+  const trajectory = new JiuwenSwarmTrajectory(options({
+    config: { dataDir }, workspaceRoot,
+    versioning: { agentId: "main:session-1", trajectoryId: "run-1", requestExecutionId: "run-1", recordEvent: async () => undefined },
+  } as never));
+  try {
+    await trajectory.start({});
+    const first = { responseId: "id-a" };
+    const second = { responseId: "id-b" };
+    await trajectory.modelRequest({ history: [], systemPrompt: "sys", tools: [], call: first });
+    await trajectory.modelCompleted({ assistantMessage: { role: "assistant", content: "a" }, toolCalls: [] } as never, [], first);
+    await trajectory.modelRequest({ history: [], systemPrompt: "sys", tools: [], call: second });
+    await trajectory.modelCompleted({ assistantMessage: { role: "assistant", content: "b" }, toolCalls: [] } as never, [], second);
+    // A tool-only turn announces only after Swarm replays it, so both records
+    // exist before either announcement — the ordering that used to alarm about a
+    // swap that did not happen.
+    trajectory.evidence({ type: "response_start", responseId: "id-a" });
+    trajectory.evidence({ type: "response_start", responseId: "id-b" });
+    assert.deepEqual(warnings.filter((line) => line.includes("adapter announced")), []);
+  } finally {
+    await trajectory.finish().catch(() => undefined);
+    await remove(dataDir, { recursive: true, force: true });
+    await remove(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 
 test("idle cancellation does not wait for the trajectory finish queue", { timeout: 3000 }, async (t) => {
   const { JiuwenSwarmTrajectory } = await import("./jiuwenswarm-trajectory.js");
