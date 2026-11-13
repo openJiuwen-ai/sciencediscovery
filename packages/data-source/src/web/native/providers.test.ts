@@ -229,6 +229,77 @@ test("web_fetch judges IPv4-mapped and IPv4-compatible IPv6 literals by their em
   );
 });
 
+test("web_fetch judges NAT64, 6to4, IPv4-translated and site-local literals by their embedded IPv4", async () => {
+  // Every form below carries an IPv4 address in a well-known position, but not in the last two
+  // hextets of a mapped/compatible address, so the mapped/compatible extraction cannot see it.
+  for (const address of [
+    "64:ff9b::7f00:1",        // NAT64 well-known /96 -> 127.0.0.1
+    "64:ff9b::a9fe:a9fe",     // NAT64 well-known /96 -> 169.254.169.254 (metadata)
+    "64:ff9b:1::7f00:1",      // NAT64 local-use /48 -> 127.0.0.1
+    "2002:7f00:1::",          // 6to4 -> 127.0.0.1
+    "2002:a9fe:a9fe::",       // 6to4 -> 169.254.169.254
+    "::ffff:0:7f00:1",        // IPv4-translated -> 127.0.0.1
+    "::ffff:0:a9fe:a9fe",     // IPv4-translated -> 169.254.169.254
+    "fec0::1",                // deprecated site-local
+    "2001:0:808:808::80ff:fffe", // Teredo, obfuscated client 127.0.0.1
+    // 64:ff9b:1::/48 is wider than the /96 an embedded IPv4 address needs, and RFC 8215 allows
+    // deployments to use other suffix lengths. Every non-canonical suffix is rejected outright,
+    // whether its last 32 bits look public (they are not the address in those deployments) or
+    // private. Decoding hextets 6-7 only is right for the /96 forms above.
+    "64:ff9b:1:0:7f00:1:808:808",
+    "64:ff9b:1:1:0:0:808:808",
+    "64:ff9b:1:0:1:0:808:808",
+    "64:ff9b:1:0:0:1:808:808",
+    "64:ff9b:1:dead:beef:cafe:808:808",
+    "64:ff9b:1:1:0:0:7f00:1",
+    "64:ff9b:1:1:0:0:a9fe:a9fe",
+    "64:ff9b:1::a9fe:a9fe",
+  ]) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+  // Reverse direction: a public embedded address must keep these forms routable, otherwise NAT64
+  // and 6to4 egress would be lost on the networks that actually run them.
+  for (const address of [
+    "64:ff9b::808:808",
+    "64:ff9b:1::808:808",
+    "2002:808:808::",
+    "::ffff:0:808:808",
+    "2001:0:808:808::f7f7:f7f7", // Teredo, obfuscated client 8.8.8.8
+    "2606:4700:4700::1111",
+  ]) {
+    assert.equal(isBlockedAddress(address), false, address);
+  }
+  // The literal path and the resolver path both run the same predicate.
+  for (const url of [
+    "http://[64:ff9b::7f00:1]/",
+    "http://[64:ff9b:1::7f00:1]/",
+    "http://[2002:7f00:1::]/",
+    "http://[::ffff:0:7f00:1]/",
+    "http://[fec0::1]/",
+    "http://[2001:0:808:808::80ff:fffe]/",
+  ]) {
+    await assert.rejects(assertPublicUrl(url), PublicUrlError, url);
+  }
+  await assert.rejects(
+    assertPublicUrl("http://example.com/", async () => ["64:ff9b::7f00:1"]),
+    PublicUrlError,
+  );
+  assert.equal(
+    await assertPublicUrl("http://[64:ff9b::808:808]/"),
+    "http://[64:ff9b::808:808]/",
+  );
+  // Tightening the local-use prefix must not cost ordinary public egress: a domain whose
+  // resolver answer is a public NAT64 or native IPv6 address still goes through.
+  assert.equal(
+    await assertPublicUrl("http://example.com/", async () => ["64:ff9b::808:808"]),
+    "http://example.com/",
+  );
+  assert.equal(
+    await assertPublicUrl("http://example.com/", async () => ["2606:4700:4700::1111"]),
+    "http://example.com/",
+  );
+});
+
 test("web_fetch applies the same judgement to resolved addresses, not only literals", async () => {
   // The DNS path runs the same predicate, so a mapped literal returned by a resolver must reject.
   await assert.rejects(
