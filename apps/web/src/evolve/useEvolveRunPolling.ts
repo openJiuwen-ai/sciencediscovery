@@ -25,7 +25,7 @@ export function useEvolveRunPolling(
   onRuns: (runs: EvolveRun[]) => void,
 ) {
   useEffect(() => {
-    if (!sessionId || !ready) { onRuns([]); return; }
+    if (!sessionId) { onRuns([]); return; }
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = () => {

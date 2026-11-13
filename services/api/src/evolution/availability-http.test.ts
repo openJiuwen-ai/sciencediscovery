@@ -59,7 +59,10 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
     assert.deepEqual(availability(initBody), { state: "not_initialized", canInitialize: false });
     assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 200);
     const before = sidecarRequests;
-    for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {
+    const savedRuns = await fetch(`${origin}/api/evolve/runs?sessionId=imported`, { headers });
+    assert.equal(savedRuns.status, 200);
+    assert.deepEqual(await savedRuns.json(), []);
+    for (const path of ["/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {
       const response = await fetch(origin + path, { headers });
       assert.equal(response.status, 503); assert.match(await response.text(), /not initialized/);
     }
