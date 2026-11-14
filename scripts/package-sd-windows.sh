@@ -119,23 +119,40 @@ data_fp() {
 }
 
 # --------------------------------------------------------------------------
-# check —— 环境预检（只读）
+# check —— 环境预检（只读；不要求干净工作树）
 do_check() {
   log "== 环境预检 =="
   local ok=1
-  chk() { # name, expect, actual
-    if [[ -n "$3" ]]; then printf '  [OK]   %-12s %s\n' "$1" "$3"; else printf '  [FAIL] %-12s %s\n' "$1" "$2"; ok=0; fi
-  }
-  need_cmd git;  chk "git"   "任意版本"  "$(git --version 2>/dev/null)"
-  need_cmd node; chk "node"  ">=22.19"   "$(node --version 2>/dev/null)"
-  need_cmd pnpm; chk "pnpm"  "11.1.2"    "$(pnpm --version 2>/dev/null)"
-  need_cmd uv;   chk "uv"    "0.9+"      "$(uv --version 2>/dev/null)"
-  chk "core.longpaths" "true" "$(git config --global core.longpaths)"
+  pass() { printf '  [OK]   %-16s %s\n' "$1" "$2"; }
+  bad()  { printf '  [FAIL] %-16s %s\n' "$1" "$2"; ok=0; }
+  # actual >= min 的版本比较（GNU sort -V，Git Bash 自带）
+  ver_ok() { [[ -n "$1" && -n "$2" ]] && printf '%s\n%s\n' "$2" "$1" | sort -V -C 2>/dev/null; }
+
+  need_cmd git
+  pass "git" "$(git --version 2>/dev/null)"
+
+  need_cmd node
+  local nv; nv=$(node --version 2>/dev/null | tr -d 'v')
+  ver_ok "$nv" "22.19" && pass "node >= 22.19" "v$nv" || bad "node >= 22.19" "实测 v${nv:-none}"
+
+  need_cmd pnpm
+  local pv; pv=$(pnpm --version 2>/dev/null)
+  ver_ok "$pv" "11" && pass "pnpm >= 11" "$pv" || bad "pnpm >= 11" "实测 ${pv:-none}"
+
+  need_cmd uv
+  local uvv; uvv=$(uv --version 2>/dev/null | awk '{print $2}')
+  ver_ok "$uvv" "0.9" && pass "uv >= 0.9" "$uvv" || bad "uv >= 0.9" "实测 ${uvv:-none}"
+
+  if [[ "$(git config --global core.longpaths 2>/dev/null || true)" == "true" ]]; then
+    pass "core.longpaths" "true"
+  else
+    bad "core.longpaths" "未开启（git config --global core.longpaths true）"
+  fi
   # WSL（SEA 必需）
   if command -v wsl.exe >/dev/null 2>&1 && wsl.exe -l -q 2>/dev/null | tr -d '\0' | grep -qix "$WSL_DISTRO"; then
-    chk "WSL" "$WSL_DISTRO" "已安装"
+    pass "WSL" "$WSL_DISTRO 已安装"
     if wsl.exe -d "$WSL_DISTRO" -- bash -lc 'export PATH="$HOME/opt/node-'"$WSL_NODE_VER"'-linux-x64/bin:$PATH"; command -v node >/dev/null' 2>/dev/null; then
-      chk "WSL node" "$WSL_NODE_VER" "就绪"
+      pass "WSL node" "$WSL_NODE_VER 就绪"
     else
       warn "  [WARN] WSL 内无 Node $WSL_NODE_VER —— sea 阶段会自动安装（用户级 ~/opt），或先自行安装"
     fi
@@ -146,11 +163,11 @@ do_check() {
   # 网络
   for host in github.com gitcode.com; do
     code=$(curl -sI --max-time 8 "https://$host" -o /dev/null -w "%{http_code}" 2>/dev/null || echo 000)
-    [[ "$code" == "200" ]] && chk "网络:$host" "200" "200" || { warn "  [WARN] $host 不可达（HTTP $code）"; }
+    [[ "$code" == "200" ]] && pass "网络:$host" "200" || { warn "  [WARN] $host 不可达（HTTP $code）"; }
   done
   # 关键路径
   [[ -f "$REPO/package.json" ]] || die "仓库路径无效: $REPO"
-  chk "仓库" "" "$REPO"
+  pass "仓库" "$REPO"
   [[ $ok -eq 1 ]] && log "预检通过" || die "预检存在硬失败项，见上方 [FAIL]"
 }
 
@@ -286,6 +303,7 @@ clean_orphans() {
 # Windows 计划任务。进程完全脱离当前终端/会话，终端关了照跑；日志可回读。
 detach_build() {
   need_cmd schtasks
+  mkdir -p "$STAMPS"   # 新 checkout 首次 --detach 时目录可能尚不存在（否则写 wrapper 即被 set -e 终止）
   local repo_win script_win bash_win log log_win wrapper tn extra=""
   repo_win="$(cygpath -w "$REPO")"
   script_win="$(cygpath -w "$0")"
@@ -358,6 +376,10 @@ main() {
   exec > >(tee "$log_file") 2>&1
   log "日志镜像: $log_file"
   if [[ "$START_AT" == "check" ]]; then do_check; exit 0; fi
+  # 干净工作树检查必须对续跑入口（data/sea/dist/--detach）同样生效：
+  # assemble 用 HEAD 写 version.json，脏树会出"提交与实际源码不符"的包。
+  # 注意 check（只读预检）不要求干净树。
+  [[ -n "$(git -C "$REPO" status --porcelain)" ]] && die "工作树有未提交改动，出包要求干净工作树（提交或 stash 后重试）"
   do_check
   if [[ $DETACH -eq 1 ]]; then
     log "detach 模式：移交独立计划任务，本终端退出不影响出包"
