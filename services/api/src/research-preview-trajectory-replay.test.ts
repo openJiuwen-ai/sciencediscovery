@@ -37,6 +37,9 @@ import { createResearchSnapshots } from "./research-snapshots.js";
 /** A value no real trajectory of an empty session can produce. */
 const FABRICATED_BYTES = 1_000_000;
 
+/** `research-snapshots.ts:135`: how many unreadable entries a receipt names. */
+const OMISSION_LIMIT = 5;
+
 /**
  * Just enough of the platform ports for a session with no runs, no memory graph
  * and no evolve history: the preview reads the store, and the recorder only has
@@ -147,6 +150,28 @@ test("a replayed walk carries the omissions it recorded, not only its byte count
     const omissions = (input as { omissions?: string[] }).omissions ?? [];
     assert.ok(omissions.includes(missing),
       `the replayed walk reports what the first walk could not read, got: ${JSON.stringify(omissions)}`);
+  } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
+});
+
+test("the omission list is bounded, and says how many entries it withheld", async (t) => {
+  // `TRAJECTORY_OMISSION_LIMIT` exists so an unavailable trajectory store adds a
+  // bounded receipt instead of one line per entry. Seeding a list two past the
+  // limit is the cheapest way to reach the cap and its overflow line: both are
+  // observable in the same receipt.
+  const f = await sessionFixture();
+  try {
+    const seededEntries = Array.from({ length: OMISSION_LIMIT + 2 }, (_, index) => ({
+      unreadable: `trajectory:${f.session.id}:entry-${index}:record unavailable`,
+    }));
+    const seeded = new Map([["full:" + f.session.id, seededEntries]]);
+    const input = await f.snapshots.buildResearchPackageInput(f.project.id, f.session.id, "complete",
+      undefined, undefined, sizing(seeded), true, false);
+    const omissions = (input as { omissions?: string[] }).omissions ?? [];
+    const named = omissions.filter((item) => item.startsWith(`trajectory:${f.session.id}:entry-`));
+    assert.equal(named.length, OMISSION_LIMIT,
+      `the receipt names only the first few, got: ${JSON.stringify(omissions)}`);
+    assert.ok(omissions.some((item) => item.includes("2 more entries could not be read")),
+      `the receipt says how many it withheld, got: ${JSON.stringify(omissions)}`);
   } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
 });
 
