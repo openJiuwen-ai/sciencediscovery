@@ -50,7 +50,21 @@ type PreviewSizing = {
   objectSizes: Map<string, number>; additionalRecordBytes: number;
   hashes: Set<string>; refs: Map<string, ObjectRef>;
   jsonSizes: WeakMap<object, number>; casVisited: WeakSet<object>; refsVisited: WeakSet<object>;
+  /**
+   * Per-session trail of what the trajectory walk produced, so the two profiles
+   * that both ask for `includeFullTrajectory` walk the closure once instead of
+   * twice (#1140 §7.4).
+   *
+   * Only the measured quantities are kept — one byte count, the CAS hashes and
+   * the version refs per entry — never the details themselves, because #1085 was
+   * lost to keeping entries alive.
+   */
+  trajectorySizing?: Map<string, TrajectorySizingEntry[]>;
 };
+
+type TrajectorySizingEntry =
+  | { unreadable: string }
+  | { bytes: number; hashes: string[]; id: string; refs: Array<[string, ObjectRef]> };
 
 export type ExportSessionRecord = PackageHistory & {
   session: Omit<Session, "settingsOverrides"> & { settingsOverrides?: undefined };
@@ -413,20 +427,57 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       const retained = new Set<string>();
       const unreadable: string[] = [];
       let counted = 0;
-      for (const entry of entries) {
-        signal.throwIfAborted();
-        const detail = await readTrajectoryDetail(view, entry, record.session.id, (message) => unreadable.push(message), signal);
-        if (!detail) continue;
-        retained.add(entry.id);
-        if (preview) {
-          const retained = summarize ? necessaryTrajectoryDetail(detail) : detail;
-          // The records skeleton keeps []; add its elements and commas only.
-          // Retain compact refs and weak size memo entries, never all details.
-          preview.additionalRecordBytes += jsonByteLength(retained, preview.jsonSizes) + (counted++ ? 1 : 0);
-          for (const hash of casHashes(retained, preview.casVisited)) preview.hashes.add(hash);
-          for (const ref of versionRefs(retained, preview.refsVisited)) preview.refs.set(`${ref.pool}:${ref.digest}`, ref);
-          if (counted % 32 === 0) await setImmediate();
-        } else details.push(detail);
+      // Keyed by walk shape as well as session: the summarized walk and the full
+      // one measure different byte counts, so replaying across them would
+      // under-count `estimatedBytes`. Only the two `complete` full-trajectory
+      // profiles share a key, which is exactly the pair this cache exists for.
+      const sizingKey = `${summarize ? "summary" : "full"}:${record.session.id}`;
+      const replayed = preview ? preview.trajectorySizing?.get(sizingKey) : undefined;
+      if (replayed) {
+        // This revision's closure was already walked for another profile with the
+        // same shape. Replaying the recorded numbers reproduces `estimatedBytes`
+        // exactly, including the comma accounting that depends on entry order.
+        for (const item of replayed) {
+          if ("unreadable" in item) { unreadable.push(item.unreadable); continue; }
+          retained.add(item.id);
+          if (!preview) continue;
+          preview.additionalRecordBytes += item.bytes + (counted++ ? 1 : 0);
+          for (const hash of item.hashes) preview.hashes.add(hash);
+          for (const [key, ref] of item.refs) preview.refs.set(key, ref);
+        }
+      } else {
+        const measured: TrajectorySizingEntry[] = [];
+        for (const entry of entries) {
+          signal.throwIfAborted();
+          let message: string | undefined;
+          const detail = await readTrajectoryDetail(view, entry, record.session.id, (text) => {
+            // Every walk reports what it could not read, preview or export, replayed
+            // or not: an entry silently dropped from the index with no omission is
+            // the loss #1083 fixed.
+            message = text;
+            unreadable.push(text);
+          }, signal);
+          if (!detail) {
+            if (message) measured.push({ unreadable: message });
+            continue;
+          }
+          retained.add(entry.id);
+          if (preview) {
+            const kept = summarize ? necessaryTrajectoryDetail(detail) : detail;
+            // The records skeleton keeps []; add its elements and commas only.
+            // Retain compact refs and weak size memo entries, never all details.
+            const bytes = jsonByteLength(kept, preview.jsonSizes);
+            const hashes = [...casHashes(kept, preview.casVisited)];
+            const refs: Array<[string, ObjectRef]> = [...versionRefs(kept, preview.refsVisited)]
+              .map((ref): [string, ObjectRef] => [`${ref.pool}:${ref.digest}`, ref]);
+            preview.additionalRecordBytes += bytes + (counted++ ? 1 : 0);
+            for (const hash of hashes) preview.hashes.add(hash);
+            for (const [key, ref] of refs) preview.refs.set(key, ref);
+            measured.push({ bytes, hashes, id: entry.id, refs });
+            if (counted % 32 === 0) await setImmediate();
+          } else details.push(detail);
+        }
+        if (preview) preview.trajectorySizing?.set(sizingKey, measured);
       }
       // Bound the receipt: a session whose trajectory store is unavailable would
       // otherwise add one line per entry to both the package and the preview.
@@ -686,9 +737,22 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     };
   };
 
+  // One trajectory walk per (revision, session), shared by the two profiles that
+  // ask for the full trajectory. Entries are measurements, not the details
+  // themselves, and the whole map is dropped as soon as evidence moves on.
+  const trajectorySizing = new Map<string, { revision: string; bySession: Map<string, TrajectorySizingEntry[]> }>();
+  const trajectorySizingFor = (revision: string): Map<string, TrajectorySizingEntry[]> => {
+    const current = trajectorySizing.get("current");
+    if (current && current.revision === revision) return current.bySession;
+    const bySession = new Map<string, TrajectorySizingEntry[]>();
+    trajectorySizing.clear();
+    trajectorySizing.set("current", { revision, bySession });
+    return bySession;
+  };
   const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal) => {
       const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, hashes: new Set(), refs: new Map(),
-        jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet() };
+        jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(),
+        trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined };
       const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
       const records = input.records as { sessions?: Array<{ session: { id: string }; workspace?: Array<{ path: string }> }> };
       if (sessionId && level === "necessary" && !selectedFiles) {

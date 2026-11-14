@@ -17,6 +17,16 @@ export type DefaultExportPreviews = {
 type WarmMemo = { revision?: string; allowed?: boolean; pendingRevision?: string; pending?: Promise<boolean> };
 const WATCH_IDLE_MS = 30_000;
 
+// There is deliberately no wall-clock budget on `defaults()`. A slow preview and a
+// pathological one look identical from the clock: the first-install fixture in
+// `research-package-http.test.ts` takes ~49 s for one dialog's five profiles, so a
+// threshold low enough to cut a genuinely pathological preview also answers 202 to
+// work that was about to finish. What the dialog needed was to stop lying about
+// the wait — the client names its own cancellation and shows a retrying state —
+// and what the service needed was to stop serialising every session behind one
+// chain. A pending-for-slow rule has to key off queue starvation rather than
+// elapsed time, and that is a separate change.
+
 const isMissingPreviewFile = (error: unknown): boolean =>
   typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
 
@@ -34,7 +44,17 @@ export class ResearchExportPreviews {
   private readonly watching = new Map<string, { projectId: string; sessionId: string; lastSeenAt: number }>();
   private readonly revisions = new Map<string, Promise<string>>();
   private readonly controllers = new Map<AbortController, ExportPreviewOptions>();
-  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * One serial chain *per session*, not one for the whole service.
+   *
+   * The five profiles a dialog asks for share a session's evidence and must stay
+   * ordered against each other — the intra-session hazard below (awaiting a
+   * queue entry admitted later would deadlock) is unchanged, because within one
+   * session the ordering is exactly what it was. What changes is that session A's
+   * dialog no longer serialises behind session B's, and an aborted dialog cannot
+   * make the next session wait behind work nobody wants (#1140 §7.5).
+   */
+  private readonly queues = new Map<string, Promise<unknown>>();
   private closed = false;
   private ticking = false;
   constructor(private readonly revision: (projectId: string, sessionId?: string) => Promise<string>,
@@ -136,7 +156,9 @@ export class ResearchExportPreviews {
     const controller = new AbortController();
     this.controllers.set(controller, options);
     const signal = controller.signal;
-    const work = this.queue.then(async () => {
+    const queueKey = `${options.projectId}:${options.sessionId ?? ""}`;
+    const tail = this.queues.get(queueKey) ?? Promise.resolve();
+    const work = tail.then(async () => {
       await setImmediate();
       signal.throwIfAborted();
       if (this.closed) throw serviceClosed();
@@ -177,7 +199,11 @@ export class ResearchExportPreviews {
       signal.throwIfAborted();
       throw error;
     });
-    this.queue = work.catch(() => undefined);
+    const next = work.catch(() => undefined);
+    this.queues.set(queueKey, next);
+    // Drop the chain once it is idle, so a long-lived service does not keep one
+    // settled promise per session it has ever served.
+    void next.then(() => { if (this.queues.get(queueKey) === next) this.queues.delete(queueKey); });
     this.remember(key, work);
     void work.finally(() => this.controllers.delete(controller)).catch(() => {
       if (this.entries.get(key) === work) this.entries.delete(key);
@@ -236,6 +262,6 @@ export class ResearchExportPreviews {
     this.closed = true; this.watching.clear(); this.entries.clear();
     for (const controller of this.controllers.keys()) controller.abort(serviceClosed());
     // Finish admitted work before its store or workspace can be disposed.
-    await Promise.allSettled([this.queue, ...this.revisions.values()]);
+    await Promise.allSettled([...this.queues.values(), ...this.revisions.values()]);
   }
 }
