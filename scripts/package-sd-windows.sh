@@ -110,7 +110,13 @@ stage_done() {
 mark_done() { mkdir -p "$STAMPS"; echo "$2" > "$STAMPS/$1"; log "阶段 $1 完成（指纹 $2）"; }
 
 head_fp() { git -C "$REPO" rev-parse HEAD; }
-data_fp() { cat "$REPO/uv.lock" "$REPO/services/runner/src/micromamba-releases.json" 2>/dev/null | sha256sum | cut -c1-16; }
+data_fp() {
+  # uv.lock + micromamba manifest + jiuwenswarm 脚本与补丁树（升 tag/改 patch 必须重建）
+  cat "$REPO/uv.lock" "$REPO/services/runner/src/micromamba-releases.json" \
+      "$REPO/scripts/jiuwenswarm.sh" 2>/dev/null \
+    | cat - <(find "$REPO/jiuwen_swarm/patches" -type f 2>/dev/null | sort | xargs -r sha256sum 2>/dev/null) \
+    | sha256sum | cut -c1-16
+}
 
 # --------------------------------------------------------------------------
 # check —— 环境预检（只读）
@@ -158,8 +164,9 @@ do_code() {
   local st; st="$(git -C "$REPO" status -sb | head -1)"
   if [[ "$st" == *"ahead"* ]]; then die "本地领先 origin，请先推送或确认: $st"; fi
   if [[ "$st" == *"behind"* ]]; then
-    if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then die "工作树有未提交改动且落后 origin，请先处理"; fi
-    git -C "$REPO" pull --ff-only origin main
+    if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then die "工作树有未提交改动且落后 upstream，请先处理"; fi
+    # 拉取当前分支自己的 upstream（对 SD_REPO 指向的任意 checkout 出包，不能写死 main）
+    git -C "$REPO" pull --ff-only || die "git pull --ff-only 失败（分支有自有提交无法快进？）"
     fp="$(head_fp)"; log "已快进至 $fp"
   fi
   [[ -n "$(git -C "$REPO" status --porcelain)" ]] && die "工作树有未提交改动，出包要求干净工作树"
@@ -182,11 +189,19 @@ do_code() {
 # data —— 全新数据目录三件套
 do_data() {
   local fp; fp="$(data_fp)"
-  if stage_done data "$fp"; then log "== data: 跳过（uv.lock/manifest 未变） =="; return 0; fi
-  log "== data: sd-services venv（uv sync，Python 按 .python-version=3.12） =="
+  if stage_done data "$fp" && [[ -f "$DATA/envs/sd-services/pyvenv.cfg" \
+      && -f "$DATA/jiuwenswarm/src/.venv/pyvenv.cfg" \
+      && -f "$DATA/jiuwenswarm/src/.sciencediscovery-patches.json" \
+      && -f "$DATA/scientific-envs/bin/micromamba.exe" ]]; then
+    log "== data: 跳过（uv.lock/jw 补丁未变且产物齐全） =="; return 0
+  fi
+  log "== data: sd-services venv（uv sync --locked --extra candidates，Python 按 .python-version=3.12） =="
   mkdir -p "$DATA/envs"
+  # --extra candidates 必须与 scripts/start-stack.mjs 对齐：evolve 侧车的候选程序
+  # 运行时（numpy/pandas/scipy/scikit-learn）；packaged 模式不会再 sync venv，缺了
+  # 安装包内的演进功能整块不可用
   UV_PROJECT_ENVIRONMENT="$(cygpath -w "$DATA/envs/sd-services")" \
-    uv sync --project "$REPO" --locked
+    uv sync --project "$REPO" --locked --extra candidates
 
   log "== data: JiuwenSwarm（clone pinned tag + venv + patches，约 5 分钟） =="
   bash "$REPO/scripts/jiuwenswarm.sh" setup
@@ -252,15 +267,17 @@ do_sea() {
 # build 目录下的进程，不碰用户其他工作。
 clean_orphans() {
   command -v powershell.exe >/dev/null 2>&1 || return 0
-  local repo_win pids
-  repo_win="$(cygpath -w "$REPO" | sed 's/\\/\\\\/g')"
-  pids=$(powershell.exe -NoProfile -Command \
+  # repo_win 保持单反斜杠（cygpath -w 原生输出）；模式里的 \\ 在 bash 双引号内折回单反斜杠，
+  # PowerShell -like 收到的才是真实路径形态。切勿对 repo_win 再做反斜杠转义（双重转义会永不命中）。
+  local repo_win pids=()
+  repo_win="$(cygpath -w "$REPO")"
+  mapfile -t pids < <(powershell.exe -NoProfile -Command \
     "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='node.exe'\" |
      Where-Object { \$_.ExecutablePath -and \$_.ExecutablePath -like '${repo_win}\\win_desktop\\build*' } |
      ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -PassThru | Select-Object -ExpandProperty Id }" \
     2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' || true)
-  if [[ -n "$pids" ]]; then
-    warn "已终止 ${#pids[@]} 个构建残留进程（占用 payload）: $(echo $pids | tr '\n' ' ')"
+  if [[ ${#pids[@]} -gt 0 ]]; then
+    warn "已终止 ${#pids[@]} 个构建残留进程（占用 payload）: ${pids[*]}"
   fi
 }
 
@@ -269,7 +286,7 @@ clean_orphans() {
 # Windows 计划任务。进程完全脱离当前终端/会话，终端关了照跑；日志可回读。
 detach_build() {
   need_cmd schtasks
-  local repo_win script_win bash_win log wrapper tn
+  local repo_win script_win bash_win log log_win wrapper tn extra=""
   repo_win="$(cygpath -w "$REPO")"
   script_win="$(cygpath -w "$0")"
   bash_win=""
@@ -279,18 +296,22 @@ detach_build() {
   [[ -n "$bash_win" ]] || bash_win="$(cygpath -w "$(which bash)")"
   # 日志与 wrapper 落 .package-stamps/（运行时产物，已 gitignore），不弄脏仓库
   log="$STAMPS/package-$(basename "$REPO")-$START_AT.log"
-  local log_win; log_win="$(cygpath -w "$log")"
+  log_win="$(cygpath -w "$log")"
   wrapper="$STAMPS/package-dist-$(basename "$REPO").cmd"
   tn="SD-pkg-$(basename "$REPO")-$START_AT"
+  # --force 必须透传，否则计划任务里 stamp 生效会静默产出旧包
+  [[ $FORCE -eq 1 ]] && extra="--force"
   cat > "$wrapper" <<EOF
 @echo off
 cd /d $repo_win
 set SD_REPO=$repo_win
-"$bash_win" "$script_win" $START_AT > "$log_win" 2>&1
+"$bash_win" "$script_win" $START_AT $extra > "$log_win" 2>&1
 echo PKG_EXIT=%ERRORLEVEL% >> "$log_win"
 EOF
-  schtasks //create //tn "$tn" //tr "$(cygpath -w "$wrapper")" //sc once //st 23:59 //f >/dev/null 2>&1
-  schtasks //run //tn "$tn" >/dev/null 2>&1
+  schtasks //create //tn "$tn" //tr "$(cygpath -w "$wrapper")" //sc once //st 23:59 //f >/dev/null 2>&1 \
+    || die "计划任务创建失败（权限/组策略？）: $tn"
+  schtasks //run //tn "$tn" >/dev/null 2>&1 \
+    || die "计划任务启动失败: $tn"
   log "已挂独立计划任务: $tn（进程脱离本终端，关掉也照跑）"
   log "  日志: $log_win（出现 PKG_EXIT 即终态）"
   log "  收尾: schtasks //delete //tn \"$tn\" //f"
@@ -300,7 +321,9 @@ EOF
 # dist —— shell 打包 + payload 组装 + NSIS 安装包
 do_dist() {
   local fp; fp="$(head_fp)"
-  local exe; exe=$(ls -1 "$WIN_DESKTOP"/release/ScienceDiscovery-*-win-x64-setup.exe 2>/dev/null | head -1)
+  # 首次出包 release/ 为空时 ls 返回 2，set -e 会在赋值处直接终止 —— 必须吞掉退出码
+  local exe=""
+  exe=$(ls -1 "$WIN_DESKTOP"/release/ScienceDiscovery-*-win-x64-setup.exe 2>/dev/null | head -1) || true
   if stage_done dist "$fp" && [[ -n "$exe" ]]; then
     log "== dist: 跳过（HEAD $fp 已出包: $(basename "$exe")） =="; return 0
   fi
@@ -317,9 +340,10 @@ do_dist() {
   log "== dist: NSIS 安装包（1.5GB payload 压缩，约 15-30 分钟） =="
   CODEBUDDY_SAFE_DELETE_ENABLED=0 pnpm -C "$WIN_DESKTOP" exec electron-builder --win
 
-  local exe; exe=$(ls -1 "$WIN_DESKTOP"/release/ScienceDiscovery-*-win-x64-setup.exe 2>/dev/null | head -1)
-  [[ -n "$exe" ]] || die "未找到安装包产物"
-  log "出包完成: $exe ($(du -h "$exe" | cut -f1))"
+  local exe2=""
+  exe2=$(ls -1 "$WIN_DESKTOP"/release/ScienceDiscovery-*-win-x64-setup.exe 2>/dev/null | head -1) || true
+  [[ -n "$exe2" ]] || die "未找到安装包产物"
+  log "出包完成: $exe2 ($(du -h "$exe2" | cut -f1))"
   mark_done dist "$fp"
 }
 
