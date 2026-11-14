@@ -8,9 +8,11 @@ type CacheState = { entries: Map<string, Promise<Preview>>; defaults: Map<string
 /**
  * How long the dialog waits before giving up on a preview and asking again.
  *
- * The server answers a preview it cannot finish in its own budget with the
- * existing pending contract, so this is the client's belt on top of that: it
- * covers a request that is merely slow rather than refused.
+ * This budget is the only bound on the wait: the server deliberately has no
+ * clock of its own for a preview (see `research-export-previews.ts`), it keeps
+ * working on the request it was given and memoises the result per revision, so
+ * the retry that follows an abort finds the preview done rather than starting
+ * it over.
  */
 export const PREVIEW_BUDGET_MS = 10_000;
 
