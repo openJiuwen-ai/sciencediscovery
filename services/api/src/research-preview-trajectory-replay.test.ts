@@ -131,6 +131,25 @@ test("an entry whose record cannot be read is reported in omissions, preview or 
       `the export names the entry it could not read, got: ${JSON.stringify(omissions)}`);
   } finally { await rm(root, { recursive: true, force: true }).catch(() => undefined); }
 });
+test("a replayed walk carries the omissions it recorded, not only its byte counts", async (t) => {
+  // `research-snapshots.ts:441` is a second, independent push: a replaying
+  // profile never reads a record, so what it knows about unreadable entries can
+  // only come from the walk that measured them. Seeding one is the only way to
+  // reach it — this session has no trajectory at all — and deleting that push
+  // is the mutation this case is here to catch.
+  const f = await sessionFixture();
+  try {
+    const missing = `trajectory:${f.session.id}:gone-entry:record unavailable`;
+    const seeded = new Map([["full:" + f.session.id, [{ unreadable: missing }]]]);
+    const preview = sizing(seeded);
+    const input = await f.snapshots.buildResearchPackageInput(f.project.id, f.session.id, "complete",
+      undefined, undefined, preview, true, false);
+    const omissions = (input as { omissions?: string[] }).omissions ?? [];
+    assert.ok(omissions.includes(missing),
+      `the replayed walk reports what the first walk could not read, got: ${JSON.stringify(omissions)}`);
+  } finally { await rm(f.root, { recursive: true, force: true }).catch(() => undefined); }
+});
+
 test("a summary-shaped entry does not feed a full-trajectory walk", async (t) => {
   // The defect the reviewers caught: one key per session let a summarized walk
   // hand its smaller numbers to a full one. The key is per walk shape now, so a
