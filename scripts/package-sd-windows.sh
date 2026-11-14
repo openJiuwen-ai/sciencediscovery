@@ -200,6 +200,12 @@ do_code() {
   pnpm -C "$REPO" install --frozen-lockfile
   log "== code: pnpm build（全 workspace，约 2-4 分钟） =="
   pnpm -C "$REPO" build
+  # 构建后同样复核产物（pnpm build rc=0 但产物空时不能让 stamp 盖章）
+  for f in services/api/dist/server.js services/runner/dist/server.js \
+           apps/web/dist/index.html apps/desktop/dist/index.html \
+           packages/executor/dist/runner-bundle.js; do
+    [[ -e "$REPO/$f" ]] || die "构建产物缺失: $f（pnpm build 退出 0 但未产出）"
+  done
   mark_done code "$fp"
 }
 
@@ -265,16 +271,19 @@ do_sea() {
   local nrc='export PATH="$HOME/opt/node-'"$WSL_NODE_VER"'-linux-x64/bin:$PATH"'
   if ! wsl.exe -d "$WSL_DISTRO" -- bash -lc "$nrc; command -v node >/dev/null"; then
     log "== sea: WSL 内安装用户级 Node $WSL_NODE_VER =="
-    # 与 micromamba 下载对齐：钉版本 + SHASUMS256 校验后再解包，防劫持
+    # 与 micromamba 下载对齐：钉版本 + SHASUMS256 校验后再解包，防劫持。
+    # 落盘文件名必须与 SHASUMS256 清单里的名字一致，否则 sha256sum -c 按清单
+    # 找文件必然 FAILED
+    local nf="node-${WSL_NODE_VER}-linux-x64.tar.xz"
     wsl.exe -d "$WSL_DISTRO" -- bash -lc \
       'set -e
        mkdir -p ~/opt && cd /tmp
-       curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/node-'"$WSL_NODE_VER"'-linux-x64.tar.xz" -o node.tar.xz
+       curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/'"$nf"'" -o "'"$nf"'"
        curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/SHASUMS256.txt" -o SHASUMS256.txt
-       grep " node-'"$WSL_NODE_VER"'-linux-x64.tar.xz\$" SHASUMS256.txt | sha256sum -c -
-       tar -xJf node.tar.xz -C ~/opt
-       rm -f node.tar.xz SHASUMS256.txt' \
-      || die "WSL Node 安装失败（网络或校验不通过），可手动装到 ~/opt 后重试"
+       grep " '"$nf"'$" SHASUMS256.txt | sha256sum -c -
+       tar -xJf "'"$nf"'" -C ~/opt
+       rm -f "'"$nf"'" SHASUMS256.txt' \
+      || die "WSL Node 安装失败（网络或 SHA256 校验不通过），可手动装到 ~/opt 后重试"
   fi
 
   log "== sea: 构建 Runner SEA（linux-x64 + linux-arm64，约 5-10 分钟） =="
