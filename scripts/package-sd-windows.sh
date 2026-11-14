@@ -143,7 +143,9 @@ do_check() {
   local uvv; uvv=$(uv --version 2>/dev/null | awk '{print $2}')
   ver_ok "$uvv" "0.9" && pass "uv >= 0.9" "$uvv" || bad "uv >= 0.9" "实测 ${uvv:-none}"
 
-  if [[ "$(git config --global core.longpaths 2>/dev/null || true)" == "true" ]]; then
+  # 合并视图读取（system -> global -> local 继承）；只查 --global 会把
+  # system 层已开启的机器误判为未开启
+  if [[ "$(git -C "$REPO" config core.longpaths 2>/dev/null || true)" == "true" ]]; then
     pass "core.longpaths" "true"
   else
     bad "core.longpaths" "未开启（git config --global core.longpaths true）"
@@ -175,6 +177,12 @@ do_check() {
 # code —— 同步代码并全量构建
 do_code() {
   local fp; fp="$(head_fp)"
+  # 硬产物必须先复核（与 data/sea/dist 一致）：stamp 命中但产物被删时不能跳过
+  for f in services/api/dist/server.js services/runner/dist/server.js \
+           apps/web/dist/index.html apps/desktop/dist/index.html \
+           packages/executor/dist/runner-bundle.js; do
+    [[ -e "$REPO/$f" ]] || { warn "构建产物缺失: $f（code stamp 作废，重建）"; rm -f "$STAMPS/code"; break; }
+  done
   if stage_done code "$fp"; then log "== code: 跳过（HEAD $fp 已构建） =="; return 0; fi
   log "== code: git 同步 =="
   git -C "$REPO" fetch origin
@@ -192,13 +200,6 @@ do_code() {
   pnpm -C "$REPO" install --frozen-lockfile
   log "== code: pnpm build（全 workspace，约 2-4 分钟） =="
   pnpm -C "$REPO" build
-
-  # 硬产物必须存在（assemble 的 stale-dist gate 同样检查，这里提前失败更友好）
-  for f in services/api/dist/server.js services/runner/dist/server.js \
-           apps/web/dist/index.html apps/desktop/dist/index.html \
-           packages/executor/dist/runner-bundle.js; do
-    [[ -e "$REPO/$f" ]] || die "构建产物缺失: $f"
-  done
   mark_done code "$fp"
 }
 
@@ -264,9 +265,16 @@ do_sea() {
   local nrc='export PATH="$HOME/opt/node-'"$WSL_NODE_VER"'-linux-x64/bin:$PATH"'
   if ! wsl.exe -d "$WSL_DISTRO" -- bash -lc "$nrc; command -v node >/dev/null"; then
     log "== sea: WSL 内安装用户级 Node $WSL_NODE_VER =="
+    # 与 micromamba 下载对齐：钉版本 + SHASUMS256 校验后再解包，防劫持
     wsl.exe -d "$WSL_DISTRO" -- bash -lc \
-      'mkdir -p ~/opt && curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/node-'"$WSL_NODE_VER"'-linux-x64.tar.xz" -o /tmp/node.tar.xz && tar -xJf /tmp/node.tar.xz -C ~/opt && rm /tmp/node.tar.xz' \
-      || die "WSL Node 安装失败（检查网络），可手动装到 ~/opt 后重试"
+      'set -e
+       mkdir -p ~/opt && cd /tmp
+       curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/node-'"$WSL_NODE_VER"'-linux-x64.tar.xz" -o node.tar.xz
+       curl -fsSL "https://nodejs.org/dist/'"$WSL_NODE_VER"'/SHASUMS256.txt" -o SHASUMS256.txt
+       grep " node-'"$WSL_NODE_VER"'-linux-x64.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+       tar -xJf node.tar.xz -C ~/opt
+       rm -f node.tar.xz SHASUMS256.txt' \
+      || die "WSL Node 安装失败（网络或校验不通过），可手动装到 ~/opt 后重试"
   fi
 
   log "== sea: 构建 Runner SEA（linux-x64 + linux-arm64，约 5-10 分钟） =="
@@ -312,6 +320,8 @@ detach_build() {
     [[ -f "$c" ]] && { bash_win="$(cygpath -w "$c")"; break; }
   done
   [[ -n "$bash_win" ]] || bash_win="$(cygpath -w "$(which bash)")"
+  # cmd 特殊字符（& % ^）在 wrapper 里会被截断/展开，拒绝这种路径，避免对错误的树出包
+  [[ "$repo_win" != *[\&\%\^]* ]] || die "仓库路径含 cmd 特殊字符（& % ^），--detach 不可用：请换目录或前台运行"
   # 日志与 wrapper 落 .package-stamps/（运行时产物，已 gitignore），不弄脏仓库
   log="$STAMPS/package-$(basename "$REPO")-$START_AT.log"
   log_win="$(cygpath -w "$log")"
