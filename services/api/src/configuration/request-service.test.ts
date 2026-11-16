@@ -13,7 +13,7 @@ import { normalizeConfigurationFields, normalizeTokenSchema } from "./schema-nor
 import { normalizeChoices } from "./choices.js";
 import { configurationNeedKey } from "./need-key.js";
 
-function harness(options: { capabilityId?: ConfigurationAdapter["id"]; verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean; choiceOptions?: ConfigurationHost["choiceOptions"]; applyRunOverlay?: ConfigurationHost["applyRunOverlay"] } = {}) {
+function harness(options: { capabilityId?: ConfigurationAdapter["id"]; verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean; choiceOptions?: ConfigurationHost["choiceOptions"]; applyRunOverlay?: ConfigurationHost["applyRunOverlay"]; now?: () => Date } = {}) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE domain_settings (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO domain_settings VALUES (1, '[]')");
   const repo = new ConfigurationRepository(db);
@@ -38,7 +38,7 @@ function harness(options: { capabilityId?: ConfigurationAdapter["id"]; verify?: 
     queue = operation.then(() => undefined, () => undefined); return operation;
   } };
   const registry = new ConfigurationRegistry().register(adapter);
-  const service = new ConfigurationRequestService({ repository: repo, registry, host });
+  const service = new ConfigurationRequestService({ repository: repo, registry, host, now: options.now });
   return { db, repo, service, registry, host, adapter, get writes() { return writes; }, stop() { generation++; }, changeVersion() { version++; }, archive() { writable = false; } };
 }
 const proposal = { capabilityId: "connector.enable" as const, values: { connectorId: "pubmed" }, runId: "run-1" };
@@ -435,6 +435,20 @@ for (const completed of [true, false]) test(`Manual settings ${completed}: durab
   await assert.rejects(restarted.confirmSettings("session", view.id, { ...input, completed: !completed }), { code: "STALE_CONFIGURATION_PREVIEW" });
   await assert.rejects(restarted.decide("session", view.id, { revision: view.revision, previewDigest: view.previewDigest!, decision: "apply", selectedOptionId: view.selectedOptionId }), { code: "STALE_CONFIGURATION_PREVIEW" });
   assert.equal(h.repo.listOutbox().length, 1); assert.equal(h.writes, 0);
+  h.db.close();
+});
+
+test("Manual settings confirmation reads the clock once for confirmedAt and updatedAt", async () => {
+  // A clock that advances 1 ms per call reproduces the CI flake in #1168:
+  // confirmSettings read the clock twice in one transaction, so confirmedAt
+  // and updatedAt could land on different milliseconds.
+  let tick = Date.parse("2026-11-16T05:49:16.000Z");
+  const now = () => new Date(tick += 1);
+  const h = harness({ capabilityId: "timeouts.configure", now });
+  const view = await h.service.propose("session", { ...proposal, capabilityId: "timeouts.configure", protocolVersion: 3 });
+  const input = { revision: view.revision, stateVersion: view.stateVersion, destination: "timeouts" as const, completed: true };
+  const result = await h.service.confirmSettings("session", view.id, input, "manual-answer");
+  assert.equal(result.settingsConfirmation?.confirmedAt, result.updatedAt);
   h.db.close();
 });
 
