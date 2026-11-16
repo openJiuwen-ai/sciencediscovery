@@ -22,6 +22,11 @@ function start(args) {
   return ready;
 }
 
+async function stop(child) {
+  child.kill("SIGTERM");
+  await new Promise((resolve) => child.once("exit", resolve));
+}
+
 test("replays recorded response and reports consumption", async () => {
   const root = await mkdtemp(join(tmpdir(), "model-replay-"));
   try {
@@ -38,10 +43,37 @@ test("replays recorded response and reports consumption", async () => {
       assert.equal(response.status, 200);
       assert.equal(await response.text(), '{"choices":[{"message":{"content":"ok"}}]}');
       const status = await (await fetch(ready.statusUrl)).json();
-      assert.deepEqual(status, { mode: "capture", total: 1, consumed: 1, requests: 1, failures: [] });
+      assert.deepEqual(status, { mode: "capture", total: 1, consumed: 1, requests: 1, matched: 1, fallback: 0, failures: [] });
     } finally {
-      child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
+      await stop(child);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("matches concurrent recorded prompts independent of arrival order", async () => {
+  const root = await mkdtemp(join(tmpdir(), "model-replay-match-"));
+  try {
+    const record = (prompt, output) => ({
+      request: { body: { messages: [{ role: "user", content: prompt }] } },
+      response: { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ choices: [{ message: { content: output } }] }) },
+    });
+    await writeFile(join(root, "001.json"), JSON.stringify(record("alpha", "A")));
+    await writeFile(join(root, "002.json"), JSON.stringify(record("bravo", "B")));
+    const { child, ready } = await start(["--capture-dir", root, "--token", "test-token"]);
+    try {
+      const request = (prompt) => fetch(ready.baseUrl + "/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+      });
+      assert.equal((await (await request("bravo")).json()).choices[0].message.content, "B");
+      assert.equal((await (await request("alpha")).json()).choices[0].message.content, "A");
+      const status = await (await fetch(ready.statusUrl)).json();
+      assert.equal(status.matched, 2);
+      assert.equal(status.fallback, 0);
+    } finally {
+      await stop(child);
     }
   } finally {
     await rm(root, { recursive: true, force: true });

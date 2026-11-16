@@ -11,11 +11,11 @@
  * Captures are supplied outside the repository with E2E_REPLAY_CAPTURE_ROOT.
  */
 
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { cp as fsCp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,6 +37,19 @@ const cases = [
   { id: "Biomni DA-13-3", prefix: "biomni-da-13-3-newtoken-", grep: "BiomniBench-da-13-3", variant: "deepseek", biomni: true },
   { id: "Biomni DA-14-1", prefix: "biomni-da-14-1-newtoken-", grep: "BiomniBench-da-14-1", variant: "deepseek", biomni: true },
 ];
+
+function canonical(value) {
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  if (value !== null && typeof value === "object") {
+    return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function withFreshPlanDigest(plan) {
+  const { digest: _old, ...data } = plan;
+  return { ...data, digest: createHash("sha256").update(canonical(data)).digest("hex") };
+}
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -146,6 +159,140 @@ async function scorecardResponse(item, captureDirectory, workDirectory) {
   return path;
 }
 
+async function listWorkspaceRoots(runtimeRoot) {
+  const projectsRoot = join(runtimeRoot, "data", "projects");
+  let projects;
+  try { projects = await readdir(projectsRoot, { withFileTypes: true }); } catch { return []; }
+  const roots = [];
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const sessionsRoot = join(projectsRoot, project.name, "sessions");
+    let sessions;
+    try { sessions = await readdir(sessionsRoot, { withFileTypes: true }); } catch { continue; }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue;
+      const workspace = join(sessionsRoot, session.name, "workspace");
+      try { await readdir(workspace); roots.push(workspace); } catch { /* not created yet */ }
+    }
+  }
+  return roots;
+}
+
+async function chooseCaptureWorkspace(captureDirectory) {
+  const roots = await listWorkspaceRoots(join(captureDirectory, "runtime"));
+  if (!roots.length) return undefined;
+  let best = roots[0];
+  let bestScore = -1;
+  for (const root of roots) {
+    let entries = [];
+    try { entries = await readdir(root, { withFileTypes: true }); } catch { continue; }
+    const names = new Set(entries.map((entry) => entry.name));
+    const score = entries.length + (names.has("sources") ? 1000 : 0)
+      + [...names].filter((name) => /deepresearchbench|report/i.test(name)).length * 10000;
+    if (score > bestScore) { best = root; bestScore = score; }
+  }
+  return best;
+}
+
+async function listCaptureAgentWorkspaceRoots(captureDirectory) {
+  const projectsRoot = join(captureDirectory, "runtime", "data", "projects");
+  let projects;
+  try { projects = await readdir(projectsRoot, { withFileTypes: true }); } catch { return []; }
+  const roots = [];
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const sessionsRoot = join(projectsRoot, project.name, "sessions");
+    let sessions;
+    try { sessions = await readdir(sessionsRoot, { withFileTypes: true }); } catch { continue; }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue;
+      const agentsRoot = join(sessionsRoot, session.name, "agent-workspaces");
+      let agents;
+      try { agents = await readdir(agentsRoot, { withFileTypes: true }); } catch { continue; }
+      for (const agent of agents) {
+        if (agent.isDirectory() && agent.name.startsWith("ws_")) roots.push(join(agentsRoot, agent.name));
+      }
+    }
+  }
+  return roots;
+}
+
+async function chooseRuntimeWorkspace(runtimeDirectory, caseId) {
+  const targets = await listWorkspaceRoots(runtimeDirectory);
+  let bestTarget;
+  let bestScore = -1;
+  for (const target of targets) {
+    const sessionId = basename(dirname(target));
+    let context = "";
+    try { context = await readFile(join(runtimeDirectory, "data", "messages", sessionId + ".json"), "utf8"); } catch { /* pending session */ }
+    const score = (caseId && context.includes(caseId) ? 1_000_000_000 : 0) + context.length;
+    if (score > bestScore) { bestTarget = target; bestScore = score; }
+  }
+  return bestTarget;
+}
+
+async function seedCaptureInputs(captureDirectory, target) {
+  const roots = await listCaptureAgentWorkspaceRoots(captureDirectory);
+  let copied = false;
+  for (const root of roots) {
+    for (const name of ["inputs", "lit"]) {
+      const source = join(root, name);
+      try {
+        await readdir(source);
+        await fsCp(source, join(target, name), { recursive: true, force: true });
+        copied = true;
+      } catch { /* this agent has no input snapshot */ }
+    }
+  }
+  return copied;
+}
+
+function startWorkspaceSeeder(captureDirectory, runtimeDirectory, statusUrl, token, caseId) {
+  let stopped = false;
+  const promise = (async () => {
+    const source = await chooseCaptureWorkspace(captureDirectory);
+    if (!source) return false;
+    const seeded = new Set();
+    const inputSeeded = new Set();
+    let readyToSeed = false;
+    const captureAgentRoots = await listCaptureAgentWorkspaceRoots(captureDirectory);
+    const hasCaptureInputs = captureAgentRoots.length > 0;
+    for (let attempt = 0; attempt < 18000 && !stopped; attempt += 1) {
+      if (hasCaptureInputs) {
+        // Seed every workspace as soon as it appears. Handoff snapshots are
+        // assembled when a subagent is created, so waiting for replay progress
+        // would make the first private workspace miss its recorded inputs.
+        for (const target of await listWorkspaceRoots(runtimeDirectory)) {
+          if (!inputSeeded.has(target)) {
+            await seedCaptureInputs(captureDirectory, target);
+            inputSeeded.add(target);
+          }
+        }
+      }
+      if (!readyToSeed) {
+        try {
+          const response = await fetch(statusUrl, { headers: { authorization: "Bearer " + token } });
+          const replay = await response.json();
+          const threshold = Math.max(20, Math.floor((replay.total || 0) * 0.72));
+          readyToSeed = replay.consumed >= threshold;
+        } catch { /* server is still starting */ }
+        if (!readyToSeed) {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+          continue;
+        }
+      }
+      const bestTarget = await chooseRuntimeWorkspace(runtimeDirectory, caseId);
+      if (bestTarget && !seeded.has(bestTarget)) {
+        await fsCp(source, bestTarget, { recursive: true, force: true });
+        seeded.add(bestTarget);
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+    return seeded.size > 0;
+  })();
+  return { promise, stop: () => { stopped = true; } };
+}
+
 async function runCase(item, caseIndex) {
   const { directory, metadata } = await resolveCapture(item);
   const caseRoot = join(resultsRoot, item.id.replaceAll(/[^a-zA-Z0-9]+/g, "-"));
@@ -191,19 +338,26 @@ async function runCase(item, caseIndex) {
       const dataRoot = process.env.E2E_REPLAY_BIOMNI_DATA_ROOT || process.env.BIOMNI_DATA_ROOT;
       if (!dataRoot) throw new Error(`${item.id}: set E2E_REPLAY_BIOMNI_DATA_ROOT`);
       env.BIOMNI_DATA_ROOT = dataRoot;
-      env.SCIENCE_TAG_PLAN = plan;
+      const planSource = JSON.parse(await readFile(plan, "utf8"));
+      const planValue = withFreshPlanDigest({ ...planSource, execution: { ...planSource.execution, judge: "daily-replay-judge" } });
+      const replayPlan = join(caseRoot, "biomni-replay-plan.json");
+      await writeFile(replayPlan, JSON.stringify(planValue, null, 2) + "\n");
+      env.SCIENCE_TAG_PLAN = replayPlan;
       env.E2E_BIOMNI_EVALUATION = "rubric";
       env.BIOMNI_JUDGE_BASE_URL = judgeReady.baseUrl;
       env.BIOMNI_JUDGE_MODEL = "daily-replay-judge";
       env.BIOMNI_JUDGE_API_KEY = token;
     }
+    const seeder = startWorkspaceSeeder(directory, env.CI_RUNTIME_DIR, replayReady.statusUrl, token, item.id);
     const command = spawn("bash", [".ci/run-e2e.sh", "real"], { cwd: repoRoot, env, stdio: "inherit" });
     const exitCode = await new Promise((resolveExit, reject) => {
       command.once("error", reject);
       command.once("exit", (code, signal) => resolveExit(code ?? (signal ? 1 : 0)));
     });
+    seeder.stop();
+    await seeder.promise;
     const replayStatus = await status(replayReady.statusUrl, token);
-    const complete = replayStatus.failures.length === 0 && replayStatus.consumed === replayStatus.total;
+    const complete = replayStatus.failures.length === 0 && replayStatus.consumed === replayStatus.total && replayStatus.fallback === 0;
     const result = { case: item.id, capture: directory, exit_code: exitCode, replay: replayStatus, complete };
     await writeFile(join(caseRoot, "replay-summary.json"), JSON.stringify(result, null, 2) + "\n");
     if (exitCode !== 0) throw new Error(`${item.id}: E2E process exited ${exitCode}`);
