@@ -349,8 +349,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         patchExport(record.id, { task: next });
         await persistArchiveRef.current(completed);
       } else if (next.status === "failed") {
-        patchExport(record.id, { task: next, phase: "pack-failed", error: next.error });
-        pushFlash("error", next.error ?? t.failed);
+        patchExport(record.id, { task: next, phase: "pack-failed", error: taskErrorMessage(next.error) });
+        pushFlash("error", taskErrorMessage(next.error) ?? t.failed);
       } else {
         patchExport(record.id, { task: next });
       }
