@@ -152,6 +152,7 @@ async function runCase(item, caseIndex) {
   await mkdir(caseRoot, { recursive: true });
   const token = `daily-replay-${randomBytes(12).toString("hex")}`;
   const model = metadata.model || process.env.E2E_REPLAY_MODEL || "replay-model";
+  const useSwarm = item.id.startsWith("DRB-") || item.id === "TC-E2E-01" || item.biomni === true;
   const replay = startServer(["--capture-dir", join(directory, "model-calls"), "--token", token]);
   let judge;
   try {
@@ -167,7 +168,8 @@ async function runCase(item, caseIndex) {
       CI_ALLOW_REAL: "1",
       E2E_REAL: "1",
       E2E_REPLAY: "1",
-      CI_E2E_BACKEND: process.env.CI_E2E_BACKEND || "legacy",
+      CI_E2E_BACKEND: useSwarm ? "jiuwenswarm" : (process.env.CI_E2E_BACKEND || "legacy"),
+      E2E_SWARM_TASK: useSwarm ? "1" : (process.env.E2E_SWARM_TASK || "0"),
       E2E_LLM_BASE_URL: replayReady.baseUrl,
       E2E_LLM_TOKEN: token,
       E2E_LLM_MODEL: model,
