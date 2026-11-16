@@ -4,7 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -398,7 +398,7 @@ test("a package carrying the evolve runs and their artifact reports no search lo
   // AND carries the run records is restored, so the "searches were not carried"
   // omission is absent — this is the path #1019 review F1 found was never tested
   // at the import boundary.
-  const { request, project, root } = await fixture(context);
+  const { request, project } = await fixture(context);
   const target = await project();
   const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
     method: "POST", body: Buffer.from(evidencePackage(false, true, true)),
@@ -411,10 +411,12 @@ test("a package carrying the evolve runs and their artifact reports no search lo
   // still be told it came back without their code.
   assert.ok(receipt.omissions.some((item) => item.includes("candidate source")),
     "the receipt names the candidate sources it could not carry");
-  // The /api/evolve/runs route is gated on the external evolve service being
-  // ready, which this fixture never provisions, so the restoration is read back
-  // from the local EvolutionStore the import wrote it into.
-  const restoredRun = JSON.parse(await readFile(resolve(root, "evolution", "runs", "evolve-run-source", "run.json"), "utf8")) as { sessionId: string };
+  // The /api/evolve/runs route answers while the evolve service is not
+  // initialized, so the restoration is read back through the same endpoint the
+  // session view uses rather than off disk.
+  const restored = await (await request(`/api/evolve/runs?sessionId=${target.firstSession.id}`)).json() as Array<{ id: string; sessionId: string }>;
+  const restoredRun = restored.find((run) => run.id === "evolve-run-source");
+  assert.ok(restoredRun, "the carried run is restored under the imported session");
   assert.equal(restoredRun.sessionId, target.firstSession.id, "the carried run is restored under the imported session");
 });
 
