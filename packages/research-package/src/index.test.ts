@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, sha256, type ResearchPackageExportProfile } from "./index.js";
+import { gunzipSync } from "node:zlib";
+import { Writable } from "node:stream";
+import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, sha256, type ResearchPackageExportProfile } from "./index.js";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
 
@@ -131,4 +133,81 @@ test("large byte parser treats prototype keys as data and rejects invalid traili
   assert.equal(parsed.escaped, "🧪");
   assert.throws(() => parseJsonBytes(Buffer.concat([bytes, Buffer.from(" false")])), /Invalid/);
   assert.throws(() => parseJsonBytes(Buffer.from(`{"padding":${prefix},}`)), /Invalid/);
+});
+
+test("the archive-size helper matches the tar the exporter really builds, and the cap refuses at +1 byte", () => {
+  const object = new TextEncoder().encode("boundary payload\n");
+  const input = { source: { projectId: "p-cap", title: "Cap boundary" }, createdAt: "2026-01-01T00:00:00.000Z",
+    records: { claims: [{ id: "c1" }] }, objects: [{ path: "objects/" + sha256(object), bytes: object }] };
+  const predicted = researchPackageArchiveBytes(input);
+  const bytes = createResearchPackage(input).bytes;
+  // The claim is exactness, so compare against the real uncompressed tar, not against a second estimate.
+  assert.equal(predicted, gunzipSync(bytes).byteLength);
+  assert.equal(researchPackageFits(input, predicted), true);
+  assert.equal(researchPackageFits(input, predicted - 1), false);
+  assert.doesNotThrow(() => createResearchPackage(input, predicted));
+  assert.throws(() => createResearchPackage(input, predicted - 1), /exceeds the archive size limit/);
+});
+
+test("the package cap is one resolved value with a clamped environment override", () => {
+  assert.equal(resolveResearchPackageMaxBytes(""), RESEARCH_PACKAGE_DEFAULT_MAX_BYTES);
+  assert.equal(resolveResearchPackageMaxBytes(""), RESEARCH_PACKAGE_DEFAULT_MAX_BYTES);
+  // A bad value fails at startup instead of running at a cap nobody chose.
+  assert.throws(() => resolveResearchPackageMaxBytes("not-a-number"), /positive integer/);
+  assert.throws(() => resolveResearchPackageMaxBytes("5g"), /positive integer/);
+  assert.throws(() => resolveResearchPackageMaxBytes("1"), /between/);
+  assert.equal(resolveResearchPackageMaxBytes(String(RESEARCH_PACKAGE_MIN_MAX_BYTES)), RESEARCH_PACKAGE_MIN_MAX_BYTES);
+  // Above the ceiling the value is rejected rather than quietly lowered: the ceiling
+  // follows this pipeline's ~3x-payload cost, and a silent clamp would run at a cap
+  // the operator never chose.
+  assert.throws(() => resolveResearchPackageMaxBytes(String(9 * 1024 * 1024 * 1024)), /between/);
+  assert.throws(() => resolveResearchPackageMaxBytes(String(999 * 1024 * 1024 * 1024)), /between/);
+  assert.equal(resolveResearchPackageMaxBytes(String(RESEARCH_PACKAGE_MAX_MAX_BYTES)), RESEARCH_PACKAGE_MAX_MAX_BYTES);
+});
+
+test("the streaming writer emits the same archive and reads each source twice, never buffering it", async () => {
+  const payload = new TextEncoder().encode("streamed evidence row\n".repeat(4096));
+  const digest = sha256(payload);
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const base = { source: { projectId: "p-stream", title: "Streaming" }, createdAt, records: { claims: [{ id: "c1" }] } };
+  const inMemory = createResearchPackage({ ...base, objects: [{ path: "objects/" + digest, bytes: payload }] }).bytes;
+
+  let opens = 0;
+  const streamed = {
+    ...base,
+    objects: [{
+      path: "objects/" + digest,
+      sizeBytes: payload.byteLength,
+      open: () => {
+        opens += 1;
+        // Two chunks, so the writer has to reassemble a payload it never holds whole.
+        return (async function* () { yield payload.subarray(0, 17); yield payload.subarray(17); })();
+      },
+    }],
+  };
+  const chunks: Buffer[] = [];
+  const sink = new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });
+  const receipt = await writeResearchPackage(streamed, sink);
+  const written = Buffer.concat(chunks);
+
+  assert.deepEqual(written, Buffer.from(inMemory));
+  assert.equal(receipt.packageChecksum, sha256(written));
+  assert.equal(opens, 2, "hashed in one pass, written in the next");
+  // The manifest still carries the real checksum and size of a source it only streamed.
+  const inspected = inspectResearchPackage(new Uint8Array(written));
+  assert.deepEqual(inspected.files.find((entry) => entry.kind === "object"),
+    { path: "objects/" + digest, sizeBytes: payload.byteLength, checksum: digest, kind: "object" });
+});
+
+test("the streaming writer refuses an over-cap package before writing anything", async () => {
+  const payload = new TextEncoder().encode("x".repeat(2048));
+  const digest = sha256(payload);
+  const input = { source: { projectId: "p", title: "cap" }, createdAt: "2026-01-01T00:00:00.000Z", records: {},
+    objects: [{ path: "objects/" + digest, bytes: payload }] };
+  const size = researchPackageArchiveBytes(input);
+  const chunks: Buffer[] = [];
+  const sink = new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });
+  await assert.rejects(() => writeResearchPackage(input, sink, size - 1), /exceeds the archive size limit/);
+  assert.equal(chunks.length, 0, "nothing reached the sink");
+  await assert.doesNotReject(() => writeResearchPackage(input, sink, size));
 });

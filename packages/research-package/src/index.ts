@@ -1,7 +1,12 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { createHash } from "node:crypto";
-import { gunzipSync, gzip, gzipSync } from "node:zlib";
+import { createReadStream } from "node:fs";
+import { open, stat } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { Writable } from "node:stream";
+import { createGunzip, createGzip, gunzipSync, gzip, gzipSync } from "node:zlib";
 import { jsonBytes, jsonByteLength, parseJsonBytes } from "./json.js";
 export { jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes } from "./json.js";
 
@@ -10,14 +15,77 @@ export const RESEARCH_PACKAGE_EXTENSION = ".sdresearch" as const;
 export const RESEARCH_PACKAGE_SCHEMA_VERSION = 1 as const;
 const MAX_ENTRIES = 10_000;
 const MAX_FILE_BYTES = 32 * 1024 * 1024 * 1024;
-// Keep the decompressed archive bounded before zlib allocates its output.
-// This limit covers tar headers, padding, and file payloads.
-const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+const MIB = 1024 * 1024;
 const TAR_BLOCK = 512;
+
+/**
+ * One cap for every side of a research package: the uncompressed tar on export,
+ * the inflated tar on import, and (derived from it) the compressed upload.
+ *
+ * It is deliberately not a literal at each call site any more. Two independent
+ * literals (512 MiB export, 256 MiB upload) let the app produce a package its own
+ * importer refuses, which is the round-trip defect this replaces.
+ */
+export const RESEARCH_PACKAGE_DEFAULT_MAX_BYTES = 512 * MIB;
+/**
+ * Ceiling for every override, environment or per-request.
+ *
+ * It is derived from this pipeline's own cost, not from what a disk can hold: peak RSS
+ * is about 3x the payload (payload + tar + gzip), so 1 GiB already means ~3 GiB of
+ * resident memory against the API's 3072 MiB heap budget. Stage 2's streaming pipeline
+ * is what makes a 5 GiB default safe; a clamp that allowed it here would turn a clean
+ * refusal into an OOM, which is the failure this bound exists to prevent.
+ */
+export const RESEARCH_PACKAGE_MAX_MAX_BYTES = 1024 * MIB;
+export const RESEARCH_PACKAGE_MIN_MAX_BYTES = 64 * MIB;
+export const RESEARCH_PACKAGE_MAX_BYTES_ENV = "SCIENCE_AGENT_RESEARCH_PACKAGE_MAX_BYTES";
+
+/** The one message both sides use when a package is over the cap. */
+export const RESEARCH_PACKAGE_TOO_LARGE_MESSAGE = "Research package exceeds the archive size limit";
+/** Stable code: the API answers 413 with it and both clients localize it. */
+export const RESEARCH_PACKAGE_TOO_LARGE_CODE = "RESEARCH_PACKAGE_TOO_LARGE";
+
+/** The refusal carries a code so it is classified as client input, never as a 500. */
+export function researchPackageTooLargeError(): Error {
+  const error = new Error(RESEARCH_PACKAGE_TOO_LARGE_MESSAGE) as Error & { code?: string };
+  error.code = RESEARCH_PACKAGE_TOO_LARGE_CODE;
+  return error;
+}
+
+/**
+ * Resolve the cap from the environment, clamped like `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB`:
+ * a malformed or out-of-range value falls back to the default rather than either
+ * ignoring the operator or letting one typo turn a clean refusal into an OOM.
+ */
+export function resolveResearchPackageMaxBytes(raw?: string): number {
+  const value = raw ?? process.env[RESEARCH_PACKAGE_MAX_BYTES_ENV];
+  if (value === undefined || value.trim() === "") return RESEARCH_PACKAGE_DEFAULT_MAX_BYTES;
+  const requested = Number(value.trim());
+  // A wrong unit or a typo must not be replaced by a number the operator did not
+  // choose: the only symptom would be exports refused at a cap nobody set. This
+  // follows `apiMaxOldSpaceMb`, which throws for the same reason.
+  if (!Number.isInteger(requested) || requested <= 0)
+    throw new Error(`${RESEARCH_PACKAGE_MAX_BYTES_ENV} must be a positive integer number of bytes, got ${JSON.stringify(value)}`);
+  if (requested < RESEARCH_PACKAGE_MIN_MAX_BYTES || requested > RESEARCH_PACKAGE_MAX_MAX_BYTES)
+    throw new Error(`${RESEARCH_PACKAGE_MAX_BYTES_ENV} must be between ${RESEARCH_PACKAGE_MIN_MAX_BYTES} and ${RESEARCH_PACKAGE_MAX_MAX_BYTES} bytes, got ${requested}`);
+  return requested;
+}
+
+/** The cap in force for this process: one value exported to every consumer. */
+export const RESEARCH_PACKAGE_MAX_BYTES = resolveResearchPackageMaxBytes();
 
 export type ResearchPackageKind = "evidence" | "verified-reproduction" | "combined";
 export type PackageObjectKind = "artifact" | "evidence" | "log" | "other";
 export interface PackageObject { path: string; bytes: Uint8Array; kind?: PackageObjectKind; }
+/**
+ * An object that is streamed from its source instead of being resident.
+ *
+ * `open` must be callable more than once: the exporter hashes every object first
+ * (the tar manifest carries each checksum and size) and then reads it again while
+ * writing the archive. A file source satisfies that naturally; a one-shot stream
+ * does not, which is why the type asks for a factory rather than an iterable.
+ */
+export interface PackageObjectStream { path: string; sizeBytes: number; open: () => AsyncIterable<Uint8Array>; }
 export interface PackageSource { projectId: string; sessionIds?: readonly string[]; title: string; }
 export interface PackageInventoryEntry {
   path: string; sizeBytes: number; checksum: string; kind: "manifest" | "records" | "object" | "readme";
@@ -74,6 +142,12 @@ export interface ResearchPackageProvider {
 
 type TarEntry = { path: string; bytes: Uint8Array };
 const text = (value: string) => new TextEncoder().encode(value);
+const DEFAULT_README = "# ScienceDiscovery Research Package\n\nThis package contains immutable research evidence. Package bytes are not executed during import.\n";
+/** One tar block plus the payload, rounded up: the size `prepareResearchPackage` charges. */
+const paddedSize = (size: number) => TAR_BLOCK + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
+const archiveTotalBytes = (entrySizes: readonly number[]) =>
+  entrySizes.reduce((total, size) => total + paddedSize(size), TAR_BLOCK * 2);
+const HASH_PLACEHOLDER = "0".repeat(64);
 const json = jsonBytes;
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const isHash = (value: string) => /^[a-f0-9]{64}$/.test(value);
@@ -131,14 +205,17 @@ function readOctal(buffer: Uint8Array, offset: number, length: number): number {
 
 function readArchive(bytes: Uint8Array): Map<string, Uint8Array> {
   let raw: Uint8Array;
-  try { raw = gunzipSync(bytes, { maxOutputLength: MAX_TOTAL_BYTES }); }
+  // Import accepts the hard ceiling, not the default cap: an export acknowledged over
+  // the cap must still be importable by the same build, or the 512/256 mismatch simply
+  // returns under a new name.
+  try { raw = gunzipSync(bytes, { maxOutputLength: RESEARCH_PACKAGE_MAX_MAX_BYTES }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
-      throw new Error("Research package exceeds the archive size limit");
+      throw researchPackageTooLargeError();
     }
     throw new Error("Invalid .sdresearch gzip archive");
   }
-  if (raw.byteLength > MAX_TOTAL_BYTES) throw new Error("Research package exceeds the archive size limit");
+  if (raw.byteLength > RESEARCH_PACKAGE_MAX_MAX_BYTES) throw researchPackageTooLargeError();
   const files = new Map<string, Uint8Array>(); let offset = 0; let total = 0;
   while (offset + TAR_BLOCK <= raw.byteLength) {
     const header = raw.slice(offset, offset + TAR_BLOCK); offset += TAR_BLOCK;
@@ -152,7 +229,7 @@ function readArchive(bytes: Uint8Array): Map<string, Uint8Array> {
     // Keep views into the decompressed archive instead of copying every large
     // object. The archive buffer remains alive through the returned map.
     files.set(path, new Uint8Array(raw.buffer, raw.byteOffset + offset, size)); total += size;
-    if (total > MAX_TOTAL_BYTES || files.size > MAX_ENTRIES) throw new Error("Research package exceeds its limits");
+    if (total > RESEARCH_PACKAGE_MAX_MAX_BYTES || files.size > MAX_ENTRIES) throw new Error("Research package exceeds its limits");
     offset += Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
   }
   if (!files.has("manifest.json") || !files.has("records.json")) throw new Error("Research package is missing its manifest or records");
@@ -202,7 +279,7 @@ function validateFiles(files: Map<string, Uint8Array>, manifest: PackageManifest
 
 type PreparedResearchPackage = { entries: TarEntry[]; packageKind: ResearchPackageKind; totalBytes: number; omissions: string[]; createdAt: string; exportProfile?: ResearchPackageExportProfile };
 
-function prepareResearchPackage(input: ExportInput): PreparedResearchPackage {
+function prepareResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES): PreparedResearchPackage {
   if (input.exportProfile !== undefined) validateExportProfile(input.exportProfile);
   const objects = [...(input.objects ?? [])]; const objectEntries: TarEntry[] = []; const inventory: PackageInventoryEntry[] = [];
   const seen = new Set<string>(); let totalBytes = 0;
@@ -223,15 +300,192 @@ function prepareResearchPackage(input: ExportInput): PreparedResearchPackage {
   const manifest: PackageManifest = { format: RESEARCH_PACKAGE_FORMAT, schemaVersion: 1, packageKind, createdAt,
     producer: { product: "ScienceDiscovery", version: input.producerVersion ?? "unknown", plugin: "research-package", pluginVersion: "0.1.0" },
     source: structuredClone(input.source), inventory, omissions: [...(input.omissions ?? [])], ...(input.exportProfile ? { exportProfile: structuredClone(input.exportProfile) } : {}) };
-  const readme = text(input.readme ?? "# ScienceDiscovery Research Package\n\nThis package contains immutable research evidence. Package bytes are not executed during import.\n");
+  const readme = text(input.readme ?? DEFAULT_README);
   manifest.inventory.push({ path: "README.md", sizeBytes: readme.byteLength, checksum: sha256(readme), kind: "readme" });
   const entries: TarEntry[] = [{ path: "manifest.json", bytes: json(manifest) }, { path: "records.json", bytes: records }, { path: "README.md", bytes: readme }, ...objectEntries];
   if (entries.length > MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
-  const archiveBytes = entries.reduce((total, entry) => total + TAR_BLOCK + Math.ceil(entry.bytes.byteLength / TAR_BLOCK) * TAR_BLOCK, TAR_BLOCK * 2);
-  if (archiveBytes > MAX_TOTAL_BYTES) throw new Error("Research package exceeds the archive size limit");
+  const archiveBytes = archiveTotalBytes(entries.map((entry) => entry.bytes.byteLength));
+  if (archiveBytes > maxBytes) throw researchPackageTooLargeError();
   return { entries, packageKind, totalBytes, omissions: [...manifest.omissions], createdAt,
     ...(manifest.exportProfile ? { exportProfile: manifest.exportProfile } : {}) };
 }
+
+/**
+ * The uncompressed tar size a package would occupy, without hashing or compressing.
+ *
+ * Hashes and object paths have a fixed width, so a manifest built from placeholder
+ * checksums is exactly as long as the real one. This is the quantity
+ * `prepareResearchPackage` refuses on — not `estimateResearchPackageBytes`, which
+ * pads the manifest approximately and can differ by a few percent either way.
+ */
+export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>,
+  additionalRecordBytes = 0): number {
+  const objects = [...(input.objects ?? [])];
+  const recordsBytes = jsonByteLength(input.records) + additionalRecordBytes;
+  const readmeBytes = Buffer.byteLength(input.readme ?? DEFAULT_README);
+  const inventory: PackageInventoryEntry[] = [{ path: "records.json", sizeBytes: recordsBytes, checksum: HASH_PLACEHOLDER, kind: "records" }];
+  const sizes: number[] = [recordsBytes, readmeBytes];
+  for (const object of objects) {
+    const size = objectSizes?.get(object.path) ?? object.bytes.byteLength;
+    inventory.push({ path: `objects/${HASH_PLACEHOLDER}`, sizeBytes: size, checksum: HASH_PLACEHOLDER, kind: "object" });
+    sizes.push(size);
+  }
+  inventory.push({ path: "README.md", sizeBytes: readmeBytes, checksum: HASH_PLACEHOLDER, kind: "readme" });
+  const manifest = {
+    format: RESEARCH_PACKAGE_FORMAT, schemaVersion: RESEARCH_PACKAGE_SCHEMA_VERSION,
+    packageKind: input.packageKind ?? "evidence", createdAt: input.createdAt ?? new Date().toISOString(),
+    producer: { product: "ScienceDiscovery", version: input.producerVersion ?? "unknown", plugin: "research-package", pluginVersion: "0.1.0" },
+    source: input.source, inventory, omissions: [...(input.omissions ?? [])],
+    ...(input.exportProfile ? { exportProfile: input.exportProfile } : {}),
+  };
+  return archiveTotalBytes([jsonByteLength(manifest), ...sizes]);
+}
+
+/** Whether a package built from this input stays within maxBytes (default: the shared cap). */
+/** The cap an acknowledged over-limit export may use; it never exceeds the safe ceiling. */
+export function researchPackageOverrideMaxBytes(requested = RESEARCH_PACKAGE_MAX_BYTES): number {
+  return Math.min(RESEARCH_PACKAGE_MAX_MAX_BYTES, Math.max(requested, RESEARCH_PACKAGE_MIN_MAX_BYTES));
+}
+
+export function researchPackageFits(input: ExportInput, maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES,
+  objectSizes?: ReadonlyMap<string, number>, additionalRecordBytes = 0): boolean {
+  return researchPackageArchiveBytes(input, objectSizes, additionalRecordBytes) <= maxBytes;
+}
+
+/** Counts and hashes the compressed bytes while they flow to the sink. */
+class ArchiveDigest extends Transform {
+  private readonly hash = createHash("sha256");
+  private compressedBytes = 0;
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, done: (error?: Error | null, data?: Buffer) => void): void {
+    this.compressedBytes += chunk.length;
+    this.hash.update(chunk);
+    done(null, chunk);
+  }
+  digest(): { packageChecksum: string; compressedBytes: number } {
+    return { packageChecksum: this.hash.digest("hex"), compressedBytes: this.compressedBytes };
+  }
+}
+
+type StreamEntry = { path: string; size: number; open: () => AsyncIterable<Uint8Array> };
+
+/**
+ * The tar stream for a set of entries: one header, the payload, then its padding.
+ *
+ * `open()` is called here and nowhere else, so a file-backed object is read exactly
+ * once while writing — the earlier pass only hashed it.
+ */
+async function* tarChunks(entries: readonly StreamEntry[]): AsyncIterable<Uint8Array> {
+  for (const entry of entries) {
+    yield tarHeader(entry.path, entry.size);
+    let written = 0;
+    for await (const chunk of entry.open()) {
+      written += chunk.byteLength;
+      if (written > entry.size) throw new Error(`Package entry grew while writing: ${entry.path}`);
+      yield chunk;
+    }
+    if (written !== entry.size) throw new Error(`Package entry shrank while writing: ${entry.path}`);
+    const padding = (TAR_BLOCK - (entry.size % TAR_BLOCK)) % TAR_BLOCK;
+    if (padding) yield new Uint8Array(padding);
+  }
+  yield new Uint8Array(TAR_BLOCK * 2);
+}
+
+/**
+ * Write a package directly to `destination`: tar → gzip → sink.
+ *
+ * The in-memory exporter builds the whole tar and then the whole gzip output, so peak
+ * RSS is payload + tar + archive. This path holds neither buffer: objects are hashed in
+ * one streaming pass (the manifest needs their checksums and sizes) and then read again
+ * while the archive is written, and the compressed bytes are hashed as they pass
+ * through. The receipt is unchanged, including `packageChecksum`, because it is the
+ * SHA-256 of exactly the bytes that reached the sink.
+ */
+export async function writeResearchPackage(
+  input: Omit<ExportInput, "objects"> & { objects?: readonly (PackageObject | PackageObjectStream)[] },
+  destination: Writable,
+  maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES,
+): Promise<ExportReceipt> {
+  if (input.exportProfile !== undefined) validateExportProfile(input.exportProfile);
+  const inventory: PackageInventoryEntry[] = [];
+  const objectEntries: StreamEntry[] = [];
+  const seen = new Set<string>();
+  let totalBytes = 0;
+
+  for (const object of input.objects ?? []) {
+    let checksum: string;
+    let size: number;
+    let open: () => AsyncIterable<Uint8Array>;
+    if ("bytes" in object) {
+      checksum = sha256(object.bytes);
+      size = object.bytes.byteLength;
+      const bytes = object.bytes;
+      open = async function* () { yield bytes; };
+    } else {
+      const hash = createHash("sha256");
+      let hashed = 0;
+      for await (const chunk of object.open()) { hash.update(chunk); hashed += chunk.byteLength; }
+      checksum = hash.digest("hex");
+      size = hashed;
+      if (object.sizeBytes !== hashed) throw new Error("Package object size changed while hashing");
+      open = object.open;
+    }
+    const path = `objects/${checksum}`;
+    if (object.path !== path && object.path !== checksum) throw new Error("Package object path must be its SHA-256 address");
+    if (seen.has(path)) throw new Error(`Duplicate package object: ${path}`);
+    seen.add(path);
+    if (size > MAX_FILE_BYTES) throw new Error("Package object exceeds the size limit");
+    totalBytes += size;
+    inventory.push({ path, sizeBytes: size, checksum, kind: "object" });
+    objectEntries.push({ path, size, open });
+  }
+
+  const records = json(input.records);
+  const recordsChecksum = sha256(records);
+  inventory.unshift({ path: "records.json", sizeBytes: records.byteLength, checksum: recordsChecksum, kind: "records" });
+  totalBytes += records.byteLength;
+  const packageKind = input.packageKind ?? "evidence";
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const manifest: PackageManifest = { format: RESEARCH_PACKAGE_FORMAT, schemaVersion: 1, packageKind, createdAt,
+    producer: { product: "ScienceDiscovery", version: input.producerVersion ?? "unknown", plugin: "research-package", pluginVersion: "0.1.0" },
+    source: structuredClone(input.source), inventory, omissions: [...(input.omissions ?? [])],
+    ...(input.exportProfile ? { exportProfile: structuredClone(input.exportProfile) } : {}) };
+  const readme = text(input.readme ?? DEFAULT_README);
+  manifest.inventory.push({ path: "README.md", sizeBytes: readme.byteLength, checksum: sha256(readme), kind: "readme" });
+
+  const manifestBytes = json(manifest);
+  const entries: StreamEntry[] = [
+    { path: "manifest.json", size: manifestBytes.byteLength, open: async function* () { yield manifestBytes; } },
+    { path: "records.json", size: records.byteLength, open: async function* () { yield records; } },
+    { path: "README.md", size: readme.byteLength, open: async function* () { yield readme; } },
+    ...objectEntries,
+  ];
+  if (entries.length > MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
+  const archiveBytes = archiveTotalBytes(entries.map((entry) => entry.size));
+  if (archiveBytes > maxBytes) throw researchPackageTooLargeError();
+
+  const digest = new ArchiveDigest();
+  await pipeline(Readable.from(tarChunks(entries)), createGzip({ level: 6 }), digest, destination);
+  const { packageChecksum } = digest.digest();
+  return { packageChecksum, packageKind, objectCount: objectEntries.length, totalBytes,
+    omissions: [...manifest.omissions], createdAt,
+    ...(manifest.exportProfile ? { exportProfile: manifest.exportProfile } : {}) };
+}
+
+/** Read an object's bytes from a file, for callers that already know its address and size. */
+export function fileObjectStream(path: string, sizeBytes: number, digest: string): PackageObjectStream {
+  return {
+    path: `objects/${digest}`,
+    sizeBytes,
+    open: () => createReadStream(path) as unknown as AsyncIterable<Uint8Array>,
+  };
+}
+
+/** Size of a file as a package object would charge it. */
+export async function fileObjectSize(path: string): Promise<number> {
+  return (await stat(path)).size;
+}
+
+export { createReadStream, open };
 
 function packageReceipt(bytes: Uint8Array, prepared: PreparedResearchPackage): ExportReceipt {
   return { packageChecksum: sha256(bytes), packageKind: prepared.packageKind,
@@ -240,15 +494,15 @@ function packageReceipt(bytes: Uint8Array, prepared: PreparedResearchPackage): E
     ...(prepared.exportProfile ? { exportProfile: prepared.exportProfile } : {}) };
 }
 
-export function createResearchPackage(input: ExportInput): { bytes: Uint8Array; receipt: ExportReceipt } {
-  const prepared = prepareResearchPackage(input);
+export function createResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES): { bytes: Uint8Array; receipt: ExportReceipt } {
+  const prepared = prepareResearchPackage(input, maxBytes);
   const bytes = createArchive(prepared.entries);
   return { bytes, receipt: packageReceipt(bytes, prepared) };
 }
 
 /** Build packages with asynchronous compression so long exports do not block API requests. */
-export async function createResearchPackageAsync(input: ExportInput): Promise<{ bytes: Uint8Array; receipt: ExportReceipt }> {
-  const prepared = prepareResearchPackage(input);
+export async function createResearchPackageAsync(input: ExportInput, maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES): Promise<{ bytes: Uint8Array; receipt: ExportReceipt }> {
+  const prepared = prepareResearchPackage(input, maxBytes);
   const bytes = await createArchiveAsync(prepared.entries);
   return { bytes, receipt: packageReceipt(bytes, prepared) };
 }

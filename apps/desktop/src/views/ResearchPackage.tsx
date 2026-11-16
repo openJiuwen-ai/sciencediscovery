@@ -68,6 +68,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   // client, which does have one.
   const [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
+  // Keyed by revision + size: a new selection has to be confirmed again.
+  const [acknowledgedLimitKey, setAcknowledgedLimitKey] = useState<string>();
+  // Closing and reopening the dialog must not inherit the previous confirmation: the
+  // same session at the same size recomputes the same key, so the key alone cannot
+  // tell a new dialog from the one that was acknowledged.
   const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
   /** True while a preview for the current selection is in flight: the file list
@@ -198,7 +203,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
     if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
@@ -323,6 +328,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     : 0;
   // A ready copy is reached through 继续聊天, which navigates as soon as the copy
   // exists; a second permanent "open" entry point only duplicated it (#1057).
+  // The cap and the exact tar size come from the preview response, so this gate
+  // matches what the server refuses on instead of re-deriving an estimate.
+  const limitBytes = preview?.maxBytes;
+  const archiveBytes = preview?.archiveBytes ?? preview?.estimatedBytes;
+  const overLimit = limitBytes !== undefined && archiveBytes !== undefined && archiveBytes > limitBytes;
+  const limitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
+  const overLimitAcknowledged = limitKey !== undefined && acknowledgedLimitKey === limitKey;
+  const blockedByLimit = overLimit && !overLimitAcknowledged;
+  const formatLimit = (bytes: number) => bytes >= 1024 * 1024 * 1024
+    ? `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`
+    : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(0)} MiB` : `${(bytes / 1024).toFixed(0)} KiB`;
   return <>
     {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
@@ -343,6 +359,14 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           </button>)}</div>
           {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
           <p>{preview ? <>{t.estimate} <b>{(preview.estimatedBytes / 1024).toFixed(1)} KiB</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
+          {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
+          {blockedByLimit ? <div role="alert" className="research-package-limit">
+            <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
+            {level === "necessary" ? <p>{t.overLimitNecessaryOnly}</p> : null}
+            <p>{t.overLimitRisk}</p>
+            <button className="secondary-button" onClick={() => setAcknowledgedLimitKey(limitKey)} type="button">{t.exportAnyway}</button>
+          </div> : null}
+          {overLimitAcknowledged ? <p role="status" className="research-package-notice">{t.overLimitConfirmed}</p> : null}
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
@@ -354,7 +378,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the
@@ -367,14 +391,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
           const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
           // to be settled immediately instead of waiting for a poll that never
           // runs against a non-active status.
           if (task.status === "completed") { await persistArchiveRef.current(record); }
-          else if (task.status === "failed") { patchExport(task.id, { phase: "pack-failed", error: task.error }); pushFlash("error", task.error ?? t.failed); }
+          else if (task.status === "failed") {
+            const message = task.error === "Research package exceeds the archive size limit" ? t.packageTooLarge : (task.error ?? t.failed);
+            patchExport(task.id, { phase: "pack-failed", error: message }); pushFlash("error", message);
+          }
           else if (task.status === "canceled") { patchExport(task.id, { phase: "canceled" }); pushFlash("error", t.exportCanceled); }
         });
         else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) onOpen(source); });

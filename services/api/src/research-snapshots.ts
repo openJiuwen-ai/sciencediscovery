@@ -20,7 +20,7 @@ import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
 import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/package.js";
-import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
 import type { ArtifactAnnotation, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
@@ -817,6 +817,12 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       const selectedPaths = new Set(records.sessions?.find((record) => record.session.id === sessionId)?.workspace?.map((file) => file.path));
       return {
         revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes), estimateKind: "uncompressed" as const,
+        // The cap and the exact tar size the export would be refused on. Both are
+        // additive: a client that ignores them keeps the old behaviour, and a client
+        // that uses them gates on the quantity the exporter itself checks rather than
+        // on the approximation above (they differ by a few percent either way).
+        maxBytes: RESEARCH_PACKAGE_MAX_BYTES,
+        archiveBytes: researchPackageArchiveBytes(input, preview.objectSizes, preview.additionalRecordBytes),
         files: sessionId ? (await (preview.workspaceListings
           ? previewWorkspaceListing(preview.workspaceListings, store, sessionId)
           : listWorkspaceFiles(store, sessionId, true))).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],
@@ -830,7 +836,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     const input = await buildResearchPackageInput(options.projectId, options.sessionId, options.level,
       options.selectedFiles ? new Set(options.selectedFiles) : undefined, undefined, undefined,
       options.includeFullTrajectory, options.includeFullMemoryGraph);
-    return (await createResearchPackageAsync(input)).bytes;
+    // An acknowledged over-cap export may use the safe ceiling; nothing beyond it.
+    return (await createResearchPackageAsync(input,
+      options.allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES)).bytes;
   });
 
   const restorePackage = async (projectId: string, sessionId: string | undefined, bytes: Buffer, options: { operationId: string; sourceSessionId?: string; sourceMessageId?: string; imported?: ImportedResearchPackage }) => {

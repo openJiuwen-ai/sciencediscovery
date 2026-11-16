@@ -12,6 +12,8 @@ export type ResearchPackageExportOptions = {
   includeFullTrajectory: boolean;
   includeFullMemoryGraph: boolean;
   revision: string;
+  /** The user confirmed the over-cap warning; the task may then use the safe ceiling. */
+  allowOverCap?: boolean;
 };
 export type ResearchPackageExportStatus = {
   id: string;

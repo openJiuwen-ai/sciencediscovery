@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { TestContext } from "node:test";
-import { createResearchPackage, importResearchPackage, estimateResearchPackageBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, createResearchPackage, importResearchPackage, estimateResearchPackageBytes, researchPackageArchiveBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { createApiServer, closeApiServer } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
@@ -91,13 +91,22 @@ test("incremental previews match exported evidence and profile sizes", async (co
   for (const level of ["necessary", "complete"]) for (const trajectory of [false, true]) for (const memory of [false, true]) {
     const query = `sessionId=${target.firstSession.id}&level=${level}&includeFullTrajectory=${Number(trajectory)}&includeFullMemoryGraph=${Number(memory)}`;
     const base = `/api/projects/${target.id}/research-package`;
-    const preview = await (await request(`${base}/preview?${query}`)).json() as { estimatedBytes: number };
+    const preview = await (await request(`${base}/preview?${query}`)).json() as {
+      estimatedBytes: number; maxBytes?: number; archiveBytes?: number };
     const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
-    assert.equal(preview.estimatedBytes, estimateResearchPackageBytes({
+    const exportedInput = {
       source: exported.manifest.source, records: exported.records, readme: Buffer.from(exported.readme).toString(),
       omissions: exported.manifest.omissions, exportProfile: exported.manifest.exportProfile,
       objects: [...exported.objects].map(([path, bytes]) => ({ path, bytes })),
-    }), query);
+    };
+    assert.equal(preview.estimatedBytes, estimateResearchPackageBytes(exportedInput), query);
+    // The dialog gates on these two fields: the shared cap, and the exact tar size
+    // the exporter refuses on (which is not the same number as the estimate above).
+    assert.equal(preview.maxBytes, RESEARCH_PACKAGE_MAX_BYTES, query);
+    assert.equal(preview.archiveBytes, researchPackageArchiveBytes(exportedInput), query);
+    // A package this fixture just exported cannot be over its own cap: a mismatch
+    // here would mean the dialog refuses work the server would happily do.
+    assert.ok(preview.archiveBytes! <= preview.maxBytes!, query);
   }
 });
 

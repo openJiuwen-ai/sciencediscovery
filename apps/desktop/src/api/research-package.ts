@@ -4,7 +4,7 @@ import { ApiRequestError, type ApiClient } from "./client.js";
 import type { ResearchContinuationOperation } from "@sciencediscovery/schema";
 
 export interface PackagePreview {
-  revision?: string; estimatedBytes: number;
+  revision?: string; estimatedBytes: number; maxBytes?: number; archiveBytes?: number;
   files: Array<{ path: string; size: number; selected?: boolean }>;
   omissions: string[];
 }
@@ -41,7 +41,7 @@ export function startCopy(client: ApiClient, session: string, requestId: string,
 export function readCopy(client: ApiClient, session: string, id: string) {
   return client.request<CopyOperation>(`${sessionPath(session)}/research-continuations/${encodeURIComponent(id)}`);
 }
-export function startExport(client: ApiClient, project: string, options: { sessionId: string; revision: string; level: string; includeFullTrajectory: boolean; includeFullMemoryGraph: boolean; filePaths?: string[] }) {
+export function startExport(client: ApiClient, project: string, options: { sessionId: string; revision: string; level: string; includeFullTrajectory: boolean; includeFullMemoryGraph: boolean; filePaths?: string[]; allowOverCap?: boolean }) {
   return client.request<ExportOperation>(`${projectPath(project)}/exports`, { method: "POST", body: JSON.stringify(options) });
 }
 export function readExport(client: ApiClient, project: string, id: string) {

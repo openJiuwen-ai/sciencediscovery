@@ -25,7 +25,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
 import { handlePluginRequest } from "../plugins/http.js";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
-import { createResearchPackageAsync, type ImportedResearchPackage } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_TOO_LARGE_CODE, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, createResearchPackageAsync, type ImportedResearchPackage } from "@sciencediscovery/research-package";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -41,7 +41,16 @@ import { listSshKeyFiles } from "../ssh-key-files.js";
 type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
 const researchPackageInspectionCache = new Map<string, ResearchPackageInspectionCacheEntry>();
 const RESEARCH_PACKAGE_INSPECTION_CACHE_TTL_MS = 10 * 60_000;
-const RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+// The upload carries the compressed archive. Compression never makes the bytes
+// disappear, and a tiny incompressible package can be a few bytes larger than its
+// tar, so the upload bound is the package cap plus 5% and a megabyte of slack.
+// Deriving it here is the point: the old 256 MiB literal refused packages the
+// 512 MiB exporter happily produced.
+const RESEARCH_PACKAGE_UPLOAD_MAX_BYTES = Math.ceil(RESEARCH_PACKAGE_MAX_BYTES * 1.05) + 1024 * 1024;
+// The inspection cache counts compressed + unpacked bytes, so it has to hold both
+// views of one package: otherwise a valid inspect hands the dialog a checksum the
+// import cannot reuse and the client uploads the whole archive twice.
+const RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES = RESEARCH_PACKAGE_UPLOAD_MAX_BYTES * 2 + 8 * 1024 * 1024;
 let researchPackageInspectionCacheBytes = 0;
 
 function inspectedResearchPackageCacheBytes(entry: ResearchPackageInspectionCacheEntry): number {
@@ -1360,7 +1369,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (request.method === "POST" && !taskId) {
           const body = await readJson(request) as {
             sessionId?: unknown; level?: unknown; filePaths?: unknown; includeFullTrajectory?: unknown;
-            includeFullMemoryGraph?: unknown; revision?: unknown;
+            includeFullMemoryGraph?: unknown; revision?: unknown; allowOverCap?: unknown;
           };
           if (body.level !== "necessary" && body.level !== "complete") return sendError(response, 400, "Invalid export level");
           if (body.sessionId !== undefined && typeof body.sessionId !== "string") return sendError(response, 400, "Invalid session id");
@@ -1370,13 +1379,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const sessionId = body.sessionId as string | undefined;
           const title = (sessionId ? store.getSession(sessionId)?.title : undefined) || store.getProject(projectId)?.name || projectId;
           const packageFileName = title.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || "科研会话";
+          const allowOverCap = body.allowOverCap === true;
+          const sizeCap = allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES;
+          // Size from metadata before the task reads anything: the preview walks the same
+          // closure without loading payloads, so an over-cap selection is refused up
+          // front instead of after the read it was supposed to avoid.
+          const sized = await previewResearchPackage(projectId, sessionId, body.level,
+            body.filePaths ? new Set(body.filePaths as string[]) : undefined,
+            body.level === "complete" && body.includeFullTrajectory === true,
+            body.level === "complete" && body.includeFullMemoryGraph === true);
+          if ((sized.archiveBytes ?? 0) > sizeCap)
+            return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
           try {
             const task = await packageExports.start({
               projectId, sessionId, level: body.level,
               selectedFiles: body.filePaths as string[] | undefined,
               includeFullTrajectory: body.level === "complete" && body.includeFullTrajectory === true,
               includeFullMemoryGraph: body.level === "complete" && body.includeFullMemoryGraph === true,
-              revision: body.revision,
+              revision: body.revision, allowOverCap,
             }, `${packageFileName}.sdresearch`);
             return sendJson(response, 202, task);
           } catch (error) { return sendError(response, 409, error instanceof Error ? error.message : "Unable to start export"); }
@@ -1457,8 +1477,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               throw error;
             }
           }
+          const allowOverCap = url.searchParams.get("allowOverCap") === "1";
+          const sizeCap = allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES;
+          // Size from metadata first: the preview measures the same closure without
+          // reading payloads, so the refusal costs a walk instead of the whole read.
+          const sized = await previewResearchPackage(projectId, sessionId, level, selectedFiles,
+            includeFullTrajectory, includeFullMemoryGraph);
+          if ((sized.archiveBytes ?? 0) > sizeCap)
+            return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
           const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, undefined, includeFullTrajectory, includeFullMemoryGraph);
-          const result = await createResearchPackageAsync(input);
+          const result = await createResearchPackageAsync(input, sizeCap);
           const packageFileName = ((sessionId ? store.getSession(sessionId)?.title : undefined) || input.source.title || projectId).trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || "科研会话";
           response.writeHead(200, {
             "cache-control": "no-store",
@@ -1471,7 +1499,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         if (request.method === "POST" && researchPackageMatch[2] === "inspect") {
-          const bytes = await readBytes(request, 256 * 1024 * 1024, "Research package");
+          const bytes = await readBytes(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package");
           const imported = researchPackageProvider.importReadOnly(bytes);
           const inspection = {
             manifest: imported.manifest,
@@ -1494,7 +1522,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if (checksum && !reusable && Number(request.headers["content-length"] ?? "0") === 0) return sendError(response, 409, "Inspected package expired; upload it again");
           const bytes = reusable
             ? reusable.bytes
-            : await readBytes(request, 256 * 1024 * 1024, "Research package");
+            : await readBytes(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package");
           if (reusable) removeInspectedResearchPackage(checksum!);
           sendJson(response, 201, await persistImportedResearchPackage(projectId, sessionId, bytes, reusable?.imported));
           return;
@@ -4608,8 +4636,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "EVOLVE_UNAVAILABLE") sendError(response, 503, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
-        sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
+        // A research package over the cap gets a stable code so both clients show
+        // localized copy; the generic branches keep their existing messages.
+        if ((error as { limitLabel?: string }).limitLabel === "Research package")
+          sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
+        else sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
       }
+      else if (code === RESEARCH_PACKAGE_TOO_LARGE_CODE || message === RESEARCH_PACKAGE_TOO_LARGE_MESSAGE)
+        sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, RESEARCH_PACKAGE_TOO_LARGE_CODE);
       else if (code === "CONFLICT") sendError(response, 409, message);
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
