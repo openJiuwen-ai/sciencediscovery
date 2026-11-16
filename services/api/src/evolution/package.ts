@@ -25,6 +25,8 @@
  * an integer sequence, and a status must be one of the known values.
  */
 
+import { randomUUID } from "node:crypto";
+
 import { isEvolveRunActive, type EvolveEventRecord, type EvolveRun, type EvolveRunStatus } from "@sciencediscovery/schema";
 
 import { EvolutionStore } from "./store.js";
@@ -38,6 +40,7 @@ export interface EvolveRestoreResult {
   /** One line per run that could not be restored, in the receipt's own style. */
   omissions: string[];
   restored: number;
+  runIds: Map<string, string>;
 }
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -119,15 +122,14 @@ function validDateString(value: unknown): string | undefined {
  *
  * An active run at export time is stored as `stopped`: nothing is executing on
  * the importing machine, and presenting it as `running` would show a search that
- * can never advance. A run id that already exists here is left untouched — two
- * imports of one package must not overwrite each other's runs.
+ * can never advance. Colliding ids are remapped so each session owns its copy.
  */
 export async function restoreEvolveRuns(
   store: EvolutionStore,
   target: { projectId?: string; sessionId: string },
   payload: unknown,
 ): Promise<EvolveRestoreResult> {
-  const result: EvolveRestoreResult = { omissions: [], restored: 0 };
+  const result: EvolveRestoreResult = { omissions: [], restored: 0, runIds: new Map() };
   if (payload === undefined || payload === null) return result;
   const container = asRecord(payload);
   const entries = Array.isArray(container?.runs) ? container.runs : undefined;
@@ -148,15 +150,11 @@ export async function restoreEvolveRuns(
       result.omissions.push("evolve:package carries a run with an invalid id");
       continue;
     }
-    const existing = await store.readRun(id);
-    if (existing) {
-      // Run ids are global to the data directory, not per project: the same
-      // package imported into a second project, or after the first session was
-      // deleted, finds its id already taken. Say whose run it is instead of
-      // claiming it is in this project.
-      result.omissions.push(`evolve:${id}:run id already exists here (owned by session ${existing.sessionId}); a package restores each run once per data directory`);
+    if (result.runIds.has(id)) {
+      result.omissions.push(`evolve:${id}:duplicate run id in package`);
       continue;
     }
+    const targetId = await store.readRun(id) ? randomUUID() : id;
     const rawGoal = asRecord(run?.goal);
     if (!rawGoal) {
       result.omissions.push(`evolve:${id}:missing the run goal`);
@@ -172,17 +170,18 @@ export async function restoreEvolveRuns(
     try {
       await store.createRun({
         goal: goal as unknown as EvolveRun["goal"],
-        id,
+        id: targetId,
         ...(createdAt ? { createdAt } : {}),
         ...(target.projectId ? { projectId: target.projectId } : {}),
         sessionId: target.sessionId,
       });
       const events = validEvents(packed?.events);
-      if (events.length) await store.appendEvents(id, events);
+      if (events.length) await store.appendEvents(targetId, events);
       const startedAt = optionalString(run?.startedAt, 40);
       const finishedAt = optionalString(run?.finishedAt, 40);
       const error = optionalString(run?.error, 2_000);
-      await store.patchRun(id, {
+      await store.patchRun(targetId, {
+        ...(Number.isInteger(run?.bestNodeIndex) ? { bestNodeIndex: Number(run?.bestNodeIndex) } : {}),
         candidates: Number.isInteger(run?.candidates) ? Number(run?.candidates) : 0,
         costCents: Number.isFinite(run?.costCents) ? Number(run?.costCents) : 0,
         ...(startedAt ? { startedAt } : {}),
@@ -192,6 +191,7 @@ export async function restoreEvolveRuns(
         tokens: Number.isInteger(run?.tokens) ? Number(run?.tokens) : 0,
       });
       result.restored += 1;
+      result.runIds.set(id, targetId);
     } catch (caught) {
       result.omissions.push(`evolve:${id}:${caught instanceof Error ? caught.message : "restore failed"}`);
     }

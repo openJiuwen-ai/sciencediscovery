@@ -1011,18 +1011,14 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           if (packedEvolve.length) {
             const restoredEvolve = await restoreEvolveRuns(evolutionStore, { projectId, sessionId: target.id }, { runs: packedEvolve });
             omissions.push(...restoredEvolve.omissions);
-            const restoredRunIds = new Set<string>();
-            for (const entry of packedEvolve) {
-              const run = typeof entry === "object" && entry !== null ? (entry as { run?: { id?: unknown } }).run : undefined;
-              if (typeof run?.id === "string" && (await evolutionStore.readRun(run.id))?.sessionId === target.id) restoredRunIds.add(run.id);
-            }
+            const restoredRunIds = new Set(restoredEvolve.runIds.keys());
             for (const candidate of packageEvolveCandidateSourcesFor(records.evolve, restoredRunIds)) {
               const object = imported.objects.get(candidate.objectPath.replace(/^objects\//, ""));
               if (!object) {
                 omissions.push(`evolve:${candidate.runId}:${candidate.hash}:missing candidate source object`);
                 continue;
               }
-              if (!await evolveCandidates.write(candidate.runId, candidate.hash, Buffer.from(object).toString("utf8"))) {
+              if (!await evolveCandidates.write(restoredEvolve.runIds.get(candidate.runId)!, candidate.hash, Buffer.from(object).toString("utf8"))) {
                 omissions.push(`evolve:${candidate.runId}:${candidate.hash}:invalid candidate source record`);
               }
             }

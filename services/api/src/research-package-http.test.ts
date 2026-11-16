@@ -434,6 +434,36 @@ test("a package carrying evolve candidate source restores it beside the imported
   const evolve = (exported.records as { evolve?: { candidates?: Array<{ hash: string; objectPath: string; runId: string }> } }).evolve;
   assert.deepEqual(evolve?.candidates, [{ hash: `sha256:${digest}`, objectPath: digest, runId: "evolve-run-source" }]);
   assert.equal(Buffer.from(exported.objects.get(digest)!).toString("utf8"), "print('candidate source')\n");
+
+  // Import into the same data directory again: both sessions must own a run
+  // and the remapped run must still serve its candidate source.
+  const second = await project();
+  const secondReceipt = await (await request(`/api/projects/${second.id}/research-package/import?sessionId=${second.firstSession.id}`, {
+    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true)),
+  })).json() as { omissions: string[] };
+  assert.equal(secondReceipt.omissions.some((item) => item.includes("run id already exists")), false);
+  const secondRuns = await (await request(`/api/evolve/runs?sessionId=${second.firstSession.id}`)).json() as Array<{ id: string }>;
+  assert.equal(secondRuns.length, 1);
+  assert.notEqual(secondRuns[0]!.id, "evolve-run-source");
+  assert.equal(await readFile(resolve(root, "evolve-candidates", secondRuns[0]!.id, `${digest}.py`), "utf8"), "print('candidate source')\n");
+
+  const operation = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "evolve-copy" }),
+  })).json() as { id: string; state: string; entrySessionId?: string; error?: string };
+  let completed = operation;
+  for (let attempt = 0; attempt < 100 && !["ready", "failed"].includes(completed.state); attempt++) {
+    await new Promise((done) => setTimeout(done, 50));
+    completed = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation;
+  }
+  assert.equal(completed.state, "ready", completed.error);
+  const copyRuns = await (await request(`/api/evolve/runs?sessionId=${completed.entrySessionId}`)).json() as Array<{ id: string }>;
+  assert.equal(copyRuns.length, 1);
+  assert.notEqual(copyRuns[0]!.id, secondRuns[0]!.id);
+  assert.equal(await readFile(resolve(root, "evolve-candidates", copyRuns[0]!.id, `${digest}.py`), "utf8"), "print('candidate source')\n");
+  const events = await (await request(`/api/evolve/runs/${copyRuns[0]!.id}/events`)).json() as Array<{ event: { type: string } }>;
+  assert.equal(events[0]?.event.type, "log");
+  const candidate = await (await request(`/api/evolve/runs/${copyRuns[0]!.id}/candidates/sha256:${digest}`)).json() as { source: string };
+  assert.equal(candidate.source, "print('candidate source')\n");
 });
 
 test("a package without an evolve artifact reports no such loss", async (context) => {

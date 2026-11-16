@@ -110,7 +110,7 @@ test("a run that was still executing at export time is restored as stopped", asy
   assert.equal((await fresh.readRun("run-a"))?.status, "stopped");
 });
 
-test("an existing run id is never overwritten by a second import", async (context) => {
+test("repeated imports preserve separate session runs and their events", async (context) => {
   const sourceDir = temporaryDataDir("evolution-package-dup-source");
   const targetDir = temporaryDataDir("evolution-package-dup-target");
   context.after(() => rm(sourceDir, { force: true, recursive: true }));
@@ -118,13 +118,17 @@ test("an existing run id is never overwritten by a second import", async (contex
   const source = new EvolutionStore(sourceDir);
   const target = new EvolutionStore(targetDir);
   await source.createRun({ goal: goal(), id: "run-1", sessionId: "session-source" });
+  await source.appendEvents("run-1", [{ createdAt: "2026-08-19T00:00:01.000Z", event: { type: "log", level: "info", message: "started" } as never, sequence: 1 }]);
   const packed = await exportEvolveRuns(source, ["session-source"]);
 
   assert.equal((await restoreEvolveRuns(target, { sessionId: "first" }, { runs: packed.runs })).restored, 1);
   const second = await restoreEvolveRuns(target, { sessionId: "second" }, { runs: packed.runs });
-  assert.equal(second.restored, 0);
-  assert.equal(second.omissions.length, 1);
-  assert.match(second.omissions[0]!, /^evolve:run-1:run id already exists here/);
+  assert.equal(second.restored, 1);
+  assert.deepEqual(second.omissions, []);
+  const secondId = second.runIds.get("run-1")!;
+  assert.notEqual(secondId, "run-1");
+  assert.equal((await target.readRun(secondId))?.sessionId, "second");
+  assert.deepEqual(await target.readEvents(secondId), packed.runs[0]!.events);
   assert.equal((await target.readRun("run-1"))?.sessionId, "first", "the first import keeps its run");
 });
 
