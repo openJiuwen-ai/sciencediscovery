@@ -14,7 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "make-icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icon.ps1",
     "assemble": "node scripts/assemble-backend.mjs",
-    "dist": "node scripts/build.mjs && node scripts/assemble-backend.mjs && electron-builder --win"
+    "dist": "node scripts/build.mjs && node scripts/assemble-backend.mjs --expect-runner-sea && electron-builder --win"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
