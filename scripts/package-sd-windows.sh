@@ -22,7 +22,7 @@
 #   dist  重跑出包（assemble + NSIS，约 40-50 分钟）
 # 前提：1) git 工作树必须干净（脚本强制检查，出包要求可复现）；
 #       2) 新机器/新目录首次先跑 bash scripts/package-sd-windows.sh check 预检环境。
-# 产物固定在 <仓库>\win_desktop\release\，版本号由 win_desktop/package.json 决定。
+# 产物固定在 <仓库>\<壳目录>\release\（application/，旧名 win_desktop/），版本号由其 package.json 决定。
 #
 # 阶段说明：
 #   code  git 同步 -> pnpm install --frozen-lockfile -> pnpm build（全 workspace）
@@ -60,7 +60,7 @@
 # 写法（如 0.4.0.rc1）不是合法 SemVer，package.json 须用 0.4.0-rc1 并把 artifactName
 # 钉为字面量；发正式版时 version 改回 X.Y.Z 并把 artifactName 恢复 ${version} 宏。
 #
-# 产物：win_desktop/release/ScienceDiscovery-<version>-win-x64-setup.exe
+# 产物：<壳目录>/release/ScienceDiscovery-<version>-win-x64-setup.exe
 set -euo pipefail
 
 # --------------------------------------------------------------------------
@@ -68,7 +68,13 @@ set -euo pipefail
 # 脚本位于 <repo>/scripts/，默认对所在仓库出包；SD_REPO 可指向任意 checkout。
 REPO="${SD_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPO_WIN="$(cygpath -w "$REPO" 2>/dev/null || echo "$REPO")"
-WIN_DESKTOP="$REPO/win_desktop"
+# 壳目录双名兼容：上游 main 仍是 win_desktop/，mac 分支已重命名为 application/
+# （平台中立化，见该分支 rename commit）。探测式取用——两边 main 都能跑，
+# 未来 rebase 该行不会与上游冲突。
+WIN_DESKTOP="$REPO/application"
+if [ ! -d "$WIN_DESKTOP" ]; then
+  WIN_DESKTOP="$REPO/win_desktop"
+fi
 DATA="$REPO/.sciencediscovery-data"
 STAMPS="$REPO/.package-stamps"
 WSL_DISTRO="${SD_WSL_DISTRO:-Ubuntu-22.04}"
@@ -307,7 +313,7 @@ clean_orphans() {
   repo_win="$(cygpath -w "$REPO")"
   mapfile -t pids < <(powershell.exe -NoProfile -Command \
     "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='node.exe'\" |
-     Where-Object { \$_.ExecutablePath -and \$_.ExecutablePath -like '${repo_win}\\win_desktop\\build*' } |
+     Where-Object { \$_.ExecutablePath -and \$_.ExecutablePath -like '${repo_win}\\'$(basename "$WIN_DESKTOP")'\\build*' } |
      ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -PassThru | Select-Object -ExpandProperty Id }" \
     2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' || true)
   if [[ ${#pids[@]} -gt 0 ]]; then
@@ -365,7 +371,7 @@ do_dist() {
     log "== dist: 跳过（HEAD $fp 已出包: $(basename "$exe")） =="; return 0
   fi
   clean_orphans
-  log "== dist: win_desktop 依赖 =="
+  log "== dist: 壳目录（$(basename "$WIN_DESKTOP")）依赖 =="
   pnpm -C "$WIN_DESKTOP" install --frozen-lockfile
 
   log "== dist: shell 打包（esbuild） =="

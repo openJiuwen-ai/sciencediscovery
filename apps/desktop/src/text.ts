@@ -54,6 +54,25 @@ let language: Language = initialLanguage();
 
 const listeners = new Set<() => void>();
 
+/**
+ * Hand the current language to the Electron shell when one is hosting us:
+ * the fail-closed error page lives on a file:// origin and cannot read
+ * this origin's localStorage, so the shell persists the locale on our
+ * behalf and passes it to that page via its query (review F13; F16: the
+ * report must also happen at BOOT, not only on change — the shell has no
+ * other way to learn the stored choice until the user flips the setting).
+ * In a plain browser there is no sdShell and this is a no-op.
+ */
+function reportLocaleToShell(l: Language): void {
+  const bridge = (globalThis as { sdShell?: { reportLocale?: (lang: Language) => void } }).sdShell;
+  bridge?.reportLocale?.(l);
+}
+
+// F16: report the persisted language once at module load. `language` was
+// just initialized from localStorage above, so the shell learns the
+// stored choice even if the user never touches the language setting.
+reportLocaleToShell(language);
+
 export function getLanguage(): Language {
   return language;
 }
@@ -84,6 +103,8 @@ export function setLanguage(next: Language): void {
   if (typeof localStorage !== "undefined") {
     writeStoredText(localStorage, LOCALE_STORAGE_KEY, next);
   }
+  // Report the change to the shell (F13/F16 — see reportLocaleToShell).
+  reportLocaleToShell(next);
   applyDocumentLanguage();
   for (const listener of [...listeners]) listener();
 }

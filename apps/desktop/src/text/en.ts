@@ -516,13 +516,17 @@ export const EN: Text = {
       timeoutSub: "The execution engine may be slow on its first preparation; wait a moment and check again.",
       fallbackError:
         "Unknown reason. Check the logs and try again; antivirus software may be blocking the preparation.",
+      seatbeltFailedTitle: "macOS sandbox (Seatbelt) not detected",
+      seatbeltRetryHint: "If an MDM restriction was just lifted or system settings changed, restart the app and check again.",
       items: {
+        seatbelt: "macOS sandbox (Seatbelt)",
         api: "Local API service",
         runner: "Execution engine (Python runtime)",
         model: "Default task model (optional; can be configured later in settings)",
       },
       notChecked: "Not checked",
       runnerNeedsToken: "Not checked (token required)",
+      seatbeltNotApplicable: "Not checked (the sandbox is macOS-only)",
       retry: "Check again",
       retryBoot: "Try again",
       logs: "Open the logs folder",

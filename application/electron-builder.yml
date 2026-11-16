@@ -1,0 +1,126 @@
+# Packaging config (electron-builder): NSIS (win32) + DMG/zip (darwin, macOS
+# adaptation D4 §2). Per-user install without UAC, an assisted first-run
+# wizard, frozen artifact names. The backend payload tree rides extraResources
+# as plain files (no physical split), so unchanged big pieces keep their
+# blockmap blocks and differential updates never re-download them.
+appId: cn.sciencediscovery.desktop
+productName: ScienceDiscovery
+copyright: Apache-2.0
+
+directories:
+  output: release
+  buildResources: build
+
+# SIZEOPT W4: trim Electron locales to en-US + zh-CN after packing
+afterPack: scripts/after-pack-trim-locales.cjs
+
+# Only the shell code goes into the asar; the backend payload is plain files
+# under resources/ (staged by scripts/assemble-backend.mjs — on darwin build
+# it with `--platform darwin-arm64` first, or the payload layout is win32's).
+files:
+  - dist/**
+  - package.json
+
+extraResources:
+  - from: build/resources
+    to: .
+  - from: build/extra
+    to: .
+    # to: . (not "resources") so build/extra files land at $INSTDIR\resources\
+    # top level — installer.nsh stages $INSTDIR\resources\uninstall_helper.ps1
+    # into $PLUGINSDIR as the rd /s /q → ps1 → robocopy fallback chain.
+
+asarUnpack: []
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ScienceDiscovery
+  artifactName: ScienceDiscovery-${version}-win-x64-setup.${ext}
+  # Installer presentation tweaks (progress bar behavior) live in
+  # build/installer.nsh.
+  include: build/installer.nsh
+
+# --- macOS (D4 §1/§2) -------------------------------------------------------
+# v1 ships arm64 only (D3 §4 per-arch plan C; darwin-x64 awaits real demand,
+# then Rosetta plan B). zip is the electron-updater carrier — on darwin the
+# updater only consumes zip, the DMG never rides the update flow.
+# NOTE: zip has no dedicated config section (schema rejects a top-level
+# `zip:` key); both targets take their names from mac.artifactName's
+# ${arch} substitution, which resolves to arm64 here.
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  # Notarization prerequisites (D4 §3); B4-1 wires the Developer ID identity,
+  # until then builds sign ad-hoc for local smoke only.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  artifactName: ScienceDiscovery-${version}-mac-${arch}.${ext}
+  # [mac-desktop] W23 — .pyc files are Python bytecode (DATA files), but
+  # isbinaryfile@4's magic sniff classifies them as Mach-O binaries, so the
+  # signer walks ~40k .pyc files one-by-one with a --timestamp round-trip to
+  # Apple per file: the 2026-11-13 signed build spent 47+ minutes inside
+  # lark_oapi alone (thousands of packages still ahead). signIgnore feeds
+  # osx-sign's shouldIgnoreFilePath — skipped files stay in the bundle and
+  # remain covered by the CodeResources seal hashes, so notarization and
+  # Gatekeeper are unaffected (only per-file ad-hoc signature entries, which
+  # data files never need, are skipped). Same treatment as .kext upstream.
+  signIgnore:
+    - \.pyc$
+
+dmg:
+  # Standard drag-to-Applications layout: app on the left, /Applications alias
+  # on the right (D4 §2).
+  contents:
+    - { x: 120, y: 160, type: file }
+    - { x: 400, y: 160, type: link, path: /Applications }
+  # Sign the DMG itself in addition to the .app (B4-1). The signer looks up
+  # the same "Developer ID Application" identity; with an ad-hoc build
+  # (mac.identity="-", local smoke) the lookup misses and the DMG is skipped —
+  # verified in dmg-builder@26.15.3 dmg.js signDmg(): no error, just a skip.
+  # DMG signing is what lets `spctl -a -vv` pass on the installer itself.
+  sign: true
+
+# --- Update source & release publishing (B4-2, D4 §1/§5) --------------------
+# IRON RULE (D4 §5): the update-source URL is frozen from the first public
+# release and never changed — this publish block IS that source of truth:
+# the same config feeds electron-builder's asset upload (B4-2) and will feed
+# electron-updater in the shell (B4-3). Changing owner/repo after release
+# strands every installed updater.
+#
+# Review F2: the update source MUST point at the OFFICIAL org repo — a
+# personal fork here would mean every installed client checks for updates
+# against (and executes code served by) an individual account. Overridable
+# for local experiments via the build env (GH_OWNER/GH_REPO-style envs are
+# NOT honored by this block; build-mac.sh documents the override path).
+publish:
+  - provider: github
+    owner: openJiuwen-ai
+    repo: sciencediscovery
+    # vPrefixedTagName default (v0.3.1) + releaseType draft keep the Windows
+    # release cadence. Note: with provider=github the channel file is always
+    # `latest-mac.yml` (arch suffix only applies on Linux) — v1 is arm64-only
+    # so there is exactly one; when x64 ships it MUST go to a separate
+    # release/directory or the two latest-mac.yml overwrite each other (D4 §1).
+    # upload is MANUAL by default: build-mac.sh 5f prints the asset manifest
+    # and the exact gh CLI commands; `--publish always` + GH_TOKEN flips
+    # electron-builder into auto-upload if ever wanted.
+    releaseType: draft

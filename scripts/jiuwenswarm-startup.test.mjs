@@ -18,7 +18,7 @@ import {
   startupDiagPath, stderrTail, verifyFingerprint,
 } from "./jiuwenswarm.mjs";
 
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 
 // The resolveVenvEntry cases below pin the Windows venv layout of the
 // packaged payload (Lib\site-packages + Scripts\python.exe). resolveVenvEntry
@@ -66,6 +66,45 @@ test("resolveVenvEntry does not false-hit on name prefixes", async () => {
       "my-jiuwenswarm-init = a.b:c\njiuwenswarm-initx = d.e:f\n", "utf8");
     const spec = resolveVenvEntry(venv, "jiuwenswarm-init");
     assert.deepEqual(spec, { exe: join(venv, "Scripts", "jiuwenswarm-init.exe"), args: [] });
+  } finally {
+    await rm(venv, { recursive: true, force: true });
+  }
+});
+
+// [macOS adaptation] W18 — the entry_points bypass must also cover the POSIX
+// venv layout (lib/python3.<minor>/site-packages + bin/python). On darwin
+// this is not an optimization but the ONLY working path: the payload's
+// console scripts ship shebangs burned with the build machine's absolute
+// jw-venv path (and macOS shebang parsing breaks on any space in it — a
+// mounted DMG's volume name has one), so falling back to the exe is a
+// guaranteed ENOENT off the build machine. Pinned here with the same shape
+// as the Windows cases above, against a POSIX-layout fixture venv.
+test("resolveVenvEntry bypasses burned-in shebang console scripts on POSIX venvs (W18)", async () => {
+  if (process.platform !== "darwin") return; // POSIX-layout fixture is darwin-shaped
+  const venv = await mkdtemp(join(tmpdir(), "jw-venv-posix-"));
+  try {
+    const distInfo = join(venv, "lib", "python3.12", "site-packages", "workswarm-0.2.5b1.dist-info");
+    await mkdir(distInfo, { recursive: true });
+    await writeFile(join(distInfo, "entry_points.txt"),
+      "[console_scripts]\njiuwenswarm-start = jiuwenswarm.start_services:main\n", "utf8");
+    const spec = resolveVenvEntry(venv, "jiuwenswarm-start");
+    // The spec must be the DIRECT-python form — never the console script exe
+    // whose shebang is burned with the build machine's path (W18).
+    assert.equal(spec.exe, join(venv, "bin", "python"));
+    assert.equal(spec.args[0], "-c");
+    assert.match(spec.args[1], /from jiuwenswarm\.start_services import main as _sd_entry/);
+    assert.match(spec.args[1], /sys\.argv\[0\] = "jiuwenswarm-start"/);
+  } finally {
+    await rm(venv, { recursive: true, force: true });
+  }
+});
+
+test("resolveVenvEntry still falls back to the console script exe when a POSIX venv has no entry_points", async () => {
+  if (process.platform !== "darwin") return;
+  const venv = await mkdtemp(join(tmpdir(), "jw-venv-posix-bare-"));
+  try {
+    const spec = resolveVenvEntry(venv, "jiuwenswarm-start");
+    assert.deepEqual(spec, { exe: join(venv, "bin", "jiuwenswarm-start"), args: [] });
   } finally {
     await rm(venv, { recursive: true, force: true });
   }

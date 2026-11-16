@@ -1,5 +1,5 @@
 {
-  "comment": "Pinned runtimes for the single-file release binaries. node and python are embedded at build time; uv is downloaded on the user's machine at first launch as a PyPI wheel (from the configured package index) and verified against the sha256 pinned here. Every download is verified, so neither the build nor the first launch trusts the network. Bump a version together with its checksums for both architectures.",
+  "comment": "Pinned runtimes for the single-file release binaries. node and python are embedded at build time; uv is downloaded on the user's machine at first launch as a PyPI wheel (from the configured package index) and verified against the sha256 pinned here. Every download is verified, so neither the build nor the first launch trusts the network. Bump a version together with its checksums for both architectures. darwin entries (B3-1) live in the SAME architectures map, keyed by the pythonPlatform triple (aarch64-apple-darwin / x86_64-apple-darwin) so resolveRuntime serves them without a parallel key space; the desktop assemble does not consume them in v1 (it uses the build machine's own uv-installed python, same as the Windows chain) — they serve runtime-version auditing and a possible mac single-file edition later.",
   "node": {
     "version": "v22.19.0",
     "baseUrl": "https://nodejs.org/dist",
@@ -26,6 +26,14 @@
       "x86_64": {
         "filename": "cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
         "sha256": "f04a55ae95e8bd352cdff8da11c344fe609ec84795d106fa91b6620366d786fe"
+      },
+      "aarch64-apple-darwin": {
+        "filename": "cpython-3.12.13+20260805-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "a4b36035915038104aabee94d6f02827161da444296881fe4493cb98f70304b2"
+      },
+      "x86_64-apple-darwin": {
+        "filename": "cpython-3.12.13+20260805-x86_64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "0d232711501680a619ea6113046603567d93be3218e326e4357557e771d1aec7"
       }
     }
   },
@@ -40,11 +48,21 @@
       "x86_64": {
         "filename": "uv-0.9.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
         "sha256": "b7e89798bd3df7dcc4b2b4ac4e2fc11d6b3ff4fe7d764aa3012d664c635e2922"
+      },
+      "aarch64-apple-darwin": {
+        "filename": "uv-0.9.26-py3-none-macosx_11_0_arm64.whl",
+        "sha256": "1b012e6c4dfe767f818cbb6f47d02c207c9b0c82fee69a5de6d26ffb26a3ef3c"
+      },
+      "x86_64-apple-darwin": {
+        "filename": "uv-0.9.26-py3-none-macosx_10_12_x86_64.whl",
+        "sha256": "b815e3b26eeed00e00f831343daba7a9d99c1506883c189453bb4d215f54faac"
       }
     }
   },
   "architectures": {
     "aarch64": { "runtimeArchitecture": "arm64", "pythonPlatform": "aarch64-unknown-linux-gnu" },
-    "x86_64": { "runtimeArchitecture": "x64", "pythonPlatform": "x86_64-unknown-linux-gnu" }
+    "x86_64": { "runtimeArchitecture": "x64", "pythonPlatform": "x86_64-unknown-linux-gnu" },
+    "aarch64-apple-darwin": { "runtimeArchitecture": "arm64", "pythonPlatform": "aarch64-apple-darwin" },
+    "x86_64-apple-darwin": { "runtimeArchitecture": "x64", "pythonPlatform": "x86_64-apple-darwin" }
   }
 }
