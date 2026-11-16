@@ -62,7 +62,7 @@ export function ExportHistoryList({
             <span>{exportSize(row.bytes)}</span>
             <span aria-hidden="true">·</span>
             <span>{exportSavedAt(row.savedAt, locale)}</span>
-            {row.sessionTitle ? <><span aria-hidden="true">·</span><span>{row.sessionTitle}</span></> : null}
+            {row.sessionTitle ? <><span aria-hidden="true">·</span><span className="export-history-session" title={row.sessionTitle}>{row.sessionTitle}</span></> : null}
           </span>
           <span className="export-history-destination" title={row.directory}>{row.directory}</span>
           <span className="export-history-actions">

@@ -49,6 +49,7 @@ export const EN: Text = {
     description: "Study packages saved on this machine, findable again",
     heading: "Saved study packages",
     empty: "No study package has been saved yet.",
+    noMatch: "No saved package matches the current filter.",
     unavailable: "Export history is available inside the desktop app only.",
     searchPlaceholder: "Search by filename or session",
     allProjects: "All projects",

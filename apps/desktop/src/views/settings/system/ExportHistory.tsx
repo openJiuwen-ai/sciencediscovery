@@ -93,7 +93,7 @@ export function ExportHistorySettings({ projects }: { projects: Project[] }) {
       {visible.length > 0 ? (
         <ExportHistoryList locale={TEXT.languageTag} onForget={(row) => void forget(row)} onReveal={(row) => void reveal(row)} rows={visible} />
       ) : (
-        <p className="settings-hint">{rows.length === 0 ? t.empty : t.unavailable}</p>
+        <p className="settings-hint">{rows.length === 0 ? t.empty : t.noMatch}</p>
       )}
     </section>
   );

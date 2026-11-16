@@ -41,7 +41,17 @@
   display: flex;
   font-size: 12px;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+}
+
+/* A session title is user-set and unbounded: it shrinks with an ellipsis
+ * instead of widening the row past the dialog or the settings pane. */
+.export-history-session {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .export-history-destination {

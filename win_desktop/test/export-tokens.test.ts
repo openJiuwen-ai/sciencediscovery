@@ -27,6 +27,18 @@ test("written destinations are marked without losing resolvability", () => {
   assert.equal(entry?.path, "C:\\picked.sdresearch");
 });
 
+test("a forgotten destination no longer resolves, and forgetting it twice is harmless", () => {
+  const destinations = new ExportDestinations();
+  destinations.issue("token-1", "C:\\picked.sdresearch");
+  destinations.markWritten("token-1");
+  destinations.forget("token-1");
+  // 移除记录 drops the token with the row: reveal through the per-run map is gone.
+  assert.equal(destinations.resolve("token-1"), undefined);
+  assert.equal(destinations.size, 0);
+  destinations.forget("token-1");
+  assert.equal(destinations.size, 0);
+});
+
 test("the oldest destination is evicted past the limit", () => {
   const destinations = new ExportDestinations(2);
   destinations.issue("a", "C:\\a.sdresearch");
