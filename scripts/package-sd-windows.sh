@@ -372,7 +372,7 @@ do_dist() {
   node "$WIN_DESKTOP/scripts/build.mjs"
 
   log "== dist: payload 组装（约 15-20 分钟，含全部自检门） =="
-  CODEBUDDY_SAFE_DELETE_ENABLED=0 node "$WIN_DESKTOP/scripts/assemble-backend.mjs"
+  CODEBUDDY_SAFE_DELETE_ENABLED=0 node "$WIN_DESKTOP/scripts/assemble-backend.mjs" --expect-runner-sea
 
   log "== dist: NSIS 安装包（1.5GB payload 压缩，约 15-30 分钟） =="
   CODEBUDDY_SAFE_DELETE_ENABLED=0 pnpm -C "$WIN_DESKTOP" exec electron-builder --win

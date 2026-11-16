@@ -27,11 +27,15 @@ test('PR inputs cannot enable real calls; every merge_group gets L3',()=>{
     assert.equal(route('pull_request',input).distribution,true);
     assert.equal(route('pull_request',input).mocked,false);
     assert.equal(route('pull_request',input).real,false);
+    assert.equal(route('pull_request',input).windows_desktop,false);
     assert.equal(route('merge_group',input).profile,'merge');
     assert.equal(route('merge_group',input).distribution,false);
     assert.equal(route('merge_group',input).mocked,true);
     assert.equal(route('merge_group',input).real,true);
+    assert.equal(route('merge_group',input).windows_desktop,false);
   }
+  assert.equal(route('workflow_dispatch','daily').windows_desktop,true);
+  assert.equal(route('workflow_dispatch','release').windows_desktop,true);
   assert.equal(route('schedule','daily').profile,'daily');
   assert.equal(route('schedule','daily').distribution,true);
   assert.equal(route('push','release').distribution,true);
@@ -44,25 +48,27 @@ test('PR inputs cannot enable real calls; every merge_group gets L3',()=>{
 });
 
 test('aggregate gate rejects failed, missing, skipped and cancelled required jobs',()=>{
-  const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker'].map(n=>[n,{result:'success'}]));
-  for(const n of ['real-scheduled','binary','docker']) needs[n]={result:'skipped'};
+  const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker','windows-desktop'].map(n=>[n,{result:'success'}]));
+  for(const n of ['real-scheduled','binary','docker','windows-desktop']) needs[n]={result:'skipped'};
   assert.deepEqual(gate('merge',needs),[]);
   for(const value of ['failure','cancelled','skipped',undefined]) {
     assert.notEqual(gate('merge',{...needs,'real-merge':{result:value}}).length,0);
   }
   for(const n of ['real-merge','real-scheduled','e2e-plan','e2e']) needs[n]={result:'skipped'};
   for(const n of ['binary','docker']) needs[n]={result:'success'};
+  needs['windows-desktop']={result:'skipped'};
   assert.deepEqual(gate('pr',needs),[]);
   assert.notEqual(gate('merge',needs).length,0);
 });
 
 test('PR requires builds without E2E; merge requires E2E without builds; daily and release require both',()=>{
   for(const profile of ['pr','merge','daily','release']) {
-    const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker'].map(n=>[n,{result:'success'}]));
+    const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker','windows-desktop'].map(n=>[n,{result:'success'}]));
     const distribution=profile!=='merge';
     if(profile!=='merge') needs['real-merge']={result:'skipped'};
     if(!['daily','release'].includes(profile)) needs['real-scheduled']={result:'skipped'};
     if(!distribution) for(const n of ['binary','docker']) needs[n]={result:'skipped'};
+    if(!['daily','release'].includes(profile)) needs['windows-desktop']={result:'skipped'};
     if(profile==='pr') for(const n of ['e2e-plan','e2e']) needs[n]={result:'skipped'};
     assert.deepEqual(gate(profile,needs),[],profile);
     for(const name of Object.keys(needs)) {
