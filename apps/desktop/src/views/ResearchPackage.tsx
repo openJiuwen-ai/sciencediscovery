@@ -400,7 +400,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const limitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
   const overLimitAcknowledged = limitKey !== undefined && acknowledgedLimitKey === limitKey;
   const blockedByLimit = overLimit && !overLimitAcknowledged;
-  const formatLimit = (bytes: number) => `${(bytes / 1024).toFixed(1)} KiB`;
+  const formatLimit = (bytes: number) => bytes >= 1024 * 1024 * 1024
+    ? `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`
+    : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(0)} MiB` : `${(bytes / 1024).toFixed(0)} KiB`;
   return <>
     {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
