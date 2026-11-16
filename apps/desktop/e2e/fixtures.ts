@@ -670,12 +670,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/mcp/servers" && method === "POST") {
         const input = JSON.parse(body ?? "{}") as JsonRecord;
         const server = {
-          checkedAt: CREATED_AT,
-          durationMs: 4,
-          error: undefined,
           id: `mcp-${state.mcpServers.length + 1}`,
           sourceId: `custom-${state.mcpServers.length + 1}`,
-          status: "ready",
+          status: input.enabled ? "untested" : "disabled",
           tools: [],
           ...input,
         };
@@ -691,7 +688,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           server.status = "error";
           server.error = "connection refused";
         } else {
-          server.status = "ready";
+          server.status = server.enabled ? "ready" : "disabled";
           server.error = undefined;
         }
         server.checkedAt = UPDATED_AT;
