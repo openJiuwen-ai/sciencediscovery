@@ -28,6 +28,9 @@ import { createLocalSessionTitle } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { listWorkspaceFiles } from "./artifacts/index.js";
 
+/** What a complete workspace listing returns, derived rather than re-imported. */
+type WorkspaceListing = Awaited<ReturnType<typeof listWorkspaceFiles>>;
+
 /** True for the per-session shell-execution ledger under `execution-runs/`.
  *  Its content still counts; only its mtime is excluded (see `inspect`). */
 function isExecutionLedgerPath(path: string): boolean {
@@ -60,7 +63,35 @@ type PreviewSizing = {
    * lost to keeping entries alive.
    */
   trajectorySizing?: Map<string, TrajectorySizingEntry[]>;
+  /**
+   * The complete workspace listing of each session, shared by the profiles of one
+   * dialog request for as long as it is young (#1140 §7.8).
+   *
+   * Each profile used to scan the directory and reconcile the catalog on its own —
+   * five writes to produce one read-only estimate — plus a second scan of the same
+   * session to build its file list. Sharing is bounded in time rather than scoped to
+   * the request, like the bounded UI listing already is, so a file written after the
+   * first profile is still seen by a later request instead of being hidden until the
+   * evidence revision moves.
+   */
+  workspaceListings?: PreviewWorkspaceListings;
 };
+
+/** Age after which a shared preview listing is scanned again. */
+const MAX_SHARED_PREVIEW_LISTING_AGE_MS = 1_000;
+
+type PreviewWorkspaceListings = Map<string, { listing: Promise<WorkspaceListing>; startedAt: number }>;
+
+/** The session's complete listing, scanned and reconciled once for a burst of profiles. */
+function previewWorkspaceListing(listings: PreviewWorkspaceListings, store: Ports["store"], sessionId: string): Promise<WorkspaceListing> {
+  const now = Date.now();
+  const shared = listings.get(sessionId);
+  if (shared && now - shared.startedAt < MAX_SHARED_PREVIEW_LISTING_AGE_MS) return shared.listing;
+  const entry = { listing: listWorkspaceFiles(store, sessionId, true), startedAt: now };
+  listings.set(sessionId, entry);
+  void entry.listing.catch(() => { if (listings.get(sessionId) === entry) listings.delete(sessionId); });
+  return entry.listing;
+}
 
 type TrajectorySizingEntry =
   | { unreadable: string }
@@ -491,7 +522,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       signal.throwIfAborted();
       const messages = await store.readMessages(session.id);
       const runs = await store.listSessionRuns(session.id);
-      const workspaceFiles = await listWorkspaceFiles(store, session.id, true);
+      const workspaceFiles = await (preview?.workspaceListings
+        ? previewWorkspaceListing(preview.workspaceListings, store, session.id)
+        : listWorkspaceFiles(store, session.id, true));
       const workspace = [];
       const workspaceProvenance = [];
       for (const file of workspaceFiles) {
@@ -749,10 +782,22 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     trajectorySizing.set("current", { revision, bySession });
     return bySession;
   };
+  // The complete workspace listings of a dialog request, dropped as soon as evidence
+  // moves on and re-scanned after the short window above (#1140 §7.8).
+  const workspaceListings = new Map<string, { revision: string; bySession: PreviewWorkspaceListings }>();
+  const workspaceListingsFor = (revision: string): PreviewWorkspaceListings => {
+    const current = workspaceListings.get("current");
+    if (current && current.revision === revision) return current.bySession;
+    const bySession: PreviewWorkspaceListings = new Map();
+    workspaceListings.clear();
+    workspaceListings.set("current", { revision, bySession });
+    return bySession;
+  };
   const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal) => {
       const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, hashes: new Set(), refs: new Map(),
         jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(),
-        trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined };
+        trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined,
+        workspaceListings: workspaceListingsFor(revision) };
       const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
       const records = input.records as { sessions?: Array<{ session: { id: string }; workspace?: Array<{ path: string }> }> };
       if (sessionId && level === "necessary" && !selectedFiles) {
@@ -762,7 +807,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       const selectedPaths = new Set(records.sessions?.find((record) => record.session.id === sessionId)?.workspace?.map((file) => file.path));
       return {
         revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes), estimateKind: "uncompressed" as const,
-        files: sessionId ? (await listWorkspaceFiles(store, sessionId, true)).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],
+        files: sessionId ? (await (preview.workspaceListings
+          ? previewWorkspaceListing(preview.workspaceListings, store, sessionId)
+          : listWorkspaceFiles(store, sessionId, true))).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],
         exportProfile: input.exportProfile, omissions: [...(input.omissions ?? [])],
       };
   }, async (_projectId, sessionId) => !(await store.listSessionRuns(sessionId))
