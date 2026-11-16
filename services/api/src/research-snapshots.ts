@@ -77,20 +77,26 @@ type PreviewSizing = {
   workspaceListings?: PreviewWorkspaceListings;
 };
 
-/** Age after which a shared preview listing is scanned again. */
-const MAX_SHARED_PREVIEW_LISTING_AGE_MS = 1_000;
+/**
+ * The complete listing of one session, cached for the lifetime of a single dialog
+ * request.
+ *
+ * It is deliberately not time-bounded. The five profiles are serialised on the
+ * per-session queue, so on a large workspace the last one starts more than a second
+ * after the first; an age bound would re-scan there and hand the last profiles a
+ * different workspace than the ones before them. Request scope is the right bound:
+ * a new request asks again, and the workspace only has to be consistent within the
+ * one answer the user is waiting for.
+ */
+type PreviewWorkspaceListings = Map<string, Promise<WorkspaceListing>>;
 
-type PreviewWorkspaceListings = Map<string, { listing: Promise<WorkspaceListing>; startedAt: number }>;
-
-/** The session's complete listing, scanned and reconciled once for a burst of profiles. */
 function previewWorkspaceListing(listings: PreviewWorkspaceListings, store: Ports["store"], sessionId: string): Promise<WorkspaceListing> {
-  const now = Date.now();
   const shared = listings.get(sessionId);
-  if (shared && now - shared.startedAt < MAX_SHARED_PREVIEW_LISTING_AGE_MS) return shared.listing;
-  const entry = { listing: listWorkspaceFiles(store, sessionId, true), startedAt: now };
-  listings.set(sessionId, entry);
-  void entry.listing.catch(() => { if (listings.get(sessionId) === entry) listings.delete(sessionId); });
-  return entry.listing;
+  if (shared) return shared;
+  const listing = listWorkspaceFiles(store, sessionId, true);
+  listings.set(sessionId, listing);
+  void listing.catch(() => { if (listings.get(sessionId) === listing) listings.delete(sessionId); });
+  return listing;
 }
 
 type TrajectorySizingEntry =
@@ -791,22 +797,17 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     trajectorySizing.set("current", { revision, bySession });
     return bySession;
   };
-  // The complete workspace listings of a dialog request, dropped as soon as evidence
-  // moves on and re-scanned after the short window above (#1140 §7.8).
-  const workspaceListings = new Map<string, { revision: string; bySession: PreviewWorkspaceListings }>();
-  const workspaceListingsFor = (revision: string): PreviewWorkspaceListings => {
-    const current = workspaceListings.get("current");
-    if (current && current.revision === revision) return current.bySession;
-    const bySession: PreviewWorkspaceListings = new Map();
-    workspaceListings.clear();
-    workspaceListings.set("current", { revision, bySession });
-    return bySession;
-  };
-  const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal) => {
+  const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal, scope) => {
+      // `defaults()` owns this map for its five profiles (#1140 §7.8). Keying it on the
+      // revision was wrong: the first profile's reconcile writes the very provenance
+      // rows the revision digests, so the request's own work moved the revision and
+      // dropped the listing for every profile after it. A standalone preview gets a
+      // throwaway map, which is the same behaviour as before the sharing existed.
+      const workspaceListings = (scope ?? new Map()) as PreviewWorkspaceListings;
       const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, hashes: new Set(), refs: new Map(),
         jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(),
         trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined,
-        workspaceListings: workspaceListingsFor(revision) };
+        workspaceListings };
       const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
       const records = input.records as { sessions?: Array<{ session: { id: string }; workspace?: Array<{ path: string }> }> };
       if (sessionId && level === "necessary" && !selectedFiles) {
