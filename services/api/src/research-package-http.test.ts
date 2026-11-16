@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { TestContext } from "node:test";
-import { createResearchPackage, importResearchPackage, estimateResearchPackageBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackage, importResearchPackage, estimateResearchPackageBytes, researchPackageArchiveBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { createApiServer, closeApiServer } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
@@ -91,13 +91,22 @@ test("incremental previews match exported evidence and profile sizes", async (co
   for (const level of ["necessary", "complete"]) for (const trajectory of [false, true]) for (const memory of [false, true]) {
     const query = `sessionId=${target.firstSession.id}&level=${level}&includeFullTrajectory=${Number(trajectory)}&includeFullMemoryGraph=${Number(memory)}`;
     const base = `/api/projects/${target.id}/research-package`;
-    const preview = await (await request(`${base}/preview?${query}`)).json() as { estimatedBytes: number };
+    const preview = await (await request(`${base}/preview?${query}`)).json() as {
+      estimatedBytes: number; maxBytes?: number; archiveBytes?: number };
     const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
-    assert.equal(preview.estimatedBytes, estimateResearchPackageBytes({
+    const exportedInput = {
       source: exported.manifest.source, records: exported.records, readme: Buffer.from(exported.readme).toString(),
       omissions: exported.manifest.omissions, exportProfile: exported.manifest.exportProfile,
       objects: [...exported.objects].map(([path, bytes]) => ({ path, bytes })),
-    }), query);
+    };
+    assert.equal(preview.estimatedBytes, estimateResearchPackageBytes(exportedInput), query);
+    // The dialog gates on these two fields: the shared cap, and the exact tar size
+    // the exporter refuses on (which is not the same number as the estimate above).
+    assert.equal(preview.maxBytes, RESEARCH_PACKAGE_MAX_BYTES, query);
+    assert.equal(preview.archiveBytes, researchPackageArchiveBytes(exportedInput), query);
+    // A package this fixture just exported cannot be over its own cap: a mismatch
+    // here would mean the dialog refuses work the server would happily do.
+    assert.ok(preview.archiveBytes! <= preview.maxBytes!, query);
   }
 });
 
@@ -825,4 +834,59 @@ test("a finished continuation stays readable after its source session is deleted
   assert.equal(afterDelete.state, "ready");
   assert.equal(afterDelete.id, operation.id);
   assert.equal(afterDelete.entrySessionId, last.entrySessionId);
+});
+
+test("the preview reports the cap and the tar size the exporter refuses on", async (context) => {
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const query = `sessionId=${target.firstSession.id}&level=complete`;
+  const base = `/api/projects/${target.id}/research-package`;
+  const preview = await (await request(`${base}/preview?${query}`)).json() as {
+    estimatedBytes: number; maxBytes?: number; archiveBytes?: number };
+  assert.equal(preview.maxBytes, RESEARCH_PACKAGE_MAX_BYTES);
+  assert.equal(typeof preview.archiveBytes, "number");
+  assert.ok((preview.archiveBytes ?? 0) > 0);
+  // The dialog refuses work on this number, so it must be the tar the exporter builds.
+  const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
+  const rebuilt = {
+    source: exported.manifest.source, records: exported.records, readme: Buffer.from(exported.readme).toString(),
+    omissions: exported.manifest.omissions, exportProfile: exported.manifest.exportProfile,
+    objects: [...exported.objects].map(([path, bytes]) => ({ path, bytes })),
+  };
+  assert.equal(preview.archiveBytes, researchPackageArchiveBytes(rebuilt));
+});
+
+test("an over-cap export is refused before it starts, and accepted once acknowledged", async (context) => {
+  const { rawRequest, project } = await fixture(context);
+  const target = await project();
+  const sessionId = target.firstSession.id;
+  const base = `/api/projects/${target.id}/research-package`;
+  const sized = (archiveBytes: number) => ({
+    revision: "sized", estimatedBytes: archiveBytes, estimateKind: "uncompressed" as const,
+    files: [], omissions: [], maxBytes: RESEARCH_PACKAGE_MAX_BYTES, archiveBytes,
+  });
+  context.mock.method(ResearchExportPreviews.prototype, "get",
+    async () => sized(RESEARCH_PACKAGE_MAX_BYTES + 1));
+
+  const body = { level: "complete", sessionId, revision: "sized" };
+  const refusedTask = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify(body) });
+  assert.equal(refusedTask.status, 413);
+  assert.equal((await refusedTask.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
+
+  const refusedStream = await rawRequest(`${base}?level=complete&sessionId=${sessionId}`);
+  assert.equal(refusedStream.status, 413);
+  assert.equal((await refusedStream.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
+
+  // The same request with the acknowledgement: the task is accepted, the stream packs.
+  const acceptedTask = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ ...body, allowOverCap: true }) });
+  assert.equal(acceptedTask.status, 202);
+  const acknowledged = await rawRequest(`${base}?level=complete&sessionId=${sessionId}&allowOverCap=1`);
+  assert.equal(acknowledged.status, 200);
+
+  // Nothing may cross the hard ceiling, acknowledgement or not.
+  context.mock.method(ResearchExportPreviews.prototype, "get",
+    async () => sized(RESEARCH_PACKAGE_MAX_MAX_BYTES + 1));
+  const beyond = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ ...body, allowOverCap: true }) });
+  assert.equal(beyond.status, 413);
+  assert.equal((await beyond.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
 });

@@ -66,8 +66,9 @@ export class PluginApiClient extends AuthApiClient {
     } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
 
-  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false): Promise<Blob> {
+  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false, allowOverCap = false): Promise<Blob> {
     const params = new URLSearchParams({ level });
+    if (allowOverCap) params.set("allowOverCap", "1");
     if (sessionId) params.set("sessionId", sessionId);
     if (!includeFullTrajectory) params.set("includeFullTrajectory", "0");
     params.set("includeFullMemoryGraph", includeFullMemoryGraph ? "1" : "0");
@@ -77,13 +78,18 @@ export class PluginApiClient extends AuthApiClient {
       headers: { authorization: `Bearer ${this.token}` },
     });
     this.reportAuthStatus(response.status);
-    if (!response.ok) throw new ApiRequestError("Research package export failed", response.status);
+    if (!response.ok) {
+      // The refusal carries a stable code; without it the dialog can only show the
+      // generic English string and the localized over-cap copy is unreachable.
+      const payload = await response.json().catch(() => undefined) as { code?: string } | undefined;
+      throw new ApiRequestError("Research package export failed", response.status, payload?.code);
+    }
     return response.blob();
   }
 
   startResearchPackageExport(projectId: string, options: {
     sessionId: string; level: "necessary" | "complete"; filePaths?: string[];
-    includeFullTrajectory: boolean; includeFullMemoryGraph: boolean; revision: string;
+    includeFullTrajectory: boolean; includeFullMemoryGraph: boolean; revision: string; allowOverCap?: boolean;
   }): Promise<ResearchPackageExportTaskView> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports`, {
       method: "POST", body: JSON.stringify(options),
@@ -114,7 +120,7 @@ export class PluginApiClient extends AuthApiClient {
     return response.blob();
   }
 
-  previewResearchPackage(projectId: string, sessionId: string, level: "necessary" | "complete", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = true): Promise<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfileView }> {
+  previewResearchPackage(projectId: string, sessionId: string, level: "necessary" | "complete", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = true): Promise<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfileView; maxBytes?: number; archiveBytes?: number }> {
     const params = new URLSearchParams({ sessionId, level });
     if (filePaths) { params.set("customFiles", "1"); for (const path of filePaths) params.append("filePath", path); }
     if (!includeFullTrajectory) params.set("includeFullTrajectory", "0");

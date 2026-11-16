@@ -71,3 +71,14 @@
 .research-package-saved-row { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-secondary); padding:4px 0; overflow-wrap:anywhere; }
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
+
+/* Over-cap warning in the export dialog: the risk is a sentence a person reads
+   before the second confirmation, so it gets a bordered block rather than a
+   quieter notice line. */
+.research-package-limit {
+  display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0;
+  padding: 10px 12px; border: 1px solid var(--warning-border, #d9a441);
+  border-radius: 8px; background: var(--warning-surface, rgba(217, 164, 65, 0.12));
+}
+.research-package-limit p { margin: 0; font-size: 13px; line-height: 1.5; }
+.research-package-limit button { align-self: flex-start; }

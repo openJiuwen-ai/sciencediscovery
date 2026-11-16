@@ -47,7 +47,18 @@ function download(blob: Blob, name: string) {
   const anchor = document.createElement("a"); anchor.href = href; anchor.download = name; anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(href), 1000);
 }
-const errorText = (reason: unknown) => reason instanceof Error ? reason.message : translateActive("researchPackage.operationFailed");
+const errorText = (reason: unknown) => {
+  // Both size refusals arrive with a stable code; their server messages are English
+  // and must not be shown verbatim (the dialog is localized, and the raw text used
+  // to carry an internal byte count).
+  if (reason instanceof ApiRequestError && reason.code === "RESEARCH_PACKAGE_TOO_LARGE")
+    return translateActive("researchPackage.packageTooLarge");
+  if (reason instanceof ApiRequestError && reason.code === "PAYLOAD_TOO_LARGE")
+    return translateActive("researchPackage.packageTooLarge");
+  if (reason instanceof Error && reason.message === "Research package exceeds the archive size limit")
+    return translateActive("researchPackage.packageTooLarge");
+  return reason instanceof Error ? reason.message : translateActive("researchPackage.operationFailed");
+};
 const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 
 function PackageScope({ profile }: { profile?: ResearchPackageExportProfile }) {
@@ -112,7 +123,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const [includeFullMemoryGraph, setIncludeFullMemoryGraph] = useState(false);
   const [files, setFiles] = useState<Array<{ path: string; size: number; selected?: boolean }>>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary.files ?? []);
   const [selectedPaths, setSelectedPaths] = useState<string[] | undefined>();
-  const [preview, setPreview] = useState<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; omissions: string[]; exportProfile?: ResearchPackageExportProfile } | undefined>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary);
+  const [preview, setPreview] = useState<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; omissions: string[]; exportProfile?: ResearchPackageExportProfile; maxBytes?: number; archiveBytes?: number } | undefined>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
@@ -120,6 +131,9 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   // Conflating them is what let a slow preview claim the session had no files
   // while it had 176 of them (#1140).
   const [preparing, setPreparing] = useState(false);
+  // Keyed by revision + size: any new selection is unanswered again, which is what
+  // the second confirmation is for.
+  const [acknowledgedLimitKey, setAcknowledgedLimitKey] = useState<string>();
   // The scope this dialog previews can be deleted while the dialog is open (another
   // client, another tab, a teardown). The poll then answers `deleted`; the last
   // estimate stays on screen as the pre-deletion snapshot, but exporting it would
@@ -204,7 +218,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     setBusy(true); setMessage(undefined); setError(undefined);
     try {
       const safeTitle = sessionTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || t("researchPackage.scientificSession");
-      download(await client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph), `${safeTitle}.sdresearch`);
+      download(await client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged), `${safeTitle}.sdresearch`);
       onClose();
     }
     catch (reason) { setError(errorText(reason)); } finally { setBusy(false); }
@@ -218,7 +232,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
         sessionId: target.sessionId, level, filePaths: selectedPaths,
         includeFullTrajectory: level === "complete" && includeFullTrajectory,
         includeFullMemoryGraph: level === "complete" && includeFullMemoryGraph,
-        revision: preview.revision,
+        revision: preview.revision, allowOverCap: overLimitAcknowledged,
       });
       trackResearchPackageExport(target.projectId, task);
       onExportQueued?.(task.filename || `${safeTitle}.sdresearch`);
@@ -228,11 +242,22 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const completeDefaultPreview = includeFullMemoryGraph
     ? includeFullTrajectory ? defaults?.completeWithTrajectoryAndMemoryGraph : defaults?.completeWithMemoryGraph
     : includeFullTrajectory ? defaults?.completeWithTrajectory : defaults?.complete;
+  // The cap and the exact tar size come from the same response, so the dialog gates
+  // on the quantity the server refuses on rather than on its own estimate.
+  const limit = preview?.maxBytes;
+  const archiveBytes = preview?.archiveBytes ?? preview?.estimatedBytes;
+  const overLimit = limit !== undefined && archiveBytes !== undefined && archiveBytes > limit;
+  const overLimitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
+  const overLimitAcknowledged = overLimitKey !== undefined && acknowledgedLimitKey === overLimitKey;
+  const blockedByLimit = overLimit && !overLimitAcknowledged;
   const necessarySize = defaults && defaults.necessary.revision === defaults.revision ? defaults.necessary.estimatedBytes : undefined;
   const completeSize = completeDefaultPreview && completeDefaultPreview.revision === defaults?.revision ? completeDefaultPreview.estimatedBytes : undefined;
   // A gone scope will never finish a preview, so the dialog stops promising
   // "Calculating…" next to an alert that says the opposite (#1074 F6).
   const unavailableSize = "—";
+  const formatLimit = (bytes: number) => bytes >= 1024 * 1024 * 1024
+    ? `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`
+    : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(0)} MiB` : `${(bytes / 1024).toFixed(0)} KiB`;
   const sizeText = (bytes: number | undefined) => bytes === undefined
     ? scopeGone ? unavailableSize : t("researchPackage.previewCalculating")
     : formatSize(bytes);
@@ -247,6 +272,14 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       <div className="research-export-estimate" aria-live="polite"><strong>{preview ? t("researchPackage.estimatedSize", { size: formatSize(preview.estimatedBytes) }) : sizeText(undefined)}</strong><span>{t("researchPackage.selectedFiles", { selected: checkedPaths.length, total: files.length })}</span></div>
       <p className="research-export-note">{t("researchPackage.previewNote")}</p>
       {preview?.estimateKind === "uncompressed" ? <p className="research-export-note">{t("researchPackage.uncompressedNote")}</p> : null}
+      {limit !== undefined ? <p className="research-export-note">{t("researchPackage.sizeLimit", { size: formatLimit(limit) })}</p> : null}
+      {blockedByLimit ? <div role="alert" className="research-export-limit">
+        <p>{t("researchPackage.overLimit", { size: formatLimit(archiveBytes ?? 0), limit: formatLimit(limit ?? 0) })}</p>
+        {level === "necessary" ? <p>{t("researchPackage.overLimitNecessaryOnly")}</p> : null}
+        <p>{t("researchPackage.overLimitRisk")}</p>
+        <button className="secondary-button" onClick={() => setAcknowledgedLimitKey(overLimitKey)} type="button">{t("researchPackage.exportAnyway")}</button>
+      </div> : null}
+      {overLimitAcknowledged ? <p role="status" className="research-export-status">{t("researchPackage.overLimitConfirmed")}</p> : null}
       {preview?.exportProfile ? <PackageScope profile={preview.exportProfile} /> : null}
       <details className="research-export-details"><summary>{t("researchPackage.customContent")}</summary><p>{t("researchPackage.customContentNote")}</p><div className="research-message-picker">
         {files.map((file) => <label key={file.path}><input checked={checkedPaths.includes(file.path)} onChange={(event) => setSelectedPaths((current) => { const paths = current ?? checkedPaths; return event.target.checked ? [...new Set([...paths, file.path])] : paths.filter((path) => path !== file.path); })} type="checkbox" /><span>{file.path} <small>{formatSize(file.size)}</small></span></label>)}
@@ -264,7 +297,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {preparing && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
       {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
-    <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
+    <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || blockedByLimit || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || blockedByLimit || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;
 }
 
