@@ -5,7 +5,14 @@ import type { ResearchPackageExportProfile } from "@sciencediscovery/research-pa
 import { ApiStatusError } from "./http/api-status-error.js";
 
 export type ExportPreviewOptions = { projectId: string; sessionId?: string; level: "necessary" | "complete"; selectedFiles?: Set<string>; includeFullTrajectory: boolean; includeFullMemoryGraph?: boolean };
-export type ResearchExportPreview = { revision: string; estimatedBytes: number; estimateKind: "uncompressed"; files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfile };
+export type ResearchExportPreview = {
+  revision: string; estimatedBytes: number; estimateKind: "uncompressed";
+  files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfile;
+  /** The one package cap (#1152). Additive: older clients keep their own default. */
+  maxBytes?: number;
+  /** The exact uncompressed tar size this selection would produce, which is what a refusal is based on. */
+  archiveBytes?: number;
+};
 export type DefaultExportPreviews = {
   revision: string;
   necessary: ResearchExportPreview;
@@ -58,7 +65,14 @@ export class ResearchExportPreviews {
   private closed = false;
   private ticking = false;
   constructor(private readonly revision: (projectId: string, sessionId?: string) => Promise<string>,
-    private readonly calculate: (options: ExportPreviewOptions, revision: string, signal: AbortSignal) => Promise<ResearchExportPreview>,
+    /**
+   * @param scope Opaque per-request state, created by `defaults()` for its five
+   *   profiles. It exists so work that is only valid within one dialog request — the
+   *   complete workspace listing — is shared across those five calls and cannot leak
+   *   into the next request, where the workspace may have changed.
+   */
+  private readonly calculate: (options: ExportPreviewOptions, revision: string, signal: AbortSignal,
+    scope?: Map<string, unknown>) => Promise<ResearchExportPreview>,
     private readonly canWarm: (projectId: string, sessionId: string) => Promise<boolean> = async () => true,
     private readonly now: () => number = () => Date.now()) {}
 
@@ -124,9 +138,10 @@ export class ResearchExportPreviews {
     return current;
   }
 
-  async get(options: ExportPreviewOptions, deferWhileRunning = false, memo?: WarmMemo): Promise<ResearchExportPreview> {
+  async get(options: ExportPreviewOptions, deferWhileRunning = false, memo?: WarmMemo,
+    scope?: Map<string, unknown>): Promise<ResearchExportPreview> {
     for (let attempt = 0; ; attempt++) {
-      try { return await this.getAttempt(options, deferWhileRunning, memo); }
+      try { return await this.getAttempt(options, deferWhileRunning, memo, scope); }
       catch (error) {
         // A run can begin after admission but before trajectory/CAS files are
         // published, so a read inside the preview can hit a file that is not on
@@ -145,7 +160,8 @@ export class ResearchExportPreviews {
     }
   }
 
-  private async getAttempt(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo): Promise<ResearchExportPreview> {
+  private async getAttempt(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo,
+    scope?: Map<string, unknown>): Promise<ResearchExportPreview> {
     const admitted = await this.assertCanCalculate(options, deferWhileRunning, memo);
     if (this.closed) throw serviceClosed();
     const revision = admitted ?? await this.currentRevision(options.projectId, options.sessionId);
@@ -175,7 +191,7 @@ export class ResearchExportPreviews {
         const existing = this.entries.get(this.key(options, current));
         const ready = existing && this.completed.get(existing);
         if (ready) return ready;
-        const result = await this.calculate(options, current, signal);
+        const result = await this.calculate(options, current, signal, scope);
         signal.throwIfAborted();
         await this.assertCanCalculate(options, deferWhileRunning, memo);
         signal.throwIfAborted();
@@ -213,12 +229,16 @@ export class ResearchExportPreviews {
 
   async defaults(projectId: string, sessionId: string, deferWhileRunning = false, memo: WarmMemo = {}): Promise<DefaultExportPreviews> {
     for (let attempt = 0; attempt < 3; attempt++) {
+      // One scope per attempt: the five profiles below ask about the same workspace,
+      // and it is the same request, so the scan and the catalog write happen once.
+      // A retry gets a fresh scope.
+      const scope = new Map<string, unknown>();
       const [necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph] = await Promise.all([
-        this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: false }, deferWhileRunning, memo),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: true }, deferWhileRunning, memo),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: true }, deferWhileRunning, memo),
+        this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope),
       ]);
       if ([complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph].every((preview) => preview.revision === necessary.revision))
         return { revision: necessary.revision, necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph };

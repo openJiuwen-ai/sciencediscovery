@@ -100,7 +100,8 @@ export class VersionStore {
    * object after this process verified it. Admission says only that this instance
    * saw those bytes; existence is re-checked on every admitted read, and reads,
    * full audits and new instances still rehash. File metadata is never taken as
-   * evidence of content.
+   * evidence of content, with one stated exception: `storedSize` compares the length
+ * only, for preview sizing. It never authorises a read, and `read` still re-hashes.
    */
   private readonly admitted = new Map<string, boolean>();
   /** Bumped when admission is revoked, so an in-flight validation cannot re-admit a stale closure. */
@@ -257,6 +258,19 @@ export class VersionStore {
    * full read of an object whose length the reference already carries (#1140 §7.6).
    * A file whose length disagrees with its reference is treated as absent, because
    * `read` would refuse it too.
+   */
+  /**
+   * The object's length, taken from file metadata, or `undefined` when it is missing
+   * or its length disagrees with the reference.
+   *
+   * This exists so a size preview does not read every object it measures (#1140 §7.6),
+   * and the trade-off is deliberate: a same-length replacement of the bytes is
+   * reported as present. Nothing exports from that answer — `read` re-hashes and fails
+   * closed — but a preview may therefore size an object the export later refuses, and
+   * no `version:…:unavailable source object` omission is recorded for it. Callers
+   * that need the bytes verified must use `read`, and this method deliberately does
+   * not revoke admissions: an admission means "this closure was hashed at publish
+   * time", which a length check cannot disprove or confirm.
    */
   async storedSize(ref: ObjectRef): Promise<number | undefined> {
     assertRef(ref);

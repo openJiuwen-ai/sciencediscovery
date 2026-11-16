@@ -20,13 +20,16 @@
  * for itself, and each profile scanned the session a second time to build its file
  * list, so one read-only size estimate produced five directory *writes*.
  *
- * It does not pin the time bound. A listing older than the shared window is scanned
- * again by design, and a test that waited for that would be measuring the clock.
+ * The workspace here holds real files, not an empty one. An empty session reconciles
+ * nothing, so a case built on it passes even when the sharing is dropped between
+ * profiles — which is exactly what Reviewers found on an earlier head: with 50 files
+ * the same assertion went red because the first profile's own reconcile moved the
+ * revision the sharing was keyed on.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
@@ -55,6 +58,14 @@ test("the five dialog profiles reconcile the workspace once, not once each", { t
   try {
     const project = await store.createProject("listing");
     const session = await store.createSession(project.id, "listing", {}, {}, { allowUnconfiguredModel: true });
+    // A workspace with files is the case that matters: reconciliation only writes
+    // the catalog when it has something to record, and the sharing has to survive
+    // that write.
+    const workspaceRoot = store.workspacePath(session.id);
+    await mkdir(workspaceRoot, { recursive: true });
+    for (let index = 0; index < 50; index += 1) {
+      await writeFile(join(workspaceRoot, `file-${index}.txt`), `row ${index}\n`);
+    }
     const snapshots = await snapshotsFor(root, store);
     const original = SessionStore.prototype.reconcileWorkspaceFiles;
     const reconciled: string[] = [];
