@@ -95,6 +95,7 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [addingSkill, setAddingSkill] = useState(false);
+  const [addingMcp, setAddingMcp] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -107,6 +108,7 @@ export function SystemSettingsDialog({
   useEffect(() => {
     setAddingModel(false);
     setAddingSkill(false);
+    setAddingMcp(false);
   }, [group]);
 
   useEffect(() => {
@@ -149,9 +151,11 @@ export function SystemSettingsDialog({
       case "mcp":
         return (
           <McpServers
+            adding={addingMcp}
             client={client}
+            onAddingChange={setAddingMcp}
             onConfirm={actions.confirmAction}
-            onToast={(message) => actions.toast(message)}
+            onToast={actions.toast}
           />
         );
       case "specialists":
@@ -256,6 +260,10 @@ export function SystemSettingsDialog({
               ) : group === "skills" ? (
                 <button className="pill-button is-dark" onClick={() => setAddingSkill(true)} type="button">
                   {TEXT.settings.skills.add}
+                </button>
+              ) : group === "mcp" ? (
+                <button className="pill-button is-dark" onClick={() => setAddingMcp(true)} type="button">
+                  {TEXT.settings.system.mcp.add}
                 </button>
               ) : null}
             </header>

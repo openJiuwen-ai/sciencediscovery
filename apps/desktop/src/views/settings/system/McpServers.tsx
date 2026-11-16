@@ -32,16 +32,18 @@ import type {
   McpSource,
   RuntimeSettingsOverrides,
 } from "../../../api/types.js";
-import type { ConfirmRequest } from "../../../app/use-workspace.js";
+import type { ConfirmRequest, Toast } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
 import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
 
 interface Props {
+  adding?: boolean;
   client: ApiClient;
+  onAddingChange?: (adding: boolean) => void;
   onConfirm: (request: ConfirmRequest) => void;
-  onToast: (message: string) => void;
+  onToast: (message: string, tone?: Toast["tone"]) => void;
 }
 
 interface Page {
@@ -82,6 +84,7 @@ interface Draft {
   id?: string;
   name: string;
   oauth: OauthDraft;
+  originalArgs?: string[];
   savedOauthSecret: boolean;
   timeoutSeconds: string;
   transport: CustomMcpServerInput["transport"];
@@ -95,13 +98,13 @@ function emptyDraft(): Draft {
     command: "",
     cwd: "",
     description: "",
-    enabled: true,
+    enabled: false,
     envRows: [],
     headerRows: [],
     name: "",
     oauth: { clientId: "", clientMetadataUrl: "", clientSecret: "", scope: "" },
     savedOauthSecret: false,
-    timeoutSeconds: "30",
+    timeoutSeconds: "60",
     transport: "http",
     url: "",
   };
@@ -113,7 +116,7 @@ function rowsFrom(map: Record<string, null>): SecretRow[] {
 
 function draftOf(server: CustomMcpServerDetails): Draft {
   return {
-    args: server.args.join(" "),
+    args: server.args.join("\n"),
     authMode: server.authMode ?? "headers",
     command: server.command,
     cwd: server.cwd,
@@ -129,6 +132,7 @@ function draftOf(server: CustomMcpServerDetails): Draft {
       clientSecret: "",
       scope: server.oauth?.scope ?? "",
     },
+    originalArgs: server.args,
     savedOauthSecret: server.oauth?.clientSecret === null,
     timeoutSeconds: String(server.timeoutSeconds),
     transport: server.transport,
@@ -160,8 +164,12 @@ function secretProblem(rows: SecretRow[]): string | undefined {
 
 function inputOf(draft: Draft): CustomMcpServerInput {
   const stdio = draft.transport === "stdio";
+  // Preserve legacy arguments such as empty strings when editing other fields.
+  const args = draft.originalArgs?.join("\n") === draft.args
+    ? draft.originalArgs
+    : draft.args.split(/\r?\n/).filter((line) => line.length > 0);
   return {
-    args: draft.args.split(/\s+/).filter(Boolean),
+    args,
     authMode: stdio ? "headers" : draft.authMode,
     command: draft.command.trim(),
     cwd: draft.cwd.trim(),
@@ -178,7 +186,7 @@ function inputOf(draft: Draft): CustomMcpServerInput {
           : draft.oauth.clientSecret,
       },
     }),
-    timeoutSeconds: Math.max(1, Number(draft.timeoutSeconds) || 30),
+    timeoutSeconds: Number(draft.timeoutSeconds),
     transport: draft.transport,
     url: draft.url.trim(),
   };
@@ -224,7 +232,7 @@ function initialOf(name: string): string {
  * 内置来源和自定义 MCP 都通过全局 `enabledConnectorIds` 管理是否默认选用；
  * 自定义服务的连接状态仍由各自的 `enabled` 字段控制，二者相互独立。
  */
-export function McpServers({ client, onConfirm, onToast }: Props) {
+export function McpServers({ adding, client, onAddingChange, onConfirm, onToast }: Props) {
   const loaded = useLoaded<Page>(async () => {
     const [servers, sources, settings] = await Promise.all([
       listMcpServers(client),
@@ -244,16 +252,17 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
 
-  useEffect(() => setFailure(undefined), [draft]);
+  useEffect(() => setFailure(undefined), [adding, draft]);
 
-  // Only a saved server opens the form, so there is never an empty draft: the
-  // record being edited is the source of every field.
-  const current = draft;
+  const current = draft ?? (adding ? emptyDraft() : undefined);
   const editing = current?.id !== undefined;
   const change = (patch: Partial<Draft>) =>
     setDraft((previous) => ({ ...(previous ?? emptyDraft()), ...patch }));
 
-  const closeForm = () => setDraft(undefined);
+  const closeForm = () => {
+    setDraft(undefined);
+    onAddingChange?.(false);
+  };
 
   /** Toggle whether a data source is selected by default for new sessions. */
   const toggleDefaultUse = async (id: string) => {
@@ -307,8 +316,12 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
-  const submit = async () => {
-    if (!current || current.name.trim() === "") return;
+  const submit = async (form: HTMLFormElement) => {
+    if (!current || busy) return;
+    if (current.name.trim() === "") {
+      setFailure(TEXT.settings.system.mcp.nameRequired);
+      return;
+    }
     const problem = current.transport === "stdio"
       ? secretProblem(current.envRows)
       : secretProblem(current.headerRows);
@@ -316,13 +329,14 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       setFailure(problem);
       return;
     }
+    if (!form.reportValidity()) return;
     setBusy(true);
     setFailure(undefined);
     try {
       await saveMcpServer(client, inputOf(current), current.id);
       closeForm();
       loaded.reload();
-      onToast(TEXT.settings.system.mcp.saved);
+      onToast(TEXT.settings.system.mcp.saved, "info");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
@@ -378,7 +392,11 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                           void testMcpServer(client, server.id)
                             .then((next) => {
                               loaded.reload();
-                              onToast(next.error ?? TEXT.settings.system.mcp.tested(next.status));
+                              const passed = next.status === "ready" || next.status === "disabled";
+                              onToast(
+                                next.error ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)),
+                                passed && !next.error ? "info" : "error",
+                              );
                             })
                             .catch((reason: unknown) => {
                               setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
@@ -494,11 +512,15 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
 
       {current ? (
         <SettingsModal
-          label={TEXT.settings.system.mcp.editTitle}
-          onClose={closeForm}
+          label={editing ? TEXT.settings.system.mcp.editTitle : TEXT.settings.system.mcp.add}
+          onClose={() => { if (!busy) closeForm(); }}
           wide
         >
-          <section className="settings-card is-form">
+          <form
+            className="settings-card is-form"
+            noValidate
+            onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}
+          >
             <div className="settings-card-form">
               <Row title={TEXT.settings.system.mcp.enableService}>
                 <label className="settings-check">
@@ -512,8 +534,11 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
               </Row>
               <Row title={TEXT.settings.system.mcp.name}>
                 <input
+                  aria-label={TEXT.settings.system.mcp.name}
                   className="field-input"
+                  maxLength={100}
                   onChange={(event) => change({ name: event.target.value })}
+                  required
                   value={current.name}
                 />
               </Row>
@@ -540,15 +565,19 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 <>
                   <Row title={TEXT.settings.system.mcp.command}>
                     <input
+                      aria-label={TEXT.settings.system.mcp.command}
                       className="field-input"
                       onChange={(event) => change({ command: event.target.value })}
+                      required
                       value={current.command}
                     />
                   </Row>
                   <Row hint={TEXT.settings.system.mcp.argsHint} title={TEXT.settings.system.mcp.args}>
-                    <input
+                    <textarea
+                      aria-label={TEXT.settings.system.mcp.args}
                       className="field-input"
                       onChange={(event) => change({ args: event.target.value })}
+                      rows={3}
                       value={current.args}
                     />
                   </Row>
@@ -569,8 +598,11 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 <>
                   <Row title={TEXT.settings.system.mcp.url}>
                     <input
+                      aria-label={TEXT.settings.system.mcp.url}
                       className="field-input"
                       onChange={(event) => change({ url: event.target.value })}
+                      required
+                      type="url"
                       value={current.url}
                     />
                   </Row>
@@ -648,24 +680,27 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
               )}
               <Row title={TEXT.settings.system.mcp.timeout}>
                 <input
+                  aria-label={TEXT.settings.system.mcp.timeout}
                   className="field-input is-number"
+                  max="600"
                   min="1"
                   onChange={(event) => change({ timeoutSeconds: event.target.value })}
+                  required
                   type="number"
                   value={current.timeoutSeconds}
                 />
               </Row>
-              {failure ? <small className="row-note is-error">{failure}</small> : null}
+              {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
               <div className="settings-card-actions">
-                <button className="secondary-button" onClick={closeForm} type="button">
+                <button className="secondary-button" disabled={busy} onClick={closeForm} type="button">
                   {TEXT.settings.cancel}
                 </button>
-                <button className="primary-button" disabled={busy} onClick={() => void submit()} type="button">
+                <button className="primary-button" disabled={busy} type="submit">
                   {TEXT.settings.system.save}
                 </button>
               </div>
             </div>
-          </section>
+          </form>
         </SettingsModal>
       ) : null}
 
