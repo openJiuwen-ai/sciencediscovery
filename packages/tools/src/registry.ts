@@ -89,6 +89,29 @@ const MAX_DETAIL_KEYS = 100;
 const MAX_DETAIL_ARRAY_ITEMS = 100;
 const MAX_DETAIL_STRING_CHARS = 4_096;
 const MAX_DETAIL_TOTAL_CHARS = 64_000;
+// The audit copy keeps whole strings and whole containers that the interactive
+// view cuts, so its budget has to be larger than 64 000 characters - but it
+// has to exist: a *wide* result (an MCP records array of many small records)
+// is otherwise written whole into the durable trajectory and the version
+// recorder. Four times the interactive bound keeps ordinary metadata complete
+// and still caps what one tool result adds to the durable record. Like the
+// interactive budget it counts characters, so the serialized record can exceed
+// it: three times in UTF-8 bytes for non-ASCII text, and six times for a payload
+// of JSON-escaped control characters. What it guarantees is that the record no
+// longer grows with the provider result.
+const MAX_AUDIT_DETAIL_TOTAL_CHARS = 4 * MAX_DETAIL_TOTAL_CHARS;
+// Charged per object entry and array item: punctuation, quoting and the key.
+// Without it a wide container of short values would grow the audit copy while
+// charging the budget almost nothing.
+const DETAIL_ENTRY_COST = 8;
+// Kept back from an entry that still has siblings after it, per sibling, so one
+// wide payload cannot spend the whole budget and drop the metadata that follows
+// it (`ok`, `error.code`, counts). It comes out of the same budget rather than
+// on top of it, and at most a quarter of what is left is ever held back.
+const DETAIL_TRAILING_ENTRY_RESERVE = 256;
+// Names what the recorder cut, so a reader of a trajectory can tell it apart
+// from what the tool returned.
+const AUDIT_DETAILS_TRUNCATED = "[audit-details truncated]";
 const REDACTED_DETAIL_KEY = /^(?:authorization|api[_-]?key|apikey|apiToken|authToken|accessToken|refreshToken|runnerToken|bearerToken|token|password|passphrase|clientSecret|secretKey|secret|credential|cookie|set-cookie|private[_-]?key|privateKey)$/iu;
 const OMITTED_PAYLOAD_DETAIL_KEY = /^(?:stdout|stderr|raw[_-]?request|raw[_-]?response|raw[_-]?result|prompt|content|text|body|input|output|evaluatorSource)$/iu;
 
@@ -98,6 +121,20 @@ interface DetailSanitizeState {
   remainingChars: number;
   truncated: boolean;
   seen: WeakSet<object>;
+}
+
+// Reported only when the recorder itself cut content: a redacted or omitted
+// payload field already says so where it stood, and the boundary's job is to
+// stop a reader mistaking a cut record for the tool's own output.
+function auditBoundary(state: DetailSanitizeState): Record<string, unknown> | undefined {
+  if (!state.truncated) return undefined;
+  return {
+    marker: AUDIT_DETAILS_TRUNCATED,
+    maxDepth: MAX_AUDIT_DETAIL_DEPTH,
+    maxTotalChars: MAX_AUDIT_DETAIL_TOTAL_CHARS,
+    omittedPayloadFields: state.omitted,
+    truncated: state.truncated,
+  };
 }
 
 function detailBoundary(state: DetailSanitizeState): Record<string, unknown> | undefined {
@@ -113,19 +150,55 @@ function detailBoundary(state: DetailSanitizeState): Record<string, unknown> | u
   };
 }
 
+function detailTruncationMarker(state: DetailSanitizeState): string {
+  return state.bounded ? "[truncated]" : AUDIT_DETAILS_TRUNCATED;
+}
+
 function sanitizeStringDetail(value: string, state: DetailSanitizeState): string {
-  if (!state.bounded) return value;
+  const marker = detailTruncationMarker(state);
   if (state.remainingChars <= 0) {
     state.truncated = true;
-    return "[truncated]";
+    return marker;
   }
-  const allowed = Math.min(value.length, MAX_DETAIL_STRING_CHARS, state.remainingChars);
+  const allowed = Math.min(value.length, state.bounded ? MAX_DETAIL_STRING_CHARS : value.length, state.remainingChars);
   state.remainingChars -= allowed;
   if (allowed < value.length) {
     state.truncated = true;
-    return `${value.slice(0, allowed)}[truncated]`;
+    return `${value.slice(0, allowed)}${marker}`;
   }
   return value;
+}
+
+/** Charge one object entry or array item. False means the budget is spent, so
+ * the walk stops instead of relabelling every remaining leaf: the point of the
+ * budget is a bounded record, not a shorter in-memory one. */
+function chargeDetailEntry(state: DetailSanitizeState, keyLength: number): boolean {
+  state.remainingChars -= DETAIL_ENTRY_COST + keyLength;
+  return state.remainingChars > 0;
+}
+
+/** Sanitize one audit entry or array item while holding back headroom for the
+ * `following` siblings, so a cut drops the payload rather than whatever came
+ * after it. The headroom is returned to the budget afterwards: it decides which
+ * entries survive a cut, never how large the record is. */
+function sanitizeAuditChild(
+  state: DetailSanitizeState,
+  value: unknown,
+  depth: number,
+  key: string | undefined,
+  following: number,
+): unknown {
+  if (state.bounded) return sanitizeDetailValue(value, state, depth + 1, key);
+  const before = state.remainingChars;
+  const reserve = Math.min(
+    Math.ceil(before / 4),
+    following * (DETAIL_ENTRY_COST + DETAIL_TRAILING_ENTRY_RESERVE),
+  );
+  const cap = Math.max(1, before - reserve);
+  state.remainingChars = cap;
+  const sanitized = sanitizeDetailValue(value, state, depth + 1, key);
+  state.remainingChars += before - cap;
+  return sanitized;
 }
 
 function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: number, key?: string): unknown {
@@ -140,7 +213,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
   if (typeof value === "string") return sanitizeStringDetail(value, state);
-  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "bigint") return state.bounded ? value.toString() : sanitizeStringDetail(value.toString(), state);
   if (typeof value === "symbol" || typeof value === "function" || value === undefined) return undefined;
   if (depth >= (state.bounded ? MAX_DETAIL_DEPTH : MAX_AUDIT_DETAIL_DEPTH)) {
     state.truncated = true;
@@ -158,7 +231,8 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
       && typeof ref.mediaType === "string" && ref.mediaType.length > 0
       && Object.keys(ref).length === 4) {
       const chars = ref.pool.length + ref.digest.length + ref.mediaType.length;
-      if (state.bounded && (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS)) {
+      if (chars > state.remainingChars
+        || (state.bounded && ref.mediaType.length > MAX_DETAIL_STRING_CHARS)) {
         state.truncated = true;
         return "[reference omitted: detail budget]";
       }
@@ -166,11 +240,17 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
       return { pool: ref.pool, digest: ref.digest, size: ref.size, mediaType: ref.mediaType };
     }
   }
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const iso = value.toISOString();
+    // A date serializes as a 24-character string, so the audit budget has to
+    // charge it like one; otherwise a list of dates writes itself whole.
+    return state.bounded ? iso : sanitizeStringDetail(iso, state);
+  }
   if (value instanceof Error) {
     return {
       message: sanitizeStringDetail(value.message, state),
-      name: value.name,
+      name: state.bounded ? value.name : sanitizeStringDetail(value.name, state),
     };
   }
   if (state.seen.has(value)) {
@@ -189,37 +269,61 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
     return `[binary:${value.byteLength}]`;
   }
   if (Array.isArray(value)) {
-    const values = value.slice(0, state.bounded ? MAX_DETAIL_ARRAY_ITEMS : undefined)
-      .map((item) => sanitizeDetailValue(item, state, depth + 1))
-      .filter((item) => item !== undefined);
-    if (state.bounded && value.length > MAX_DETAIL_ARRAY_ITEMS) {
+    const values: unknown[] = [];
+    const limit = state.bounded ? Math.min(value.length, MAX_DETAIL_ARRAY_ITEMS) : value.length;
+    let processed = 0;
+    for (; processed < limit; processed += 1) {
+      if (!state.bounded && !chargeDetailEntry(state, 0)) break;
+      const sanitized = sanitizeAuditChild(state, value[processed], depth, undefined, limit - processed - 1);
+      if (sanitized !== undefined) values.push(sanitized);
+    }
+    if (processed < value.length) {
       state.truncated = true;
-      values.push(`[${value.length - MAX_DETAIL_ARRAY_ITEMS} items omitted]`);
+      values.push(state.bounded
+        ? `[${value.length - processed} items omitted]`
+        : `[${value.length - processed} items omitted: ${AUDIT_DETAILS_TRUNCATED}]`);
     }
     state.seen.delete(value);
     return values;
   }
   const result: Record<string, unknown> = {};
   const entries = Object.entries(value as Record<string, unknown>);
-  for (const [entryKey, entryValue] of entries.slice(0, state.bounded ? MAX_DETAIL_KEYS : undefined)) {
-    const sanitized = sanitizeDetailValue(entryValue, state, depth + 1, entryKey);
+  const limit = state.bounded ? Math.min(entries.length, MAX_DETAIL_KEYS) : entries.length;
+  let processed = 0;
+  for (; processed < limit; processed += 1) {
+    const [entryKey, entryValue] = entries[processed]!;
+    if (!state.bounded && !chargeDetailEntry(state, entryKey.length)) break;
+    const sanitized = sanitizeAuditChild(state, entryValue, depth, entryKey, limit - processed - 1);
     if (sanitized !== undefined) result[entryKey] = sanitized;
   }
-  if (state.bounded && entries.length > MAX_DETAIL_KEYS) {
+  if (processed < entries.length) {
     state.truncated = true;
-    result.__omittedKeys = entries.length - MAX_DETAIL_KEYS;
+    result.__omittedKeys = entries.length - processed;
   }
   state.seen.delete(value);
   return result;
 }
 
-/** Persist safe metadata without the interactive size limits, retaining a
- * defensive depth limit. Raw payload fields remain omitted; full results
- * belong in their governed source stores. */
+/** Persist safe metadata without the interactive per-field and per-container
+ * size limits, retaining a defensive depth limit and a total budget. Raw
+ * payload fields remain omitted; full results belong in their governed source
+ * stores. A cut adds `__auditBoundary` and the `[audit-details truncated]`
+ * marker, so a reader can tell the recorder's cut from the tool's own output. */
 export function redactToolDetails(details: unknown): unknown {
-  return sanitizeDetailValue(details, {
-    bounded: false, omitted: false, remainingChars: Infinity, seen: new WeakSet<object>(), truncated: false,
-  }, 0);
+  const state: DetailSanitizeState = {
+    bounded: false,
+    omitted: false,
+    remainingChars: MAX_AUDIT_DETAIL_TOTAL_CHARS,
+    seen: new WeakSet<object>(),
+    truncated: false,
+  };
+  const sanitized = sanitizeDetailValue(details, state, 0);
+  const boundary = auditBoundary(state);
+  if (!boundary) return sanitized;
+  if (sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)) {
+    return { ...(sanitized as Record<string, unknown>), __auditBoundary: boundary };
+  }
+  return { __auditBoundary: boundary, value: sanitized };
 }
 
 export function sanitizeToolDetails(details: unknown): unknown {
