@@ -1,0 +1,125 @@
+diff --git a/dist/cjs/util.js b/dist/cjs/util.js
+index 77e64b56872bc65bcb0f60ecfbec84eb3da02c6f..b8ea2106860ae2280512e93c8e702644e41d7abe 100644
+--- a/dist/cjs/util.js
++++ b/dist/cjs/util.js
+@@ -147,6 +147,48 @@ exports.validateOptsPlatform = validateOptsPlatform;
+  * @returns {Promise} Promise resolving child paths needing signing in order.
+  * @internal
+  */
++// SD-PATCH (mac-design W15): bound the concurrent isbinaryfile probes.
++// Upstream 1.3.x walkAsync fires one coroutine per directory entry with no
++// concurrency limit, and isbinaryfile@4 holds an open fd across its await
++// points (raw util.promisify(fs.open) — no graceful-fs EMFILE queue). On a
++// ~92k-file Electron app payload that fans out into tens of thousands of
++// simultaneously held descriptors and dies with EMFILE: too many open files
++// during the pre-signing walk, regardless of any ulimit raise
++// (kern.maxfilesperproc caps the process at 10240 on stock macOS). A counting
++// semaphore keeps held fds bounded no matter how large the tree is. stat /
++// readdir / remove go through fs-extra (graceful-fs) and need no cap.
++const SD_BINARY_PROBE_LIMIT = 64;
++let sdProbeActive = 0;
++const sdProbeWaiters = [];
++function sdProbeAcquire() {
++    return new Promise((resolve) => {
++        if (sdProbeActive < SD_BINARY_PROBE_LIMIT) {
++            sdProbeActive++;
++            resolve();
++        }
++        else {
++            sdProbeWaiters.push(resolve);
++        }
++    });
++}
++function sdProbeRelease() {
++    const next = sdProbeWaiters.shift();
++    if (next) {
++        next(); // hand the slot straight to the next waiter
++    }
++    else {
++        sdProbeActive--;
++    }
++}
++async function sdProbeSlot(fn) {
++    await sdProbeAcquire();
++    try {
++        return await fn();
++    }
++    finally {
++        sdProbeRelease();
++    }
++}
+ async function walkAsync(dirPath) {
+     (0, exports.debugLog)('Walking... ' + dirPath);
+     async function _walkAsync(dirPath) {
+@@ -161,7 +203,7 @@ async function walkAsync(dirPath) {
+                         await fs.remove(filePath);
+                         return null;
+                     default:
+-                        return await getFilePathIfBinary(filePath);
++                        return await sdProbeSlot(() => getFilePathIfBinary(filePath));
+                 }
+             }
+             else if (stat.isDirectory() && !stat.isSymbolicLink()) {
+diff --git a/dist/esm/util.js b/dist/esm/util.js
+index d3f66d54b1a88e7410d78affe17de87302db02a3..1544184f44d853daf92e7aafeb59314e11beeef6 100644
+--- a/dist/esm/util.js
++++ b/dist/esm/util.js
+@@ -111,6 +111,49 @@ export async function validateOptsPlatform(opts) {
+  * @returns {Promise} Promise resolving child paths needing signing in order.
+  * @internal
+  */
++// SD-PATCH (mac-design W15): bound the concurrent isbinaryfile probes.
++// Upstream 1.3.x walkAsync fires one coroutine per directory entry with no
++// concurrency limit, and isbinaryfile@4 holds an open fd across its await
++// points (raw util.promisify(fs.open) — no graceful-fs EMFILE queue). On a
++// ~92k-file Electron app payload that fans out into tens of thousands of
++// simultaneously held descriptors and dies with EMFILE: too many open files
++// during the pre-signing walk, regardless of any ulimit raise
++// (kern.maxfilesperproc caps the process at 10240 on stock macOS). A counting
++// semaphore keeps held fds bounded no matter how large the tree is. stat /
++// readdir / remove go through fs-extra (graceful-fs) and need no cap.
++const SD_BINARY_PROBE_LIMIT = 64;
++let sdProbeActive = 0;
++const sdProbeWaiters = [];
++function sdProbeAcquire() {
++    return new Promise((resolve) => {
++        if (sdProbeActive < SD_BINARY_PROBE_LIMIT) {
++            sdProbeActive++;
++            resolve();
++        }
++        else {
++            sdProbeWaiters.push(resolve);
++        }
++    });
++}
++function sdProbeRelease() {
++    const next = sdProbeWaiters.shift();
++    if (next) {
++        next(); // hand the slot straight to the next waiter — active stays
++
++    }
++    else {
++        sdProbeActive--;
++    }
++}
++async function sdProbeSlot(fn) {
++    await sdProbeAcquire();
++    try {
++        return await fn();
++    }
++    finally {
++        sdProbeRelease();
++    }
++}
+ export async function walkAsync(dirPath) {
+     debugLog('Walking... ' + dirPath);
+     async function _walkAsync(dirPath) {
+@@ -125,7 +168,7 @@ export async function walkAsync(dirPath) {
+                         await fs.remove(filePath);
+                         return null;
+                     default:
+-                        return await getFilePathIfBinary(filePath);
++                        return await sdProbeSlot(() => getFilePathIfBinary(filePath));
+                 }
+             }
+             else if (stat.isDirectory() && !stat.isSymbolicLink()) {

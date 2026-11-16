@@ -74,7 +74,7 @@ test("local runtime and browser-test data never enter the image context", () => 
 // from the repository root and uv reads that file there — a workspace root
 // sync does NOT consult the members' own `.python-version`. Both feed the
 // same pyvenv.cfg minor-version gate in
-// win_desktop/scripts/assemble-backend.mjs:124-139, which hard-fails when a
+// application/scripts/assemble-backend.mjs:124-139, which hard-fails when a
 // bundled venv drifts a minor from its siblings. That gate fires at package
 // time, so a one-sided edit here only surfaces on a machine whose default
 // interpreter differs from the pinned one — expensive to discover by hand.

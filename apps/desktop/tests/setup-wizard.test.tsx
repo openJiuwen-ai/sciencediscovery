@@ -20,8 +20,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import type { ApiClient } from "../src/api/client.js";
-import { TEXT } from "../src/text.js";
-import { SetupWizard } from "../src/views/SetupWizard.js";
+import { setLanguage, getLanguage, TEXT } from "../src/text.js";
+import { BOOT_CHECK_ITEMS, SetupWizard } from "../src/views/SetupWizard.js";
 
 const { describe, it } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
@@ -82,6 +82,33 @@ describe("the first-run setup wizard", () => {
     // this one.
     assert.ok(markup.includes(TEXT.wizard.back));
     assert.ok(!markup.includes(TEXT.wizard.testAndContinue));
+  });
+
+  it("lists the Seatbelt row as item 0 of the environment check (B2-2)", () => {
+    // Static rendering runs no effect, so the list itself only appears after
+    // the starting phase; the items registry still drives what CAN appear.
+    // The TEXT contract is what the fail-closed page quotes verbatim.
+    assert.ok(TEXT.wizard.boot.items.seatbelt);
+    assert.ok(TEXT.wizard.boot.seatbeltFailedTitle);
+    assert.ok(TEXT.wizard.boot.seatbeltRetryHint.includes("重启"));
+    // Review: pin the RENDER source (BOOT_CHECK_ITEMS drives the list the
+    // component maps over), not the TEXT registry's key order — a reordered
+    // text file must not be able to pass this test while the UI still shows
+    // a different sequence.
+    assert.deepEqual([...BOOT_CHECK_ITEMS], ["seatbelt", "api", "runner", "model"],
+      "Seatbelt is item 0, before API/runner/model");
+    // zh + en both define every rendered row (the shell renders whichever
+    // locale the SPA loaded; a missing key would render "undefined" in one
+    // language).
+    const original = getLanguage();
+    for (const lang of ["zh-CN", "en"] as const) {
+      setLanguage(lang);
+      for (const key of BOOT_CHECK_ITEMS) {
+        assert.ok(TEXT.wizard.boot.items[key], `missing TEXT.wizard.boot.items.${key} in ${lang}`);
+      }
+      assert.ok(TEXT.wizard.boot.seatbeltNotApplicable, `missing seatbeltNotApplicable tip in ${lang}`);
+    }
+    setLanguage(original);
   });
 
   it("is a model step whose final action waits for a successful test", () => {

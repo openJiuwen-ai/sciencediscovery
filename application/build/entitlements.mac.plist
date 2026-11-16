@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron/V8 JIT runtime expectations -->
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <!-- The payload ships unsigned third-party machine code (conda/pip python
+       extension .so, micromamba, shell tools); without this every dlopen of
+       them fails under hardened runtime (D4 §2). -->
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+  <!-- python/uv runtimes may set DYLD_* environment variables -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+  <!-- NOTE: deliberately NO com.apple.security.app-sandbox — that is the Mac
+       App Store sandbox, a different thing from the Seatbelt execution
+       sandbox; enabling it would restrict the shell's fork/child-process
+       behaviour (D4 §2 note). -->
+</dict>
+</plist>

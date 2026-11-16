@@ -1,0 +1,12 @@
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - esbuild
+ignoredBuiltDependencies: []
+patchedDependencies:
+  '@electron/osx-sign@1.3.3': patches/@electron__osx-sign@1.3.3.patch
+  app-builder-lib@26.15.3: patches/app-builder-lib@26.15.3.patch
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true

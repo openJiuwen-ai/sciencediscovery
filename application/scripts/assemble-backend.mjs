@@ -1,0 +1,1359 @@
+// assemble-backend: stage the packaged payload tree for electron-builder.
+//
+// Inputs (all optional, defaults follow the dev checkout):
+//   --repo     ../sciencediscovery   (built: pnpm build ran, venvs provisioned)
+//   --data     <repo>/.sciencediscovery-data
+//   --out      build/resources
+//   --platform win32-x64 | darwin-arm64 | darwin-x64   (default win32-x64)
+//              Target-platform dialect for every platform-sensitive step
+//              (venv layout, .pth separators, launcher repairs, compileall
+//              targets, micromamba name) — see lib/assemble-platform.mjs.
+//   --expect-runner-sea           require both Linux remote-Runner binaries
+//              (win32 installer gate from upstream; darwin payloads never
+//              ship the SEA — see the copySet note at the SEA entry)
+//
+// Output layout (consumed by shell/src/bootstrap.ts and electron-builder.yml):
+//   <out>/backend            repo-relative runtime subset (repoRoot at runtime)
+//   <out>/envs-template      the 5 venvs (pyvenv.cfg home + editable .pth fixed
+//                            at first run by the shell)
+//   <out>/python             the uv-managed base interpreter (venv `home` target)
+//   <out>/micromamba         pinned micromamba (micromamba.exe on win32)
+//   <out>/version.json       payload manifest (commit, sizes, sha256, platform)
+//
+// node_modules strategy (v4): `pnpm deploy` produces a self-contained
+// prod install whose .pnpm store holds every package as REAL files with
+// junction edges. We flatten that store into a classic npm-style
+// <backend>/node_modules: every package as a real directory, package-internal
+// node_modules stripped (flat resolution), and nested copies ONLY for
+// multi-version conflicts. No junctions survive → the tree is portable.
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { copyFile, cp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { copyVenvRuntimeDlls, replaceVenvSymlinks, pythonNamesFor, relocatablePythonTree } from "./lib/venv-launchers.mjs";
+import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
+import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
+import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
+import { stagedPatchTag, patchVerifyCommand, patchVerifyFailureDetail } from "./lib/patch-consistency.mjs";
+import { parseAssemblePlatform, assembleDialect, finderAnchorLevel, sitePackagesDepth } from "./lib/assemble-platform.mjs";
+
+const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`);
+  return i >= 0 && process.argv[i + 1] ? resolve(process.argv[i + 1]) : fallback;
+}
+
+// The backend tree to package. In-tree default: this repository itself
+// (application/ lives at the repo root). Pass --repo <path> to package an
+// out-of-tree backend checkout instead.
+const repo = arg("repo", join(shellRoot, ".."));
+const data = arg("data", join(repo, ".sciencediscovery-data"));
+const out = arg("out", join(shellRoot, "build", "resources"));
+const runnerSeaDir = join(repo, "services", "runner", "dist", "sea");
+const expectRunnerSea = process.argv.includes("--expect-runner-sea")
+  || process.env.SD_EXPECT_RUNNER_SEA === "1";
+
+const say = (line) => console.log(`[assemble] ${line}`);
+const fail = (line) => { console.error(`[assemble] FAIL: ${line}`); process.exit(1); };
+
+// Target platform dialect (macOS adaptation, D3 §2). Default win32-x64 keeps
+// the current behaviour byte-for-byte; --platform darwin-arm64/darwin-x64
+// switches every platform-sensitive step below (venv layout, separator
+// dialect, trampoline-vs-symlink repairs, compileall targets, micromamba
+// name). The dialect table mirrors src/shell-platform.ts venvLayoutFor() —
+// the runtime consumer of this payload.
+const { platform: assemblePlatform, error: platformError } = parseAssemblePlatform(process.argv);
+if (platformError) fail(platformError);
+const dialect = assembleDialect(assemblePlatform);
+say(`platform = ${assemblePlatform} (${dialect.family})`);
+
+// SIZEOPT W2: the five Python sidecars share one venv (uv workspace,
+// "sd-services"); assemble stages that single venv instead of five.
+const VENV_NAMES = ["sd-services"];
+/** Placeholder bootstrap.ts substitutes with the real <resources>\backend. */
+const BACKEND_PLACEHOLDER = "@@SD_BACKEND_ROOT@@";
+
+function pyvenvHome(venvDir) {
+  const text = readFileSync(join(venvDir, "pyvenv.cfg"), "utf8");
+  const match = /^home\s*=\s*(.+)$/m.exec(text);
+  if (!match) fail(`no 'home' in ${join(venvDir, "pyvenv.cfg")}`);
+  return match[1].trim();
+}
+
+/** Recursively measure a directory in MB (best-effort, ignores errors). */
+async function dirSizeMb(dir) {
+  let total = 0;
+  const walk = async (d) => {
+    let entries;
+    try { entries = await readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.isFile()) { try { total += (await stat(p)).size; } catch { /* raced */ } }
+    }
+  };
+  await walk(dir);
+  return total / (1024 * 1024);
+}
+
+/** Copy filter factory: skip named excludes.  Bytecode (__pycache__ / .pyc) is
+ * intentionally kept so the first-run precompile step can be a fast no-op. */
+function pyFilter(extraExcludes = []) {
+  return (src) => {
+    const rel = relative(data, src);
+    const parts = rel.split(/[\\/]/).filter(Boolean);
+    return !parts.some((p) => extraExcludes.includes(p));
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1. Sanity checks — fail fast before any copy
+
+say(`repo    = ${repo}`);
+say(`data    = ${data}`);
+say(`out     = ${out}`);
+
+for (const p of [
+  join(repo, "scripts", "start-stack.mjs"),
+  join(repo, "scripts", "jiuwenswarm.mjs"),
+  join(repo, "scripts", "lib", "stack-platform.mjs"),
+  join(repo, "services", "api", "dist", "server.js"),
+  join(repo, "services", "runner", "dist", "server.js"),
+  join(repo, "services", "paper", "paper_worker.py"),
+  join(repo, "apps", "web", "dist"),
+  join(repo, "skills"),
+  join(repo, "extensions_config.json"),
+  join(data, "scientific-envs", "bin", dialect.micromambaName),
+  join(data, "jiuwenswarm", "src", ".venv", "pyvenv.cfg"),
+]) {
+  if (!existsSync(p)) fail(`missing expected input: ${p}`);
+}
+for (const name of VENV_NAMES) {
+  if (!existsSync(join(data, "envs", name, "pyvenv.cfg"))) {
+    fail(`missing venv: ${join(data, "envs", name)}`);
+  }
+}
+
+// Every bundled venv must share ONE interpreter: assemble replaces each
+// launcher with the single bundled base interpreter (gateway's home) and
+// first-run bootstrap points every pyvenv.cfg `home` at it. A venv
+// provisioned on another minor (paper drifted to 3.11 once) ships
+// wrong-ABI compiled extensions and dies off-machine (SRE module
+// mismatch / DLL load failure). Gate on pyvenv.cfg version_info.
+let PYTHON_MINOR;
+{
+  const venvPython = (venvDir) =>
+    /^version_info\s*=\s*(\d+\.\d+)/m.exec(readFileSync(join(venvDir, "pyvenv.cfg"), "utf8"))?.[1];
+  const bundled = [
+    ...VENV_NAMES.map((name) => ({ label: `envs/${name}`, dir: join(data, "envs", name) })),
+    { label: "jiuwenswarm", dir: join(data, "jiuwenswarm", "src", ".venv") },
+  ];
+  const base = venvPython(join(data, "envs", "sd-services"));
+  for (const { label, dir } of bundled) {
+    const v = venvPython(dir);
+    if (v !== base) {
+      fail(
+        `venv ${label} is Python ${v} but the bundled interpreter is ${base}. ` +
+        `Re-provision it with 'uv sync --python ${base}' (or add a .python-version), then rebuild.`,
+      );
+    }
+  }
+  // The payload's Python minor ("12" for 3.12), from the same version_info
+  // the gate above just verified consistent. Feeds every layout computation
+  // downstream (site-packages paths, compileall targets) — never hardcoded,
+  // so a Python bump is a venv re-provision, not a script edit.
+  PYTHON_MINOR = base.split(".")[1];
+}
+
+say("sanity checks passed");
+
+// ---------------------------------------------------------------------------
+// 1b. Stale-dist gate. `pnpm deploy` ships each workspace package's
+// compiled `dist/` as-is — it does NOT rebuild it. Editing TS and only
+// typechecking (--noEmit) leaves dist/ stale and the payload silently
+// carries old code (a real incident: fixes landed in src/ but were absent
+// from the installer). Any first-party package whose
+// src/ is newer than its dist/ fails the build, offender named.
+
+const gateExclude = /\.test\.[cm]?tsx?$|\.fixture\./; // tests don't ship in dist
+async function newestMtime(dir, exclude) {
+  let newest = 0;
+  const walk = async (d) => {
+    let entries;
+    try { entries = await readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.isFile() && !(exclude && exclude.test(e.name))) {
+        const m = (await stat(p)).mtimeMs;
+        if (m > newest) newest = m;
+      }
+    }
+  };
+  await walk(dir);
+  return newest;
+}
+{
+  const stale = [];
+  for (const group of ["services", "packages", "apps"]) {
+    const groupDir = join(repo, group);
+    if (!existsSync(groupDir)) continue;
+    for (const entry of await readdir(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const srcDir = join(groupDir, entry.name, "src");
+      const distDir = join(groupDir, entry.name, "dist");
+      if (!existsSync(srcDir) || !existsSync(distDir)) continue;
+      const [srcNewest, distNewest] = await Promise.all([
+        newestMtime(srcDir, gateExclude),
+        newestMtime(distDir),
+      ]);
+      if (srcNewest > distNewest) stale.push(`${group}/${entry.name}`);
+    }
+  }
+  if (stale.length) {
+    fail(`stale dist/ — src newer than dist, pnpm deploy would ship old code: ${stale.join(", ")} `
+      + `— rebuild first (e.g. npx tsc -p <package>/tsconfig.json)`);
+  }
+  say("stale-dist gate passed (services/packages/apps)");
+}
+
+// Fresh staging: a stale partial tree (e.g. an interrupted earlier run) must
+// never leak into the payload.
+await rm(out, { recursive: true, force: true });
+await mkdir(out, { recursive: true });
+
+// ---------------------------------------------------------------------------
+// 2. pnpm deploy — self-contained prod install of the api closure
+
+const deployDir = join(shellRoot, "build", ".deploy-tmp");
+await rm(deployDir, { recursive: true, force: true });
+say(`deploying prod closure (pnpm deploy --legacy) into ${deployDir}`);
+// corepack only ships as a .cmd shim on Windows, which a shell-less
+// execFileSync cannot run (Node deliberately refuses to spawn .cmd files
+// without a shell). The command stays a fixed string and the one
+// interpolated value — deployDir, derived from this script's own location —
+// is validated against shell metacharacters, so nothing user-controlled
+// can ever reach the command line.
+if (/[&^%"<>|]/.test(deployDir)) {
+  fail(`deploy path contains shell metacharacters, refusing to build a command line from it: ${deployDir}`);
+}
+try {
+  execFileSync(
+    "corepack pnpm --filter=@sciencediscovery/api deploy --prod --legacy "
+    + `"${deployDir}"`,
+    { cwd: repo, shell: true, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 },
+  );
+} catch (error) {
+  fail(`pnpm deploy failed: ${error.stderr?.toString() || error.message}`);
+}
+if (!existsSync(join(deployDir, "node_modules", ".pnpm"))) {
+  fail("pnpm deploy produced no .pnpm store");
+}
+
+// ---------------------------------------------------------------------------
+// 3. Flatten .pnpm into <out>/backend/node_modules
+
+const backendOut = join(out, "backend");
+const nmOut = join(backendOut, "node_modules");
+const pnpmStore = join(deployDir, "node_modules", ".pnpm");
+
+/** Is this filesystem entry a junction/symlink? */
+const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
+/** Enumerate real package dirs and junction edges inside a node_modules dir
+ * (one level, expanding @scope/ dirs). Junctions report as neither directory
+ * nor file in Dirent terms — the isLink check must come FIRST. */
+async function scanNodeModules(dir, onReal, onEdge) {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    const p = join(dir, e.name);
+    if (isLink(p)) { onEdge(e.name, readlinkSync(p)); continue; }
+    if (!e.isDirectory()) continue;
+    if (e.name.startsWith("@")) {
+      await scanNodeModules(p, (name, realDir) => onReal(`${e.name}/${name}`, realDir),
+        (name, target) => onEdge(`${e.name}/${name}`, target));
+    } else {
+      onReal(e.name, p);
+    }
+  }
+}
+
+/** package name+version from a real package dir. */
+function pkgIdentity(realDir) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(realDir, "package.json"), "utf8"));
+    return { name: pkg.name, version: String(pkg.version ?? "0.0.0") };
+  } catch {
+    return { name: "", version: "0.0.0" };
+  }
+}
+
+/** Parse a .pnpm key dir name into the package it owns: e.g.
+ * 'body-parser@2.3.0' → 'body-parser', '@sciencediscovery+provenance@file+...'
+ * → '@sciencediscovery/provenance'. */
+function ownNameFromKey(key) {
+  const at = key.startsWith("@") ? key.indexOf("@", 1) : key.indexOf("@");
+  if (at <= 0) return null;
+  return key.slice(0, at).replace("+", "/");
+}
+
+// key dir (under .pnpm) → own package {name, version, realDir}
+const ownByKey = new Map();
+// key dir → deps the key's package resolves through its junctions:
+// [{name, version}] — read straight off each junction target's package.json.
+const depsByKey = new Map();
+// name → Map(version → realDir)   (first real dir wins; same version = same content)
+const realDirs = new Map();
+
+for (const key of await readdir(pnpmStore, { withFileTypes: true })) {
+  if (!key.isDirectory() || key.name === "node_modules" || key.name.startsWith(".")) continue;
+  const keyDir = join(pnpmStore, key.name);
+  const knm = join(keyDir, "node_modules");
+  if (!existsSync(knm)) continue;
+  const ownName = ownNameFromKey(key.name);
+  const reals = [];
+  const depLinks = [];
+  await scanNodeModules(knm,
+    (name, realDir) => reals.push({ name, realDir }),
+    (_name, target) => depLinks.push(target));
+  for (const { name, realDir } of reals) {
+    const { version } = pkgIdentity(realDir);
+    if (!realDirs.has(name)) realDirs.set(name, new Map());
+    if (!realDirs.get(name).has(version)) realDirs.get(name).set(version, realDir);
+    if (name === ownName) ownByKey.set(key.name, { name, version, realDir });
+  }
+  depsByKey.set(key.name, depLinks.map((target) => pkgIdentity(target)));
+}
+
+// version conflicts: name → Set(versions)
+const conflicts = [...realDirs.entries()]
+  .filter(([, versions]) => versions.size > 1)
+  .map(([name]) => name);
+
+// primary version per name: the one with the most consumers; ties → first seen.
+const consumerCount = new Map(); // `${name}@${version}` → count
+for (const deps of depsByKey.values()) {
+  for (const dep of deps) {
+    const id = `${dep.name}@${dep.version}`;
+    consumerCount.set(id, (consumerCount.get(id) ?? 0) + 1);
+  }
+}
+const primaryOf = new Map(); // name → version
+for (const [name, versions] of realDirs) {
+  let best = null; let bestCount = -1;
+  for (const version of versions.keys()) {
+    const count = consumerCount.get(`${name}@${version}`) ?? 0;
+    if (count > bestCount) { best = version; bestCount = count; }
+  }
+  primaryOf.set(name, best);
+}
+
+// install locations: `${name}@${version}` → absolute dirs (flat roots)
+const locations = new Map();
+for (const [name, versions] of realDirs) {
+  const primary = primaryOf.get(name);
+  locations.set(`${name}@${primary}`, [join(nmOut, ...name.split("/"))]);
+}
+// Non-primary versions nest under each consumer's own install locations.
+// Conflicts are rare and shallow; iterate to a fixed point.
+for (let round = 0; round < 5; round += 1) {
+  let changed = false;
+  for (const [consumerKey, deps] of depsByKey) {
+    const own = ownByKey.get(consumerKey);
+    if (!own) continue;
+    const consumerLocs = locations.get(`${own.name}@${own.version}`);
+    if (!consumerLocs) continue;
+    for (const dep of deps) {
+      if (primaryOf.get(dep.name) === dep.version) continue; // flat root already
+      const id = `${dep.name}@${dep.version}`;
+      const nested = consumerLocs.map((l) => join(l, "node_modules", ...dep.name.split("/")));
+      const existing = locations.get(id) ?? [];
+      const merged = [...new Set([...existing, ...nested])];
+      if (merged.length !== existing.length) { locations.set(id, merged); changed = true; }
+    }
+  }
+  if (!changed) break;
+}
+
+if (conflicts.length > 0) {
+  say(`multi-version packages (nested under consumers): ${conflicts.join(", ")}`);
+}
+
+/** Copy a real package dir into a destination, dropping its internal
+ * node_modules (flat layout) and any leftover links. */
+const copyFlat = (realDir, dest) => cp(realDir, dest, {
+  recursive: true,
+  force: true,
+  filter: (src) => {
+    const rel = relative(realDir, src);
+    if (!rel) return true;
+    if (rel.split(/[\\/]/).includes("node_modules")) return false;
+    return !isLink(src);
+  },
+});
+
+say(`flattening ${[...realDirs.keys()].length} packages into backend/node_modules`);
+let copied = 0;
+for (const [name, versions] of realDirs) {
+  for (const [version, realDir] of versions) {
+    const dests = locations.get(`${name}@${version}`) ?? [];
+    for (const dest of dests) {
+      await mkdir(dirname(dest), { recursive: true });
+      await copyFlat(realDir, dest);
+      copied += 1;
+    }
+  }
+}
+say(`flattened ${copied} package copies`);
+
+// Verify: every direct dep of the deployed api resolves in the flat root.
+let missing = 0;
+await scanNodeModules(join(deployDir, "node_modules"),
+  (name) => {
+    if (!existsSync(join(nmOut, ...name.split("/")))) {
+      say(`MISSING direct dep in flat root: ${name}`);
+      missing += 1;
+    }
+  },
+  () => {},
+);
+if (missing > 0) fail(`${missing} direct deps missing after flatten`);
+
+// ---------------------------------------------------------------------------
+// 4. Backend static tree
+
+const copySet = [
+  { src: join(repo, "scripts", "start-stack.mjs"), dest: join(backendOut, "scripts", "start-stack.mjs") },
+  { src: join(repo, "scripts", "jiuwenswarm.mjs"), dest: join(backendOut, "scripts", "jiuwenswarm.mjs") },
+  { src: join(repo, "scripts", "swarm-patches.py"), dest: join(backendOut, "scripts", "swarm-patches.py") },
+  // jiuwenswarm.mjs runs `swarm-patches.py apply/verify <src> <tag>` on every
+  // cold start; the patch set lives in jiuwen_swarm/patches/<tag> relative to
+  // the backend root — shipping the script without it kills the stack
+  // (field bugfix: coworker first-run timeouts traced back to this).
+  { src: join(repo, "jiuwen_swarm", "patches"), dest: join(backendOut, "jiuwen_swarm", "patches") },
+  { src: join(repo, "scripts", "lib", "stack-platform.mjs"), dest: join(backendOut, "scripts", "lib", "stack-platform.mjs") },
+  { src: join(repo, "services", "api", "dist"), dest: join(backendOut, "services", "api", "dist") },
+  { src: join(repo, "services", "api", "package.json"), dest: join(backendOut, "services", "api", "package.json") },
+  { src: join(repo, "services", "runner", "dist"), dest: join(backendOut, "services", "runner", "dist") },
+  { src: join(repo, "services", "runner", "package.json"), dest: join(backendOut, "services", "runner", "package.json") },
+  { src: join(repo, "services", "runner", "workloads"), dest: join(backendOut, "services", "runner", "workloads") },
+  // SEA copySet entry REMOVED (upstream fc9e0b71): the push moved to the
+  // conditional block below the array — see the runnerSeaDir gate there.
+  // Field report kept ("missing its Linux arm64 Runner SEA artifact"):
+  // executor's loadRunnerExecutable resolves the @sciencediscovery/runner
+  // package ENTRY and reads sea/linux-<arch>/ from that dirname — the
+  // node_modules layout the conditional block stages, matching what
+  // remote-host deployment resolves; the duplicate under services/runner/dist
+  // is dropped after the copy (rm below).
+  { src: join(repo, "services", "paper", "paper_worker.py"), dest: join(backendOut, "services", "paper", "paper_worker.py") },
+  { src: join(repo, "services", "paper", "pyproject.toml"), dest: join(backendOut, "services", "paper", "pyproject.toml") },
+  // SIZEOPT W2: five per-service uv.lock files became one workspace lock at
+  // the repo root — ship that (paper's old per-service lock is gone).
+  { src: join(repo, "uv.lock"), dest: join(backendOut, "uv.lock") },
+  { src: join(repo, "pyproject.toml"), dest: join(backendOut, "pyproject.toml") },
+  { src: join(repo, "apps", "web", "dist"), dest: join(backendOut, "apps", "web", "dist") },
+  { src: join(repo, "apps", "desktop", "dist"), dest: join(backendOut, "apps", "desktop", "dist") },
+  { src: join(repo, "skills"), dest: join(backendOut, "skills") },
+  { src: join(repo, "extensions_config.json"), dest: join(backendOut, "extensions_config.json") },
+  // Field report (the built-in UniProt source was unavailable): uniprot_mcp.py reads
+  // external URLs at IMPORT time from cwd()/config/external-urls.json (or
+  // SCIENCE_AGENT_EXTERNAL_URLS_PATH) — neither existed in the packaged
+  // backend (only the node_modules copy the Node api imports), so the stdio
+  // subprocess died before the MCP handshake and the source showed
+  // "unavailable". Ship the repo's authoritative config to backend/config/.
+  { src: join(repo, "config", "external-urls.json"), dest: join(backendOut, "config", "external-urls.json") },
+];
+// Linux Runner SEA files are generated by the Linux-only `pnpm runner:binary`
+// step. The Windows desktop shell runs its local Runner through Node, but the
+// same payload also supports remote Linux Runner deployment. Installer builds
+// pass --expect-runner-sea so a missing cross-platform asset fails before the
+// installer is produced; an unflagged assemble remains available for a local
+// shell-only staging build.
+// macOS adaptation (problems W15): SEA binaries are Linux-built
+// (build-binary.mjs resolveSeaRuntimePlan throws off-Linux) and only serve
+// remote-host SSH execution, which the mac v1 scope excludes (上级设计文档:
+// 远程执行 Provider C 不进 v1). A darwin payload NEVER stages them and is
+// never gated by --expect-runner-sea: the flag targets win32 installer builds;
+// a darwin assemble that passes it is a build-script bug worth failing on.
+if (dialect.family === "darwin") {
+  if (expectRunnerSea) {
+    fail("--expect-runner-sea was passed for a darwin payload: desktop darwin never ships the Linux remote-Runner binaries (remote execution is out of mac v1 scope) — check the build script's platform gating");
+  }
+  say("darwin payload: Linux Runner SEA assets skipped by design (remote execution out of mac v1 scope)");
+} else if (existsSync(runnerSeaDir)) {
+  copySet.push({ src: runnerSeaDir, dest: join(backendOut, "node_modules", "@sciencediscovery", "runner", "dist", "sea") });
+} else {
+  if (expectRunnerSea) {
+    fail("Linux Runner SEA assets are required for this package but services/runner/dist/sea is absent; run pnpm runner:binary first");
+  }
+  say("Linux Runner SEA assets not present; Windows package will use its local Node Runner");
+}
+// The four Python sidecar services: their venvs' editable .pth files point at
+// <backend>/services/<name>/src, so the source trees must ride along.
+const svcFilter = (src) => {
+  const parts = relative(repo, src).split(/[\\/]/).filter(Boolean);
+  if (parts.some((p) => p === "tests" || p === ".venv" || p === ".pytest_cache"
+    || p === "node_modules" || p === "__pycache__" || p === "tools")) return false;
+  if (src.endsWith(".pyc")) return false;
+  const top = parts[parts.length - 1];
+  return !["README.md", ".gitignore", "pyrightconfig.json"].includes(top);
+};
+for (const name of ["gateway", "memory-graph", "evolve", "adapter"]) {
+  await mkdir(join(backendOut, "services", name), { recursive: true });
+  await cp(join(repo, "services", name), join(backendOut, "services", name), {
+    recursive: true,
+    force: true,
+    filter: svcFilter,
+  });
+}
+say("copying backend static tree (scripts/api/runner/paper/sidecars/web/skills)");
+for (const { src, dest } of copySet) {
+  await mkdir(dirname(dest), { recursive: true });
+  await cp(src, dest, { recursive: true, force: true });
+}
+// If a prepared SEA directory was staged under services/runner/dist, remove
+// that duplicate after copying it to the node_modules layout above.
+await rm(join(backendOut, "services", "runner", "dist", "sea"), { recursive: true, force: true });
+
+// SIZEOPT 1B-2: drop the @openai/codex vendored native toolchain (~437 MB).
+// The SDK resolves these binaries lazily at Codex construction time
+// (dist/index.js:448-460), so api startup is unaffected; only a codex
+// specialist run errors at use time. The JS SDK itself stays.
+//
+// Enumerated instead of one hardcoded path: which of the three reachable
+// shapes the platform package lands in depends on the primary-version pick
+// below (assemble-backend.mjs:307-323), so pinning one shape would make the
+// 437 MB win depend on readdir order. See payload-slim.mjs for the shapes.
+for (const vendorDir of codexVendorDirs(nmOut)) {
+  await rm(vendorDir, { recursive: true, force: true });
+  say(`swept codex vendor toolchain: ${relative(backendOut, vendorDir)}`);
+}
+// Verify the sweep by CONTENT, not by re-running its own enumeration. If
+// codexPackageDirs' name rule stops matching, the loop above deletes nothing and
+// a check built on the same rule would also find nothing — both green, 437 MB
+// shipped. This is review finding F12 applied to the node_modules half, which
+// probe-payload-runtime.py cannot see at all (it runs the Python venv only).
+// The marker file `codex-package.json` is unique to a vendored toolchain here:
+// measured once in the pnpm store and zero times under @openai/codex-sdk.
+{
+  const leftovers = leftoverCodexVendorDirs(nmOut);
+  if (leftovers.length > 0) {
+    fail(
+      "codex vendor sweep left native toolchains in the payload:\n"
+      + leftovers.map((d) => `  ${relative(backendOut, d)}`).join("\n")
+      + "\nThese carry a vendored codex-package.json, so they are the ~437 MB "
+      + "toolchain the sweep exists to remove. The usual cause is that "
+      + "codexPackageDirs' name filter no longer matches how the flattener laid "
+      + "the package out (see payload-slim.mjs for the four shapes) — fix the "
+      + "enumeration, do not widen this marker check.",
+    );
+  }
+  say("codex vendor sweep verified: no vendored toolchain left (content marker)");
+}
+
+// ---------------------------------------------------------------------------
+// 5. JiuwenSwarm src tree (backend/jw — shortened payload layout)
+//
+// SIZEOPT W6 / design D11: the payload JW tree used to live at
+//   backend/.sciencediscovery-data/jiuwenswarm/src
+// which pushed the deepest relative path (a venv .pyc) to maxRel=228, leaving
+// ZERO MAX_PATH headroom under the default per-user install root (problems W6).
+// (The installed-tree walk reported 224, but that walk is self-blinded: the
+// deepest .pyc sits at an absolute path > 259, so NSIS silently skips it and
+// the tree never carries the file that would reveal the true budget — see
+// problems W15. maxRel must be read from the A5 build-time measurement below.)
+// The layout is now the short backend/jw (saves 36 chars → maxRel=192, A5
+// measured), giving the default root room for any Windows username (≤20 chars).
+// Only the OUTPUT
+// layout changes; the INPUT dev data dir (data/jiuwenswarm/src) is untouched.
+// JIUWENSWARM_SRC (bootstrap packagedPaths.jwSrc) follows, and jiuwenswarm.mjs
+// follows that env var — the editable finder uses parents[3] relative to
+// site-packages, so it is layout-name agnostic (assemble-backend §5b).
+const jwPayload = join(backendOut, "jw");
+const jwSrcOut = jwPayload;
+const jwSrcIn = join(data, "jiuwenswarm", "src");
+
+// The filter-rule lessons live with the rules themselves:
+// scripts/lib/jw-src-filter.mjs (unit-tested in test/jw-src-filter.test.ts).
+// Field incident: frontend/node_modules (329.5 MB) shipped — the filter now
+// excludes node_modules at any depth.
+const jwSrcFilter = makeJwSrcFilter(jwSrcIn);
+
+say(`copying JiuwenSwarm src (minus top-level .git/docs) into backend tree`);
+await mkdir(jwSrcOut, { recursive: true });
+await cp(jwSrcIn, jwSrcOut, {
+  recursive: true,
+  force: true,
+  filter: jwSrcFilter,
+});
+
+// Lesson: fs.cp --force OVERLAYS the target — files that an older
+// build copied before a filter rule existed (or that the filter now excludes)
+// stay behind forever and keep shipping in every installer. Sweep the known
+// dead weight out of the target tree after the copy so the payload reflects
+// the filter, not the history of this build directory.
+async function rmIfPresent(p) {
+  // Best-effort stays best-effort (fresh trees legitimately lack the junk),
+  // but a swallowed delete is no longer SILENT: the W16 rebuild shipped
+  // kubernetes/onnxruntime because the sandbox shim rejected the big rmtree
+  // and only the payload probe caught it. Named in the log, the same failure
+  // is a one-glance diagnosis.
+  try { await rm(p, { recursive: true, force: true }); say(`swept stale payload: ${relative(jwSrcOut, p)}`); }
+  catch (e) { say(`warning: sweep rm FAILED (left in payload): ${relative(jwSrcOut, p)} — ${e instanceof Error ? e.message : String(e)}`); }
+}
+for (const junk of ["htmlcov", "coverage.xml", ".coverage", ".pytest_cache"]) {
+  await rmIfPresent(join(jwSrcOut, junk));
+}
+async function sweepPycache(dir) {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.name === "__pycache__") { await rmIfPresent(join(dir, e.name)); continue; }
+    if (e.isDirectory()) await sweepPycache(join(dir, e.name));
+  }
+}
+await sweepPycache(join(jwSrcOut, "tests"));
+
+// Sweep-backstop for node_modules: the filter rule alone only
+// protects fresh copies — anything already sitting in the output tree from a
+// build that predated the rule must go too. .venv is skipped (a Python venv
+// never contains node_modules; skipping keeps the sweep off the 1.2 GB tree).
+async function sweepNodeModules(dir) {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.name === ".venv") continue;
+    if (e.name === "node_modules" && e.isDirectory()) {
+      await rmIfPresent(join(dir, e.name));
+      continue;
+    }
+    if (e.isDirectory()) await sweepNodeModules(join(dir, e.name));
+  }
+}
+await sweepNodeModules(jwSrcOut);
+
+// SIZEOPT 1B-1: sweep audit-proven dead weight out of the bundled venv.
+// Fresh trees should not contain any of these (setup syncs slim, JW patch
+// 0018 drops playwright/uv from pyproject) — this is the backstop for stale
+// data dirs, same philosophy as the sweeps above. Best-effort by design.
+{
+  const sp = join(jwSrcOut, ".venv", ...dialect.sitePackages(PYTHON_MINOR).split("/"));
+  let sweptAny = false;
+  try {
+    for (const e of await readdir(sp, { withFileTypes: true })) {
+      const rule = matchJwVenvSweep(e.name);
+      if (!rule) continue;
+      await rmIfPresent(join(sp, e.name));
+      say(`swept dead weight: ${e.name} (${rule.why})`);
+      sweptAny = true;
+    }
+    for (const nested of JW_VENV_SWEEP_NESTED) {
+      const p = join(sp, ...nested.split("/"));
+      if (existsSync(p)) { await rmIfPresent(p); say(`swept dead weight: ${nested} (google_adk namespace subtree)`); sweptAny = true; }
+    }
+  } catch (e) { say(`warning: dead-weight sweep could not list site-packages — ${e instanceof Error ? e.message : String(e)}`); }
+  const scriptsDir = join(jwSrcOut, ".venv", dialect.venvBin);
+  try {
+    for (const e of await readdir(scriptsDir, { withFileTypes: true })) {
+      if (!e.isFile() || !isDeadVenvScript(e.name)) continue;
+      await rmIfPresent(join(scriptsDir, e.name));
+      say(`swept dead venv script: ${e.name}`);
+      sweptAny = true;
+    }
+  } catch { /* no Scripts dir (POSIX venv) — nothing to sweep */ }
+  if (!sweptAny) say("dead-weight sweep: nothing to remove (tree was already slim)");
+}
+
+// Rewrite the setuptools editable finder so package paths resolve relative to
+// wherever the payload got installed (site-packages → .venv → src).
+const finderGlob = /^(?:__editable___.*_finder\.py)$/;
+const sitePackages = join(jwSrcOut, ".venv", ...dialect.sitePackages(PYTHON_MINOR).split("/"));
+// parents[N] must land exactly on the jw src root: N is derived from the
+// site-packages depth of THIS dialect's venv layout (win32 Lib\site-packages
+// = depth 2 → parents[3]; darwin lib/python3.<minor>/site-packages = depth 3
+// → parents[4]), so a future layout change moves the anchor by editing the
+// dialect table, not this rewrite.
+const anchorLevel = finderAnchorLevel(sitePackagesDepth(dialect, PYTHON_MINOR));
+for (const e of await readdir(sitePackages, { withFileTypes: true })) {
+  if (!e.isFile() || !finderGlob.test(e.name)) continue;
+  const file = join(sitePackages, e.name);
+  const text = await readFile(file, "utf8");
+  const mappingLine = /^MAPPING: dict\[str, str\] = \{.*\}$/m.exec(text);
+  if (!mappingLine) { say(`warning: no MAPPING line in ${e.name}; left as-is`); continue; }
+  const entries = [...mappingLine[0].matchAll(/'([^']+)':\s*'([^']+)'/g)];
+  if (entries.length === 0) { say(`warning: empty MAPPING in ${e.name}; left as-is`); continue; }
+  const rewritten = entries.map(([, pkg, abs]) => {
+    const rel = relative(jwSrcIn, abs);
+    // Field incident (stale editable venv): a venv carried over from a moved
+    // checkout still mapped into the old absolute path; relative() happily
+    // produced a ".." hop chain that resolved nowhere on the installed
+    // machine, and the payload shipped with every jw import dead. Anything
+    // not strictly inside the jw src tree is a broken payload.
+    if (rel === "" || rel.startsWith("..") || /^[a-zA-Z]:[\\/]/.test(rel)) {
+      fail(`editable mapping for ${pkg} does not live under the jw src tree (mapped to ${abs}); the bundled venv's editable install is stale — reinstall it from this tree before assembling`);
+    }
+    const tail = rel.split(/[\\/]+/).filter(Boolean);
+    return `'${pkg}': str(_SRC.joinpath(${tail.map((t) => `'${t}'`).join(", ")}))`;
+  }).join(", ");
+  const lines = text.split("\n");
+  const idx = lines.findIndex((l) => /^MAPPING: dict\[str, str\] = /.test(l));
+  lines.splice(idx, 1, `_SRC = Path(__file__).resolve().parents[${anchorLevel}]`, `MAPPING: dict[str, str] = {${rewritten}}`);
+  await writeFile(file, lines.join("\n"), "utf8");
+  say(`rewrote editable finder ${e.name} (paths now resolve relative to the payload)`);
+}
+
+// ---------------------------------------------------------------------------
+// 6. envs-template — the 5 venvs, editable .pth paths → placeholder
+
+say("copying venv template (envs-template)");
+for (const name of VENV_NAMES) {
+  await cp(join(data, "envs", name), join(out, "envs-template", name), {
+    recursive: true,
+    force: true,
+    filter: pyFilter(),
+  });
+  // _editable_impl_*.pth contains an absolute path into the dev repo; swap the
+  // repo prefix for the placeholder the shell resolves at first run. The
+  // separator inside the rewritten body follows the TARGET platform's
+  // dialect (Windows .pth paths carry "\", POSIX ones "/") — the runtime
+  // rewrite in bootstrap.ts substitutes only the placeholder, so the rest of
+  // the string must already be correct for the platform that will read it.
+  const sp = join(out, "envs-template", name, ...dialect.sitePackages(PYTHON_MINOR).split("/"));
+  if (!existsSync(sp)) continue;
+  for (const e of await readdir(sp, { withFileTypes: true })) {
+    if (!e.isFile() || !/^_editable_impl_.*\.pth$/.test(e.name)) continue;
+    const file = join(sp, e.name);
+    const text = (await readFile(file, "utf8")).trim();
+    // Field incident (stale editable venv): the envs came from a data dir
+    // carried over after a repo migration; their .pth files still pointed at
+    // the old checkout path. This branch only warned and shipped anyway, and
+    // every Python sidecar died with ModuleNotFoundError on the installed
+    // machine while the build machine looked healthy. A mispointed editable
+    // is always a broken payload — fail the build instead of shipping it.
+    // A directory boundary must follow the repo prefix: `repo` is also a
+    // prefix of `repo-something-else`, and that sibling path would silently
+    // slice into a wrong tail (e.g. `-something-else\...`) instead of failing.
+    if (!text.startsWith(repo) || !/^[\\/]/.test(text.slice(repo.length))) {
+      fail(`${name}/${e.name} points outside the repo (${text}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
+    }
+    const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, dialect.pthSeparator);
+    await writeFile(file, `${BACKEND_PLACEHOLDER}${dialect.pthSeparator}${tail}\n`, "utf8");
+    say(`placeholdered ${name}/${e.name}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Base interpreter (venv `home`), realpath'd (uv dirs can be symlinks)
+
+// POSIX pyvenv.cfg points `home` at the interpreter's bin/ DIRECTORY (Windows
+// points at the install root). The payload bundles the whole install root —
+// stdlib lives at <out>/python/lib/python3.<minor> (dialect.stdlibLib), and
+// every payload venv's bin/python symlink hops to <out>/python/bin/python3 —
+// so on darwin copy the PARENT of the realpath'd home (the install root),
+// not the bin/ directory itself (measured: copying bin/ alone flattened
+// executables into <out>/python and left lib/ missing entirely).
+const pyvenvHomeRaw = await realpath(pyvenvHome(join(data, "envs", "sd-services")));
+const pythonHome = dialect.family === "darwin" ? dirname(pyvenvHomeRaw) : pyvenvHomeRaw;
+if (!existsSync(join(pythonHome, dialect.bundledBasePythonPath))) {
+  fail(`no ${dialect.bundledBasePythonPath} under ${pythonHome} — not a base interpreter install root`);
+}
+say(`copying base interpreter from ${pythonHome}`);
+await cp(pythonHome, join(out, "python"), { recursive: true, force: true, filter: pyFilter() });
+// The hosted Windows Python distribution includes python3.exe as a reparse
+// alias for python.exe. It is not used by the payload, and 7-Zip treats the
+// copied alias as an invalid directory while creating the NSIS archive.
+const python3Alias = join(out, "python", "python3.exe");
+if (existsSync(python3Alias)) {
+  await rm(python3Alias, { force: true, recursive: true });
+  say("removed Windows python3.exe alias from the bundled interpreter");
+}
+
+// [macOS adaptation] The install root ships absolute symlinks (uv bakes
+// them at python-install time): bin/python3 -> <builder>/.../bin/python3.12,
+// lib/pkgconfig/*.pc, share/man/man1/python3.1 — dead links on any other
+// machine, and codesign --deep --strict rejects the bundle outright
+// ("invalid destination for symbolic link in bundle", W15 second face).
+// Relativize what maps inside the tree, drop dev-only artifacts (pkgconfig/
+// man links with no in-tree counterpart). No-op on win32 (relative links).
+if (dialect.family === "darwin") {
+  const { rewritten, removed } = await relocatablePythonTree(join(out, "python"), say);
+  say(`python tree symlinks: ${rewritten} relativized, ${removed} off-tree removed`);
+}
+
+// ---------------------------------------------------------------------------
+// 7b. [windows-desktop] uv venv Scripts\python.exe / pythonw.exe are
+// trampolines with the build machine's interpreter path burned in — on any
+// other machine spawn dies with "entity not found" (the root cause of every
+// off-machine failure). The payload side swaps them in place with the real
+// interpreter copied in step 7; bootstrap adds an idempotent first-run
+// backstop (a same-location reinstall can leave old trampolines in
+// dataDir\envs).
+
+say(dialect.hasTrampolines
+  ? "normalizing venv launchers to the bundled CPython interpreter"
+  : "rewriting venv launchers for the darwin payload (symlink hop to the bundled interpreter)");
+const launcherDirs = [
+  ...VENV_NAMES.map((name) => join(out, "envs-template", name)),
+  join(jwPayload, ".venv"),
+];
+if (dialect.hasTrampolines) {
+  // [win32, upstream fc9e0b71] Normalize venv launchers to the bundled CPython
+  // interpreter with sha256 verification: the old replaceVenvTrampolines swap
+  // only checked a count; the upstream gate hashes the bundled python.exe /
+  // pythonw.exe, copies them over every venv's Scripts\ launchers, and FAILS
+  // when a destination diverges — catching a corrupted/wrong-arch venv before
+  // it ships. Optional launchers (pythonw.exe) degrade to a say() line.
+  const launcherNames = ["python.exe", "pythonw.exe"];
+  const bundledLauncherHashes = new Map();
+  for (const name of launcherNames) {
+    const source = join(out, "python", name);
+    if (!existsSync(source)) {
+      if (name === "python.exe") fail(`bundled interpreter is missing ${name}`);
+      continue;
+    }
+    bundledLauncherHashes.set(name, createHash("sha256").update(await readFile(source)).digest("hex"));
+  }
+  let launcherCopies = 0;
+  for (const venvDir of launcherDirs) {
+    for (const name of launcherNames) {
+      if (!bundledLauncherHashes.has(name)) {
+        say(`optional bundled ${name} is absent; leaving venv launchers unchanged`);
+        continue;
+      }
+      const destination = join(venvDir, "Scripts", name);
+      if (!existsSync(destination)) {
+        if (name === "python.exe") fail(`venv launcher is missing: ${relative(out, destination)}`);
+        say(`optional venv launcher is absent; leaving it unchanged: ${relative(out, destination)}`);
+        continue;
+      }
+      await copyFile(join(out, "python", name), destination);
+      const actual = createHash("sha256").update(await readFile(destination)).digest("hex");
+      if (actual !== bundledLauncherHashes.get(name)) {
+        fail(`venv launcher does not match bundled ${name}: ${relative(out, destination)}`);
+      }
+      launcherCopies += 1;
+    }
+  }
+  say(`normalized ${launcherCopies} venv launcher(s) to the bundled interpreter`);
+} else {
+  // [macOS adaptation] POSIX venvs carry the trampoline disease in symlink
+  // form: bin/python / bin/python3 point at the BUILD machine's absolute
+  // interpreter path (measured: `python3 -> /Users/<builder>/.../bin/python3`).
+  // Rewrite both to a RELATIVE hop at the bundled base interpreter, so the
+  // links stay valid wherever the payload lands (mirrors the trampoline
+  // swap's philosophy — see replaceVenvSymlinks in lib/venv-launchers.mjs).
+  // Relative target from <venv>/bin/ to <out>/python/bin/python3:
+  // envs-template venvs need ../../../python/bin/python3, the jw venv
+  // (backend/jw/.venv) needs ../../python/bin/python3 — computed per venv.
+  say("rewriting venv python symlinks to the bundled interpreter (darwin)");
+  let symlinkReplaced = 0;
+  for (const venvDir of launcherDirs) {
+    // <venvDir> is <out>/envs-template/<name> or <out>/backend/jw/.venv;
+    // the bundled interpreter is <out>/python. The link lives in
+    // <venvDir>/<venvBin>/ (bin/ on POSIX), one level below venvDir, so the
+    // hop count is the venv's depth below out PLUS one for that bin/ level:
+    // envs-template venvs → ../../../python/bin/python3 (3 hops from bin/),
+    // the jw venv (backend/jw/.venv) → ../../../../python/bin/python3 (4).
+    // An off-by-one here lands the links one directory short (measured:
+    // envs-template/python/…, backend/python/… — dead symlinks the jw
+    // precompile step then fails to spawn).
+    const relFromOut = relative(out, venvDir);
+    const hops = relFromOut.split(/[\\/]/).length + 1; // +1: links sit in <venv>/bin
+    // python, python3 AND the versioned python3.<minor> — the versioned link
+    // is what tooling and codesign walk; leaving it absolute re-creates the
+    // "invalid destination for symbolic link in bundle" failure (W15).
+    const n = await replaceVenvSymlinks(
+      [venvDir],
+      dialect.venvBin,
+      `${"../".repeat(hops)}python/bin/python3`,
+      say,
+      pythonNamesFor(PYTHON_MINOR),
+    );
+    symlinkReplaced += n;
+  }
+  if (symlinkReplaced === 0) {
+    fail("no venv python symlinks found in the bundled venvs — the payload layout changed (or the venvs were not made on this platform); investigate before shipping");
+  }
+  say(`rewrote ${symlinkReplaced} venv python symlink(s)`);
+}
+
+// The shell launches the whole stack with hidden consoles; every
+// payload Python that spawns a console-subsystem child without
+// CREATE_NO_WINDOW flashes a blank cmd window (observed in the field:
+// init-phase flashes from execFile'd jiuwenswarm CLI steps, and tool/agent
+// runs would flash from the service venvs). Each venv gets a sitecustomize
+// that patches subprocess defaults (activated by SCIENCE_AGENT_DESKTOP,
+// which start-stack sets for the whole tree). All six payload venvs —
+// jiuwenswarm + envs-template ×5. Source of
+// truth stays in the repo; the dev venvs are never touched.
+// [macOS adaptation] Windows-only: darwin has no console-window problem,
+// and the script is a no-op unless SCIENCE_AGENT_DESKTOP is set anyway.
+const sitecustomizeSrc = join(repo, "scripts", "desktop-venv-sitecustomize.py");
+let sitecustomizeCount = 0;
+if (dialect.hasTrampolines) {
+  for (const venvRoot of launcherDirs) {
+    const venvSitePackages = join(venvRoot, ...dialect.sitePackages(PYTHON_MINOR).split("/"));
+    if (!existsSync(venvSitePackages)) {
+      fail(`no site-packages under ${relative(out, venvRoot)} — the venv layout changed; investigate before shipping`);
+    }
+    await copyFile(sitecustomizeSrc, join(venvSitePackages, "sitecustomize.py"));
+    sitecustomizeCount += 1;
+  }
+  say(`installed desktop sitecustomize (subprocess CREATE_NO_WINDOW guard) into ${sitecustomizeCount} payload venv(s)`);
+} else {
+  // Still gate the layout expectation on darwin: site-packages must exist
+  // (dialect-shaped) even though we do not install the Windows guard there.
+  for (const venvRoot of launcherDirs) {
+    const venvSitePackages = join(venvRoot, ...dialect.sitePackages(PYTHON_MINOR).split("/"));
+    if (!existsSync(venvSitePackages)) {
+      fail(`no site-packages under ${relative(out, venvRoot)} — the venv layout changed; investigate before shipping`);
+    }
+  }
+  say("skipped desktop sitecustomize (win32-only subprocess guard)");
+}
+
+// [windows-desktop] The swapped-in real exe resolves python3x.dll/
+// vcruntime*.dll by name: its own directory → PATH → registry. On a clean
+// machine every fallback is empty and the process exits with 0xC0000135
+// before main() (measured off-machine: six dead venv pythons, precompile
+// 0-1s ×6, jiuwenswarm init 1.6s). An unrelated Python on the build
+// machine's PATH masked it during local testing. The runtime DLLs must ride
+// along with the launcher into venv\Scripts\ so the exe directory hits first.
+// [macOS adaptation] Windows-only: darwin links its runtime dynamically
+// through dyld with @rpath/install ids, no DLL-beside-exe concept needed.
+if (dialect.hasTrampolines) {
+  say("installing runtime DLLs beside the bundled venv launchers");
+  const dllCopies = await copyVenvRuntimeDlls(launcherDirs, join(out, "python"), say);
+  if (dllCopies === 0) {
+    fail("no runtime DLLs installed beside the venv launchers — expected python3x.dll + vcruntime*.dll in the bundled python root; investigate before shipping");
+  }
+  say(`installed ${dllCopies} runtime DLL file(s) beside venv launchers`);
+} else {
+  say("skipped runtime DLLs (win32-only)");
+}
+
+// ---------------------------------------------------------------------------
+// 7c. Eagerly precompile bytecode so the first-run bootstrap compileall is a
+// no-op. checked-hash (PEP 552): validity keys on the source CONTENT hash, so
+// downstream copy chains (electron-builder → NSIS → dataDir) may restamp
+// mtimes freely without invalidating what we ship.
+say("precompiling Python bytecode for bundled venvs");
+// Do NOT spread process.env into the compile environment unfiltered. It used to
+// read `{...process.env, PYTHONWARNINGS: "ignore"}`, which let a build script's
+// exported PYTHONPYCACHEPREFIX redirect all 73,752 .pyc files (1011 MB) into a
+// mirror tree outside the payload while compileall still exited 0 — release6
+// shipped 446.5 MiB with 1,384 bytecode files instead of ~577 MiB with ~37,000,
+// and every gate stayed green (problems W25, lesson L56). The filter below is
+// the same defence already applied to SD_PROBE_DEV_TREE for the runtime probe;
+// A6 further down is the net for a cause nobody thought to blocklist.
+const compileEnv = payloadCompileEnv(process.env, { warn: say });
+const compileAll = (pythonExe, target, exclude) =>
+  execFileSync(pythonExe, ["-m", "compileall", "-q", "--invalidation-mode", "checked-hash",
+    ...(exclude ? ["-x", exclude] : []), target], { env: compileEnv, windowsHide: true, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+const basePythonExe = join(out, "python", ...dialect.bundledBasePythonPath.split("/"));
+const jwVenvPython = join(jwPayload, ".venv", dialect.venvBin, dialect.venvPythonName);
+const compileTargets = [
+  { label: "python stdlib", python: basePythonExe, path: join(out, "python", ...dialect.stdlibCompileTarget(PYTHON_MINOR)) },
+  ...VENV_NAMES.map(name => ({ label: `venv ${name}`, python: basePythonExe, path: join(out, "envs-template", name, ...dialect.sitePackages(PYTHON_MINOR).split("/")) })),
+  // jw's venv compiles with ITS OWN interpreter (site-packages + the editable
+  // src mount both resolve through it; the base python failed on this pair).
+  { label: "jiuwenswarm venv", python: jwVenvPython, path: join(jwPayload, ".venv", ...dialect.sitePackages(PYTHON_MINOR).split("/")) },
+  // Lesson: compiling the WHOLE src tree also compiles tests/**, which
+  // resurrects the very __pycache__ the post-copy sweep removed (~40 dirs of
+  // dead weight that shipped in every installer). -x skips path
+  // components named tests so the bytecode is never generated in the first
+  // place; the post-compile sweep below is the belt-and-suspenders net.
+  { label: "jiuwenswarm src", python: jwVenvPython, path: jwPayload, exclude: "[/\\\\]tests[/\\\\]" },
+];
+for (const { label, python, path: target, exclude } of compileTargets) {
+  if (!existsSync(target)) continue;
+  try {
+    compileAll(python, target, exclude);
+    say(`precompiled bytecode for ${label}`);
+  } catch (error) {
+    // SIZEOPT (problems W4): the JW venv/src precompile is W15-critical — a
+    // silent skip ships an installer whose first run re-compiles everything
+    // (multi-minute startup regression caught in the field 2026-11-03: a
+    // >260-char payload path broke compileall atomically and this warning
+    // was the only signal). JW failures must kill the build; the service
+    // venvs keep the soft warning.
+    if (label.startsWith("jiuwenswarm")) {
+      fail(`bytecode precompile FAILED for ${label}: ${error.message}`);
+    }
+    say(`warning: bytecode precompile skipped for ${label}: ${error.message}`);
+  }
+}
+// Belt and suspenders: whatever re-created test bytecode above (regex misses,
+// future code paths) gets swept here, after ALL compileall runs.
+await sweepPycache(join(jwSrcOut, "tests"));
+
+// ---------------------------------------------------------------------------
+// 8. micromamba
+
+say("copying micromamba");
+await mkdir(join(out, "micromamba"), { recursive: true });
+await cp(join(data, "scientific-envs", "bin", dialect.micromambaName),
+  join(out, "micromamba", dialect.micromambaName), { force: true });
+
+// ---------------------------------------------------------------------------
+// 9. Payload self-verification (SIZEOPT A1/A2, modelled on the JW official
+// packaging scripts' import smoke check)
+
+// A1 payload self-check: run the PAYLOAD's own interpreters — if the assembled venvs
+// cannot import the product modules, the installer is broken and must not
+// ship. This is the check that would have caught the silent precompile skip.
+say("verifying payload imports (self-check)");
+const sdVenvPython = join(out, "envs-template", "sd-services", dialect.venvBin, dialect.venvPythonName);
+const sdServiceSrcs = ["gateway", "memory-graph", "evolve", "adapter"]
+  .map((name) => join(out, "backend", "services", name, "src"));
+// PYTHONPATH list separator is a platform dialect too (Windows ";", POSIX ":").
+const pythonPathSep = dialect.family === "darwin" ? ":" : ";";
+const smokeRuns = [
+  {
+    label: "jiuwenswarm venv",
+    python: jwVenvPython,
+    code: "import jiuwenswarm.common.config, jiuwenswarm.gateway.app_gateway, jiuwenswarm.server.app_agentserver",
+  },
+  {
+    // The sd-services venv ships with PLACEHOLDERED editable .pth files
+    // (the shell rewrites them to the installed backend path at first run),
+    // so services are not importable from the raw payload — simulate what
+    // the .pth will resolve to via PYTHONPATH instead. This still exercises
+    // the payload's venv deps + shipped service sources.
+    label: "sd-services venv",
+    python: sdVenvPython,
+    code: "import sciencediscovery_gateway, sciencediscovery_memory_graph, sciencediscovery_evolve, sciencediscovery_adapter",
+    extraEnv: { PYTHONPATH: sdServiceSrcs.join(pythonPathSep) },
+  },
+];
+for (const { label, python, code, extraEnv } of smokeRuns) {
+  try {
+    execFileSync(python, ["-c", code], { env: { ...compileEnv, ...extraEnv }, windowsHide: true, stdio: "pipe", maxBuffer: 16 * 1024 * 1024 });
+    say(`payload import OK: ${label}`);
+  } catch (error) {
+    fail(`payload self-check FAILED (${label}): ${error.message}`);
+  }
+}
+
+// A1b runtime-path probe. The two import checks above prove module-scope imports
+// resolve; they CANNOT see a lazily imported dependency, nor a dependency that
+// only appears several hops down the third-party graph, and the sweep rules in
+// payload-slim.mjs sit exactly on those two blind spots:
+//   * onnxruntime — chromadb imports it inside its default embedding function, so
+//     `import chromadb` stays green whether or not it ships;
+//   * kubernetes  — imported by chromadb's distributed segment client, which the
+//     product never loads (it builds the embedded PersistentClient);
+//   * babel       — reached only as openjiuwen -> trafilatura -> courlan -> babel.
+//     A rule once swept it as a "jinja2 hard dep" while jinja2 was not even
+//     installed; the HTML compressor then silently degraded to its beautifulsoup
+//     fallback in the shipped payload. It is no longer swept.
+// So this runs the swept venv through two things the product really builds: the
+// store its memory provider opens (write + ranked query, plus chromadb's
+// default-embedding fallback, which must fail with its own readable ValueError
+// and never a bare ModuleNotFoundError) and its HTML compressor, which must still
+// extract with trafilatura rather than fall back. So the probe now fails the
+// build in BOTH directions a rule can be wrong: one that removes something the
+// runtime needs (assertions 1-4), and one that stops matching and quietly ships
+// its dead weight again (assertion 5, which enforces the package table instead
+// of only printing it — review finding F12). The node_modules sweeps cannot be
+// checked from Python, so they have their own content-marker verification above
+// at the codex vendor sweep.
+// See scripts/probe-payload-runtime.py and review findings F2 / F12.
+const probeScript = join(dirname(fileURLToPath(import.meta.url)), "probe-payload-runtime.py");
+if (!existsSync(probeScript)) {
+  fail(`runtime probe script missing: ${relative(out, probeScript)}`);
+}
+try {
+  // A payload build must NOT inherit SD_PROBE_DEV_TREE: compileEnv spreads
+  // process.env, so a dev machine that happens to export it (to run the probe
+  // against a dev venv) would silently skip the probe's ABSENT half here and
+  // let an unswept payload through — exactly the "gate green but nothing swept"
+  // failure F12 is about. The switch is for a human running the probe by hand,
+  // never for this path, so it is removed rather than passed through.
+  const probeEnv = { ...compileEnv };
+  delete probeEnv.SD_PROBE_DEV_TREE;
+  if ("SD_PROBE_DEV_TREE" in compileEnv) {
+    say("warning: SD_PROBE_DEV_TREE was set in the build environment; ignoring it for the payload probe");
+  }
+  const probeOut = execFileSync(jwVenvPython, [probeScript], { env: probeEnv, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+  // Require the sentinel, not just exit 0: a probe that dies before its own
+  // assertions would still leave an interpreter exit code behind, and this repo
+  // has already shipped one check that trusted an exit code (problems W22 /
+  // lesson L51 — makensis exits 0 on an undefined symbol).
+  if (!/^PROBE_OK$/m.test(probeOut ?? "")) {
+    fail(`payload runtime probe FAILED (jw venv): no PROBE_OK sentinel in output\n${probeOut ?? ""}`);
+  }
+  say("payload runtime probe OK: package table swept as the rules intend, jw venv store write+query, default-EF fallback readable, HTML compressor on trafilatura");
+} catch (error) {
+  const detail = (error.stdout?.toString?.() ?? "") + (error.stderr?.toString?.() ?? error.message);
+  fail(`payload runtime probe FAILED (jw venv):\n${detail}`);
+}
+
+
+// A2 RequiredFiles manifest: every file an installer must contain, checked
+// before the build is accepted (field history: a missing patch directory
+// killed the stack cold start in a shipped installer).
+const requiredFiles = [
+  join(jwPayload, ".sciencediscovery-patches.json"),
+  join(jwPayload, ".venv", dialect.venvBin, dialect.family === "darwin" ? "jiuwenswarm-start" : "jiuwenswarm-start.exe"),
+  join(out, "backend", "services", "api", "dist", "server.js"),
+  join(out, "backend", "services", "runner", "dist", "server.js"),
+  join(out, "envs-template", "sd-services", ...dialect.sitePackages(PYTHON_MINOR).split("/"), "_editable_impl_sciencediscovery_gateway.pth"),
+  join(out, "micromamba", dialect.micromambaName),
+  join(out, "python", ...dialect.bundledBasePythonPath.split("/")),
+];
+// SEA manifest entries (upstream fc9e0b71 shape + W15 darwin exclusion):
+// win32 installer builds gate on --expect-runner-sea (fail before the
+// installer is produced when the Linux remote-Runner binaries are absent);
+// an unflagged win32 assemble keeps them required only when actually staged.
+// darwin payloads never ship the SEA (remote execution out of mac v1
+// scope), so neither the files nor the gate apply there.
+if (dialect.family === "win32" && (expectRunnerSea || existsSync(runnerSeaDir))) {
+  requiredFiles.push(
+    join(out, "backend", "node_modules", "@sciencediscovery", "runner", "dist", "sea", "linux-x64", "sciencediscovery-runner"),
+    join(out, "backend", "node_modules", "@sciencediscovery", "runner", "dist", "sea", "linux-arm64", "sciencediscovery-runner"),
+  );
+}
+const missingRequired = requiredFiles.filter((p) => !existsSync(p));
+if (missingRequired.length > 0) {
+  fail(`required payload files missing:\n  ${missingRequired.map((p) => relative(out, p)).join("\n  ")}`);
+}
+say(`required-files manifest OK (${requiredFiles.length} entries)`);
+
+// A2b patch-consistency gate: the staged jw tree must pass the verify the
+// installer will run on every cold start, against the patch set being shipped.
+// Field incident (2026-11-12 build): the jw tree came from the build data dir
+// patched with an OLDER 0004, the patch payload came from the repo's NEW 0004
+// (a7ff1333) — a payload that can never start, invisible to A1/A2/A5 and the
+// runtime probe. See lib/patch-consistency.mjs for the full failure chain.
+// The receipt's tag drives the verify (it describes the tree being shipped);
+// a missing receipt is a hard failure — the runtime verify reads it too.
+{
+  const stagedTag = stagedPatchTag(jwPayload);
+  const command = patchVerifyCommand({
+    jwPython: jwVenvPython,
+    swarmPatchesPy: join(backendOut, "scripts", "swarm-patches.py"),
+    jwPayloadDir: jwPayload,
+    tag: stagedTag,
+  });
+  if (!command) {
+    fail(`payload patch consistency check FAILED: no readable .sciencediscovery-patches.json in the staged jw tree (${relative(out, jwPayload)})`);
+  }
+  try {
+    execFileSync(command.exe, command.args, { env: compileEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024 });
+  } catch (error) {
+    fail(patchVerifyFailureDetail({
+      jwPayloadDir: jwPayload,
+      tag: stagedTag,
+      exitCode: error.status ?? 1,
+      stderr: (error.stderr?.toString?.() ?? "") + (error.message ?? ""),
+    }));
+  }
+  say(`patch consistency OK: staged jw tree verifies against the shipped patch set (tag ${stagedTag})`);
+}
+
+// A5 path-budget gate (SIZEOPT W9 / design D11): W6 burned ALL MAX_PATH headroom
+// (maxRel=228, margin 0) and no existing gate noticed — assemble exit 0 while
+// the installed tree was one long username away from ImportError. The budget
+// is a TREND quantity (every upstream dep that nests deeper eats it), so it is
+// printed on EVERY build, not only on failure.
+//
+// Model (problems W6, lesson L29):
+//   maxAbs = rootLen + 1 + maxRel     (root = install dir, e.g. C:\…\ScienceDiscovery)
+//   runtime limit : maxAbs + 1 ≤ 260  → longest usable path is 259
+//   build limit   : compileall writes "<pyc>.<id(path)>" temp files (suffix
+//                     measured 14 chars; margin below kept at 19, a wide bound)
+//                   — modeled explicitly so the margin is never a surprise.
+//   default root  : C:\Users\<u>\AppData\Local\ScienceDiscoveryApp = 43 + username
+//                   (set explicitly by installer.nsh customInit; the electron-builder
+//                   default's intermediate "Programs" level was dropped on 2026-11-04
+//                   by owner decision); Windows caps usernames at 20 → root ≤ 63.
+//                   The "App" suffix is not cosmetic: the unsuffixed name is the
+//                   default DATA directory (wizard-data-dir.ts:22), and sharing one
+//                   path made uninstall delete user data — see problems W16.
+//
+// Closure with the installer guard: installer.nsh SD_INSTALL_ROOT_MAX=66 is
+// derived from the maxRel measured HERE ("longest install root the current
+// payload still fits in", 259 - 1 - 192 = 66). Change the payload layout →
+// maxRel moves → both sides must be updated (printing maxRel on every build is
+// exactly what keeps that coupling visible).
+// DEFAULT_ROOT_LEN below is coupled the same way, to the install root NAME in
+// installer.nsh customInit. Rename that root and this constant is wrong — and
+// wrong in the unsafe direction: a too-small rootLen reports a maxRelRuntime
+// the payload does not actually have, so the gate passes a tree that breaches
+// (the same "threshold derived from a stale measurement" failure as W15).
+// ⚠️ Derive the threshold from this MEASUREMENT, never from a number computed
+// by subtracting a saved-layout delta from an installed-tree walk: the walk is
+// truncated by MAX_PATH itself (problems W15), so such a derivation once
+// produced 70 — 4 chars too loose, letting roots 67..70 pass the guard while
+// actually breaching.
+// maxRel is measured from the INSTALL ROOT, so it must include the leading
+// "resources\" segment: electron-builder packs `out` as <install>\resources.
+// NOTE: derive it from relative(out, …) + a literal "resources" prefix, NOT
+// from relative(dirname(out), …) — the build tree is routinely staged at a
+// short path (`--out X:\pld`) to keep compileall inside the MAX_PATH budget
+// (lesson L29), and dirname() of that would label every payload file
+// "pld\backend\…", under-reporting the budget by 6 chars and hiding exactly
+// the breach this gate exists to catch (problems W9).
+// [macOS adaptation] MAX_PATH is a Windows-only constraint; darwin keeps the
+// walk (A6 bytecode counting piggybacks on it) but the budget gate below is
+// win32-scoped. The path-length number is still printed for trend visibility.
+const MAX_PATH_USABLE = 259;
+const DEFAULT_ROOT_LEN = 63; // C:\Users\<u20>\AppData\Local\ScienceDiscoveryApp
+const COMPILEALL_TEMP_MARGIN = 19;
+const PAYLOAD_SEGMENT = "resources";
+const maxRelRuntime = MAX_PATH_USABLE - DEFAULT_ROOT_LEN - 1; // 195
+const maxRelBuild = maxRelRuntime - COMPILEALL_TEMP_MARGIN;   // 176
+const installRootRel = (p) => join(PAYLOAD_SEGMENT, relative(out, p));
+
+let maxRel = 0;
+let maxRelPath = "";
+const topRel = []; // [len, relPath] kept sorted desc, capped at 10
+// A6 piggybacks on this same walk: counting bytecode needs the identical
+// traversal, so it is accumulated here rather than paying for a second pass
+// over ~95,000 files. `pycByRegion` buckets by the payload's top-level
+// directory (python, envs-template, backend, ...) so the advisory can name
+// WHICH subtree lost coverage.
+let pyCount = 0;
+let pycCount = 0;
+const pycByRegion = {};
+{
+  const stack = [out];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { stack.push(p); continue; }
+      const rel = installRootRel(p);
+      if (rel.length > maxRel) { maxRel = rel.length; maxRelPath = rel; }
+      topRel.push([rel.length, rel]);
+      if (e.name.endsWith(".py")) {
+        pyCount += 1;
+      } else if (e.name.endsWith(".pyc")) {
+        pycCount += 1;
+      } else {
+        continue;
+      }
+      // Bucket by the payload's top-level DIRECTORY. A file sitting directly at
+      // the payload root (e.g. version.json itself) has no separator in its
+      // relative path, so split()[0] would be the FILENAME — bucketing root files
+      // under their own names and polluting byRegion with one-entry buckets that
+      // bootstrap never reads. Test for the separator explicitly; "(root)" is the
+      // honest bucket for them.
+      const relFromOut = relative(out, p);
+      const sep = relFromOut.search(/[\\/]/);
+      const region = sep === -1 ? "(root)" : relFromOut.slice(0, sep);
+      const bucket = (pycByRegion[region] ??= { py: 0, pyc: 0 });
+      if (e.name.endsWith(".py")) bucket.py += 1; else bucket.pyc += 1;
+    }
+  }
+  topRel.sort((a, b) => b[0] - a[0]);
+  topRel.length = Math.min(topRel.length, 10);
+}
+say(`A5 path budget: maxRel=${maxRel} (runtime limit ${maxRelRuntime} @ default root ${DEFAULT_ROOT_LEN}, build limit ${maxRelBuild} incl. compileall +${COMPILEALL_TEMP_MARGIN}) — longest: ${maxRelPath}`);
+if (dialect.hasTrampolines && maxRel > maxRelRuntime) {
+  fail(`payload path budget exceeded: maxRel=${maxRel} > ${maxRelRuntime} (over by ${maxRel - maxRelRuntime}) under the worst-case default install root (${DEFAULT_ROOT_LEN} chars).\n` +
+    `  Longest paths:\n    ${topRel.map(([n, p]) => `${n}  ${p}`).join("\n    ")}\n` +
+    `  Shorten the payload layout (design D11 §S2: rename/move the deep venv prefix) — do NOT ship: the installed tree will ImportError under long usernames.`);
+}
+if (dialect.hasTrampolines && maxRel > maxRelBuild) {
+  // Advisory, not a failure: the payload ships fully precompiled
+  // (checked-hash, step 7c), so first-run compileall over the install tree is
+  // a no-op and never materializes the +19 temp names in practice. The line
+  // stays visible so the eroding margin cannot hide (W9: the budget is a trend
+  // quantity — every upstream dep that nests deeper eats it).
+  say(`A5 advisory: maxRel=${maxRel} exceeds the compileall build budget (${maxRelBuild}); safe only while the shipped checked-hash .pyc set stays complete (first-run precompile must remain a no-op)`);
+}
+if (!dialect.hasTrampolines) {
+  say("A5 gate: skipped (MAX_PATH is a win32-only constraint)");
+}
+
+// A6 bytecode-budget gate (SIZEOPT W25): A5's advisory above says the build
+// limit is only safe "while the shipped .pyc set stays complete" — this is the
+// check that makes that sentence enforceable instead of decorative.
+//
+// release6 shipped with 1,384 .pyc where it should have had ~37,000, because
+// the build environment exported PYTHONPYCACHEPREFIX and compileall (which
+// spreads process.env) redirected every bytecode file into a mirror tree
+// outside the payload. compileall exited 0 — right content, wrong place — and
+// all four existing gates stayed green: A1 imports fine (the .py sources all
+// shipped), A1b runs code without counting bytecode, A2's manifest has no
+// bytecode entry, A5 measures path length. The installer came out 139.7 MiB
+// SMALLER (446.5 vs the rebuild's 586.2 MiB) and so looked like a win for a
+// size-optimisation branch; the first launch recompiled everything instead.
+//
+// Like A4 and A5 this prints on EVERY build: coverage is a trend quantity
+// (upstream adds tests, a sweep rule changes) and a budget nobody can see
+// eroding is a budget that fails all at once. The ratio and its calibration
+// live in scripts/lib/pyc-budget.mjs, pinned against both release6 trees by
+// test/pyc-budget.test.ts — change the limit there, not here.
+{
+  const verdict = pycBudgetVerdict(pyCount, pycCount);
+  const pct = (n) => `${(n * 100).toFixed(1)}%`;
+  say(`A6 bytecode budget: ${pycCount} .pyc for ${pyCount} .py = ${pct(verdict.ratio)} (limit ${pct(PYC_MIN_RATIO)})`);
+  const weak = regionsBelowRatio(pycByRegion);
+  if (weak.length > 0) {
+    // Advisory, not a failure: the gate is whole-tree, and a whole-tree ratio
+    // has a blind spot proportional to a region's size — a SMALL target losing
+    // every .pyc can leave the total above the limit while that subtree ships
+    // uncompiled and pays the recompile on first run. Naming it keeps the loss
+    // visible instead of hiding inside a passing total.
+    say(`A6 advisory: below-limit regions — ${weak.map((r) => `${r.name} ${r.pyc}/${r.py} (${pct(r.ratio)})`).join(", ")}`);
+  }
+  if (!verdict.ok) {
+    fail(`payload bytecode budget failed: ${verdict.reason}.\n` +
+      `  The .pyc files are either missing or were written OUTSIDE the payload. Check the build environment for PYTHONPYCACHEPREFIX (it redirects compileall's output and still exits 0 — problems W25) and check the "precompiled bytecode for <label>" lines above for a target that was skipped.\n` +
+      `  Do NOT ship: the installed tree recompiles on first run, a multi-minute startup regression.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 10. version.json manifest
+
+let repoCommit = "unknown";
+try {
+  repoCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+} catch { /* not a git checkout — keep "unknown" */ }
+
+const pieces = {};
+for (const name of ["backend", "envs-template", "python", "micromamba"]) {
+  pieces[name] = Math.round((await dirSizeMb(join(out, name))) * 10) / 10;
+}
+const mmBuf = readFileSync(join(out, "micromamba", dialect.micromambaName));
+const manifest = {
+  repoCommit,
+  builtAt: new Date().toISOString(),
+  // Target platform of this payload (macOS adaptation, D3 §2) — audit
+  // dimension for version.json consumers (a darwin shell must never boot a
+  // win32 payload, and the requiredFiles manifest differs per platform).
+  platform: assemblePlatform,
+  piecesMB: pieces,
+  micromambaSha256: createHash("sha256").update(mmBuf).digest("hex"),
+  // #897 §2 first half: record the precompiled set so bootstrap can verify the
+  // COPY against what this build actually shipped. The counts come from the A6
+  // walk above (no second traversal). byRegion is keyed by the payload's
+  // top-level directory; bootstrap reads the "envs-template" entry, the region
+  // copyTreeConcurrent unpacks into <dataDir>\envs (unpackedBytecodeVerdict).
+  bytecode: {
+    py: pyCount,
+    pyc: pycCount,
+    byRegion: pycByRegion,
+  },
+};
+await writeFile(join(out, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+// ---------------------------------------------------------------------------
+// 11. Cleanup + report
+
+await rm(deployDir, { recursive: true, force: true });
+say("removed deploy temp dir");
+const payloadTotal = Math.round(Object.values(pieces).reduce((a, b) => a + b, 0) * 10) / 10;
+say(`done — payload pieces (MB): ${JSON.stringify(pieces)}`);
+say(`payload total: ${payloadTotal} MB — installer size follows after electron-builder`);

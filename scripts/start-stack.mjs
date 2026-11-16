@@ -31,7 +31,7 @@ import {
   absoluteFromRepository, apiHeapBudgetMb, findHostPython, findOnPath, isMac, isWindows,
   loadDotEnv, portAvailability, portOccupant, spawnService, killTree, venvPython, waitHealthy,
 } from "./lib/stack-platform.mjs";
-import { cmdStart as jwStart, isUp as jwIsUp, jwConfig, jwEnv, readInstancePorts } from "./jiuwenswarm.mjs";
+import { cmdStart as jwStart, isUp as jwIsUp, jwConfig, jwEnv, readInstancePorts, stopDetachedSync as jwStopSync } from "./jiuwenswarm.mjs";
 
 const scriptDir = fileURLToPath(new URL(".", import.meta.url));
 const repositoryRoot = resolve(scriptDir, "..");
@@ -375,6 +375,12 @@ async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
 // behaviour terminates the process, and the sync's async finally never runs.
 const children = [];
 let shuttingDown = false;
+// [mac-desktop] W20 —— jw 由 cmdStart 内 spawnDetached 起独立进程组，
+// 不在上面的 children[] 册上；teardown 时若不走 jw 官方 --stop，darwin 上
+// 整组 4 进程（python -c 直调 + app + agentserver + gateway）成孤儿泄漏
+// （实测：AppleEvent quit 后 start-stack 组全清、jw 组全存活）。双平台
+// 同漏——win32 detached:false 但 unref 后同样脱离名册。
+let jwRunning = false;
 
 /** Kill every registered child and resolve once each one has exited.
  *
@@ -398,10 +404,13 @@ async function stopChildren() {
 
 // Synchronous fallback for `process.on("exit")`, where nothing can be awaited.
 // Order still matters: kill first, restore after, so a child that dies during
-// this turn cannot rewrite the lockfile behind the restore.
+// this turn cannot rewrite the lockfile behind the restore. jw's stop is LAST
+// of all (it spawns a python; children[] die first so a wedged service cannot
+// delay jw's own stop).
 function cleanupSync() {
   for (const child of children.splice(0)) killTree(child);
   restoreActiveLockfile();
+  if (jwRunning) jwStopSync(jwConfig());
 }
 
 async function shutdown(code) {
@@ -409,6 +418,9 @@ async function shutdown(code) {
   shuttingDown = true;
   await stopChildren();
   restoreActiveLockfile();
+  // W20: the detached jw group is off the children[] roster — stop it via
+  // jw's official --stop path after the registered children have settled.
+  if (jwRunning) jwStopSync(jwConfig());
   process.exit(code);
 }
 
@@ -743,6 +755,7 @@ try {
             say("JiuwenSwarm is not running; starting it in the background (node scripts/jiuwenswarm.mjs start)...");
             perf("jw-bg-start-enter");
             await jwStart(cfg);
+            jwRunning = true; // W20: cleanup() must stop the detached group
             perf("jw-bg-start-settled");
           }
           const env = await jwEnv(cfg).catch(() => null);
@@ -788,6 +801,7 @@ try {
         if (!gatewayPort || !await jwIsUp(cfg)) {
           say("JiuwenSwarm is not running; starting it (node scripts/jiuwenswarm.mjs start)...");
           await jwStart(cfg);
+          jwRunning = true; // W20: cleanup() must stop the detached group
           Object.assign(process.env, await jwEnv(cfg));
         }
       })());

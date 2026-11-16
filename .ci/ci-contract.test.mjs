@@ -420,10 +420,10 @@ test("Windows distribution gate builds the native Electron installer", async () 
   assert.match(job, /fetch-managed-micromamba\.mjs[\s\S]*--platform win32/);
   assert.match(job, /actions\/download-artifact@v4[\s\S]*pattern: windows-runner-sea-\*/);
   assert.match(job, /merge-multiple: true/);
-  assert.match(job, /pnpm --dir win_desktop dist/);
+  assert.match(job, /pnpm --dir application dist/);
   const installer = artifactUploads(job).find((upload) => upload.artifact === "windows-desktop-installer");
   assert.ok(installer, "Windows installer artifact was not found");
-  assert.deepEqual(installer.paths, ["win_desktop/release"]);
+  assert.deepEqual(installer.paths, ["application/release"]);
   assert.equal(installer.missing, "error");
 });
 

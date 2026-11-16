@@ -944,7 +944,7 @@ jobs:
           path: |
             .sciencediscovery-data
             ~\AppData\Local\electron-builder\Cache
-          key: windows-desktop-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'uv.lock', 'scripts/jiuwenswarm.mjs', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**', 'services/runner/src/micromamba-releases.json', 'win_desktop/pnpm-lock.yaml') }}
+          key: windows-desktop-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'uv.lock', 'scripts/jiuwenswarm.mjs', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**', 'services/runner/src/micromamba-releases.json', 'application/pnpm-lock.yaml') }}
 
       - name: Install the backend workspace
         run: pnpm install --frozen-lockfile
@@ -969,22 +969,22 @@ jobs:
           --output .sciencediscovery-data\scientific-envs\bin\micromamba.exe
 
       - name: Install the Electron workspace
-        run: pnpm --dir win_desktop install --frozen-lockfile
+        run: pnpm --dir application install --frozen-lockfile
 
       - name: Test and typecheck the desktop shell
         run: |
-          pnpm --dir win_desktop test
-          pnpm --dir win_desktop typecheck
+          pnpm --dir application test
+          pnpm --dir application typecheck
 
       - name: Build the Windows installer
-        run: pnpm --dir win_desktop dist
+        run: pnpm --dir application dist
 
       - name: Verify and upload the Windows installer
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-desktop-installer
-          path: win_desktop/release
+          path: application/release
           if-no-files-found: error
           retention-days: 7
 

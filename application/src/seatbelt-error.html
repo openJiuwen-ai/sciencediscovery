@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ScienceDiscovery — 沙箱自检未通过</title>
+<style>
+  /* Fail-closed Seatbelt page (B2-2, F1 fix): the main process probes
+     sandbox-exec BEFORE any UI loads. A "failed" verdict lands here instead
+     of the SPA — the user never reaches the main interface (upstream red
+     line). Visual language ported from wizard.html so the product reads
+     as one flow. No forward button BY DESIGN. */
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .wizard-page {
+    --wizard-ink: #191919;
+    --wizard-muted: #808080;
+    --wizard-err: #bf0a1c;
+    --wizard-err-bg: #fce3e0;
+    position: fixed; inset: 0; z-index: 400;
+    display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 37vw, 710px);
+    height: 100vh; overflow: hidden;
+    background: #fff; color: var(--wizard-ink);
+    font-family: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  }
+  .wizard-pane { display: flex; flex-direction: column; min-width: 0; height: 100vh; background: #fff; }
+  .wizard-brand { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 40px clamp(32px, 6.25vw, 120px) 0; }
+  .wizard-brand-mark { width: 32px; height: 32px; flex: 0 0 32px; background: url("app-mark.png") center / 32px 32px no-repeat; }
+  .wizard-brand-name { color: var(--wizard-ink); font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: .1px; }
+  .wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 clamp(32px, 6.25vw, 120px); }
+  .wizard-content { width: 100%; max-width: 544px; padding-top: clamp(72px, 12.2vh, 132px); padding-bottom: 64px; }
+  .wizard-content h1 { margin: 0 0 16px; color: var(--wizard-err); font-size: 32px; line-height: 48px; font-weight: 600; }
+  .wizard-sub { margin: 0; color: var(--wizard-muted); font-size: 14px; line-height: 22px; }
+  .reason {
+    margin-top: 24px; padding: 12px 16px; border-radius: 6px;
+    background: var(--wizard-err-bg); color: var(--wizard-err);
+    font-size: 14px; line-height: 22px; white-space: pre-line;
+  }
+  .diagnostics { margin: 24px 0 0; padding: 0; list-style: none; }
+  .diagnostics li { margin-top: 8px; }
+  .diagnostics code {
+    display: block; padding: 8px 12px; border-radius: 4px;
+    background: #f5f5f5; border: 1px solid #e8e8e8;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 18px; color: var(--wizard-ink);
+    overflow-x: auto; word-break: break-all;
+  }
+  .wizard-hint { margin-top: 24px; color: var(--wizard-muted); font-size: 12px; line-height: 18px; }
+  .wizard-art { position: relative; height: 100vh; overflow: hidden; background: #0d4f8b; }
+  .wizard-art::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: url("panel-model.webp");
+    background-position: center center; background-repeat: no-repeat; background-size: cover;
+  }
+  @media (max-width: 900px) { .wizard-page { grid-template-columns: 1fr; } .wizard-art { display: none; } }
+</style>
+</head>
+<body>
+  <div class="wizard-page">
+    <main class="wizard-pane">
+      <header class="wizard-brand">
+        <span class="wizard-brand-mark" aria-hidden="true"></span>
+        <span class="wizard-brand-name">ScienceDiscovery</span>
+      </header>
+
+      <div class="wizard-scroll">
+        <div class="wizard-content">
+          <!-- Static markup is zh (the fallback for a page whose script never
+               runs); the copy swap below re-picks the locale. Strings mirror
+               apps/desktop text/zh.ts + text/en.ts (wizard.boot.seatbelt*)
+               verbatim so both surfaces state the same thing. -->
+          <section role="alert">
+            <h1 data-i18n="title">未检测到 macOS 沙箱（Seatbelt）</h1>
+            <p class="wizard-sub" data-i18n="sub">SD 桌面版必须在沙箱内运行代码，自检未通过，无法进入主界面。</p>
+
+            <div class="reason" id="reason" hidden></div>
+
+            <ul class="diagnostics" id="diagnostics" hidden></ul>
+
+            <p class="wizard-hint" data-i18n="hint">若刚解除 MDM 限制或修改了系统配置，请重启应用后重新检测。</p>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <aside class="wizard-art" aria-hidden="true"></aside>
+  </div>
+
+  <script>
+  "use strict";
+  // Review (HongyeZhou, round 3): the packaged fail-closed page serves BOTH
+  // locales — the SPA block already carries zh/en, and this page is the one
+  // a blocked user actually sees, so it must not be Chinese-only.
+  //
+  // Locale pick (F13): this page is a file:// origin while the SPA runs on
+  // http://127.0.0.1 — localStorage does NOT cross that boundary, so the
+  // page cannot read the SPA's own stored choice (the first cut tried and
+  // never fired in the packaged app). The shell now hands the SPA's
+  // persisted locale through the query; the pick order is:
+  //   1. `?lang=zh|en` — explicit override (QA/screenshot harness, or the
+  //      shell's own pass-through of the SPA choice),
+  //   2. navigator.language with zh as the default (the pre-F13 behavior —
+  //      an English Mac still gets an English page when the shell has no
+  //      persisted choice yet, e.g. before the SPA ever ran),
+  //   3. zh as the final fallback (matches the static copy).
+  try {
+    const I18N = {
+      zh: {
+        title: "未检测到 macOS 沙箱（Seatbelt）",
+        sub: "SD 桌面版必须在沙箱内运行代码，自检未通过，无法进入主界面。",
+        hint: "若刚解除 MDM 限制或修改了系统配置，请重启应用后重新检测。",
+      },
+      en: {
+        title: "macOS sandbox (Seatbelt) not detected",
+        sub: "The desktop edition runs code only inside the sandbox; the self-check failed, so the main interface stays closed.",
+        hint: "If an MDM restriction was just lifted or system settings changed, restart the app and check again.",
+      },
+    };
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get("lang") === "en" ? "en" : params.get("lang") === "zh" ? "zh" : null;
+    const lang = override ?? ((navigator.language || "zh").toLowerCase().startsWith("zh") ? "zh" : "en");
+    if (lang !== "zh") {
+      const copy = I18N[lang];
+      for (const el of document.querySelectorAll("[data-i18n]")) {
+        const key = el.getAttribute("data-i18n");
+        if (copy[key]) el.textContent = copy[key];
+      }
+      document.documentElement.lang = "en";
+      document.title = "ScienceDiscovery — macOS sandbox (Seatbelt) not detected";
+    }
+    window.__SEATBELT_LANG__ = lang; // read by the reason block below
+  } catch { /* locale pick is cosmetic; the static zh copy still explains the block */ }
+  // The main process passes the verdict payload via query params (URL-encoded
+  // JSON) — this page has no preload bridge on purpose: nothing interactive
+  // should work on a fail-closed page.
+  //
+  // Reason & diagnostics copy (review F7 + HongyeZhou round 3): the shell
+  // also passes a machine-readable failCode (+ signal/exitCode); the EN page
+  // keys its reason line AND its diagnostics comments off that code instead
+  // of showing the zh strings. The zh payload from the query still renders
+  // for zh, and stays as the fallback for an unknown failCode (a probe
+  // shape this page predates).
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const failCode = params.get("failCode");
+    const lang = window.__SEATBELT_LANG__ || "zh";
+    let reason = params.get("reason");
+    let diagnostics = JSON.parse(params.get("diagnostics") || "[]");
+    if (lang === "en" && failCode) {
+      // Templates mirror the zh copy in sandbox-probe.ts (same commands,
+      // English comments) so the EN reader gets fully readable diagnostics.
+      const templates = {
+        "spawn-error": {
+          reason: () => "macOS sandbox (Seatbelt) not detected: the sandbox-exec command was not found. The desktop edition runs code only inside the sandbox; it cannot continue.",
+          diagnostics: [
+            "ls -l /usr/bin/sandbox-exec   # check that the binary exists",
+            "sudo profiles status -all     # look for MDM-deployed restrictions (ask your administrator)",
+          ],
+        },
+        "signal": {
+          reason: (sig) => `The sandbox probe was killed by ${sig} before it could confirm Seatbelt works. The desktop edition runs code only inside the sandbox; it cannot continue.`,
+          diagnostics: [
+            "ls -l /usr/bin/sandbox-exec   # check that the binary exists",
+            "sudo profiles status -all     # look for MDM-deployed restrictions (ask your administrator)",
+          ],
+        },
+        "exit-code": {
+          reason: (code) => `The sandbox probe failed (sandbox-exec exited with code ${code}). Seatbelt may be disabled under MDM control or in nested virtualization. The desktop edition runs code only inside the sandbox; it cannot continue.`,
+          diagnostics: [
+            "sandbox-exec -p '(version 1)(allow default)' /usr/bin/true   # reproduce the probe by hand",
+            "sudo profiles status -all     # look for MDM-deployed restrictions (ask your administrator)",
+          ],
+        },
+      };
+      const template = templates[failCode];
+      if (template) {
+        reason = template.reason(params.get("signal") || params.get("exitCode"));
+        diagnostics = template.diagnostics;
+      }
+    }
+    if (reason) {
+      const el = document.getElementById("reason");
+      el.textContent = reason;
+      el.hidden = false;
+    }
+    if (Array.isArray(diagnostics) && diagnostics.length) {
+      const ul = document.getElementById("diagnostics");
+      for (const line of diagnostics) {
+        const li = document.createElement("li");
+        const code = document.createElement("code");
+        code.textContent = String(line);
+        li.appendChild(code);
+        ul.appendChild(li);
+      }
+      ul.hidden = false;
+    }
+  } catch { /* A missing payload still shows the static fail-closed copy. */ }
+  </script>
+</body>
+</html>

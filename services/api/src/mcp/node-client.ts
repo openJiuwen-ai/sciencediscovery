@@ -449,6 +449,15 @@ export class McpNodeClient {
           if (!PROXY_ENV_VARS.includes(key as (typeof PROXY_ENV_VARS)[number])) env[key] = value;
         }
         Object.assign(env, overlay);
+        // [mac-desktop] W26: StdioClientTransport's getDefaultEnvironment()
+        // builds a MINIMAL env (HOME/PATH/USER/...) that drops the shell's
+        // PYTHONDONTWRITEBYTECODE — the sixth bundle-write surface (W22 fixed
+        // five). Bundled-python MCP servers import gateway sources straight
+        // from the sealed .app; every .pyc written there breaks the codesign
+        // seal and the next launch dies at amfid. Forward the guard whenever
+        // the parent carries it (set by packagedEnv on darwin; absent on
+        // win32 dev — no-op there).
+        if (process.env.PYTHONDONTWRITEBYTECODE) env.PYTHONDONTWRITEBYTECODE = process.env.PYTHONDONTWRITEBYTECODE;
         const transport = new StdioClientTransport({
           args: server.args,
           command,

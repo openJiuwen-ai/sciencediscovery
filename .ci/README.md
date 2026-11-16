@@ -230,7 +230,7 @@ Allow enough queue status-check time for L1/UT/ST + mocked and real setup/testin
 Linux binary and Docker distribution jobs run in PR and daily/release profiles.
 The Windows desktop installer runs only in the nightly workflow (`daily` profile)
 and version release (`release` profile); PR and merge queue runs skip it. It uses
-the checked-in `win_desktop` NSIS build on `windows-latest`, provisioning the
+the checked-in `application` NSIS build on `windows-latest`, provisioning the
 shared Python environment, the pinned JiuwenSwarm runtime and the verified
 Windows micromamba before uploading the installer. Its Linux Runner SEA inputs
 come from the two architecture-specific artifacts produced by the `binary`

@@ -13,10 +13,10 @@
 | `packages/feedback-worker` | Cloudflare Worker：KV 去重/限流/护栏、Origin 白名单、CORS，中转成私有 GitHub issue，并把截图写入仓库 |
 | `apps/web` | **Linux Web 端**（默认根路径 `apps/web/dist`） |
 | `apps/desktop` | **Windows 桌面端**新工作台（打包 renderer 载荷） |
-| `win_desktop`（sd-shell） | Electron 外壳，拉起后端栈并加载 UI |
+| `application`（sd-shell） | Electron 外壳，拉起后端栈并加载 UI |
 | `services/launcher` | 后端栈入口，4310 服务 UI、4410 服务控制 API |
 
-> 打包后的桌面端通过 `SCIENCE_AGENT_WEB_DIR=apps/desktop/dist`（见 `win_desktop/src/bootstrap.ts`）加载 `apps/desktop`；Web/默认路径加载 `apps/web`。两端反馈功能均已实现。
+> 打包后的桌面端通过 `SCIENCE_AGENT_WEB_DIR=apps/desktop/dist`（见 `application/src/bootstrap.ts`）加载 `apps/desktop`；Web/默认路径加载 `apps/web`。两端反馈功能均已实现。
 
 > **限额是近似值。** 去重、IP 小时限流、installId 日限流和每日 issue 配额都建立在 KV 的 `get` → 判断 → `put` 之上，KV 没有原子的条件写入，并发请求可能同时通过检查而略微超出阈值。当前量级下可以接受；若将来需要严格限额，应改用 Durable Object 承载计数。
 
@@ -150,7 +150,7 @@ pnpm start                                          # 起栈并让 4310 服务 d
 **B. 真实 Electron 外壳**
 
 ```powershell
-cd win_desktop
+cd application
 pnpm install
 pnpm start        # = node scripts/build.mjs && electron .
 ```
