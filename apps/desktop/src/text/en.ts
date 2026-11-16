@@ -42,6 +42,21 @@ export const EN: Text = {
     omissionsSummary: (count: number) => `Not included: ${count} workspace file${count === 1 ? "" : "s"}`, download: "Download", preparing: "Preparing the package in the background…", close: "Close", copyMissing: "The conversation or operation record for this copy no longer exists; waiting has stopped. Create a new continuation.", copyPollingFailed: "Unable to read copy progress; retries have stopped. Refresh or try again later.", legacyUnavailable: "The local service is temporarily unavailable, retrying…", exportPollingFailed: "Unable to read export progress; retries have stopped. Export again later.", exportMissing: "The export task no longer exists. Export again.",
     necessary: "Necessary", complete: "Complete", necessaryHint: "Current results, input dependencies and related evidence, with optional history omitted.", completeHint: "Available history and versions within the selected scope.", graph: "Include full scientific-memory graph", estimate: "Uncompressed estimate", calculating: "Calculating scope and size…", files: "Workspace files", omissions: "Scope and omissions", evidenceOnly: "Packages support inspection and continuation. Import does not execute code or restore permission grants.", choose: "Select a .sdresearch package", objects: "content objects", importHint: "Restore conversation, files and evidence as a read-only snapshot. Continuing research creates an independent new session. The original record is preserved.", branchHint: "Choose a completed reply. The branch inherits the prefix and recoverable evidence, excluding later research.", reply: "Branch starting point", working: "Working…", startExport: "Start background export", confirmImport: "Confirm import", exportSaving: "Saving package…", exportSaved: "Package saved", exportSaveFailed: "Failed to save the package", exportCanceled: "Export canceled", openLocation: "Open file location", exportsInProgress: (count: number) => `${count} export${count === 1 ? "" : "s"} in progress`, retrySave: "Retry save", savedExports: "Saved packages",
   },
+  /** Export history: the study packages this machine has saved, reachable again
+   *  after the export dialog closed or the app restarted (#1154). */
+  exportHistory: {
+    title: "Export history",
+    description: "Study packages saved on this machine, findable again",
+    heading: "Saved study packages",
+    empty: "No study package has been saved yet.",
+    unavailable: "Export history is available inside the desktop app only.",
+    searchPlaceholder: "Search by filename or session",
+    allProjects: "All projects",
+    missing: "File moved or deleted",
+    reveal: "Show in folder",
+    forget: "Remove record",
+    revealMissing: "The file was moved or deleted; you can remove this record.",
+  },
   appName: "ScienceDiscovery",
   languageTag: "en-US",
 
@@ -94,6 +109,7 @@ export const EN: Text = {
   },
 
   sessionBar: {
+    export: "Export",
     workspaceToggle: "Workspace panel",
     sessionMenu: "Session menu",
     sessionTitle: "Session name",
@@ -887,6 +903,7 @@ export const EN: Text = {
         "sandbox-network": { label: "Network", description: "Network access for run_shell" },
         remote: { label: "Remote", description: "Remote Runners and the machines a project may use" },
         timeouts: { label: "Timeouts", description: "Wall-clock limits and unlimited mode" },
+        "export-history": { label: "Export history", description: "Study packages saved on this machine" },
       },
       global: {
         modelHeading: "Default model",
