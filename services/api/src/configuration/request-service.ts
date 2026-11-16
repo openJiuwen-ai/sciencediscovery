@@ -327,11 +327,15 @@ export class ConfigurationRequestService {
       // expiry, archive and adapter identity, without verifying or applying settings.
       this.guard(record, this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId), false);
       const version = record.view.stateVersion;
+      // One clock read for both timestamps: two reads in the same transaction
+      // could land on different milliseconds, flaking the confirmedAt ==
+      // updatedAt invariant asserted by the Manual settings tests (#1168).
+      const confirmedAt = this.now();
       record.view.settingsConfirmation = { destination: input.destination, completed: input.completed,
-        source: "user", verified: false, configurationWritten: false, confirmedAt: this.now() };
+        source: "user", verified: false, configurationWritten: false, confirmedAt };
       record.view.state = "dismissed";
       record.view.decisionSource = "user";
-      record.view.stateVersion++; record.view.updatedAt = this.now();
+      record.view.stateVersion++; record.view.updatedAt = confirmedAt;
       record.approvedRevision = record.view.revision; record.approvedDigest = record.view.previewDigest;
       delete record.view.autoApplyAt; delete record.view.error; delete record.view.choiceReceipt;
       record.view.activation.state = "not_requested";
