@@ -1545,18 +1545,25 @@ ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
     ? details.recordId.trim()
     : token as string;
   const level = details.level === "necessary" || details.level === "complete" ? details.level : undefined;
-  exportHistory().record({
-    bytes: bytes.byteLength,
-    filename: basename(destination.path),
-    id: recordId,
-    ...(level ? { level } : {}),
-    path: destination.path,
-    ...(typeof details.projectId === "string" ? { projectId: details.projectId } : {}),
-    savedAt: new Date().toISOString(),
-    ...(typeof details.sessionId === "string" ? { sessionId: details.sessionId } : {}),
-    ...(typeof details.sessionTitle === "string" ? { sessionTitle: details.sessionTitle } : {}),
-    token: token as string,
-  });
+  try {
+    exportHistory().record({
+      bytes: bytes.byteLength,
+      filename: basename(destination.path),
+      id: recordId,
+      ...(level ? { level } : {}),
+      path: destination.path,
+      ...(typeof details.projectId === "string" ? { projectId: details.projectId } : {}),
+      savedAt: new Date().toISOString(),
+      ...(typeof details.sessionId === "string" ? { sessionId: details.sessionId } : {}),
+      ...(typeof details.sessionTitle === "string" ? { sessionTitle: details.sessionTitle } : {}),
+      token: token as string,
+    });
+  } catch (error) {
+    // The package is already on disk: a history row that cannot be persisted
+    // must not turn a successful save into 保存失败. The row is simply absent,
+    // and the shell log says why.
+    log(`[export] history row not recorded: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return { ok: true };
 });
 
