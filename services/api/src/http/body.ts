@@ -26,8 +26,11 @@ export async function readBytes(request: IncomingMessage, maxBytes: number, labe
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
     if (total > maxBytes) {
-      const error = new Error(`${label} exceeds the ${maxBytes} byte limit`) as NodeJS.ErrnoException;
+      // The client shows localized copy keyed on the code; a raw byte count is an
+      // internal number that leaked into the dialog and reads as gibberish there.
+      const error = new Error(`${label} exceeds its size limit`) as NodeJS.ErrnoException & { limitLabel?: string };
       error.code = "PAYLOAD_TOO_LARGE";
+      error.limitLabel = label;
       throw error;
     }
     chunks.push(buffer);
