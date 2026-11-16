@@ -183,7 +183,7 @@ test("environment subprocess overlay canonicalizes contradictory variants", () =
   });
 });
 
-test("authenticated environment settings display the complete effective value", () => {
+test("environment settings redact proxy credentials and query parameters", () => {
   const value = "http://user:secret@proxy.example.test:8080/path?token=abc&region=private";
   const details = proxyEnvironmentDetails(resolveProxyEnvironment({
     HTTP_PROXY: value,
@@ -192,7 +192,8 @@ test("authenticated environment settings display the complete effective value", 
   assert.equal(details.status, "configured");
   assert.equal(details.variables[0]?.status, "configured");
   assert.equal(details.variables[0]?.effectiveName, "HTTP_PROXY");
-  assert.equal(details.variables[0]?.effectiveValue, value);
+  assert.equal(details.variables[0]?.effectiveValue, "http://***:***@proxy.example.test:8080/path");
+  assert.doesNotMatch(JSON.stringify(details), /secret|token=abc|region=private/);
   assert.equal(details.variables[3]?.effectiveValue, "localhost,.example.test");
 });
 

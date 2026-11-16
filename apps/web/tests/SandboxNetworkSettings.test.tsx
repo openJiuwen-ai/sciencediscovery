@@ -107,14 +107,14 @@ test("the outbound route offers the same three choices a model does", () => {
 
 /**
  * Naming regression: this capability is "sandbox network access", never a
- * proxy. The Network proxies settings group (Web/MCP outbound) is a separate
+ * proxy. The Network and proxy settings group (Web/MCP outbound) is a separate
  * face and keeps its own wording.
  *
  * The outbound-route control does pick an entry from that other registry, so
- * proxy wording legitimately appears there — as a reference to Network proxies
- * and as the shared route choices. What must never happen is this capability
- * being *named* a proxy, so the guard is on the names it gives itself: the
- * heading, the group legends and the labels of its own controls.
+ * proxy wording legitimately appears there — as a reference to Network and
+ * proxy and as the shared route choices. What must never happen is this
+ * capability being *named* a proxy, so the guard is on the names it gives
+ * itself: the heading, the group legends and the labels of its own controls.
  */
 test("the sandbox network settings never call this capability a proxy", () => {
   const html = render({
@@ -124,7 +124,7 @@ test("the sandbox network settings never call this capability a proxy", () => {
     mode: "domain-allowlist",
   }, PROXY_REGISTRY);
   // The cross-reference that names the other feature and scopes it out stays.
-  assert.match(html, /Web and MCP outbound servers are configured separately under Network proxies[^.]*\./);
+  assert.match(html, /Web and MCP outbound servers are configured separately under Network and proxy[^.]*\./);
   // No phrasing anywhere that turns this capability into "a proxy".
   assert.doesNotMatch(html, /sandbox\s*prox|prox\w*\s+sandbox|沙箱\s*代理/i);
   const ownNames = [

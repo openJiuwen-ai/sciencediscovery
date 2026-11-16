@@ -381,7 +381,7 @@ def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
     router = APIRouter()
 
     async def forward(route: LlmRoute, body: dict[str, Any], *, restore_names: bool) -> Response:
-        client: httpx.AsyncClient = client_getter()
+        client = client_getter()
         upstream_request = client.build_request(
             "POST", f"{route.base_url}/chat/completions", json=body,
             headers={

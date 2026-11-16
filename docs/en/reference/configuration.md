@@ -60,7 +60,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator provisioner override |
 | `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL serving the pinned micromamba release under the same file names; empty uses the upstream release host. The pinned SHA-256 is enforced wherever the file comes from |
 | `SCIENCE_AGENT_NPU_PYTHON_PATH` | auto-detected | Host Python used to read NPU state through the driver's DCMI interface; empty tries `/usr/bin/python3` then `/usr/local/bin/python3`, and falls back to `npu-smi` when neither works |
-| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply. Also the only knob that relocates the package cache: on Windows the cache does not follow the data directory, because a member path has to stay at or under 259 characters |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply. Also the only knob that relocates the package cache: on Windows the cache does not follow the data directory, because a member path has to stay at or under 259 characters. Re-seed it with the current starter-package set (including `pysocks`) before upgrading: a starter upgrade that cannot be served from the cache is skipped with a setup message, and SOCKS-routed pip installs into old task environments expect the package in the cache |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | Static UI assets |

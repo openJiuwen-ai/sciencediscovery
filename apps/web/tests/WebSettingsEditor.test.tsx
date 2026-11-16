@@ -55,7 +55,7 @@ test("renders the search tiers in attempt order with write-only credentials", ()
   assert.match(html, /A provider without a saved API key is skipped/);
   assert.match(html, /Keyed paid providers are tried first/);
   assert.match(html, /A switched-off engine is never requested/);
-  assert.match(html, /WebSearch proxy selection is managed in Network proxies/);
+  assert.match(html, /WebSearch proxy selection is managed in Network and proxy/);
   assert.doesNotMatch(html, /Web proxy|Inherit global default|Corporate proxy/);
   assert.match(html, /Jina API key/);
   assert.match(html, /Saved · enter a new key to replace it/);

@@ -44,8 +44,9 @@ async function openProxySettings(page: Page) {
   if (!(await settingsNavigation.isVisible())) {
     await configuration.getByRole("button", { name: /^Settings directory/ }).click();
   }
-  await configuration.getByRole("button", { name: "Network proxies" }).click();
-  await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
+  await configuration.getByRole("button", { name: "Network and proxy" }).click();
+  await expect(configuration.getByRole("heading", { name: "Network and proxy" })).toBeVisible();
+  await configuration.getByText("Advanced: saved proxies", { exact: true }).click();
   return configuration;
 }
 
@@ -84,7 +85,7 @@ async function expectOverlayWithinDialogAndViewport(page: Page, dialog: Locator,
  * E2E-META
  * Purpose: 代理设置把默认代理与注册表放在最前，URL 格式帮助稳定可操作，且 WebSearch 代理策略只有一处入口。
  * Steps:
- *   1. 在系统设置中打开 Network proxies。
+ *   1. 在系统设置中打开 Network and proxy（网络与代理）。
  *   2. 断言 Default proxy 位于 Proxy server list 之前，旧式 URL 指南入口不存在。
  *   3. 打开添加表单，展开 URL 格式帮助，断言内容、表单几何稳定与浮层边界。
  *   4. 断言帮助可悬停、聚焦、Escape 与点击切换，并在 environment/system 类型下隐藏。
@@ -155,7 +156,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
   // Escape belongs to the topmost layer only: the guide closes, the System
   // configuration dialog underneath it stays open and usable.
   await expect(configuration).toBeVisible();
-  await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
+  await expect(configuration.getByRole("heading", { name: "Network and proxy" })).toBeVisible();
   await guideTrigger.click();
   await expect(guide).toBeVisible();
   await expect(guideTrigger).toHaveAttribute("aria-expanded", "true");
@@ -173,15 +174,21 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
   await form.getByRole("button", { name: "Cancel" }).click();
   await expect(form).toBeHidden();
 
+  // Module policies fold behind their own <details> (see the editor's advanced
+  // and module sections); the select inside is hidden until it is expanded.
+  // The inner locator must stay page-rooted: filter({ has }) matches it
+  // relative to the whole document, so rooting it at the dialog finds nothing.
+  const moduleDetails = configuration.locator("details").filter({ has: page.locator("summary", { hasText: "Module proxy policies" }) });
+  if (!(await moduleDetails.evaluate(element => (element as HTMLDetailsElement).open))) await moduleDetails.locator("summary").click();
   await expect(configuration.getByLabel("WebSearch proxy")).toBeVisible();
-  await configuration.getByRole("heading", { name: "Network proxies" }).scrollIntoViewIfNeeded();
+  await configuration.getByRole("heading", { name: "Network and proxy" }).scrollIntoViewIfNeeded();
   await page.screenshot({
     path: `${screenshotDirectory}/issue-143-proxy-settings-desktop.png`,
     fullPage: false,
     mask: [configuration.locator(".proxy-effective-value, .proxy-server-url")],
   });
   await configuration.getByRole("button", { name: "Web providers" }).click();
-  await expect(configuration.getByText(/WebSearch proxy selection is managed in Network proxies/)).toBeVisible();
+  await expect(configuration.getByText(/WebSearch proxy selection is managed in Network and proxy/)).toBeVisible();
   await expect(configuration.getByLabel("Web proxy")).toHaveCount(0);
 });
 
@@ -189,7 +196,7 @@ test("proxy settings put defaults and registry first and expose one WebSearch po
  * E2E-META
  * Purpose: 390×844 窄屏下代理设置仍可用：帮助浮层不撑破对话框与视口，页面不产生横向溢出。
  * Steps:
- *   1. 在 390×844 打开 Network proxies。
+ *   1. 在 390×844 打开 Network and proxy（网络与代理）。
  *   2. 打开添加表单并展开 URL 格式帮助。
  *   3. 断言表单几何稳定、浮层落在对话框与视口内。
  *   4. 断言对话框与页面都没有横向溢出。
@@ -264,12 +271,15 @@ test("custom URL remains complete after refresh and is prefilled for editing", {
   await addForm.getByRole("button", { name: "Add", exact: true }).click();
   await expect(addForm).toBeHidden();
   const normalizedUrl = `${url}/`;
-  await expect(configuration.getByText(normalizedUrl, { exact: true })).toBeVisible();
+  // The staged entry shows a redacted URL until Save persists it.
+  const displayedUrl = "http://***:***@proxy.example.test:8080/";
+  await configuration.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(configuration.getByText(displayedUrl, { exact: true })).toBeVisible();
 
   await page.reload();
   configuration = await openProxySettings(page);
   const card = configuration.locator(".proxy-server-card").filter({ hasText: name });
-  await expect(card.getByText(normalizedUrl, { exact: true })).toBeVisible();
+  await expect(card.getByText(displayedUrl, { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Edit" }).click();
   const editForm = configuration.getByRole("form", { name: `Edit proxy server ${name}` });
   await expect(editForm.getByRole("textbox", { name: "Proxy URL", exact: true })).toHaveValue(normalizedUrl);
@@ -277,8 +287,10 @@ test("custom URL remains complete after refresh and is prefilled for editing", {
   await editForm.getByRole("button", { name: "Cancel" }).click();
 
   page.once("dialog", (dialog) => void dialog.accept());
+  await configuration.locator("#proxy-global-default").selectOption("proxy:environment");
   await card.getByRole("button", { name: "Delete" }).click();
   await expect(card).toBeHidden();
+  await configuration.getByRole("button", { name: "Save", exact: true }).click();
 });
 
 });

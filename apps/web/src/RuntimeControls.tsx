@@ -312,7 +312,7 @@ export function QuotaSettingsEditor({
 /**
  * Sandbox network access: whether commands executed through run_shell may reach the
  * network, and which domains they may reach. Deliberately its own settings
- * group, separate from the Network proxies group, which configures this
+ * group, separate from the Network and proxy group, which configures this
  * service's own outbound calls and does not affect sandbox code.
  */
 export function SandboxNetworkSettingsEditor({
@@ -321,7 +321,7 @@ export function SandboxNetworkSettingsEditor({
   settings,
 }: {
   onChange: (settings: SandboxNetworkSettings) => void;
-  /** Network proxies registry, so allowed traffic can reuse a configured server. */
+  /** Network and proxy registry, so allowed traffic can reuse a configured server. **/
   proxySettings?: ProxySettingsDetails;
   settings: SandboxNetworkSettings;
 }) {
