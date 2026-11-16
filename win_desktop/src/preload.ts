@@ -75,15 +75,49 @@ const wizard = {
 /** Study-package export helpers: native save dialog, destination-bound write,
  *  "open file location" and the OS downloads directory. The main process keeps
  *  the chosen path and hands the renderer an opaque token, so the renderer can
- *  never name a file of its own choosing. */
+ *  never name a file of its own choosing.
+ *
+ *  `write` also carries the export's own metadata (which task, which session,
+ *  which profile): the main process records the finished export in the durable
+ *  history, so the row keeps the token that can still reveal it after a
+ *  restart. */
 const exportFile = {
   saveDialog: (suggestedName: string): Promise<{ canceled: boolean; token: string | null }> =>
     ipcRenderer.invoke("sd-shell:export-save-dialog", { suggestedName }),
-  write: (token: string, data: ArrayBuffer): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke("sd-shell:export-write", { token, data }),
+  write: (token: string, data: ArrayBuffer, meta?: {
+    recordId?: string;
+    projectId?: string;
+    sessionId?: string;
+    sessionTitle?: string;
+    level?: "necessary" | "complete";
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-write", { token, data, meta }),
   showInFolder: (token: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("sd-shell:export-show-in-folder", token),
   downloadsDir: (): Promise<string> => ipcRenderer.invoke("sd-shell:export-downloads-dir"),
+};
+
+/** The durable list of finished exports (#1154). Rows carry no filesystem path
+ *  the renderer could use for a write: the folder is for display, the token is
+ *  the only handle it may hand back. */
+const exportHistory = {
+  list: (): Promise<Array<{
+    bytes: number;
+    directory: string;
+    exists: boolean;
+    filename: string;
+    id: string;
+    level?: "necessary" | "complete";
+    projectId?: string;
+    savedAt: string;
+    sessionId?: string;
+    sessionTitle?: string;
+    token: string;
+  }>> => ipcRenderer.invoke("sd-shell:export-history-list"),
+  reveal: (token: string): Promise<{ missing: boolean; ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-history-reveal", token),
+  forget: (id: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-history-forget", id),
 };
 
 contextBridge.exposeInMainWorld("sdShell", {
@@ -144,4 +178,6 @@ contextBridge.exposeInMainWorld("sdShell", {
   wizard,
   /** Study-package export helpers (undefined outside the shell). */
   exportFile,
+  /** Finished exports, kept across restarts (#1154). */
+  exportHistory,
 });

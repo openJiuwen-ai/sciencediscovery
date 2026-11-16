@@ -5,7 +5,8 @@ import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
 import { cancelExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, readExportBlob, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
-import { exportShellBridge } from "../app/export-bridge.js";
+import { exportHistoryBridge, exportShellBridge, type ExportHistoryRow } from "../app/export-bridge.js";
+import { ExportHistoryList } from "./ExportHistoryList.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
@@ -41,6 +42,10 @@ interface ExportRecord {
   failures: number;
   savedToken?: string;
   error?: string;
+  /** The package profile and session title travel with the write, so the shell
+   *  can record a row that says which search the package belongs to. */
+  level?: "necessary" | "complete";
+  sessionTitle?: string;
 }
 interface ExportFlash { id: number; tone: "success" | "error"; message: string; savedToken?: string; }
 
@@ -126,6 +131,20 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
 
   useEffect(() => { exportsRef.current = exports; }, [exports]);
 
+  /** The shell's durable list of finished exports (#1154): the dialog shows
+   *  this session's rows from it, so closing the dialog — or restarting the app
+   *  — no longer erases the package. */
+  const historyBridge = exportHistoryBridge();
+  const [history, setHistory] = useState<ExportHistoryRow[]>([]);
+  const refreshHistory = useCallback(async () => {
+    if (!historyBridge) return;
+    try {
+      setHistory(await historyBridge.list());
+    } catch {
+      setHistory([]);
+    }
+  }, [historyBridge]);
+
   // Save the completed archive to its destination. In the shell this is a write
   // bound to the token the dialog issued; in a plain browser it falls back to a
   // browser download (the browser's save prompt is that platform's destination
@@ -137,8 +156,15 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       const bridge = exportShellBridge();
       let savedToken: string | undefined;
       if (bridge && record.destinationToken) {
-        await bridge.write(record.destinationToken, await blob.arrayBuffer());
+        await bridge.write(record.destinationToken, await blob.arrayBuffer(), {
+          level: record.level,
+          projectId: record.project,
+          recordId: record.id,
+          sessionId: request?.sessionId ?? detail?.id,
+          sessionTitle: record.sessionTitle,
+        });
         savedToken = record.destinationToken;
+        await refreshHistory();
       } else {
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a"); anchor.href = url; anchor.download = record.task.filename;
@@ -150,7 +176,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       patchExport(record.id, { phase: "save-failed", error: reason instanceof Error ? reason.message : String(reason) });
       pushFlash("error", TEXT.researchPackage.exportSaveFailed);
     }
-  }, [client, patchExport, pushFlash]);
+  }, [client, detail?.id, patchExport, pushFlash, refreshHistory, request?.sessionId]);
   // The polling tick keeps one timer and must not restart when a save
   // callback identity changes; it reads the latest through this ref.
   const persistArchiveRef = useRef(persistArchive);
@@ -220,6 +246,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
   }, [dialog]);
+
+  useEffect(() => {
+    if (dialog !== "export") return;
+    void refreshHistory();
+  }, [dialog, refreshHistory]);
 
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
@@ -308,6 +339,22 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (bridge) { try { await bridge.showInFolder(token); } catch { /* reveal is best-effort */ } }
   }
   function retrySave(record: ExportRecord) { void persistArchiveRef.current(record); }
+
+  /** The dialog's rows are this session's only. */
+  const sessionHistory = history.filter(row => request?.sessionId === undefined || row.sessionId === request.sessionId);
+
+  async function revealHistory(row: ExportHistoryRow) {
+    if (!historyBridge) return;
+    try {
+      const result = await historyBridge.reveal(row.token);
+      if (result.missing) await refreshHistory();
+    } catch { await refreshHistory(); }
+  }
+
+  async function forgetHistory(row: ExportHistoryRow) {
+    if (!historyBridge) return;
+    try { await historyBridge.forget(row.id); } finally { await refreshHistory(); }
+  }
   /** Cancel only while the server task can still be cancelled — not while the
    *  archive is already being written to its destination. */
   const canCancel = (record: ExportRecord): boolean =>
@@ -346,7 +393,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
-          {finishedExports.length > 0 ? <div className="research-package-saved"><h3>{t.savedExports}</h3>{finishedExports.map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "saved" && record.savedToken ? <button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button> : null}{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <span className="is-error">{record.error ?? t.failed}</span> : null}</div>)}</div> : null}
+          {sessionHistory.length > 0 || finishedExports.some(record => record.phase !== "saved") ? <div className="research-package-saved"><h3>{t.savedExports}</h3>
+            {historyBridge ? <ExportHistoryList locale={TEXT.languageTag} onForget={record => void forgetHistory(record)} onReveal={record => void revealHistory(record)} rows={sessionHistory} /> : null}
+            {finishedExports.filter(record => record.phase !== "saved").map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <span className="is-error">{record.error ?? t.failed}</span> : null}</div>)}
+            {historyBridge ? null : finishedExports.filter(record => record.phase === "saved" && record.savedToken).map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span><button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button></div>)}
+          </div> : null}
         </> : dialog === "import" ? <>
           <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
           <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span>{file ? <span className="research-package-upload-filename">{file.name}</span> : null}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
@@ -368,7 +419,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             destinationToken = picked.token;
           }
           const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
-          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error };
+          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error, level: level as "necessary" | "complete", sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
           // to be settled immediately instead of waiting for a poll that never

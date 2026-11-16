@@ -1007,6 +1007,7 @@ export function App({ initialToken }: Props) {
             actions={actions}
             detail={state.detail}
             onExpandSidebar={expandSidebar}
+            onExport={() => setPackageRequest({ kind: "export", projectId: state.detail?.projectId, sessionId: state.detail?.id })}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
             // A Session outside every Project is not "in 会话": that is
             // the column's name for the list, not a place to print beside the

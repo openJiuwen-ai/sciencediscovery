@@ -1,0 +1,107 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ * Licensed under the Apache License, Version 2.0 (the "License"); */
+
+/* 导出记录 (#1154): one row per finished study package, in the export dialog
+ * and in 设置 › 导出记录. Uses the shared design tokens only. */
+
+.export-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.export-history-row {
+  align-items: center;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.18));
+  border-radius: var(--radius, 10px);
+  display: grid;
+  gap: 4px 12px;
+  grid-template-columns: minmax(140px, 1.4fr) auto minmax(120px, 1fr) auto;
+  padding: 8px 12px;
+}
+
+.export-history-row.is-missing {
+  border-color: var(--warning-border, rgba(214, 150, 0, 0.45));
+}
+
+.export-history-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-history-meta {
+  color: var(--ink-2, #6b7280);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.export-history-destination {
+  color: var(--ink-2, #6b7280);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-history-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.export-history-actions button {
+  background: transparent;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.28));
+  border-radius: var(--radius-pill, 999px);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+
+.export-history-actions .is-warning {
+  color: var(--warning-ink, #b45309);
+  font-size: 12px;
+}
+
+.export-history-settings h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+
+.export-history-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.export-history-filters input,
+.export-history-filters select {
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.28));
+  border-radius: var(--radius, 10px);
+  color: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.export-history-filters input {
+  flex: 1;
+}
+
+.export-history-notice {
+  color: var(--warning-ink, #b45309);
+  font-size: 12px;
+  margin: 0 0 10px;
+}

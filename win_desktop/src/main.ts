@@ -10,7 +10,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { bootstrapPackaged, needsUnpack, packagedEnv, packagedPaths, type PackagedPaths } from "./bootstrap.ts";
 import { healthUrl, resolveDataDir, resolveRepoRoot, tokenFilePath, uiUrl } from "./config.ts";
 import { FIRST_CHAT_WARMUP_PATH, runFirstChatWarmup } from "./first-chat-warmup.ts";
@@ -25,6 +25,7 @@ import { shouldRetryUiLoad, UI_LOAD_RETRY_LIMIT, uiLoadRetryDelayMs, waitForUiOr
 import { loadWindowState, saveWindowState } from "./window-state.ts";
 import { loadExportState, saveExportState } from "./export-state.ts";
 import { ExportDestinations } from "./export-tokens.ts";
+import { ExportHistoryStore } from "./export-history.ts";
 import {
   effectiveDataDir, loadWizardState, needsWizard, pidAlive, saveWizardState, type WizardState,
 } from "./wizard-state.ts";
@@ -1454,6 +1455,37 @@ ipcMain.handle("sd-shell:save-token", async (_event, token: string) => {
 let lastExportDir: string | null = null;
 let lastExportDirLoaded = false;
 const exportDestinations = new ExportDestinations();
+/** The durable list of finished exports. Read lazily: a corrupt or unreadable
+ *  history must not stop the shell from starting, and `loadExportHistory`
+ *  already reads a broken file as empty. */
+let exportHistoryStore: ExportHistoryStore | null = null;
+
+function exportHistory(): ExportHistoryStore {
+  if (!exportHistoryStore) exportHistoryStore = new ExportHistoryStore(app.getPath("userData"));
+  return exportHistoryStore;
+}
+
+function exportFileExists(path: string): boolean {
+  try { return statSync(path).isFile(); } catch { return false; }
+}
+
+/** The list the renderer gets: no filesystem path it could hand back to a write,
+ *  only the folder name for display plus whether the file is still there. */
+function exportHistoryRows() {
+  return exportHistory().list().map((row) => ({
+    bytes: row.bytes,
+    directory: dirname(row.path),
+    exists: exportFileExists(row.path),
+    filename: row.filename,
+    id: row.id,
+    ...(row.level ? { level: row.level } : {}),
+    ...(row.projectId ? { projectId: row.projectId } : {}),
+    savedAt: row.savedAt,
+    ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+    ...(row.sessionTitle ? { sessionTitle: row.sessionTitle } : {}),
+    token: row.token,
+  }));
+}
 
 function defaultExportDir(): string {
   if (!lastExportDirLoaded) {
@@ -1485,7 +1517,7 @@ ipcMain.handle("sd-shell:export-save-dialog", async (_event, args: unknown) => {
 });
 
 ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
-  const { token, data } = (args ?? {}) as { token?: unknown; data?: unknown };
+  const { token, data, meta } = (args ?? {}) as { token?: unknown; data?: unknown; meta?: unknown };
   const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
   // No token, or one this process never issued → refuse. There is no code path
   // where the renderer supplies a path.
@@ -1496,6 +1528,28 @@ ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
   if (!bytes) throw new Error("导出数据无效。");
   writeFileSync(destination.path, bytes);
   exportDestinations.markWritten(token as string);
+  // Recorded only after the write succeeded: a canceled or failed save leaves
+  // no row, and a re-save of the same task keeps the same row (its id).
+  const details = (meta ?? {}) as {
+    level?: unknown; projectId?: unknown; recordId?: unknown;
+    sessionId?: unknown; sessionTitle?: unknown;
+  };
+  const recordId = typeof details.recordId === "string" && details.recordId.trim()
+    ? details.recordId.trim()
+    : token as string;
+  const level = details.level === "necessary" || details.level === "complete" ? details.level : undefined;
+  exportHistory().record({
+    bytes: bytes.byteLength,
+    filename: basename(destination.path),
+    id: recordId,
+    ...(level ? { level } : {}),
+    path: destination.path,
+    ...(typeof details.projectId === "string" ? { projectId: details.projectId } : {}),
+    savedAt: new Date().toISOString(),
+    ...(typeof details.sessionId === "string" ? { sessionId: details.sessionId } : {}),
+    ...(typeof details.sessionTitle === "string" ? { sessionTitle: details.sessionTitle } : {}),
+    token: token as string,
+  });
   return { ok: true };
 });
 
@@ -1508,6 +1562,33 @@ ipcMain.handle("sd-shell:export-show-in-folder", async (_event, token: unknown) 
 
 ipcMain.handle("sd-shell:export-downloads-dir", () => {
   try { return app.getPath("downloads"); } catch { return app.getPath("home"); }
+});
+
+// --- durable export history (issue #1154): the list survives a restart --------
+// A finished export is remembered with its token, so 打开文件位置 still works
+// after the app restarts and a package cannot be lost with the dialog that made
+// it. Only a stat is taken on read; the file itself is never moved or copied.
+ipcMain.handle("sd-shell:export-history-list", () => exportHistoryRows());
+
+ipcMain.handle("sd-shell:export-history-reveal", async (_event, token: unknown) => {
+  if (typeof token !== "string") return { missing: true, ok: false };
+  // Resolved from the persisted row, so a token from a previous run works; the
+  // per-run map stays the fallback for a row that was written this session.
+  const row = exportHistory().byToken(token);
+  const destination = row?.path ?? exportDestinations.resolve(token)?.path;
+  if (!destination) return { missing: true, ok: false };
+  // A moved or deleted file must be reported rather than revealed as a no-op.
+  if (!exportFileExists(destination)) return { missing: true, ok: false };
+  electronShell.showItemInFolder(destination);
+  return { missing: false, ok: true };
+});
+
+ipcMain.handle("sd-shell:export-history-forget", async (_event, id: unknown) => {
+  if (typeof id !== "string" || !id.trim()) return { ok: false };
+  const row = exportHistory().list().find((entry) => entry.id === id);
+  if (!row) return { ok: false };
+  exportDestinations.forget(row.token);
+  return { ok: exportHistory().forget(id) };
 });
 
 const appStartAt = Date.now();

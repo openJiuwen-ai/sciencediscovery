@@ -49,6 +49,12 @@ export class ExportDestinations {
     if (entry) entry.written = true;
   }
 
+  /** Drop a token (移除记录): a forgotten export is no longer revealable through
+   *  the per-run map either. */
+  forget(token: string): void {
+    this.issued.delete(token);
+  }
+
   get size(): number {
     return this.issued.size;
   }

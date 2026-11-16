@@ -38,9 +38,42 @@ export interface ExportSaveResult {
 
 export interface ExportShellBridge {
   saveDialog: (suggestedName: string) => Promise<ExportSaveResult>;
-  write: (token: string, data: ArrayBuffer) => Promise<{ ok: boolean }>;
+  write: (token: string, data: ArrayBuffer, meta?: ExportWriteMeta) => Promise<{ ok: boolean }>;
   showInFolder: (token: string) => Promise<{ ok: boolean }>;
   downloadsDir: () => Promise<string>;
+}
+
+/** What the shell records with a finished write: which export task it was, the
+ *  session it came from, and the package profile. The shell keeps the path; the
+ *  renderer only says what the row is about. */
+export interface ExportWriteMeta {
+  recordId?: string;
+  projectId?: string;
+  sessionId?: string;
+  sessionTitle?: string;
+  level?: "necessary" | "complete";
+}
+
+/** One row of the shell's durable export history. `directory` and `exists` are
+ *  for display only — the row's only handle is `token`. */
+export interface ExportHistoryRow {
+  bytes: number;
+  directory: string;
+  exists: boolean;
+  filename: string;
+  id: string;
+  level?: "necessary" | "complete";
+  projectId?: string;
+  savedAt: string;
+  sessionId?: string;
+  sessionTitle?: string;
+  token: string;
+}
+
+export interface ExportHistoryBridge {
+  list: () => Promise<ExportHistoryRow[]>;
+  reveal: (token: string) => Promise<{ missing: boolean; ok: boolean }>;
+  forget: (id: string) => Promise<{ ok: boolean }>;
 }
 
 /** The export bridge, or null when the app is not running inside the shell. */
@@ -49,5 +82,16 @@ export function exportShellBridge(): ExportShellBridge | null {
   const shell = (window as typeof window & { sdShell?: { exportFile?: ExportShellBridge } }).sdShell;
   const bridge = shell?.exportFile;
   if (!bridge || typeof bridge.saveDialog !== "function" || typeof bridge.write !== "function") return null;
+  return bridge;
+}
+
+/** The durable export history, or null outside the shell (a browser keeps no
+ *  export history: it has no token to reveal, and nothing was saved by the
+ *  product rather than by the browser's own download manager). */
+export function exportHistoryBridge(): ExportHistoryBridge | null {
+  if (typeof window === "undefined") return null;
+  const shell = (window as typeof window & { sdShell?: { exportHistory?: ExportHistoryBridge } }).sdShell;
+  const bridge = shell?.exportHistory;
+  if (!bridge || typeof bridge.list !== "function" || typeof bridge.forget !== "function") return null;
   return bridge;
 }

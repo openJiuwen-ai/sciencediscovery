@@ -28,6 +28,7 @@ import { McpServers } from "./settings/system/McpServers.js";
 import { MemorySettings } from "./settings/system/MemorySettings.js";
 import { SpecialistsSettings } from "./settings/system/Specialists.js";
 import { TimeoutSettings } from "./settings/system/Timeouts.js";
+import { ExportHistorySettings } from "./settings/system/ExportHistory.js";
 
 /** The original desktop nav, extended with MCP, 专家, 科学记忆 and 超时. */
 export type SettingsGroup =
@@ -39,7 +40,8 @@ export type SettingsGroup =
   | "specialists"
   | "sandbox-network"
   | "remote"
-  | "timeouts";
+  | "timeouts"
+  | "export-history";
 
 type CategoryId = "system" | "intelligence" | "connection" | "workspace";
 
@@ -50,7 +52,7 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // the agent rather than the environment it runs in.
   { groups: ["models", "skills", "mcp", "specialists", "memory"], id: "intelligence" },
   { groups: ["sandbox-network", "remote"], id: "connection" },
-  { groups: ["timeouts"], id: "workspace" },
+  { groups: ["timeouts", "export-history"], id: "workspace" },
 ];
 
 function categoryOf(group: SettingsGroup): CategoryId {
@@ -172,6 +174,8 @@ export function SystemSettingsDialog({
         );
       case "timeouts":
         return <TimeoutSettings client={client} />;
+      case "export-history":
+        return <ExportHistorySettings projects={state.projects} />;
     }
   })();
 
