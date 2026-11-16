@@ -78,11 +78,11 @@ const noConfirm = () => {};
 const loading = "正在读取…";
 
 describe("the settings tree", () => {
-  it("keeps the original desktop groups, plus 科学记忆, MCP, 专家 and 超时", () => {
+  it("keeps the original desktop groups, plus 科学记忆, MCP, 专家, 超时 and 导出记录", () => {
     assert.deepEqual(Object.values(TEXT.settings.system.categories), ["系统", "智能", "连接", "工作区"]);
     assert.deepEqual(
       Object.values(TEXT.settings.system.groups).map((group) => group.label),
-      ["通用", "科学记忆", "模型", "技能", "MCP 服务器", "专家", "网络", "远程", "超时"],
+      ["通用", "科学记忆", "模型", "技能", "MCP 服务器", "专家", "网络", "远程", "超时", "导出记录"],
     );
   });
 });
@@ -237,10 +237,17 @@ describe("the settings directory", () => {
 
   it("has no footer: every page writes on the press", () => {
     // 通用, 模型, 技能, MCP, 专家, 网络 and 远程 all write as they are changed,
-    // and 超时 now commits its own fields; a shared save bar would only ever
-    // have been disabled. 设置 is left through the rail's 会话 or Escape.
+    // 超时 now commits its own fields, and 导出记录 only reveals or forgets a
+    // row; a shared save bar would only ever have been disabled. 设置 is left
+    // through the rail's 会话 or Escape.
     assert.ok(!markup.includes("system-config-footer"), "the footer is back");
-    assert.ok(!markup.includes(TEXT.settings.system.save), "a footer save button is back");
+    // The word 保存 is no longer a reliable proxy: the directory's tooltips
+    // carry "本机保存过的研究包". What must not come back is a button whose
+    // label is the save action.
+    const labelled = [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/gs)]
+      .map((match) => match[1]!.replace(/<[^>]*>/g, "").trim())
+      .filter((text) => text === TEXT.settings.system.save);
+    assert.deepEqual(labelled, [], "a footer save button is back");
     assert.ok(!markup.includes("保存并关闭"), "a save-and-close button is back");
   });
 });
