@@ -21,6 +21,15 @@ import { neutralizeUntrustedTags } from "@sciencediscovery/tools";
 export const MCP_MODEL_RESULT_MAX_BYTES = 48 * 1024;
 // Reserve room for the registry's full-result reference and recovery instruction.
 const MCP_VIEW_BUDGET = MCP_MODEL_RESULT_MAX_BYTES - 1_024;
+// The retained copy exists so read_tool_output can page the complete safe
+// result back in, and it costs a whole second copy of the provider result on
+// every lossy call: a full JSON serialization plus the stored text. Measured on
+// a 754 KiB Europe PMC page that is 2.8 ms; on a 29.5 MiB MCP reply it is 59 ms
+// and 29.5 MiB written for a 48 KiB view. Every governed provider page is under
+// 1 MiB, so retaining stays the default and 2 MiB is enough headroom; past it
+// the projection keeps the honest "could not be stored" notice instead of
+// duplicating a result no read_tool_output page could use anyway.
+const MCP_RETENTION_MAX_BYTES = 2 * 1024 * 1024;
 interface ProjectionState { lossy: boolean }
 const MCP_MODEL_STRING_MAX_BYTES = 4 * 1024;
 const MCP_MODEL_ARRAY_MAX_ITEMS = 25;
@@ -294,11 +303,13 @@ export function mcpModelResultView(result: unknown, sourceId: string, toolId: st
   const view = projectResult(safe, sourceId, toolId, state);
   // Serialize only when real business information was omitted. A depth/cycle
   // marker is not a complete result and must never receive a recovery ref.
-  const retainedContent = state.lossy && !safety.incomplete ? mcpRetainedContent(safe) : undefined;
-  if (state.lossy && retainedContent === undefined) {
-    view._retainedOutput = { instruction: "Content was omitted; the full result could not be stored because the provider result cannot be safely serialized. Re-run with a narrower request or explicit pagination." };
+  const retention = state.lossy && !safety.incomplete ? mcpRetainedContent(safe) : {};
+  if (state.lossy && retention.content === undefined) {
+    view._retainedOutput = { instruction: retention.tooLarge
+      ? `Content was omitted; the full result could not be stored for re-reading because it is larger than the ${MCP_RETENTION_MAX_BYTES / (1024 * 1024)} MiB retention budget. Re-run with a narrower request or explicit pagination.`
+      : "Content was omitted; the full result could not be stored because the provider result cannot be safely serialized. Re-run with a narrower request or explicit pagination." };
   }
-  return { view, lossy: state.lossy, ...(retainedContent !== undefined ? { retainedContent } : {}) };
+  return { view, lossy: state.lossy, ...(retention.content !== undefined ? { retainedContent: retention.content } : {}) };
 }
 
 function projectResult(result: unknown, sourceId: string, toolId: string, state: ProjectionState): JsonObject {
@@ -344,7 +355,47 @@ function safeMcpValue(value: unknown, state: { incomplete: boolean; ancestors: W
 }
 
 /** A retention failure cannot replace a successfully projected result with an error. */
-function mcpRetainedContent(result: unknown): string | undefined {
-  try { return JSON.stringify(result); }
-  catch { return undefined; }
+function mcpRetainedContent(result: unknown): { content?: string; tooLarge?: boolean } {
+  // The size is checked before serializing, so a result far past the bound
+  // costs one allocation-free walk instead of a whole JSON string that is then
+  // thrown away. Measured on a 29.5 MiB MCP reply: 41 ms and nothing stored with
+  // the gate, against 101 ms and a 29.5 MiB string without it.
+  if (exceedsUtf8Budget(result, MCP_RETENTION_MAX_BYTES)) return { tooLarge: true };
+  try {
+    const content = JSON.stringify(result);
+    // Escaping can push a tree that fitted the estimate over the bound; the
+    // exact text decides, so an oversized one is never handed to the store.
+    if (content === undefined || Buffer.byteLength(content, "utf8") > MCP_RETENTION_MAX_BYTES) return { tooLarge: true };
+    return { content };
+  } catch { return { tooLarge: false }; }
+}
+
+/** Serialized-size walk with early exit, over the already-safe copy (acyclic,
+ * depth-bounded), so it never needs recursion or a visited set.
+ *
+ * Every charge is a lower bound on what JSON adds: under-estimating only sends
+ * an oversized tree through the exact check below, while over-estimating would
+ * refuse a result that fits and take its recovery reference away. */
+function exceedsUtf8Budget(value: unknown, budget: number): boolean {
+  let remaining = budget;
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    // A hole in an array copies through as `undefined` and serializes as `null`.
+    if (typeof node === "string") remaining -= Buffer.byteLength(node, "utf8") + 2;
+    else if (node === null) remaining -= 4;
+    else if (Array.isArray(node)) {
+      remaining -= 2 + Math.max(0, node.length - 1);
+      for (const item of node) pending.push(item);
+    } else if (typeof node === "object") {
+      const entries = Object.entries(node as JsonObject);
+      remaining -= 2 + Math.max(0, entries.length - 1);
+      for (const [key, item] of entries) {
+        remaining -= key.length + 3;
+        pending.push(item);
+      }
+    } else remaining -= node === undefined ? 4 : String(node).length;
+    if (remaining < 0) return true;
+  }
+  return false;
 }

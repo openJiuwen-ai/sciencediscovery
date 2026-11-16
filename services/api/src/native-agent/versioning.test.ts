@@ -124,9 +124,18 @@ test("production AgentRun records exact contexts, complete observations, sequent
     assert.equal(state.transcript.at(-1)?.provider_extension, "preserved");
     assert.equal(state.observations.length, 2);
     const observation = (await store.readRecord<{ content: import("@sciencediscovery/cas").AgentStateRef; details: unknown }>(state.observations[0]!)).value;
-    assert.deepEqual(observation.details, {
-      data: largeResult, nested: [{ apiToken: "[redacted]", body: "[omitted]" }],
-    }, "persisted observations retain safe metadata without credentials or raw payloads");
+    const auditDetails = observation.details as { __auditBoundary: { marker: string; truncated: boolean }; data: string; nested: unknown };
+    // The version recorder stores the safe copy, but not without a size budget:
+    // the credential-bearing field is still redacted and omitted, and a payload
+    // wider than the audit budget is cut with an explicit marker instead of
+    // being written whole into the durable record.
+    assert.deepEqual(auditDetails.nested, [{ apiToken: "[redacted]", body: "[omitted]" }],
+      "persisted observations retain safe metadata without credentials or raw payloads");
+    assert.equal(auditDetails.__auditBoundary.truncated, true);
+    assert.equal(auditDetails.__auditBoundary.marker, "[audit-details truncated]");
+    assert.ok(auditDetails.data.length < largeResult.length);
+    assert.ok(auditDetails.data.endsWith("[audit-details truncated]"));
+    assert.equal(largeResult.startsWith(auditDetails.data.replace(/\[audit-details truncated\]$/, "")), true);
     assert.doesNotMatch(JSON.stringify(observation.details), /audit-secret|private-body/);
     const modelObservation = JSON.parse((await store.readState(observation.content)).toString()) as { data: { text: string; truncated: boolean } };
     assert.equal(modelObservation.data.truncated, true);

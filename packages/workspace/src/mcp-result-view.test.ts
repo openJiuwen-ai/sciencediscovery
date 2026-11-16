@@ -268,3 +268,68 @@ test("distinct supporting citations and unknown business fields still trigger re
     assert.deepEqual(full.records[0], record);
   }
 });
+
+test("a result past the retention bound is never serialized whole and says why", async () => {
+  // 2.4 MiB of provider rows: past the retention budget, and a shape whose
+  // projection is cheap so the measurement is about the retention copy.
+  const canonic = { data: { rows: Array.from({ length: 400 }, (_, index) => ({ body: "B".repeat(6_000), id: index })) } };
+  const snapshot = structuredClone(canonic);
+  // A near-bound result keeps the recovery contract: 1.5 MiB is under the
+  // budget, and read_tool_output can still page the complete safe result.
+  const nearBound = { data: { rows: Array.from({ length: 300 }, (_, index) => ({ body: "N".repeat(5_000), id: index })) } };
+  const originalStringify = JSON.stringify;
+  const oversizedSerializations: number[] = [];
+  const spy = (value: unknown, ...rest: unknown[]): string | undefined => {
+    const text = (originalStringify as (input: unknown, ...args: unknown[]) => string | undefined)(value, ...rest);
+    if (typeof text === "string" && text.length > 2 * 1024 * 1024) oversizedSerializations.push(text.length);
+    return text;
+  };
+  JSON.stringify = spy as unknown as typeof JSON.stringify;
+  try {
+    const { response } = await dispatch(canonic);
+    const view = JSON.parse(response.content);
+    assert.equal(response.isError, false);
+    assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+    assert.equal(view._retainedOutput.ref, undefined);
+    assert.match(view._retainedOutput.instruction, /could not be stored/u);
+    assert.match(view._retainedOutput.instruction, /retention budget/u);
+    assert.deepEqual(canonic, snapshot);
+
+    const kept = await dispatch(nearBound);
+    const keptView = JSON.parse(kept.response.content);
+    assert.equal(typeof keptView._retainedOutput.ref, "string");
+    assert.ok((await kept.store.search(keptView._retainedOutput.ref, "NNNN")).matches.length > 0);
+  } finally {
+    JSON.stringify = originalStringify;
+  }
+  // The only serializations at that size would have been a whole-result copy
+  // for the store; nothing at all reached one.
+  assert.deepEqual(oversizedSerializations, []);
+});
+
+test("the retention size estimate never refuses a result that fits the bound", async () => {
+  // A dense numeric series serializes to almost exactly two bytes per row, so
+  // it is the shape where an over-estimate would silently take the recovery
+  // reference away from a result that fits: 2 080 010 bytes, under 2 MiB.
+  const fits = { data: { rows: Array.from({ length: 1_040_000 }, (_, index) => index % 10) } };
+  assert.ok(Buffer.byteLength(JSON.stringify(fits), "utf8") < 2 * 1024 * 1024);
+  const kept = await dispatch(fits);
+  assert.equal(typeof JSON.parse(kept.response.content)._retainedOutput.ref, "string");
+  // The same shape past the bound is refused rather than serialized.
+  const over = { data: { rows: Array.from({ length: 1_200_000 }, (_, index) => index % 10) } };
+  assert.ok(Buffer.byteLength(JSON.stringify(over), "utf8") > 2 * 1024 * 1024);
+  const refused = await dispatch(over);
+  const refusedView = JSON.parse(refused.response.content);
+  assert.equal(refused.response.isError, false);
+  assert.equal(refusedView._retainedOutput.ref, undefined);
+  assert.match(refusedView._retainedOutput.instruction, /retention budget/u);
+  // Holes copy through as holes and serialize as null, so a sparse array must
+  // not be estimated at the nine characters of "undefined" per item.
+  const sparse: unknown[] = [];
+  sparse.length = 250_000;
+  const holey = { data: { rows: sparse } };
+  assert.equal(Object.hasOwn(sparse, 0), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(holey), "utf8") < 2 * 1024 * 1024);
+  const keptHoles = await dispatch(holey);
+  assert.equal(typeof JSON.parse(keptHoles.response.content)._retainedOutput.ref, "string");
+});

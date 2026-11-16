@@ -195,13 +195,17 @@ test("returned tool failures keep their result, metadata, and error flag through
   assert.deepEqual(observed[0]?.details, sanitizedDetails);
 });
 
-test("durable details redact nested credentials and payloads without truncating safe metadata", async () => {
+test("durable details redact nested credentials and payloads without the interactive size limits", async () => {
   const recorded: Array<{ details?: unknown }> = [];
   const testCredential = randomUUID();
   const shared = { password: testCredential, label: "shared" };
   const details = {
     token: "root-token",
-    records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(5_000), nested: [shared] })),
+    // 105 items is over the interactive array cap and the single 5 000
+    // character string is over the interactive string cap: an audit record
+    // that fits its own total budget keeps both whole.
+    records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(2_000), nested: [shared] })),
+    note: "n".repeat(5_000),
     tail: { authorization: "header-secret", body: "private-payload" },
     left: shared, right: shared,
   };
@@ -215,10 +219,15 @@ test("durable details redact nested credentials and payloads without truncating 
     recordResult: async (result) => { recorded.push(result); },
   });
   const result = await registry.execute({ id: "audit", name: "audit", args: {} }, new AbortController().signal);
-  const audit = recorded[0]?.details as { self: string; details: typeof details };
+  const audit = recorded[0]?.details as {
+    __auditBoundary: { marker: string; truncated: boolean };
+    self: string;
+    details: typeof details;
+  };
   assert.equal(audit.self, "[circular]");
   assert.equal(audit.details.records.length, 105);
-  assert.equal(audit.details.records[104]?.metadata.length, 5_000);
+  assert.equal(audit.details.records[104]?.metadata.length, 2_000);
+  assert.equal(audit.details.note.length, 5_000);
   assert.equal(audit.details.records[104]?.nested[0]?.password, "[redacted]");
   assert.deepEqual(audit.details.tail, { authorization: "[redacted]", body: "[omitted]" });
   assert.equal(audit.details.left.password, "[redacted]");
@@ -230,7 +239,85 @@ test("durable details redact nested credentials and payloads without truncating 
   assert.equal(details.token, "root-token");
   assert.equal(shared.password, testCredential);
   assert.equal(cyclic.self, cyclic);
+  // The only cut here is the cycle marker; a record under budget never says
+  // the recorder truncated it.
+  assert.equal(audit.__auditBoundary.truncated, true);
+  assert.equal(audit.__auditBoundary.marker, "[audit-details truncated]");
   assert.equal((result.details as { __detailsBoundary: { truncated: boolean } }).__detailsBoundary.truncated, true);
+});
+
+test("a wide audit record stops at the total budget with an explicit truncation marker", async () => {
+  const recorded: Array<{ details?: unknown }> = [];
+  const testCredential = randomUUID();
+  const shared = { password: testCredential, label: "shared" };
+  const details = {
+    token: "root-token",
+    // The same shape the Issue names: wide rather than deep. 105 records of
+    // 5 000 characters is 525 kB, which is what used to reach the durable
+    // trajectory and the version recorder whole.
+    records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(5_000), nested: [shared] })),
+    tail: { authorization: "header-secret", body: "private-payload" },
+  };
+  const snapshot = JSON.stringify(details);
+  const registry = new ToolRegistry([{
+    name: "audit", label: "Audit", description: "Audit", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: "done" }], details }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(result); },
+  });
+  const result = await registry.execute({ id: "audit", name: "audit", args: {} }, new AbortController().signal);
+  const audit = recorded[0]?.details as {
+    __auditBoundary: { marker: string; maxDepth: number; maxTotalChars: number; truncated: boolean };
+    records: Array<{ metadata: string; nested: Array<typeof shared> }>;
+    tail: typeof details.tail;
+    token: string;
+  };
+  const serialized = JSON.stringify(audit);
+  assert.equal(result.isError, false);
+  // Bounded: the record is far smaller than the 527 055 characters it used to
+  // duplicate, and still larger than the interactive 64 000-character budget
+  // because the audit copy keeps whole strings.
+  assert.ok(serialized.length < 300_000, `audit record was ${serialized.length} characters`);
+  assert.equal(audit.__auditBoundary.truncated, true);
+  assert.equal(audit.__auditBoundary.marker, "[audit-details truncated]");
+  assert.equal(audit.__auditBoundary.maxDepth, 128);
+  assert.ok(audit.__auditBoundary.maxTotalChars > 64_000);
+  assert.match(serialized, /items omitted: \[audit-details truncated\]/u);
+  // The cut spends the budget on the payload, not on its reader: the metadata
+  // after the wide array is still there, still redacted.
+  assert.deepEqual(audit.tail, { authorization: "[redacted]", body: "[omitted]" });
+  // The cut is a budget cut, not a security one: redaction still happened in
+  // the part that was kept.
+  const kept = audit.records.filter((record) => typeof record === "object");
+  assert.ok(kept.length > 0 && kept.length < 105, `kept ${kept.length} records`);
+  assert.equal(kept[0]?.nested[0]?.password, "[redacted]");
+  assert.equal(kept[0]?.nested[0]?.label, "shared");
+  assert.doesNotMatch(serialized, /root-token|header-secret|private-payload/u);
+  assert.equal(serialized.includes(testCredential), false);
+  // The tool's own result object is never mutated by the audit copy.
+  assert.equal(JSON.stringify(details), snapshot);
+});
+
+test("a wide container of short values is still bounded by the total budget", () => {
+  const values = Array.from({ length: 100_000 }, (_, index) => index);
+  const keys = Object.fromEntries(Array.from({ length: 20_000 }, (_, index) => [`key${index}`, index]));
+  for (const details of [{ values }, { keys }, { rows: Array.from({ length: 20_000 }, () => ({ ok: true })) }]) {
+    const audit = redactToolDetails(details) as { __auditBoundary: { truncated: boolean } };
+    assert.equal(audit.__auditBoundary.truncated, true);
+    assert.ok(JSON.stringify(audit).length < 300_000, "an entry cost is charged for keys and values");
+  }
+});
+
+test("values that serialize to strings are charged to the audit budget too", () => {
+  for (const details of [
+    { dates: Array.from({ length: 200_000 }, () => new Date(0)) },
+    { count: 10n ** 1_000_000n },
+  ]) {
+    const audit = redactToolDetails(details) as Record<string, unknown> & { __auditBoundary: { truncated: boolean } };
+    assert.equal(audit.__auditBoundary.truncated, true);
+    assert.ok(JSON.stringify(audit).length < 300_000, "a date and a bigint are not the way around the budget");
+  }
 });
 
 test("pathologically deep tool details remain recordable without failing the turn", async () => {
