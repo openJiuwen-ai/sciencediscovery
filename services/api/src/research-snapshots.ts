@@ -20,7 +20,7 @@ import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
 import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/package.js";
-import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackageAsync, estimateResearchPackageBytes, writeResearchPackage, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
 import type { ArtifactAnnotation, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
@@ -832,13 +832,15 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     .some((run) => run.status === "queued" || run.status === "running" || run.status === "blocked"));
   const previewResearchPackage = (projectId: string, sessionId: string | undefined, level: "necessary" | "complete", selectedFiles?: Set<string>, includeFullTrajectory = true, includeFullMemoryGraph = true) =>
     exportPreviews.get({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph });
-  const packageExports = new ResearchPackageExports(resolve(store.dataDir, "research-package-exports"), previewRevision, async (options: ResearchPackageExportOptions) => {
+  const packageExports = new ResearchPackageExports(resolve(store.dataDir, "research-package-exports"), previewRevision, async (options: ResearchPackageExportOptions, destination) => {
     const input = await buildResearchPackageInput(options.projectId, options.sessionId, options.level,
       options.selectedFiles ? new Set(options.selectedFiles) : undefined, undefined, undefined,
       options.includeFullTrajectory, options.includeFullMemoryGraph);
     // An acknowledged over-cap export may use the safe ceiling; nothing beyond it.
-    return (await createResearchPackageAsync(input,
-      options.allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES)).bytes;
+    // Streaming keeps the tar and the gzip output off the heap; the objects are still
+    // resident until the pipeline hands over sources instead of bytes.
+    await writeResearchPackage(input, destination,
+      options.allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES);
   });
 
   const restorePackage = async (projectId: string, sessionId: string | undefined, bytes: Buffer, options: { operationId: string; sourceSessionId?: string; sourceMessageId?: string; imported?: ImportedResearchPackage }) => {
