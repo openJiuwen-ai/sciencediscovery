@@ -9,6 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, s
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { dirname, join, basename } from "node:path";
 import { bootstrapPackaged, needsUnpack, packagedEnv, packagedPaths, type PackagedPaths } from "./bootstrap.ts";
@@ -1469,13 +1470,19 @@ function exportFileExists(path: string): boolean {
   try { return statSync(path).isFile(); } catch { return false; }
 }
 
+/** Async so a package on a slow network share cannot block the main process —
+ *  which supervises the whole stack — while the list is read. */
+async function exportFileExistsAsync(path: string): Promise<boolean> {
+  try { return (await stat(path)).isFile(); } catch { return false; }
+}
+
 /** The list the renderer gets: no filesystem path it could hand back to a write,
  *  only the folder name for display plus whether the file is still there. */
-function exportHistoryRows() {
-  return exportHistory().list().map((row) => ({
+async function exportHistoryRows() {
+  return Promise.all(exportHistory().list().map(async (row) => ({
     bytes: row.bytes,
     directory: dirname(row.path),
-    exists: exportFileExists(row.path),
+    exists: await exportFileExistsAsync(row.path),
     filename: row.filename,
     id: row.id,
     ...(row.level ? { level: row.level } : {}),
@@ -1484,7 +1491,7 @@ function exportHistoryRows() {
     ...(row.sessionId ? { sessionId: row.sessionId } : {}),
     ...(row.sessionTitle ? { sessionTitle: row.sessionTitle } : {}),
     token: row.token,
-  }));
+  })));
 }
 
 function defaultExportDir(): string {

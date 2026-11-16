@@ -45,6 +45,10 @@ interface ExportRecord {
   /** The package profile and session title travel with the write, so the shell
    *  can record a row that says which search the package belongs to. */
   level?: "necessary" | "complete";
+  /** The session this package was exported from, captured when the export
+   *  starts: packaging outlives the dialog, so the live request is not the
+   *  exporting session by the time the write lands. */
+  sessionId?: string;
   sessionTitle?: string;
 }
 interface ExportFlash { id: number; tone: "success" | "error"; message: string; savedToken?: string; }
@@ -160,7 +164,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           level: record.level,
           projectId: record.project,
           recordId: record.id,
-          sessionId: request?.sessionId ?? detail?.id,
+          sessionId: record.sessionId,
           sessionTitle: record.sessionTitle,
         });
         savedToken = record.destinationToken;
@@ -341,7 +345,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   function retrySave(record: ExportRecord) { void persistArchiveRef.current(record); }
 
   /** The dialog's rows are this session's only. */
-  const sessionHistory = history.filter(row => request?.sessionId === undefined || row.sessionId === request.sessionId);
+  /** The session the open dialog packages; without one there is no list to
+   *  scope to, rather than every session's packages. */
+  const dialogSessionId = request?.sessionId ?? detail?.id;
+  const sessionHistory = dialogSessionId === undefined
+    ? []
+    : history.filter(row => row.sessionId === dialogSessionId);
 
   async function revealHistory(row: ExportHistoryRow) {
     if (!historyBridge) return;
@@ -419,7 +428,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             destinationToken = picked.token;
           }
           const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
-          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error, level: level as "necessary" | "complete", sessionTitle: detail?.title };
+          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error, level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
           // to be settled immediately instead of waiting for a poll that never
