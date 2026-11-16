@@ -101,7 +101,11 @@ test("the acknowledged over-cap export carries allowOverCap to the server", asyn
     const buttons = () => view.root.findAllByType("button");
     const acknowledge = buttons().find((button) => button.props.children === t.exportAnyway);
     assert.ok(acknowledge, "the over-cap state offers 仍要导出");
-    // Nothing has been sent yet: both export actions are still gated.
+    // The gate itself, read before the confirmation: this is the half that a footer
+    // edit dropping lockedByLimit would break while the body assertion stayed green.
+    const gated = buttons().find((button) => button.props.className === "primary-button");
+    assert.ok(gated, "the dialog offers the export action");
+    assert.equal(gated!.props.disabled, true, "the unconfirmed over-cap export is disabled");
     assert.equal(bodies.length, 0, "no export request while the warning is unconfirmed");
 
     await act(async () => { acknowledge!.props.onClick(); });
