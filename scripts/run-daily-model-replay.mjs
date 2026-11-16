@@ -167,6 +167,7 @@ async function runCase(item, caseIndex) {
       CI_ALLOW_REAL: "1",
       E2E_REAL: "1",
       E2E_REPLAY: "1",
+      CI_E2E_BACKEND: process.env.CI_E2E_BACKEND || "legacy",
       E2E_LLM_BASE_URL: replayReady.baseUrl,
       E2E_LLM_TOKEN: token,
       E2E_LLM_MODEL: model,
