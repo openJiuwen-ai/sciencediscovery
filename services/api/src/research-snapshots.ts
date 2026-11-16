@@ -740,6 +740,15 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       if (versionObjects.has(key)) continue;
       versionObjects.set(key, ref);
       try {
+        // A JSON object is read anyway: its nested refs are discovered by parsing it. Anything
+        // else only contributes a byte count, which its reference already carries — so the preview
+        // asks for the stored size instead of reading and verifying the whole object (#1140 §7.6).
+        if (previewObjectSizes && !ref.mediaType.includes("json")) {
+          const size = await versions.storedSize(ref);
+          if (size === undefined) throw new Error("version object is not stored");
+          addPreviewObject(ref.digest.slice(7), size, "log");
+          continue;
+        }
         const bytes = await versions.read(ref);
         if (previewObjectSizes) addPreviewObject(ref.digest.slice(7), bytes.byteLength, "log");
         else await addObject(bytes, "log");

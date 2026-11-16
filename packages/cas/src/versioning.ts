@@ -249,6 +249,26 @@ export class VersionStore {
     return resolve(this.poolRoot(ref.pool), "blobs", "sha256", ref.digest.slice(7));
   }
 
+  /**
+   * The stored byte count of an object, or undefined when it is not there — the
+   * size `read` would verify, obtained without reading the bytes.
+   *
+   * A size preview only needs the number: `read` verifies, and verification costs a
+   * full read of an object whose length the reference already carries (#1140 §7.6).
+   * A file whose length disagrees with its reference is treated as absent, because
+   * `read` would refuse it too.
+   */
+  async storedSize(ref: ObjectRef): Promise<number | undefined> {
+    assertRef(ref);
+    try {
+      const info = await lstat(this.objectPath(ref));
+      return info.isFile() && info.size === ref.size ? info.size : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
   async put<P extends Pool>(pool: P, content: string | Buffer, mediaType = "application/octet-stream"): Promise<ObjectRef<P>> {
     await this.initialize();
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);

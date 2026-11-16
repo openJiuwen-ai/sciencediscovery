@@ -399,3 +399,14 @@ test("a ref commit re-verifies an admitted object that disappeared instead of tr
     assert.equal(refs.head("agent/second"), null);
   } finally { refs.close(); }
 }));
+
+test("a stored size is reported without reading the object, and an absent or truncated one is not", async () => fixture(async (store) => {
+  const ref = await store.put("data", "1234567890", "text/plain");
+  assert.equal(await store.storedSize(ref), 10, "the length the reference carries, from the file's own metadata");
+  // `read` refuses bytes whose length disagrees with the reference, so a size preview must not
+  // claim them either: the object counts as absent rather than as ten bytes of evidence.
+  await writeFile(store.objectPath(ref), "12345");
+  assert.equal(await store.storedSize(ref), undefined);
+  await rm(store.objectPath(ref), { force: true });
+  assert.equal(await store.storedSize(ref), undefined);
+}));
