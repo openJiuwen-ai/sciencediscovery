@@ -58,7 +58,7 @@ test("the five dialog profiles reconcile the workspace once, not once each", { t
     const snapshots = await snapshotsFor(root, store);
     const original = SessionStore.prototype.reconcileWorkspaceFiles;
     const reconciled: string[] = [];
-    t.mock.method(SessionStore.prototype, "reconcileWorkspaceFiles", function (this: SessionStore, ...args: never[]) {
+    t.mock.method(SessionStore.prototype, "reconcileWorkspaceFiles", function (this: SessionStore, ...args: Parameters<SessionStore["reconcileWorkspaceFiles"]>) {
       reconciled.push(String(args[0]));
       return original.apply(this, args);
     });
