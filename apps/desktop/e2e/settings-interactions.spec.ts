@@ -20,7 +20,9 @@
  * a toggle that writes the wrong record, or a save that stays open after the
  * server refused it would all pass that static render and fail here.
  */
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
+
+import { createJourneyReporter, type JourneyReporter } from "../../../test/helpers/journey-report.ts";
 
 import { LOCALE_STORAGE_KEY } from "../src/state/storage.js";
 import {
@@ -31,6 +33,17 @@ import {
   type ModelRecord,
   type Mock,
 } from "./fixtures.js";
+
+const test = base.extend<{ journey: JourneyReporter }>({
+  journey: async ({ page }, use, info) => {
+    const reporter = createJourneyReporter(page, info);
+    try {
+      await use(reporter);
+    } finally {
+      await reporter.finalize();
+    }
+  },
+});
 
 const MODELS: ModelRecord[] = [
   { id: "model-1", model: "qwen-max", name: "Qwen Max", providerId: "provider-1" },
@@ -374,14 +387,86 @@ test.describe("MCP 服务器", () => {
     },
   ];
 
+  /**
+   * E2E-META
+   * Purpose: Create a custom MCP server from an empty desktop settings list.
+   * Steps:
+   *   1. Open the form, inspect the defaults, and cancel a draft.
+   *   2. Reopen the form and save a local server, retrying after a failed write.
+   *   3. Test the saved server and verify it was not selected for sessions.
+   * Environment: Desktop browser with the local mocked control plane.
+   * Type: mocked
+   * LLM: none
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: mocked settings and connection test only
+   * OtherExternal: none
+   * Credentials: local fixture token only
+   * CostSideEffects: in-memory browser fixture only
+   */
+  test("creates and tests a custom server from an empty list", async ({ page, journey }) => {
+    const mock = await installMockApi(page);
+    journey.scenario({ goal: "Add a custom MCP server in desktop settings", preconditions: ["Empty MCP list"] });
+    const settings = await openSettings(page, "MCP 服务器");
+    const create = settings.getByRole("button", { name: "新增 MCP 服务器", exact: true });
+    const form = page.getByRole("dialog", { name: "新增 MCP 服务器" });
+    const name = form.getByRole("textbox", { name: "名称", exact: true });
+    const transport = form.getByLabel("传输方式");
+    const save = form.getByRole("button", { name: "保存", exact: true });
+
+    await journey.step("Open and discard a new MCP configuration", "The empty list offers a blank form with the documented defaults.", async () => {
+      await expect(settings.getByText("暂无可用的内置或自定义 MCP 来源。")).toBeVisible();
+      await create.click();
+      await expect(form.getByRole("checkbox", { name: "启用服务" })).not.toBeChecked();
+      await expect(form.getByRole("spinbutton", { name: "超时（秒）" })).toHaveValue("60");
+      await expect(transport).toHaveValue("http");
+      await name.fill("Discarded server");
+      await form.getByRole("button", { name: "取消", exact: true }).click();
+      await expect(form).toBeHidden();
+    });
+
+    await journey.step("Create a local MCP server after a refused save", "The draft survives the error, and a retry creates exactly one server.", async () => {
+      await create.click();
+      await expect(name).toHaveValue("");
+      await name.fill("Local Echo");
+      await transport.selectOption("stdio");
+      await form.getByRole("textbox", { name: "命令", exact: true }).fill("node");
+      const args = form.getByRole("textbox", { name: "参数", exact: true });
+      const scriptPath = "/srv/my MCP server/echo.mjs";
+      await args.fill(`${scriptPath}\n--quiet`);
+      await page.route("**/api/mcp/servers", async (route) => {
+        await route.fulfill({ status: 503, json: { error: "保存服务暂不可用" } });
+      }, { times: 1 });
+      await save.click();
+      await expect(form.getByRole("alert")).toContainText("保存服务暂不可用");
+      await expect(name).toHaveValue("Local Echo");
+      await expect(args).toHaveValue(`${scriptPath}\n--quiet`);
+      await save.click();
+      await expect(form).toBeHidden();
+      await expect(settings.locator(".settings-card").filter({ hasText: "Local Echo" })).toBeVisible();
+      expect(mock.state.mcpServers).toHaveLength(1);
+      expect(writeCall(mock, "POST", "/api/mcp/servers")).toMatchObject({
+        args: [scriptPath, "--quiet"], command: "node", enabled: false,
+        name: "Local Echo", timeoutSeconds: 60, transport: "stdio",
+      });
+    });
+
+    await journey.step("Test the saved connection", "The server can be tested without changing which sources sessions use by default.", async () => {
+      const card = settings.locator(".settings-card").filter({ hasText: "Local Echo" });
+      await card.getByRole("button", { name: "测试", exact: true }).click();
+      await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
+      await expect(card.getByRole("switch", { name: "Local Echo · 默认使用" })).not.toBeChecked();
+      expect(mock.state.mcpServers[0]?.enabled).toBe(false);
+    });
+  });
+
   test("a custom server is written whole, with its env and transport", async ({ page }) => {
     const mock = await installMockApi(page, { mcpServers: [mcpServer()], mcpSources: sources });
     const dialog = await openSettings(page, "MCP 服务器");
 
     // Custom and built-in servers share one page: the ones the user added are
     // listed first, and the product's own follow with a switch instead of
-    // edit/delete, because they have no record of their own. There is no
-    // 新增服务器 since #584 — the form below is the one an existing row opens.
+    // edit/delete, because they have no record of their own.
     await expect(dialog.locator(".settings-card").filter({ hasText: "内置检索" })).toBeVisible();
 
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
@@ -419,9 +504,7 @@ test.describe("MCP 服务器", () => {
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
 
     await card.getByRole("button", { name: "测试" }).click();
-    // The toast prints the status the service reported; `ready` is its own
-    // spelling, not the card's translated 已连接.
-    await expect(page.locator(".toast")).toContainText("测试结果：ready");
+    await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
     expect(mock.calls.some((call) => call.method === "POST" && call.path === "/api/mcp/servers/mcp-1/test")).toBe(
       true,
     );
