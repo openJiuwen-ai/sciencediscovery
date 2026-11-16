@@ -51,34 +51,44 @@ test("active cards poll, terminal and failed lists stop, and unmount clears the 
   await act(async () => t.mock.timers.tick(30_000)); assert.equal(calls, 5);
 });
 
-test("unavailable or absent sessions never poll; readiness loss and session change discard late results", async t => {
+test("a session reads its restored runs before the service is ready, and a readiness change discards a superseded answer", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const requests: { sessionId: string; finish: (runs: EvolveRun[]) => void; fail: (error: Error) => void }[] = [];
   const client = { listEvolveRuns: (sessionId: string) => new Promise<EvolveRun[]>((finish, fail) => requests.push({ sessionId, finish, fail })) };
   const seen: EvolveRun[][] = []; const onRuns = (runs: EvolveRun[]) => seen.push(runs);
-  function Poll({ ready = false, sessionId = "session" }: { ready?: boolean; sessionId?: string }) {
-    useEvolveRunPolling(client, sessionId, ready, 0, onRuns); return null;
+  function Poll({ ready = false, sessionId = "session", refresh = 0 }: { ready?: boolean; sessionId?: string; refresh?: number }) {
+    useEvolveRunPolling(client, sessionId, ready, refresh, onRuns); return null;
   }
   let renderer: ReactTestRenderer;
   await act(async () => { renderer = create(createElement(Poll)); });
   try {
-    assert.deepEqual(seen, [[]]); assert.equal(requests.length, 0);
+    // A session that is open while Evolve is not ready still has a list on disk:
+    // the restored run a research package wrote is read and shown.
+    assert.equal(requests.length, 1); assert.equal(requests[0]!.sessionId, "session");
+    const restored = [{ id: "restored", status: "stopped" } as EvolveRun];
+    await act(async () => requests[0]!.finish(restored));
+    assert.deepEqual(seen.at(-1), restored);
+    // Without a session there is nothing to read, and the list is emptied.
     await act(async () => renderer!.update(createElement(Poll, { ready: true, sessionId: "" })));
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, 1); assert.deepEqual(seen.at(-1), []);
+    // Back on the session: the list is read again; dropping readiness re-runs the
+    // effect, and the answer the superseded read would have delivered is dropped.
     await act(async () => renderer!.update(createElement(Poll, { ready: true })));
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
     await act(async () => renderer!.update(createElement(Poll, { ready: false })));
-    await act(async () => requests[0]!.finish([{ status: "running" } as EvolveRun]));
+    assert.equal(requests.length, 3);
+    await act(async () => requests[1]!.finish([{ id: "stale", status: "running" } as EvolveRun]));
     assert.deepEqual(seen.at(-1), []);
-    await act(async () => t.mock.timers.tick(30_000)); assert.equal(requests.length, 1);
-    await act(async () => renderer!.update(createElement(Poll, { ready: true, sessionId: "next" })));
-    assert.equal(requests[1]!.sessionId, "next");
-    await act(async () => renderer!.update(createElement(Poll, { ready: true, sessionId: "last" })));
-    await act(async () => requests[1]!.fail(new Error("late failure")));
+    const settled = [{ id: "final", status: "succeeded" } as EvolveRun];
+    await act(async () => requests[2]!.finish(settled));
+    assert.deepEqual(seen.at(-1), settled);
+    // A refresh starts one more read; unmounting before it lands discards it.
+    await act(async () => renderer!.update(createElement(Poll, { ready: false, refresh: 1 })));
+    assert.equal(requests.length, 4);
     const before = seen.length;
     await act(async () => renderer!.unmount());
-    await act(async () => requests[2]!.finish([{ status: "running" } as EvolveRun]));
+    await act(async () => requests[3]!.finish([{ id: "late", status: "running" } as EvolveRun]));
     assert.equal(seen.length, before);
-    await act(async () => t.mock.timers.tick(30_000)); assert.equal(requests.length, 3);
+    await act(async () => t.mock.timers.tick(30_000)); assert.equal(requests.length, 4);
   } finally { await act(async () => renderer!.unmount()); }
 });

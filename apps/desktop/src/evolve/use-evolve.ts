@@ -69,9 +69,6 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   const [error, setError] = useState<string | undefined>();
   /** Bumped by `refresh`, which re-runs the run-list effect immediately. */
   const [revision, setRevision] = useState(0);
-  /** Whether a status read has landed. Before it does, the app does not know
-   *  whether a list request is even allowed. */
-  const statusRead = useRef(false);
   /** The last list read that succeeded: which session it was for, and whether
    *  it saw an active search. A failed read answers nothing about the search
    *  itself — a restarted server, a proxy hiccup or a dropped request is not a
@@ -92,13 +89,11 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
       void getEvolveStatus(client)
         .then((next) => {
           if (!live) return;
-          statusRead.current = true;
           setStatus(next);
           if (next.state !== "ready") timer = setTimeout(load, STATUS_POLL_MS);
         })
         .catch(() => {
           if (!live) return;
-          statusRead.current = true;
           // A read failure is not "no runtime", and a ready runtime that
           // missed one poll is still ready: keep the state the last good read
           // established so the cards keep their list through a blip. Only a
@@ -117,11 +112,13 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
     };
   }, [client, revision]);
 
-  const ready = status.state === "ready";
-
   useEffect(() => {
-    if (!statusRead.current) return;
-    if (sessionId === undefined || !ready) {
+    // The list is this session's own record on disk: unlike starting a search it
+    // does not need the runtime to be initialized, which is what lets a session
+    // restored from a research package show its cards before Init Evolve.
+    // `status.state` is deliberately absent from this condition and from the
+    // dependencies below — readiness gates new work, not reading what happened.
+    if (sessionId === undefined) {
       lastRead.current = { active: false, sessionId };
       setRuns([]);
       return;
@@ -171,7 +168,7 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
       live = false;
       if (timer) clearTimeout(timer);
     };
-  }, [client, ready, revision, sessionId]);
+  }, [client, revision, sessionId]);
 
   const refresh = useCallback(async () => {
     setRevision((value) => value + 1);
@@ -180,7 +177,6 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   const refreshStatus = useCallback(async () => {
     try {
       const next = await getEvolveStatus(client);
-      statusRead.current = true;
       setStatus(next);
     } catch (reason) {
       // Same rule as the poll: a failure to re-read does not revoke what the
@@ -197,7 +193,6 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
     setError(undefined);
     try {
       const next = await initEvolve(client);
-      statusRead.current = true;
       setStatus(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));

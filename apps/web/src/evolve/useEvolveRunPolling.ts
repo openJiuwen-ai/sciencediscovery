@@ -16,7 +16,9 @@ import { useEffect } from "react";
 import { isEvolveRunActive, type EvolveRun } from "@sciencediscovery/schema";
 import type { EvolveApiClient } from "../api/evolve.js";
 
-/** Refresh active cards only while their owned service and session are available. */
+/** Read the session's run cards when it opens, then only while one of its runs
+ *  is active. Reading does not wait for the Evolve service to be ready, so a run
+ *  a research package restored is visible before Init Evolve. */
 export function useEvolveRunPolling(
   client: Pick<EvolveApiClient, "listEvolveRuns">,
   sessionId: string | undefined,

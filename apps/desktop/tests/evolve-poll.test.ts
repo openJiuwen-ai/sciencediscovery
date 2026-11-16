@@ -33,6 +33,7 @@ import type { EvolveRun } from "@sciencediscovery/schema";
 
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 import type { ApiClient } from "../src/api/client.js";
+import type { EvolveStatus } from "../src/api/evolve.js";
 import { useEvolve, type EvolveHandle } from "../src/evolve/use-evolve.js";
 
 function run(status: EvolveRun["status"]): EvolveRun {
@@ -97,18 +98,42 @@ function mount(
   return act(async () => create(createElement(Harness, { api: client, onHandle: handle, sessionId })));
 }
 
-/** Answers `/api/evolve/status` as ready, then hands the run-list reads to the
- *  caller's queue in order. */
-function client(reads: Array<() => Promise<EvolveRun[]>>): ApiClient {
+/** Answers `/api/evolve/status` with `status` (ready unless a case says
+ *  otherwise), then hands the run-list reads to the caller's queue in order. */
+function client(reads: Array<() => Promise<EvolveRun[]>>, status: EvolveStatus = { canInitialize: false, state: "ready" }): ApiClient {
   return {
     request: async (path: string) => {
-      if (path === "/api/evolve/status") return { canInitialize: false, state: "ready" };
+      if (path === "/api/evolve/status") return status;
       const next = reads.shift();
       assert.ok(next, `unexpected run-list read: ${path}`);
       return next();
     },
   } as unknown as ApiClient;
 }
+
+test("a restored run is read while the runtime is not initialized", async () => {
+  // A session imported from a research package opens before Init Evolve: the
+  // list is on disk and must be shown, so readiness must not gate the read.
+  const timers = clock();
+  try {
+    const api = client(
+      [async () => [run("succeeded")]],
+      { canInitialize: true, state: "not_initialized" },
+    );
+    let latest: EvolveHandle | undefined;
+    const renderer = await mount(api, (value) => {
+      latest = value;
+    });
+    assert.equal(latest?.status.state, "not_initialized");
+    assert.equal(latest?.runs[0]?.status, "succeeded",
+      "the restored card is shown before the runtime is initialized");
+    // The cadence is the status poll's alone: a terminal list is not re-read.
+    assert.equal(timers.armed(), 1);
+    renderer.unmount();
+  } finally {
+    timers.restore();
+  }
+});
 
 test("a live search keeps polling through a failed read", async () => {
   const timers = clock();

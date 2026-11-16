@@ -21,9 +21,22 @@ import { join } from "node:path";
 import { createApiServer, closeApiServer } from "../http/index.js";
 import { loadServerConfig, repositoryRoot } from "../bootstrap/config.js";
 import { createPlatformServices } from "../bootstrap/platform.js";
+import { EvolutionStore } from "./store.js";
+import type { EvolveGoal } from "@sciencediscovery/schema";
+
+/** The minimum a restored run needs; the goal's detail does not matter here. */
+function restoredGoal(): EvolveGoal {
+  return { algorithm: "puct", schemaVersion: 2, statement: "restored search" } as unknown as EvolveGoal;
+}
 
 test("public status/init require API auth; uninitialized Tasks/API paths refuse with no sidecar transport", async () => {
   const data = await mkdtemp(join(tmpdir(), "evolve-api-test-"));
+  // What a research-package restore leaves behind: a run record on disk for a
+  // session that has never talked to the Evolve service.
+  const restored = new EvolutionStore(data);
+  await restored.initialize();
+  await restored.createRun({ createdAt: "2026-11-12T00:00:00.000Z", goal: restoredGoal(), id: "restored-run", sessionId: "imported" });
+  await restored.patchRun("restored-run", { status: "succeeded" });
   const original = globalThis.fetch; let origin = ""; let sidecarRequests = 0;
   globalThis.fetch = async (url, init) => {
     if (origin && String(url).startsWith(origin + "/")) return original(url, init);
@@ -59,9 +72,19 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
     assert.deepEqual(availability(initBody), { state: "not_initialized", canInitialize: false });
     assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 200);
     const before = sidecarRequests;
+    // The read route is exempted for the reason it exists: serving the run a
+    // restore wrote to disk. A session with no runs still answers empty rather
+    // than 503, and neither read reaches the sidecar.
+    const emptyRuns = await fetch(`${origin}/api/evolve/runs?sessionId=absent`, { headers });
+    assert.equal(emptyRuns.status, 200);
+    assert.deepEqual(await emptyRuns.json(), []);
     const savedRuns = await fetch(`${origin}/api/evolve/runs?sessionId=imported`, { headers });
     assert.equal(savedRuns.status, 200);
-    assert.deepEqual(await savedRuns.json(), []);
+    const runs = await savedRuns.json() as Array<{ id: string; sessionId: string; status: string }>;
+    assert.deepEqual(runs.map((run) => [run.id, run.sessionId, run.status]), [["restored-run", "imported", "succeeded"]],
+      "the restored run is served while the service is not initialized");
+    const savedEvents = await fetch(`${origin}/api/evolve/runs/restored-run/events`, { headers });
+    assert.equal(savedEvents.status, 200);
     for (const path of ["/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {
       const response = await fetch(origin + path, { headers });
       assert.equal(response.status, 503); assert.match(await response.text(), /not initialized/);
