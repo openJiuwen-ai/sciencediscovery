@@ -259,7 +259,7 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
-function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false, withEvolveCandidateSource = false) {
+function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false, withEvolveCandidateSource = false, completedRun = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
   const notebook = Buffer.from('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}');
@@ -273,7 +273,7 @@ function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = fa
   return createResearchPackage({ source: { projectId: "source-project", title: "科研项目", sessionIds: ["source-one", "source-two"] }, records: {
     sessions: [{ session: { id: "source-one", title: "原始研究", specialistId: "unavailable-specialist" },
       messages: [{ id: "prompt-one", role: "user", content: "第一轮科研问题", createdAt: date }, { id: "answer-one", role: "assistant", content: "第一轮结论", createdAt: date }, { id: "prompt-two", role: "user", content: "第二轮科研问题", createdAt: date }, { id: "answer-two", role: "assistant", content: "第二轮结论", createdAt: date }],
-      runs: [{ id: "run-source", sessionId: "source-one", prompt: "第一轮科研问题", createdAt: date, status: "running", queueOrder: 1, annotationIds: [], references: [], settingsSnapshot: {}, userMessageId: "prompt-one", assistantMessageId: "answer-one" }],
+      runs: [{ id: "run-source", sessionId: "source-one", prompt: "第一轮科研问题", createdAt: date, status: completedRun ? "completed" : "running", queueOrder: 1, annotationIds: [], references: [], settingsSnapshot: {}, userMessageId: "prompt-one", assistantMessageId: "answer-one" }],
       workspace: [{ path: "results/result.csv", objectPath: sha256(latest), size: latest.length, modifiedAt: date }, { path: "analysis.ipynb", objectPath: sha256(notebook), size: notebook.length, modifiedAt: date }],
       validations: { reviews: [{ id: "review-source", sessionId: "source-one", kind: "integrity", status: "passed", turnId: "run-source", createdAt: date, finishedAt: date, findings: [] }], artifactReviews: [{ id: "artifact-review-source", sessionId: "source-one", artifactId: "artifact-source", artifactVersionId: "version-two", artifactContentHash: sha256(latest), artifactLogicalName: "results/result.csv", checkpointId: "checkpoint-source", decision: "ACCEPT_AND_PROCEED", createdAt: date, finishedAt: date, findings: [], reviewerSpecialistVersion: "1", status: "completed" }] },
     }, { session: { id: "source-two", title: "分支会话", specialistId: "unavailable-specialist" }, messages: [{ id: "branch-prompt", role: "user", content: "分支研究", createdAt: date }], workspace: [] }],
@@ -425,7 +425,7 @@ test("a package carrying evolve candidate source restores it beside the imported
   const { request, project, root } = await fixture(context);
   const target = await project();
   const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
-    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true)),
+    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true, true)),
   })).json() as { omissions: string[] };
   assert.equal(receipt.omissions.some((item) => item.includes("candidate source files are not carried")), false);
   const digest = sha256(Buffer.from("print('candidate source')\n")).replace(/^sha256:/, "");
@@ -439,7 +439,7 @@ test("a package carrying evolve candidate source restores it beside the imported
   // and the remapped run must still serve its candidate source.
   const second = await project();
   const secondReceipt = await (await request(`/api/projects/${second.id}/research-package/import?sessionId=${second.firstSession.id}`, {
-    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true)),
+    method: "POST", body: Buffer.from(evidencePackage(false, true, true, true, true)),
   })).json() as { omissions: string[] };
   assert.equal(secondReceipt.omissions.some((item) => item.includes("run id already exists")), false);
   const secondRuns = await (await request(`/api/evolve/runs?sessionId=${second.firstSession.id}`)).json() as Array<{ id: string }>;
@@ -448,7 +448,7 @@ test("a package carrying evolve candidate source restores it beside the imported
   assert.equal(await readFile(resolve(root, "evolve-candidates", secondRuns[0]!.id, `${digest}.py`), "utf8"), "print('candidate source')\n");
 
   const operation = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "evolve-copy" }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "evolve-copy-regression" }),
   })).json() as { id: string; state: string; entrySessionId?: string; error?: string };
   let completed = operation;
   for (let attempt = 0; attempt < 100 && !["ready", "failed"].includes(completed.state); attempt++) {
