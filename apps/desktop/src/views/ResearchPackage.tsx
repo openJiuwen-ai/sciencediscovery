@@ -65,6 +65,11 @@ export function copyStatusLine(copy: CopyOperation | undefined, t: typeof TEXT.r
   if (!copy || copy.state === "ready") return undefined;
   return copy.state === "copying" ? t.copying : copy.error ?? t.failed;
 }
+/** A task that fails over the cap stores the same sentence the synchronous refusals use. */
+function taskErrorMessage(error?: string): string | undefined {
+  return error === "Research package exceeds the archive size limit" ? TEXT.researchPackage.packageTooLarge : error;
+}
+
 export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
   const t = TEXT.researchPackage;
   const [dialog, setDialog] = useState<"export" | "import" | "branch">();
@@ -198,7 +203,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     const settle = async (record: ExportRecord, task: ExportOperation): Promise<void> => {
       if (task.status === "completed") { patchExport(record.id, { task }); await persistArchiveRef.current({ ...record, task }); }
       else if (task.status === "canceled") { patchExport(record.id, { task, phase: "canceled" }); pushFlash("error", TEXT.researchPackage.exportCanceled); }
-      else { patchExport(record.id, { task, phase: "pack-failed", error: task.error }); pushFlash("error", task.error ?? TEXT.researchPackage.failed); }
+      else { const message = taskErrorMessage(task.error); patchExport(record.id, { task, phase: "pack-failed", error: message }); pushFlash("error", message ?? TEXT.researchPackage.failed); }
     };
     const tick = async () => {
       if (cancelled) return;
@@ -459,14 +464,14 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files });
-          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: task.error, level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
+          const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: taskErrorMessage(task.error), level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
           // to be settled immediately instead of waiting for a poll that never
           // runs against a non-active status.
           if (task.status === "completed") { await persistArchiveRef.current(record); }
-          else if (task.status === "failed") { patchExport(task.id, { phase: "pack-failed", error: task.error }); pushFlash("error", task.error ?? t.failed); }
+          else if (task.status === "failed") { const message = taskErrorMessage(task.error); patchExport(task.id, { phase: "pack-failed", error: message }); pushFlash("error", message ?? t.failed); }
           else if (task.status === "canceled") { patchExport(task.id, { phase: "canceled" }); pushFlash("error", t.exportCanceled); }
         });
         else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) onOpen(source); });
