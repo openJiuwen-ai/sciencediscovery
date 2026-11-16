@@ -150,6 +150,8 @@ export interface MockOptions {
    *  on. The transcript is rebuilt from these alone — the stored messages stay
    *  as they were listed. */
   runsBySession?: Record<string, ReplayRecord[]>;
+  /** Extra events emitted before the assistant response on a sent message. */
+  messageRunEvents?: JsonRecord[];
   /** The catalog behind `GET .../subagents`, keyed by Session id. It is the only
    *  place a replayed child's steps live, so a spec that opens one needs both
    *  the snapshot in the run's log and the row here. */
@@ -801,16 +803,25 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         // leaves them behind — an event that carried them would hand the page a
         // second copy of a conversation it is already drawing.
         const published = renamed ? { ...session, messages: undefined } : undefined;
+        const completed = {
+          ...run,
+          assistantMessageId: assistantMessage.id,
+          status: "completed",
+          userMessageId: userMessage.id,
+        };
+        const events = [
+          ...(published ? [{ session: published, type: "session.updated" }] : []),
+          { run, type: "run.queued" },
+          { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
+          ...(options.messageRunEvents ?? []),
+          { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+          { delta: answer, responseId: "response-1", turn: 1, type: "assistant.delta" },
+          { files: [], message: assistantMessage, type: "run.completed" },
+          { run: completed, status: "completed", type: "run.status" },
+        ];
+        options.runsBySession?.[session.id]?.push({ events, run: completed });
         return route.fulfill({
-          body: sse([
-            ...(published ? [{ session: published, type: "session.updated" }] : []),
-            { run, type: "run.queued" },
-            { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
-            { responseId: "response-1", turn: 1, type: "assistant.response.started" },
-            { delta: answer, responseId: "response-1", turn: 1, type: "assistant.delta" },
-            { files: [], message: assistantMessage, type: "run.completed" },
-            { run: { ...run, status: "completed" }, status: "completed", type: "run.status" },
-          ]),
+          body: sse(events),
           contentType: "text/event-stream",
           status: 200,
         });

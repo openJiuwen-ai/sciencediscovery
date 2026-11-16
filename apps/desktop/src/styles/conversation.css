@@ -255,6 +255,19 @@
 }
 .collapse-body .kv-label { color: var(--text-faint); font-weight: 700; }
 
+.run-mcp-readiness {
+  padding: 8px 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.run-mcp-readiness p {
+  margin: 4px 0 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 /* label / value pairs, used by tool inputs and by artifact provenance */
 .kv {
   display: flex;

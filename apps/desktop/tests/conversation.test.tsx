@@ -23,6 +23,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ApiClient } from "../src/api/client.js";
 import type { ChatMessage, SessionDetail, WorkspaceFile } from "../src/api/types.js";
 import { emptyRunStream, type RunStreamState } from "../src/run-stream/model.js";
+import { reduceRunStream } from "../src/run-stream/reducer.js";
 import type { RunReplay } from "../src/run-stream/replay.js";
 import { Conversation } from "../src/views/Conversation.js";
 
@@ -105,6 +106,17 @@ test("every finished run is rebuilt in the place of its own answer", () => {
   assert.doesNotMatch(markup, /PLAIN-ANSWER-A/);
   assert.doesNotMatch(markup, /PLAIN-ANSWER-B/);
   assert.equal(markup.match(/REBUILT-ANSWER-A/gu)?.length, 1);
+});
+
+test("a replay shows connector diagnostics under the run fold", () => {
+  const summary = "example: degraded; omitted tools: search.";
+  const diagnostics = reduceRunStream(TWO_REPLAYS[0]!.state, { summary, type: "mcp.readiness" });
+  const markup = render({
+    detail: detail(TWO_RUNS),
+    replays: [{ ...TWO_REPLAYS[0]!, state: diagnostics }, TWO_REPLAYS[1]!],
+  });
+  assert.match(markup, /class="run-mcp-readiness".*MCP 连接器状态.*omitted tools: search/s);
+  assert.doesNotMatch(markup, /本版本不认识/);
 });
 
 test("the two runs stay in the order the conversation happened in", () => {

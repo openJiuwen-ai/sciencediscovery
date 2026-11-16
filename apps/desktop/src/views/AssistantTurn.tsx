@@ -585,7 +585,7 @@ export const AssistantTurns = memo(function AssistantTurns({
   const pending = pendingPermissions(run.permissions);
   // A run still going always shows its line, even before it has thought
   // anything: that line is what says the run exists.
-  const fold = live || hasMiddleContent(run, shown);
+  const fold = live || run.mcpReadiness.length > 0 || hasMiddleContent(run, shown);
   // Nothing happened and nothing is going to: a run that failed or was
   // interrupted before producing anything is its status line, and an empty fold
   // above it would be furniture. A turn whose response streamed no prose at all
@@ -629,6 +629,12 @@ export const AssistantTurns = memo(function AssistantTurns({
                 <span aria-hidden="true" className="collapse-chev">›</span>
               </summary>
               <div className="collapse-body">
+                {run.mcpReadiness.length > 0 ? (
+                  <div className="run-mcp-readiness">
+                    <strong>{TEXT.conversation.mcpReadiness}</strong>
+                    {run.mcpReadiness.map((summary) => <p key={summary}>{summary}</p>)}
+                  </div>
+                ) : null}
                 {run.turns.map((turn) => (
                   <TurnBlock
                     detach={shown !== undefined && shown.turn === turn.turn ? shown.response : undefined}

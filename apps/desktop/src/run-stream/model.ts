@@ -123,6 +123,8 @@ export interface RunStreamState {
   evolveRunsCreated: number;
   /** Largest replay cursor seen, for `?after=` on a reconnect. */
   lastSequence?: number;
+  /** Connector diagnostics reported when a run starts with degraded sources. */
+  mcpReadiness: string[];
   modelName?: string;
   /** Every authorization request this run raised, oldest first. */
   permissions: PermissionEntry[];
@@ -162,6 +164,7 @@ export function emptyRunStream(): RunStreamState {
   return {
     droppedEvents: 0,
     evolveRunsCreated: 0,
+    mcpReadiness: [],
     pendingResponses: {},
     permissions: [],
     terminal: false,

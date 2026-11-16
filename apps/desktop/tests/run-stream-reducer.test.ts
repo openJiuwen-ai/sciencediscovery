@@ -352,6 +352,15 @@ test("a persisted model.usage record is not an event this build cannot draw", ()
   assert.equal(state.unknownEvents, 0);
 });
 
+test("connector readiness keeps diagnostics and advances the cursor without an unknown event", () => {
+  const event = { summary: "example: degraded; omitted tools: search.", type: "mcp.readiness" } as const;
+  const first = reduceRunStream(emptyRunStream(), event, 1);
+  const replay = reduceRunStream(first, { ...event, agentId: "child" }, 2);
+  assert.deepEqual(replay.mcpReadiness, [event.summary]);
+  assert.equal(replay.unknownEvents, 0);
+  assert.equal(replay.lastSequence, 2);
+});
+
 test("a tool output frame is neither unknown nor a cursor step", () => {
   // It is a copy of what the substream already holds, so it carries no `id:`
   // line and must not be treated as a gap in the numbering — nor as something
