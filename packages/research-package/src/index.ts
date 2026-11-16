@@ -53,9 +53,12 @@ export function researchPackageTooLargeError(): Error {
 }
 
 /**
- * Resolve the cap from the environment, clamped like `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB`:
- * a malformed or out-of-range value falls back to the default rather than either
- * ignoring the operator or letting one typo turn a clean refusal into an OOM.
+ * Resolve the cap from the environment.
+ *
+ * A value the operator set but that cannot be honoured throws, following
+ * `SCIENCE_AGENT_API_MAX_OLD_SPACE_MB`: a silent fallback would run at a cap nobody
+ * chose, and the only symptom would be exports refused at a number the dialog prints
+ * as "the limit".
  */
 export function resolveResearchPackageMaxBytes(raw?: string): number {
   const value = raw ?? process.env[RESEARCH_PACKAGE_MAX_BYTES_ENV];
@@ -342,11 +345,6 @@ export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: Re
 }
 
 /** Whether a package built from this input stays within maxBytes (default: the shared cap). */
-/** The cap an acknowledged over-limit export may use; it never exceeds the safe ceiling. */
-export function researchPackageOverrideMaxBytes(requested = RESEARCH_PACKAGE_MAX_BYTES): number {
-  return Math.min(RESEARCH_PACKAGE_MAX_MAX_BYTES, Math.max(requested, RESEARCH_PACKAGE_MIN_MAX_BYTES));
-}
-
 export function researchPackageFits(input: ExportInput, maxBytes: number = RESEARCH_PACKAGE_MAX_BYTES,
   objectSizes?: ReadonlyMap<string, number>, additionalRecordBytes = 0): boolean {
   return researchPackageArchiveBytes(input, objectSizes, additionalRecordBytes) <= maxBytes;

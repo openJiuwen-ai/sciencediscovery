@@ -46,7 +46,11 @@ const RESEARCH_PACKAGE_INSPECTION_CACHE_TTL_MS = 10 * 60_000;
 // tar, so the upload bound is the package cap plus 5% and a megabyte of slack.
 // Deriving it here is the point: the old 256 MiB literal refused packages the
 // 512 MiB exporter happily produced.
-const RESEARCH_PACKAGE_UPLOAD_MAX_BYTES = Math.ceil(RESEARCH_PACKAGE_MAX_BYTES * 1.05) + 1024 * 1024;
+// The upload is the first bound a client meets, so it has to cover what an
+// acknowledged export may produce — the hard ceiling, not the configured cap.
+// Otherwise a confirmed 600 MiB export is refused at the front door of the importer
+// that just accepted its inflated size.
+const RESEARCH_PACKAGE_UPLOAD_MAX_BYTES = Math.ceil(RESEARCH_PACKAGE_MAX_MAX_BYTES * 1.05) + 1024 * 1024;
 // The inspection cache counts compressed + unpacked bytes, so it has to hold both
 // views of one package: otherwise a valid inspect hands the dialog a checksum the
 // import cannot reuse and the client uploads the whole archive twice.
