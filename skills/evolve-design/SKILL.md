@@ -41,6 +41,14 @@ carries `--allow-direct`, written by the setup dialog when the user turned the w
 run — correctly, because the candidate would run with the user's own file and network access.
 Never add it to make a refusal go away, and never say the run is sandboxed when it is not.
 
+A design that continues one already in the session may start from a plain message instead of a new
+`/evolve-design` command. That message carries no flags, and the user's earlier answer does not
+disappear with it: the consent is the **latest** `/evolve-design` command in the session's
+transcript — the same command the server reads — and a checkpoint answer does not replace it. Read
+that command before `create_evolve_run`: if it carries `--allow-direct`, pass
+`allowUnisolated: true`; if it does not, leave the flag out and say the run needs a design started
+from the setup dialog. A plain message is not itself an answer to the warning.
+
 Four checkpoints, numbered 1 to 4. **Do the work for a step, show the result, wait for the user,
 then go on.** A checkpoint is a glance, not a form: a few lines they can wave through, with a
 recommended default for every open question so "looks right" is always a valid answer. Do the work
@@ -241,7 +249,8 @@ does. Set one only for a reason you can give in a line:
 
 Call `create_evolve_run`. Set `algorithm` to what the user chose, and `checkpointMode` to the pace
 the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. Set
-`allowUnisolated: true` only when the command carried `--allow-direct`; leave it out otherwise.
+`allowUnisolated: true` only when the latest `/evolve-design` command in the session carried
+`--allow-direct`; leave it out otherwise.
 `howScored` is **one sentence** for the user: what it measures, how much is held out. `risks`: at
 most two, only ones that change a decision; empty is fine.
 
