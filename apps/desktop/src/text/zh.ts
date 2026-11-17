@@ -1395,6 +1395,7 @@ export const ZH = {
       send: "开始设计",
       cancel: "取消",
       blockedRunning: "当前会话正在运行，等它结束后再开始新的实验。",
+      blockedSearch: "本会话已有正在运行的实验。请在对话中的卡片里打开它，或等它结束后再开始新的实验。",
       blockedArchived: "归档会话不能开始新的实验。",
     },
 
