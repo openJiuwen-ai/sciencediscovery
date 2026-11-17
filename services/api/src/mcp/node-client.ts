@@ -423,7 +423,10 @@ export class McpNodeClient {
     };
     this.logger.info("mcp_connection_started", connectionFields);
     const client = new Client({ name: "sciencediscovery-api", version: "1.0.0" });
-    const options = { timeout: Math.min(10_000, (server.toolCallTimeoutSeconds ?? 60) * 1_000) };
+    // A remote streamable HTTP server may complete its first handshake just
+    // after 10 seconds. Keep the bound tied to the server timeout, but leave
+    // enough headroom so a successful slow initialize is not discarded.
+    const options = { timeout: Math.min(20_000, (server.toolCallTimeoutSeconds ?? 60) * 1_000) };
     let stderrTail: StderrTail | undefined;
     const connect = async (transport: Parameters<Client["connect"]>[0]): Promise<void> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -500,29 +503,41 @@ export class McpNodeClient {
   }
 
   private async serverTools(serverId: string, server: McpServerEntry): Promise<McpCatalogTool[]> {
-    const client = await this.session(serverId, server);
-    const tools: McpCatalogTool[] = [];
-    let cursor: string | undefined;
-    const seen = new Set<string>();
-    do {
-      const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 10_000 });
-      for (const tool of page.tools) {
-        const inputSchema = (tool.inputSchema ?? { properties: {}, type: "object" }) as Record<string, unknown>;
-        const routing = effectiveRouting(server, tool.name);
-        tools.push({
-          ...(routing ? { annotations: { routing } } : {}),
-          description: tool.description ?? tool.name,
-          inputSchema,
-          name: tool.name,
-          schemaHash: createHash("sha256").update(JSON.stringify(inputSchema)).digest("hex"),
-        });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const client = await this.session(serverId, server);
+      const tools: McpCatalogTool[] = [];
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      try {
+        do {
+          const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 10_000 });
+          for (const tool of page.tools) {
+            const inputSchema = (tool.inputSchema ?? { properties: {}, type: "object" }) as Record<string, unknown>;
+            const routing = effectiveRouting(server, tool.name);
+            tools.push({
+              ...(routing ? { annotations: { routing } } : {}),
+              description: tool.description ?? tool.name,
+              inputSchema,
+              name: tool.name,
+              schemaHash: createHash("sha256").update(JSON.stringify(inputSchema)).digest("hex"),
+            });
+          }
+          cursor = page.nextCursor ?? undefined;
+          if (tools.length > 1_000 || (cursor && seen.has(cursor))) throw new Error("MCP tool catalog pagination limit exceeded");
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+        tools.sort((a, b) => a.name.localeCompare(b.name));
+        return tools;
+      } catch (error) {
+        const retryable = attempt === 0 && error instanceof Error && /timeout/i.test(error.message);
+        if (!retryable) throw error;
+        // A stateless streamable HTTP endpoint can time out on its first
+        // post-initialize request after a successful handshake. Rebuild the
+        // transport once; the second request is idempotent tools/list.
+        await this.closeSession(serverId, "tools_list_timeout_retry");
       }
-      cursor = page.nextCursor ?? undefined;
-      if (tools.length > 1_000 || (cursor && seen.has(cursor))) throw new Error("MCP tool catalog pagination limit exceeded");
-      if (cursor) seen.add(cursor);
-    } while (cursor);
-    tools.sort((a, b) => a.name.localeCompare(b.name));
-    return tools;
+    }
+    throw new Error("MCP tool catalog retry failed");
   }
 
   async catalog(): Promise<McpCatalog> {

@@ -28,6 +28,72 @@ import { inspectMcpTool } from "./inspector.js";
 
 const fixture = fileURLToPath(new URL("../../../../test/fixtures/mcp-echo.mjs", import.meta.url));
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("custom MCP mutations do not wait for the full catalog refresh", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "custom-mcp-background-"));
+  const gate = deferred();
+  let refreshCalls = 0;
+  const manager = new CustomMcpServers(
+    dir,
+    createMcpSourceRegistry(),
+    () => undefined,
+    () => {
+      refreshCalls += 1;
+      return gate.promise;
+    },
+  );
+  try {
+    await manager.load();
+    const saved = await manager.save({ name: "Disabled server", transport: "http", url: "http://127.0.0.1/mcp", enabled: false });
+    assert.equal(refreshCalls, 0);
+    await manager.remove(manager.list()[0]!.id);
+    assert.equal(refreshCalls, 1);
+    assert.equal(saved.status, "disabled");
+  } finally {
+    gate.resolve();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("custom MCP testing probes through the server's effective proxy policy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "custom-mcp-proxy-"));
+  const proxy = { mode: "url" as const, url: "http://127.0.0.1:18080" };
+  const manager = new CustomMcpServers(
+    dir,
+    createMcpSourceRegistry(),
+    () => undefined,
+    async () => undefined,
+    async () => undefined,
+    () => proxy,
+  );
+  const originalReload = McpNodeClient.prototype.reload;
+  const originalClose = McpNodeClient.prototype.close;
+  let capturedProxy: unknown;
+  try {
+    McpNodeClient.prototype.reload = (async function (this: McpNodeClient, proxies: Record<string, unknown>) {
+      capturedProxy = proxies;
+      return { loadedAt: new Date(0).toISOString(), revision: "", servers: [{ id: "custom-000000000000", tools: [] }] };
+    }) as typeof McpNodeClient.prototype.reload;
+    McpNodeClient.prototype.close = async () => undefined;
+    await manager.load();
+    const saved = await manager.save({ name: "Proxied server", transport: "http", url: "http://127.0.0.1/mcp", enabled: false });
+    const tested = await manager.test(saved.id);
+    assert.equal(tested.enabled, false);
+    assert.equal(tested.error, undefined);
+    assert.ok(String(saved.id).startsWith("custom-"));
+    assert.deepEqual(capturedProxy, { [saved.id]: proxy });
+  } finally {
+    McpNodeClient.prototype.reload = originalReload;
+    McpNodeClient.prototype.close = originalClose;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), "custom-mcp-"));
   const registry = createMcpSourceRegistry();
@@ -48,9 +114,10 @@ test("custom stdio tools are discovered, authorized, invoked, audited and retain
   const f = await setup();
   try {
     const saved = await f.manager.save({ name: "Local echo", transport: "stdio", command: process.execPath, args: [fixture], enabled: true, env: { PRIVATE_TEST: "fixture-secret-value" } });
-    assert.equal(saved.status, "ready");
-    assert.equal(saved.tools.length, 2);
-    assert.deepEqual(saved.env, { PRIVATE_TEST: null });
+    const tested = await f.manager.test(saved.id);
+    assert.equal(tested.status, "ready");
+    assert.equal(tested.tools.length, 2);
+    assert.deepEqual(tested.env, { PRIVATE_TEST: null });
     const persisted = await readFile(join(f.dir, "custom-mcp-servers.enc"), "utf8");
     assert.ok(!persisted.includes("fixture-secret-value"));
     assert.ok(!persisted.includes("Local echo"));
@@ -111,8 +178,9 @@ test("JSON import is atomic, disabled by default, and concurrent saves do not lo
     await Promise.all([f.manager.save({ name: "A", command: process.execPath }), f.manager.save({ name: "B", command: process.execPath })]);
     assert.equal(f.manager.list().length, 3);
     const broken = await f.manager.save({ name: "Broken", command: "/nonexistent-mcp-command", enabled: true });
-    assert.equal(broken.status, "error");
-    assert.match(broken.error!, /ENOENT/);
+    const brokenTest = await f.manager.test(broken.id);
+    assert.equal(brokenTest.status, "error");
+    assert.match(brokenTest.error!, /ENOENT/);
   } finally { await f.close(); }
 });
 
@@ -128,12 +196,14 @@ for (const transport of ["http", "sse"] as const) {
       });
       const base = { name: transport, transport, url: `http://127.0.0.1:${port}/${transport === "sse" ? "sse" : "mcp"}`, enabled: true, headers: { Authorization: "Bearer fixture-only" } };
       const saved = await f.manager.save(base);
-      assert.equal(saved.status, "ready", saved.error ?? "");
-      assert.equal(saved.tools.length, 2);
-      assert.deepEqual(saved.headers, { Authorization: null });
+      const tested = await f.manager.test(saved.id);
+      assert.equal(tested.status, "ready", tested.error ?? "");
+      assert.equal(tested.tools.length, 2);
+      assert.deepEqual(tested.headers, { Authorization: null });
       const broken = await f.manager.save({ ...base, headers: { Authorization: "wrong-fixture-secret" } }, saved.id);
-      assert.equal(broken.status, "error");
-      assert.ok(!broken.error!.includes("wrong-fixture-secret"));
+      const brokenTest = await f.manager.test(broken.id);
+      assert.equal(brokenTest.status, "error");
+      assert.ok(!brokenTest.error!.includes("wrong-fixture-secret"));
     } finally { child.kill(); await f.close(); }
   });
 }
