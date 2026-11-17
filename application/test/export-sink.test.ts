@@ -2,6 +2,10 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ExportSinks, type ExportSinkIo } from "../src/export-sink.ts";
 
 function recordingIo() {
@@ -12,29 +16,41 @@ function recordingIo() {
     write: (handle, bytes) => { events.push(`write:${handle}:${bytes.byteLength}`); },
     close: (handle) => { events.push(`close:${handle}`); },
     remove: (path) => { events.push(`remove:${path}`); },
+    rename: (from, to) => { events.push(`rename:${from}->${to}`); },
   };
   return { io, events };
 }
 
-test("chunks are appended to one open destination", () => {
+test("chunks are appended to one open temporary and renamed onto the destination", () => {
   const { io, events } = recordingIo();
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
   sinks.write("t1", new Uint8Array([1, 2, 3]));
   sinks.write("t1", new Uint8Array([4, 5]));
   const written = sinks.end("t1");
-  assert.deepEqual(events, ["open:C:/exports/a.sdresearch", "write:1:3", "write:1:2", "close:1"]);
+  assert.deepEqual(events, [
+    "open:C:/exports/a.sdresearch.t1.part",
+    "write:1:3",
+    "write:1:2",
+    "close:1",
+    "rename:C:/exports/a.sdresearch.t1.part->C:/exports/a.sdresearch",
+  ]);
   assert.equal(written, 5, "the history row needs the size the stream wrote");
   assert.equal(sinks.size, 0);
 });
 
-test("abort closes and deletes the partial archive", () => {
+test("abort removes the temporary and never touches the destination", () => {
   const { io, events } = recordingIo();
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
   sinks.write("t1", new Uint8Array([1]));
   sinks.abort("t1");
-  assert.deepEqual(events, ["open:C:/exports/a.sdresearch", "write:1:1", "close:1", "remove:C:/exports/a.sdresearch"]);
+  assert.deepEqual(events, [
+    "open:C:/exports/a.sdresearch.t1.part",
+    "write:1:1",
+    "close:1",
+    "remove:C:/exports/a.sdresearch.t1.part",
+  ]);
   assert.equal(sinks.has("t1"), false);
 });
 
@@ -49,11 +65,16 @@ test("reusing a token closes the previous handle before truncating", () => {
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
   sinks.begin("t1", "C:/exports/a.sdresearch");
-  assert.deepEqual(events, ["open:C:/exports/a.sdresearch", "close:1", "open:C:/exports/a.sdresearch"]);
+  assert.deepEqual(events, [
+    "open:C:/exports/a.sdresearch.t1.part",
+    "close:1",
+    "rename:C:/exports/a.sdresearch.t1.part->C:/exports/a.sdresearch",
+    "open:C:/exports/a.sdresearch.t1.part",
+  ]);
   assert.equal(sinks.size, 1);
 });
 
-test("a failed close keeps the sink so the partial archive can still be deleted", () => {
+test("a failed close keeps the sink so the temporary can still be deleted", () => {
   // #1216 F4: deleting the entry before closing made abort() a no-op after a close error.
   const events: string[] = [];
   let handle = 0;
@@ -62,13 +83,16 @@ test("a failed close keeps the sink so the partial archive can still be deleted"
     write: () => undefined,
     close: (id) => { events.push(`close:${id}`); throw Object.assign(new Error("EIO"), { code: "EIO" }); },
     remove: (path) => { events.push(`remove:${path}`); },
+    rename: (from, to) => { events.push(`rename:${from}->${to}`); },
   };
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
   assert.throws(() => sinks.end("t1"), /EIO/);
   assert.equal(sinks.has("t1"), true, "the entry survives a failed close");
   sinks.abort("t1");
-  assert.deepEqual(events, ["open:C:/exports/a.sdresearch", "close:1", "close:1", "remove:C:/exports/a.sdresearch"]);
+  assert.deepEqual(events, [
+    "open:C:/exports/a.sdresearch.t1.part", "close:1", "close:1", "remove:C:/exports/a.sdresearch.t1.part",
+  ]);
   assert.equal(sinks.size, 0);
 });
 
@@ -80,8 +104,34 @@ test("abortAll drops every open stream when the renderer disappears", () => {
   sinks.begin("t2", "C:/exports/b.sdresearch");
   sinks.abortAll();
   assert.deepEqual(events, [
-    "open:C:/exports/a.sdresearch", "open:C:/exports/b.sdresearch",
-    "close:1", "remove:C:/exports/a.sdresearch", "close:2", "remove:C:/exports/b.sdresearch",
+    "open:C:/exports/a.sdresearch.t1.part", "open:C:/exports/b.sdresearch.t2.part",
+    "close:1", "remove:C:/exports/a.sdresearch.t1.part",
+    "close:2", "remove:C:/exports/b.sdresearch.t2.part",
   ]);
   assert.equal(sinks.size, 0);
+});
+
+test("an aborted save over an existing destination leaves the old bytes", async () => {
+  // #1216 review 2: the save dialog offers to replace an archive, so a failure must not
+  // consume it.
+  const root = await mkdtemp(join(tmpdir(), "export-sink-"));
+  try {
+    const destination = join(root, "evidence.sdresearch");
+    await writeFile(destination, "the archive the user already had");
+    const sinks = new ExportSinks();
+    sinks.begin("token-1", destination);
+    sinks.write("token-1", new Uint8Array([1, 2, 3]));
+    sinks.abort("token-1");
+    assert.equal(await readFile(destination, "utf8"), "the archive the user already had");
+    assert.equal(existsSync(`${destination}.token-1.part`), false, "the temporary is gone");
+
+    // A completed save replaces it, and leaves no temporary behind.
+    sinks.begin("token-1", destination);
+    sinks.write("token-1", new Uint8Array([9, 9]));
+    sinks.end("token-1");
+    assert.deepEqual([...await readFile(destination)], [9, 9]);
+    assert.equal(existsSync(`${destination}.token-1.part`), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

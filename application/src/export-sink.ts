@@ -6,18 +6,21 @@
 // per destination token and append each chunk as it arrives, so the peak is one
 // chunk on each side.
 //
-// `abort` removes the partial file: a failed or cancelled save must not leave a
-// truncated archive behind for the next download to mistake for a complete one.
-// Pure class over an injected fs, so the sequencing is unit-tested without a
-// host.
+// The bytes go to a sibling temporary file and only `end` renames it onto the
+// destination: the save dialog asks whether to replace an existing archive, and a
+// save that fails at 80% must not destroy the file the user chose to keep
+// (#1216 review 2). `abort` removes the temporary and leaves the destination
+// untouched. Pure class over an injected fs, so the sequencing is unit-tested
+// without a host.
 
-import { closeSync, openSync, rmSync, writeSync } from "node:fs";
+import { closeSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 
 export interface ExportSinkIo {
   open: (path: string) => number;
   write: (handle: number, bytes: Uint8Array) => void;
   close: (handle: number) => void;
   remove: (path: string) => void;
+  rename: (from: string, to: string) => void;
 }
 
 const NODE_IO: ExportSinkIo = {
@@ -25,20 +28,28 @@ const NODE_IO: ExportSinkIo = {
   write: (handle, bytes) => { writeSync(handle, bytes); },
   close: (handle) => { closeSync(handle); },
   remove: (path) => { rmSync(path, { force: true }); },
+  rename: (from, to) => { renameSync(from, to); },
 };
 
+/** The temporary a destination token streams into before it is committed. */
+function partPath(path: string, token: string): string {
+  const tag = token.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12) || "export";
+  return `${path}.${tag}.part`;
+}
+
 export class ExportSinks {
-  private readonly open = new Map<string, { handle: number; path: string; bytes: number }>();
+  private readonly open = new Map<string, { handle: number; path: string; part: string; bytes: number }>();
   private readonly io: ExportSinkIo;
 
   constructor(io: ExportSinkIo = NODE_IO) {
     this.io = io;
   }
 
-  /** Truncate (or create) the destination and keep it open for chunks. */
+  /** Open the temporary that will become `path` on `end`. */
   begin(token: string, path: string): void {
     if (this.open.has(token)) this.end(token);
-    this.open.set(token, { handle: this.io.open(path), path, bytes: 0 });
+    const part = partPath(path, token);
+    this.open.set(token, { handle: this.io.open(part), path, part, bytes: 0 });
   }
 
   /** Append one chunk. An unknown token is an error, not a silent no-op: the
@@ -50,29 +61,30 @@ export class ExportSinks {
     sink.bytes += bytes.byteLength;
   }
 
-  /** Close the file and report how much was written, so the caller can record
-   *  the history row. The caller owns the "written" flag so a failed close cannot
-   *  report a saved archive. On a close error the entry stays in the map, so
-   *  `abort` can still delete the partial file (#1216 F4). */
+  /** Close the temporary and move it onto the destination. The caller owns the
+   *  "written" flag so a failed close or rename cannot report a saved archive.
+   *  On failure the entry stays in the map, so `abort` can still remove the
+   *  temporary (#1216 F4). */
   end(token: string): number {
     const sink = this.open.get(token);
     if (!sink) return 0;
     this.io.close(sink.handle);
+    this.io.rename(sink.part, sink.path);
     this.open.delete(token);
     return sink.bytes;
   }
 
-  /** Close and delete the partial archive. */
+  /** Close and delete the temporary; the destination keeps whatever it had. */
   abort(token: string): void {
     const sink = this.open.get(token);
     if (!sink) return;
     this.open.delete(token);
     try { this.io.close(sink.handle); } catch { /* already gone */ }
-    try { this.io.remove(sink.path); } catch { /* already gone */ }
+    try { this.io.remove(sink.part); } catch { /* already gone */ }
   }
 
   /** Drop every open stream: a renderer that reloaded or crashed will never send
-   *  its own abort, so each partial archive must go with it (#1216 F5). */
+   *  its own abort, so each temporary must go with it (#1216 F5). */
   abortAll(): void {
     for (const token of [...this.open.keys()]) this.abort(token);
   }
