@@ -11,7 +11,7 @@
 import { fileURLToPath } from "node:url";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, handlePermissionsUntilTerminal, openProjectSession, scriptedModel, sendUserMessage } from "./helpers/journeys.ts";
+import { cleanupJourney, createProjectAndSession, handlePermissionsUntilTerminal, openProjectSession, scriptedModel, sendUserMessage, waitForMcpTool } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
@@ -54,9 +54,7 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
     return await response.json() as { id: string };
   };
   const server = await saveServer(true);
-  const toolsResponse = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${server.id}/tools`, { headers: authorizationHeader() });
-  expect(toolsResponse.ok()).toBe(true);
-  const echo = (await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>).find((tool) => tool.mcpToolName === "echo")!;
+  const echo = await waitForMcpTool(page, server.id, "echo");
   const mcpTool = `mcp__${server.id}__${echo.id}`;
   // Turn 2 tries whichever web search tool turn 1 was offered, so the attempt names a real tool of this executor.
   const searchAttempt = { tool: "web_search", arguments: { query: "latest perovskite stability results" } };
