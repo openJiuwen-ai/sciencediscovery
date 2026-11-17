@@ -24,7 +24,7 @@ import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } f
 export interface McpTransportClient {
   /** Opaque digest of the effective endpoint and credentials, never a raw secret. */
   sourceScope?(serverId: string): string;
-  catalog(signal?: AbortSignal): Promise<McpCatalog>;
+  catalog(signal?: AbortSignal, proxies?: Record<string, ResolvedProxy>): Promise<McpCatalog>;
   /**
    * Release whatever the client is holding open. An implementation that talks
    * to stdio servers owns child processes, and those outlive their caller

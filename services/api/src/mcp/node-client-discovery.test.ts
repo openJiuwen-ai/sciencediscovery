@@ -9,14 +9,67 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { startMcpFixture, startMcpProxy } from "../../../../test/support/mcp-network-fixtures.js";
 import { McpNodeClient } from "./node-client.js";
 import type { ResolvedProxy } from "@sciencediscovery/schema";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
+import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import type { OperationalLogger } from "@sciencediscovery/operational-logging";
 
 /** 构造仅包含一个远程服务的客户端，避免访问机器上已有连接器。 */
-function clientFor(url: string, transport: "http" | "sse" = "http") {
+function clientFor(url: string, transport: "http" | "sse" = "http", logger?: OperationalLogger) {
   return new McpNodeClient(() => ({ path: undefined, signature: url, servers: {
     remote: { enabled: true, transport, url, description: "Local fixture", toolOverrides: {},
       command: "", args: [], env: {}, headers: {}, routing: { mode: "off", keywords: [], priority: 0 } },
-  } }));
+  } }), undefined, logger);
 }
+
+for (const transport of ["http", "sse"] as const) {
+  for (const mode of ["direct", "url", "environment"] as const) {
+    test(`${transport} first refresh honours saved ${mode} policy and logs its actual route`, async () => {
+      const fixture = await startMcpFixture(transport);
+      const proxy = await startMcpProxy(fixture.origin);
+      const events: Record<string, unknown>[] = [];
+      const logger = { info: (event, fields) => { if (event === "mcp_connection_started") events.push(fields ?? {}); },
+        debug: () => undefined, warn: () => undefined, error: () => undefined, path: "unused" } as OperationalLogger;
+      const keys = ["http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"] as const;
+      const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+      const endpoint = mode === "direct" ? fixture.origin : "http://mcp-fixture.invalid";
+      const client = clientFor(`${endpoint}/${transport === "http" ? "mcp" : "sse"}`, transport, logger);
+      const policy: ResolvedProxy = mode === "url" ? { mode, url: proxy.url, noProxy: "" } : { mode };
+      try {
+        process.env.http_proxy = proxy.url; process.env.no_proxy = ""; process.env.NO_PROXY = "";
+        const catalog = new McpSourceCatalog(createMcpSourceRegistry(), client, () => ({ remote: policy }));
+        assert.equal((await catalog.refresh()).servers[0]?.tools.length, 2);
+        assert.equal(proxy.requests.length > 0, mode !== "direct");
+        assert.equal(events[0]?.proxyApplied, mode !== "direct");
+        assert.equal(events[0]?.proxyMode, mode);
+        assert.equal((await catalog.refresh()).servers[0]?.tools.length, 2);
+      } finally {
+        for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+        await client.close(); await proxy.close(); await fixture.close();
+      }
+    });
+  }
+}
+
+test("ordinary refresh applies proxy changes and respects NO_PROXY without a reload", async () => {
+  const fixture = await startMcpFixture("http");
+  const proxy = await startMcpProxy(fixture.origin);
+  const client = clientFor("http://mcp-fixture.invalid/mcp");
+  let policy: ResolvedProxy = { mode: "url", url: proxy.url, noProxy: "" };
+  const catalog = new McpSourceCatalog(createMcpSourceRegistry(), client, () => ({ remote: policy }));
+  try {
+    assert.equal((await catalog.refresh()).servers[0]?.tools.length, 2);
+    const before = proxy.requests.length;
+    policy = { mode: "direct" };
+    assert.ok((await catalog.refresh()).servers[0]?.error);
+    assert.equal(proxy.requests.length, before);
+    policy = { mode: "url", url: proxy.url, noProxy: "mcp-fixture.invalid" };
+    assert.ok((await catalog.refresh()).servers[0]?.error);
+    assert.equal(proxy.requests.length, before);
+    policy = { mode: "url", url: proxy.url, noProxy: "" };
+    assert.equal((await catalog.refresh()).servers[0]?.tools.length, 2);
+    assert.ok(proxy.requests.length > before);
+  } finally { await client.close(); await proxy.close(); await fixture.close(); }
+});
 
 test("HTTP listTools SDK timeout reconnects once and restarts pagination", async (context) => {
   const fixture = await startMcpFixture("http");

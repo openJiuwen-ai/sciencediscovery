@@ -90,7 +90,7 @@ for (const transport of ["http", "sse"] as const) {
         (snapshot) => manager.applyCatalog(snapshot), undefined, () => manager.discoveryRevision());
       const revision = manager.discoveryRevision();
       fixture.expire();
-      const catalog = await sourceCatalog.reload();
+      const catalog = await sourceCatalog.refresh();
       assert.equal(catalog.servers[0]?.tools.length, 1, catalog.servers[0]?.error ?? "");
       assert.equal(fixture.counts.refreshes, 1);
       assert.equal(manager.discoveryRevision(), revision, "token renewal preserves the discovery binding");
@@ -153,6 +153,23 @@ test("OAuth static client, rotating refresh single-flight, expiry and revoked re
     assert.equal(f.manager.oauth.status(f.server.id)?.state, "required");
     await f.login();
     assert.equal((await f.client.catalog()).servers[0]!.tools.length, 1);
+  } finally { await f.close(); }
+});
+
+test("OAuth native Request POST is replayed intact after a 401 token refresh", async () => {
+  const f = await setup();
+  try {
+    await f.login();
+    f.fixture.expire();
+    const request = new Request(`${f.fixture.origin}/request-echo`, {
+      method: "POST", headers: { "content-type": "text/plain", "x-fixture": "retained" }, body: "replay-me",
+    });
+    const response = await f.manager.oauth.fetchFor(f.server.id)!(request);
+    assert.deepEqual(await response.json(), { method: "POST", body: "replay-me", header: "retained" });
+    assert.equal(f.fixture.counts.refreshes, 1);
+    const cancelled = new AbortController(); cancelled.abort();
+    await assert.rejects(f.manager.oauth.fetchFor(f.server.id)!(new Request(`${f.fixture.origin}/request-echo`, { signal: cancelled.signal })), /abort/i);
+    await assert.rejects(f.manager.oauth.fetchFor(f.server.id)!(new Request("http://localhost:1/request-echo")), /does not match/);
   } finally { await f.close(); }
 });
 
