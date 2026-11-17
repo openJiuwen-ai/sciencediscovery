@@ -1022,6 +1022,17 @@ export function App({ initialToken }: Props) {
     && panelGroup === "artifacts"
     && activeArtifactId === linkedArtifactId;
 
+  /** Checkpoints whose review is still queued or running. The review card
+   *  reads this to draw its running line instead of an empty verdict.
+   *
+   *  Deliberately not a hook: this sits below the boot screens' early returns,
+   *  and a hook here would change the hook order when boot settles. */
+  const reviewerActive = new Set(
+    state.reviewerTasks
+      .filter((task) => task.status === "queued" || task.status === "running")
+      .map((task) => task.toolCallId),
+  );
+
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
@@ -1029,6 +1040,11 @@ export function App({ initialToken }: Props) {
     // The session's own mode, else the reader's last choice, else the project/global
   // default the service would apply — never a third "follow settings" state (#1204).
   approvalMode: state.detail?.approvalMode ?? lastApprovalMode ?? state.defaultApprovalMode ?? "ask_for_dangerous",
+    automaticReviewEnabled: state.reviewerSettings?.automaticReviewEnabled,
+    reviewerEnabled: state.reviewerEnabled,
+    reviewLevel: state.reviewerSettings?.level,
+    onAutomaticReview: (enabled) => void actions.setAutomaticReview(enabled),
+    onReviewLevel: (level) => void actions.setReviewLevel(level),
     attachBlocked: canUpload ? undefined : TEXT.composer.attachArchived,
     attachLimit,
     attachments: state.attachments,
@@ -1199,6 +1215,9 @@ export function App({ initialToken }: Props) {
                   onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
                   onReferenceClick={openReference}
                   pending={state.pendingMessage}
+                  reviews={state.reviews}
+                  reviewerActive={reviewerActive}
+                  onReview={(messageId) => void actions.reviewCheckpoint(messageId)}
                   replays={state.replays}
                   run={state.run}
                   workspaceFiles={state.panelFiles}

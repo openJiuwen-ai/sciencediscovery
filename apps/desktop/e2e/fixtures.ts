@@ -177,6 +177,16 @@ export interface MockOptions {
   jiuwenSwarmSkills?: JsonRecord[];
   skillToggleFailures?: string[];
   specialists?: JsonRecord[];
+  /** The Reviewer Specialist. `reviews` are the saved verdicts and `tasks` the
+   *  durable audit queue; the settings are the system-wide master switch and
+   *  each Session's own layer. A Session with no `sessionSettings` entry reads
+   *  the product default: automatic review on, Quick. */
+  reviewer?: {
+    reviews?: JsonRecord[];
+    settings?: JsonRecord;
+    sessionSettings?: Record<string, JsonRecord>;
+    tasks?: JsonRecord[];
+  };
   mcpServers?: JsonRecord[];
   mcpSources?: JsonRecord[];
   timeouts?: Record<string, number>;
@@ -258,6 +268,14 @@ export interface MockState {
   sandboxNetwork: { allowedDomains: string[]; mode: string };
   sessions: SessionRecord[];
   skills: JsonRecord[];
+  /** The Reviewer Specialist's mutable half: both settings layers, the saved
+   *  reviews, and the audit queue a manual request appends to. */
+  reviewer: {
+    reviews: JsonRecord[];
+    sessionSettings: Record<string, JsonRecord>;
+    settings: JsonRecord;
+    tasks: JsonRecord[];
+  };
   jiuwenSwarmSkills: JsonRecord[];
   specialists: JsonRecord[];
   timeouts: Record<string, number>;
@@ -368,6 +386,12 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     },
     projects: [...(options.projects ?? [DEFAULT_PROJECT])],
     providers: [],
+    reviewer: {
+      reviews: structuredClone(options.reviewer?.reviews ?? []),
+      sessionSettings: structuredClone(options.reviewer?.sessionSettings ?? {}),
+      settings: structuredClone(options.reviewer?.settings ?? { enabled: true, feedbackPolicy: "record" }),
+      tasks: structuredClone(options.reviewer?.tasks ?? []),
+    },
     runners: structuredClone(options.runners ?? []) as JsonRecord[],
     npuSelections: {},
     sandboxNetwork: structuredClone(options.sandboxNetwork ?? { allowedDomains: [], mode: "open" }),
@@ -573,6 +597,22 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         return json(route, 200, state.skills);
       }
 
+      // The expanded card reads the package's own SKILL.md. The list record
+      // carries no body, so the mock composes one from the description: a spec
+      // can then assert that the card really opened the file, rather than only
+      // that it stopped loading.
+      const skillDetail = /^\/api\/skills\/([^/]+)$/.exec(path);
+      if (skillDetail && method === "GET") {
+        const found = state.skills.find((skill) => skill.id === decodeURIComponent(skillDetail[1]!));
+        if (found === undefined) return json(route, 404, { error: "skill not found" });
+        return json(route, 200, {
+          ...found,
+          frontmatter: {},
+          instructions: `# ${String(found.name)}\n\n${String(found.description ?? "")}`,
+          resources: [],
+        });
+      }
+
       const projectSettings = /^\/api\/projects\/([^/]+)\/settings$/.exec(path);
       if (projectSettings) {
         if (method === "GET") return json(route, 200, state.projectSettings);
@@ -765,6 +805,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           state.sessions.splice(index, 1);
           return json(route, 200, { deleted: id });
         }
+      }
+
+      // The conversational configuration surface reads this on every session
+      // open, and a failure hides the welcome page behind an error notice
+      // (`App.tsx`, `landing`). An empty list is the normal answer for a
+      // session that has nothing to confirm.
+      const configurationRequests = /^\/api\/sessions\/([^/]+)\/configuration-requests$/.exec(path);
+      if (configurationRequests && method === "GET") {
+        return json(route, 200, { items: [] });
       }
 
       const messages = /^\/api\/sessions\/([^/]+)\/messages$/.exec(path);
@@ -1028,6 +1077,71 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       const cancel = /^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/cancel$/.exec(path);
       if (cancel && method === "POST") return json(route, 200, { cancelled: true });
+
+      /* -- 审查专家 -------------------------------------------------------- */
+
+      if (path === "/api/reviewer-specialist/settings") {
+        if (method === "GET") return json(route, 200, state.reviewer.settings);
+        if (method === "PUT") {
+          // Only the master switch is written; the legacy policy is echoed back
+          // unchanged, which is what the page sends it.
+          const input = JSON.parse(body ?? "{}") as { enabled?: boolean };
+          state.reviewer.settings = {
+            ...state.reviewer.settings,
+            enabled: input.enabled ?? state.reviewer.settings.enabled,
+          };
+          return json(route, 200, state.reviewer.settings);
+        }
+      }
+
+      const reviewerSettings = /^\/api\/sessions\/([^/]+)\/reviewer-specialist\/settings$/.exec(path);
+      if (reviewerSettings) {
+        const id = reviewerSettings[1]!;
+        if (method === "GET") {
+          return json(route, 200, state.reviewer.sessionSettings[id]
+            ?? { automaticReviewEnabled: true, level: "quick" });
+        }
+        if (method === "PUT") {
+          const input = JSON.parse(body ?? "{}") as JsonRecord;
+          state.reviewer.sessionSettings[id] = {
+            automaticReviewEnabled: input.automaticReviewEnabled ?? true,
+            level: input.level ?? "quick",
+          };
+          return json(route, 200, state.reviewer.sessionSettings[id]);
+        }
+      }
+
+      const reviews = /^\/api\/sessions\/([^/]+)\/artifact-reviews$/.exec(path);
+      if (reviews && method === "GET") return json(route, 200, state.reviewer.reviews);
+
+      const auditTasks = /^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/.exec(path);
+      if (auditTasks && method === "GET") return json(route, 200, state.reviewer.tasks);
+
+      const requestReview = /^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/.exec(path);
+      if (requestReview && method === "POST") {
+        const { messageId } = JSON.parse(body ?? "{}") as { messageId?: string };
+        const task: JsonRecord = {
+          artifactVersionIds: [],
+          checkpointMessageId: messageId,
+          createdAt: UPDATED_AT,
+          feedbackPolicy: "record",
+          id: `task-manual-${state.reviewer.tasks.length + 1}`,
+          inputFingerprint: "manual",
+          origin: "manual",
+          reviewLevel: "quick",
+          sessionId: requestReview[1],
+          status: "queued",
+          toolCallId: "call-manual",
+        };
+        // The queue answers 202 with the task still queued; the review it
+        // produces arrives on a later read, so the next listing carries a
+        // finished record and the dialog's poll settles.
+        state.reviewer.tasks = [...state.reviewer.tasks, { ...task, finishedAt: UPDATED_AT, status: "completed" }];
+        return json(route, 202, { task });
+      }
+
+      const cancelReview = /^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/.exec(path);
+      if (cancelReview && method === "POST") return json(route, 200, { cancelled: true });
 
       /* -- 远程机器 -------------------------------------------------------- */
 

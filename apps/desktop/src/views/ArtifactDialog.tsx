@@ -30,6 +30,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../api/client.js";
+import { listArtifactReviews, listReviewerAuditTasks, requestReview } from "../api/reviewer.js";
 import {
   listArtifactOutputs,
   listArtifactVersions,
@@ -39,8 +40,10 @@ import {
 } from "../api/sessions.js";
 import type {
   ArtifactCodeProvenance,
+  ArtifactReviewRun,
   ArtifactVersionProvenance,
   ComposerReference,
+  ReviewerAuditTask,
   ScientificArtifactVersion,
   Session,
   SessionArtifactOutput,
@@ -52,6 +55,7 @@ import type { PreviewSlot } from "../app/preview-tabs.js";
 import { TEXT } from "../text.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 import { DocumentPreview } from "./DocumentPreview.js";
+import { ReviewArtifactBody } from "./reviewer/ReviewCard.js";
 
 interface Props {
   client: ApiClient;
@@ -101,6 +105,11 @@ type ProvenanceState =
   | { message: string; status: "error" }
   | { provenance: ArtifactVersionProvenance; status: "ready" };
 
+type ReviewState =
+  | { status: "loading" }
+  | { message: string; status: "error" }
+  | { reviews: ArtifactReviewRun[]; status: "ready" };
+
 const VERSION_SOURCE_MAX_CHARACTERS = 18;
 
 /** A Session title long enough to identify itself and short enough for a
@@ -139,9 +148,21 @@ export function ArtifactDialog({
   const [state, setState] = useState<ArtifactState>({ status: "loading" });
   const [versionId, setVersionId] = useState<string>();
   const [sessions, setSessions] = useState<Session[]>();
-  const [mode, setMode] = useState<"preview" | "provenance">("preview");
+  const [mode, setMode] = useState<"preview" | "provenance" | "review">("preview");
   const [preview, setPreview] = useState<PreviewState>({ status: "loading" });
   const [provenance, setProvenance] = useState<ProvenanceState>({ status: "loading" });
+  /** Every review of this session; the tab filters to the version on screen. */
+  const [reviews, setReviews] = useState<ReviewState>({ status: "loading" });
+  /** The durable queue, read with the reviews: it is the only place a
+   *  checkpoint message id can be found from a review's `toolCallId`, which is
+   *  what a re-run has to name. */
+  const [reviewTasks, setReviewTasks] = useState<ReviewerAuditTask[]>([]);
+  /** The review whose re-run is being requested, while the request is in flight. */
+  const [reviewRerun, setReviewRerun] = useState<string>();
+  /** What the last re-run attempt had to say. */
+  const [reviewNote, setReviewNote] = useState<string>();
+  /** The checkpoint this tab asked to re-review, until its task leaves the queue. */
+  const [reviewQueued, setReviewQueued] = useState<string>();
   const [expanded, setExpanded] = useState(false);
   const [attempt, setAttempt] = useState(0);
   /** The scrolling body. Each tab is a page of its own, so 溯源 opens at its
@@ -303,6 +324,97 @@ export function ArtifactDialog({
   const artifact = output?.artifact;
   const versions = state.status === "ready" ? state.versions : [];
   const version = versions.find((candidate) => candidate.id === versionId);
+
+  // Reviews belong to the Session that produced the version, which is where
+  // the artifact came from even when a citation opens a dependency.
+  const reviewSession = version?.sessionId || target;
+  const [reviewAttempt, setReviewAttempt] = useState(0);
+  useEffect(() => {
+    if (reviewSession === undefined) return;
+    let alive = true;
+    setReviews({ status: "loading" });
+    void Promise.allSettled([
+      listArtifactReviews(client, reviewSession),
+      listReviewerAuditTasks(client, reviewSession),
+    ]).then(([listed, tasks]) => {
+      if (!alive) return;
+      if (tasks.status === "fulfilled") setReviewTasks(tasks.value);
+      if (listed.status === "fulfilled") {
+        setReviews({ reviews: listed.value, status: "ready" });
+      } else {
+        setReviews({
+          message: listed.reason instanceof Error ? listed.reason.message : TEXT.reviewer.noReviews,
+          status: "error",
+        });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [client, reviewAttempt, reviewSession]);
+
+  // A re-run asked for from this tab lands through the queue, like every other
+  // review, and nothing pushes it at the dialog. While the queue still owes
+  // that checkpoint a review, read both again; the moment it is done the new
+  // verdict is already in the reviews this same read returns.
+  useEffect(() => {
+    if (reviewQueued === undefined || reviewSession === undefined) return;
+    let alive = true;
+    const timer = window.setInterval(() => {
+      void Promise.allSettled([
+        listArtifactReviews(client, reviewSession),
+        listReviewerAuditTasks(client, reviewSession),
+      ]).then(([listed, tasks]) => {
+        if (!alive) return;
+        if (listed.status === "fulfilled") setReviews({ reviews: listed.value, status: "ready" });
+        if (tasks.status === "fulfilled") {
+          setReviewTasks(tasks.value);
+          const outstanding = tasks.value.some((task) => task.toolCallId === reviewQueued
+            && (task.status === "queued" || task.status === "running"));
+          if (!outstanding) {
+            setReviewQueued(undefined);
+            window.clearInterval(timer);
+          }
+        }
+      });
+    }, 6000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [client, reviewQueued, reviewSession]);
+
+  /** Ask for this review's checkpoint to be reviewed again.
+   *
+   *  The route names a transcript message, so the queue supplies the message id
+   *  the review's `toolCallId` belongs to. The queue is read again here rather
+   *  than trusted from mount: a checkpoint that finished long ago is exactly
+   *  the one whose stale review is being re-run. */
+  const rerunReview = async (review: ArtifactReviewRun) => {
+    if (reviewSession === undefined || review.toolCallId === undefined) {
+      setReviewNote(TEXT.reviewer.noCheckpoint);
+      return;
+    }
+    setReviewRerun(review.id);
+    setReviewNote(undefined);
+    try {
+      const tasks = await listReviewerAuditTasks(client, reviewSession);
+      setReviewTasks(tasks);
+      const task = tasks.find((candidate) => candidate.toolCallId === review.toolCallId);
+      if (task === undefined) {
+        setReviewNote(TEXT.reviewer.noCheckpoint);
+        return;
+      }
+      await requestReview(client, reviewSession, task.checkpointMessageId);
+      setReviewNote(TEXT.reviewer.rerunQueued);
+      setReviewQueued(review.toolCallId);
+    } catch (failure) {
+      setReviewNote(failure instanceof Error ? failure.message : TEXT.errors.generic);
+    } finally {
+      setReviewRerun(undefined);
+    }
+  };
+
   const title = output === undefined ? reference.label || reference.id : artifactName(output);
   const showVersionSources = new Set(versions.map((candidate) => candidate.sessionId)).size > 1;
 
@@ -333,7 +445,8 @@ export function ArtifactDialog({
   // dialog does not open as a strip and grow into a page (which is why the
   // old UI waited for the content instead).
   const bodyLoading = state.status === "loading"
-    || (state.status === "ready" && mode === "preview" && preview.status === "loading");
+    || (state.status === "ready" && mode === "preview" && preview.status === "loading")
+    || (state.status === "ready" && mode === "review" && reviews.status === "loading");
 
   const split = panelOffset > 0;
   const dialog = (
@@ -412,6 +525,14 @@ export function ArtifactDialog({
           >
             {TEXT.memory.provenanceTab}
           </button>
+          <button
+            aria-pressed={mode === "review"}
+            className={mode === "review" ? "is-active" : ""}
+            onClick={() => setMode("review")}
+            type="button"
+          >
+            {TEXT.reviewer.tab}
+          </button>
         </nav>
 
         <div aria-busy={bodyLoading} className="doc-body artifact-dialog-body" ref={bodyRef}>
@@ -457,6 +578,37 @@ export function ArtifactDialog({
                   provenance={provenance.provenance}
                 />
               )
+          ) : null}
+          {state.status === "ready" && mode === "review" ? (
+            reviews.status === "error" ? (
+              <Failure
+                message={reviews.message}
+                onRetry={() => setReviewAttempt((value) => value + 1)}
+                title={TEXT.reviewer.title}
+              />
+            ) : reviews.status === "ready" ? (
+              (() => {
+                // A review answers for one version; the tab shows the ones
+                // that answered for the version on screen.
+                const rows = reviews.reviews.filter((review) => review.artifactVersionId === versionId);
+                if (rows.length === 0) return <p className="doc-note">{TEXT.reviewer.noReviews}</p>;
+                return (
+                  <div className="review-dialog">
+                    {reviewNote === undefined ? null : <p className="doc-note">{reviewNote}</p>}
+                    {rows.map((review) => (
+                      <ReviewArtifactBody
+                        key={review.id}
+                        // Hidden only while this card's own request is in
+                        // flight; a second click would queue the same work twice.
+                        onRerun={reviewRerun === review.id ? undefined : () => void rerunReview(review)}
+                        review={review}
+                        showName={false}
+                      />
+                    ))}
+                  </div>
+                );
+              })()
+            ) : null
           ) : null}
         </div>
       </section>

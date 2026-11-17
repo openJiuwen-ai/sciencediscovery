@@ -69,6 +69,17 @@ function specialist(name: string): Specialist {
   } as Specialist;
 }
 
+/** The page's whole shape, because the cache is painted as it was written: a
+ *  fixture missing a field the pane reads is a crash, not a stale frame. */
+function specialistsPage() {
+  return {
+    connectors: [],
+    reviewer: { enabled: true },
+    skills: [],
+    specialists: [specialist("审稿人")],
+  };
+}
+
 function skillsPage(skills: SkillDescriptor[], enabled: string[]) {
   return { enabled, jiuwenSwarmSkills: [], native: false, skills, switchesAvailable: true };
 }
@@ -76,11 +87,7 @@ function skillsPage(skills: SkillDescriptor[], enabled: string[]) {
 describe("a settings pane's remembered answer", () => {
   it("paints the last list instead of the loading frame on the next visit", () => {
     const client = new StubClient().asClient();
-    writeSettingsCache(client, "specialists", {
-      connectors: [],
-      skills: [],
-      specialists: [specialist("审稿人")],
-    });
+    writeSettingsCache(client, "specialists", specialistsPage());
 
     const markup = renderToStaticMarkup(<SpecialistsSettings client={client} onConfirm={noop} />);
 
@@ -90,11 +97,7 @@ describe("a settings pane's remembered answer", () => {
 
   it("does not paint a remembered list under another client", () => {
     const visited = new StubClient().asClient();
-    writeSettingsCache(visited, "specialists", {
-      connectors: [],
-      skills: [],
-      specialists: [specialist("审稿人")],
-    });
+    writeSettingsCache(visited, "specialists", specialistsPage());
 
     const fresh = new StubClient().asClient();
     const markup = renderToStaticMarkup(<SpecialistsSettings client={fresh} onConfirm={noop} />);
