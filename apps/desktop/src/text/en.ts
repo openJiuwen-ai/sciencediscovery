@@ -198,6 +198,9 @@ export const EN: Text = {
   },
 
   conversation: {
+    runArtifacts: "Artifacts from this run",
+    collapseRunArtifacts: "Show fewer artifacts",
+    expandRunArtifacts: (count: number) => `Show all ${count} artifacts`,
     configurationRefreshFailed: "Configuration requests could not refresh. The displayed state may be out of date; retry before confirming.",
     retryConfiguration: "Retry",
     copyAnswer: "Copy answer",

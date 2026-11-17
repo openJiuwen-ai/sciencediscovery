@@ -201,6 +201,9 @@ export const ZH = {
   },
 
   conversation: {
+    runArtifacts: "本轮产物",
+    collapseRunArtifacts: "收起产物",
+    expandRunArtifacts: (count: number) => `展开全部 ${count} 项产物`,
     configurationRefreshFailed: "配置请求未能刷新。已显示的状态可能已过时，请重试后再确认。",
     retryConfiguration: "重试",
     copyAnswer: "复制回答",

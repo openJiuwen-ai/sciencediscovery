@@ -77,7 +77,7 @@ const GLYPHS: Readonly<Record<UploadKind, ReactNode>> = {
 
 /** The page icon: one shape in the family's colour, a folded corner, and a
  *  white mark that says which family it is. */
-function FileGlyph({ kind, size }: { kind: UploadKind; size: number }) {
+export function FileGlyph({ kind, size }: { kind: UploadKind; size: number }) {
   return (
     <svg aria-hidden="true" className="upload-glyph" height={size} viewBox="0 0 24 24" width={size}>
       <path

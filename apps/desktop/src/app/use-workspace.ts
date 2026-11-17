@@ -151,6 +151,7 @@ export interface WorkspaceState {
    *  the persisted transcript has no thinking, so a run that is not replayed
    *  shows a bare answer with none of the work that produced it behind it. */
   replays: RunReplay[];
+  terminalRuns: readonly SessionRun[];
   loadingSession: boolean;
   models: ModelProfile[];
   outputs: SessionArtifactOutput[];
@@ -300,10 +301,16 @@ function rememberBounded<T>(cache: Map<string, T>, key: string, value: T): void 
 
 /** A rebuilt set of run replays, stamped with the session epoch it was read in
  *  so a batch that outlived its session cannot be committed. */
-interface ReplayBatch {
-  epoch: number;
+interface TranscriptRuns {
   replays: RunReplay[];
+  terminalRuns: readonly SessionRun[];
 }
+
+interface ReplayBatch extends TranscriptRuns {
+  epoch: number;
+}
+
+const EMPTY_TRANSCRIPT_RUNS: TranscriptRuns = { replays: [], terminalRuns: [] };
 
 /** The browser storage when this app runs with one; a test or a restricted host may not. */
 function modelStorage(): ReadableStorage | undefined {
@@ -354,7 +361,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const configurationRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const followedConfigurationRuns = useRef(new Set<string>());
   const [pendingMessage, setPendingMessage] = useState<PendingMessage>();
-  const [replays, setReplays] = useState<RunReplay[]>([]);
+  const [{ replays, terminalRuns }, setTranscriptRuns] = useState(EMPTY_TRANSCRIPT_RUNS);
   const [outputs, setOutputs] = useState<SessionArtifactOutput[]>([]);
   const [panelFiles, setPanelFiles] = useState<WorkspaceFile[]>([]);
   const [tabs, setTabs] = useState<TabState>(initialTabState);
@@ -410,7 +417,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  keeps the ones it already rebuilt instead of paying for them again. The
    *  map is bounded — the transcript of a Session left long ago is not worth
    *  holding — with the oldest entry dropped first. */
-  const replaysBySession = useRef(new Map<string, RunReplay[]>());
+  const transcriptRunsBySession = useRef(new Map<string, TranscriptRuns>());
   /** Session details already shown, for the same reason: a switch paints the
    *  transcript it had and lets the re-read land behind it. */
   const detailsBySession = useRef(new Map<string, SessionDetail>());
@@ -513,9 +520,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const buildReplays = useCallback(
     async (target: string, runs: SessionRun[]): Promise<ReplayBatch> => {
       const epoch = replayEpoch.current;
-      const held = new Map((replaysBySession.current.get(target) ?? [])
+      const terminalRuns = runs.filter((entry) => isTerminalRunStatus(entry.status));
+      const held = new Map((transcriptRunsBySession.current.get(target)?.replays ?? [])
         .map((replay) => [replay.runId, replay]));
-      const missing = runs.filter((entry) => isTerminalRunStatus(entry.status) && !held.has(entry.id));
+      const missing = terminalRuns.filter((entry) => !held.has(entry.id));
       if (missing.length > 0) {
         const rebuilt = await Promise.all(
           missing.map(async (entry): Promise<RunReplay | undefined> => {
@@ -537,11 +545,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // replay actually holds a pending one, which a healthy Session never
       // does.
       if (!replays.some((replay) => pendingPermissions(replay.state.permissions).length > 0)) {
-        return { epoch, replays };
+        return { epoch, replays, terminalRuns };
       }
       // Display-only correction: a failed read leaves the replay as it was.
       const authoritative = await listPermissionRequests(client, target).catch(() => undefined);
-      if (!authoritative) return { epoch, replays };
+      if (!authoritative) return { epoch, replays, terminalRuns };
       const reconciled = replays.map((replay) => {
         const permissions = reconcilePermissions(replay.state.permissions, authoritative);
         return permissions === replay.state.permissions
@@ -551,7 +559,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // The corrected replay replaces the cached copy, so the next settle does
       // not have to ask again.
       for (const replay of reconciled) held.set(replay.runId, replay);
-      return { epoch, replays: reconciled };
+      return { epoch, replays: reconciled, terminalRuns };
     },
     [client],
   );
@@ -561,9 +569,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const commitReplays = useCallback((target: string, batch: ReplayBatch) => {
     // The batch belongs to `target` whether or not it is still on screen, so
     // it is worth keeping either way; only the state write is gated.
-    rememberBounded(replaysBySession.current, target, batch.replays);
+    const { replays, terminalRuns } = batch;
+    const history = { replays, terminalRuns };
+    rememberBounded(transcriptRunsBySession.current, target, history);
     if (batch.epoch !== replayEpoch.current || sessionRef.current !== target) return;
-    setReplays(batch.replays);
+    setTranscriptRuns(history);
   }, []);
 
   // ── bootstrap ────────────────────────────────────────────────────────────
@@ -1425,14 +1435,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     setDetail(undefined);
     setPendingMessage(undefined);
     // Any batch still being read belongs to the session being left behind. What
-    // it rebuilt stays in `replaysBySession`, so coming back needs no re-read.
+    // it rebuilt stays in the per-Session cache, so coming back needs no re-read.
     replayEpoch.current += 1;
     // A settle still reading belongs to the Session being left. Bumping the
     // epoch here also covers the case nothing else does: leaving and reopening
     // the *same* Session before that settle lands would otherwise make it look
     // current again.
     settleEpoch.current += 1;
-    setReplays([]);
+    setTranscriptRuns(EMPTY_TRANSCRIPT_RUNS);
     // Open documents belong to the session's workspace, so leaving the session
     // takes them with it rather than showing another session's file contents.
     setTabs(initialTabState());
@@ -1521,8 +1531,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // head start, never the last word — `settle` writes back a coarse one.
       const cached = detailsBySession.current.get(id);
       if (cached) setDetail(cached);
-      const cachedReplays = replaysBySession.current.get(id);
-      if (cachedReplays) setReplays(cachedReplays);
+      const cachedRuns = transcriptRunsBySession.current.get(id);
+      if (cachedRuns) setTranscriptRuns(cachedRuns);
       const cachedFiles = panelFilesBySession.current.get(id);
       if (cachedFiles) {
         // Seed the comparison baseline as well: the refresh below then only
@@ -2230,6 +2240,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     sessionId,
     sessionsByProject: listedByProject,
     tabs,
+    terminalRuns,
     toasts,
     uploadLimit,
     uploading,

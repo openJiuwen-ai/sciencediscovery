@@ -32,16 +32,19 @@ import type {
   ComposerReference,
   PermissionDecision,
   PermissionRequest,
+  SessionArtifactOutput,
   SessionDetail,
+  SessionRun,
   WorkspaceFile,
 } from "../api/types.js";
-import type { RunStreamState } from "../run-stream/model.js";
+import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run-stream/model.js";
 import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
 import { coalesceTimeoutNotices } from "../run-failure.js";
 import { RunFailureCard } from "./RunFailureCard.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
+import { RunArtifactList } from "./RunArtifactList.js";
 import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
@@ -50,6 +53,10 @@ import { desktopConfigurationPresentation } from "../app/configuration-presentat
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
 
 interface Props {
+  artifactOutputs?: ReadonlyMap<string, readonly SessionArtifactOutput[]>;
+  onOpenArtifact?: (output: SessionArtifactOutput) => void;
+  selectedArtifactVersionId?: string;
+  terminalRuns?: readonly SessionRun[];
   onOpenConfigurationSettings?: (group: SettingsGroup) => void;
   onBranch?: (messageId: string) => void;
   onConfigurationChange?: (request: DesktopConfigurationRequest) => void;
@@ -157,6 +164,7 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
 function MessageRow({
   usage,
   answered,
+  footer,
   message,
   onBranch,
   onReferenceClick,
@@ -164,6 +172,7 @@ function MessageRow({
 }: {
   usage?: ReactNode;
   answered?: boolean;
+  footer?: ReactNode;
   message: ChatMessage;
   onBranch?: () => void;
   onReferenceClick?: (reference: ComposerReference) => void;
@@ -202,6 +211,7 @@ function MessageRow({
           actions
           answered={answered}
           content={message.content}
+          footer={footer}
           usage={usage}
           onBranch={onBranch}
           onReferenceClick={onReferenceClick}
@@ -248,6 +258,10 @@ function useAfter(flag: boolean, delayMs: number): boolean {
  * per turn, and the run still streaming has none yet, so it goes at the end.
  */
 export function Conversation({
+  artifactOutputs,
+  onOpenArtifact,
+  selectedArtifactVersionId,
+  terminalRuns,
   onOpenConfigurationSettings,
   onBranch,
   onConfigurationChange,
@@ -340,7 +354,6 @@ export function Conversation({
 
   const messages = detail?.messages ?? [];
   const failures = coalesceTimeoutNotices(messages, replays, run);
-  const { following, replacing, trailing } = placeReplays(failures.replays, messages);
   const visibleRun = failures.run;
   /** A chip opens the card for this session; the transcript is the session's
    *  own, so the id is not a per-row value. Stable so the memoised turns under
@@ -380,6 +393,50 @@ export function Conversation({
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
   const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
+  const artifactFooters = useMemo(() => {
+    const footers = new Map<string, ReactNode>();
+    if (onOpenArtifact) {
+      for (const [runId, outputs] of artifactOutputs ?? []) {
+        footers.set(runId, <RunArtifactList
+          key={runId}
+          onOpen={onOpenArtifact}
+          outputs={outputs}
+          selectedVersionId={selectedArtifactVersionId}
+        />);
+      }
+    }
+    return footers;
+  }, [artifactOutputs, onOpenArtifact, selectedArtifactVersionId]);
+  const anchoredReplays = new Map(failures.replays.map((replay) => [replay.runId, replay]));
+  const storedAnswers = new Set(messages
+    .filter((message) => message.role === "assistant" && (!message.kind || message.kind === "message"))
+    .map((message) => message.id));
+  const messageFooters = new Map<string, ReactNode>();
+  const replayFooters = new Map(artifactFooters);
+  for (const entry of terminalRuns ?? []) {
+    const footer = artifactFooters.get(entry.id);
+    if (!footer || (liveRun && visibleRun.runId === entry.id)) continue;
+    const replay = anchoredReplays.get(entry.id);
+    if (entry.assistantMessageId && storedAnswers.has(entry.assistantMessageId) && !replay?.messageId) {
+      // A pruned log may preserve the status but lose the answer. Keep the
+      // list with the saved reply even when the status is rendered elsewhere.
+      messageFooters.set(entry.assistantMessageId, footer);
+      replayFooters.delete(entry.id);
+      continue;
+    }
+    if (replay) continue;
+    anchoredReplays.set(entry.id, {
+      runId: entry.id,
+      state: { ...emptyRunStream(), runId: entry.id, status: entry.status, terminal: true },
+      userMessageId: entry.userMessageId,
+    });
+  }
+  const replayOrder = new Map((terminalRuns ?? []).map((entry, index) => [entry.id, index]));
+  const { following, replacing, trailing } = placeReplays(
+    [...anchoredReplays.values()].sort((left, right) =>
+      (replayOrder.get(left.runId) ?? Infinity) - (replayOrder.get(right.runId) ?? Infinity)),
+    messages,
+  );
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -441,6 +498,7 @@ export function Conversation({
                 <MessageRow
                   usage={usageFor(undefined, message.id)}
                   answered={answeredAfter[index]}
+                  footer={messageFooters.get(message.id)}
                   message={message}
                   onBranch={onBranch && message.role === "assistant" ? () => onBranch(message.id) : undefined}
                   onReferenceClick={referenceClick}
@@ -451,6 +509,7 @@ export function Conversation({
                   usage={usageFor(replacement.runId)}
                   answered={answeredAfter[index]}
                   client={client}
+                  footer={replayFooters.get(replacement.runId)}
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
@@ -459,7 +518,7 @@ export function Conversation({
                   // replay is drawing: its references are what make the
                   // `[alias]` tokens in the reconstructed text links.
                   references={message.references}
-                  run={replacement}
+                  run={replacement.state}
                   onBranch={onBranch ? () => onBranch(message.id) : undefined}
                   sessionId={detail?.id}
                 />
@@ -472,6 +531,7 @@ export function Conversation({
                   usage={usageFor(replay.runId)}
                   answered={answeredAfter[index]}
                   client={client}
+                  footer={replayFooters.get(replay.runId)}
                   key={replay.runId}
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
@@ -489,6 +549,7 @@ export function Conversation({
             usage={usageFor(replay.runId)}
             answered={pending !== undefined}
             client={client}
+            footer={replayFooters.get(replay.runId)}
             key={replay.runId}
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
@@ -506,6 +567,9 @@ export function Conversation({
           <AssistantTurns
             usage={usageFor(visibleRun.runId)}
             client={client}
+            footer={visibleRun.runId && visibleRun.terminal && isTerminalRunStatus(visibleRun.status)
+              ? artifactFooters.get(visibleRun.runId)
+              : undefined}
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}

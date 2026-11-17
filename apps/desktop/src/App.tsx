@@ -41,6 +41,7 @@ import { useIdeaResearches } from "./app/use-idea-researches.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
 import { followSubagent } from "./app/follow-subagent.js";
+import { useRunArtifactOutputs } from "./app/use-run-artifacts.js";
 import { useFileDrop } from "./app/use-file-drop.js";
 import { useLanguage } from "./app/use-language.js";
 import { usePanelWidth } from "./app/use-panel-width.js";
@@ -188,7 +189,31 @@ export function App({ initialToken }: Props) {
   // a mutable header through every call site.
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
+  const runArtifactOutputs = useRunArtifactOutputs(
+    client, state.sessionId, state.outputs, state.terminalRuns, state.run.runId,
+  );
   const resize = usePanelWidth();
+
+  const openExactArtifactInPanel = useCallback((output: SessionArtifactOutput) => {
+    setWorkspaceOpen(true);
+    setPanelGroup("artifacts");
+    setOpenSubagentId(undefined);
+    setOpenTool(undefined);
+    setLinkedArtifactId(undefined);
+    // Reuse the existing tab, selecting the requested version explicitly.
+    const openTab = state.tabs.tabs.find(
+      (tab) => tab.artifactId === output.artifact.id,
+    );
+    if (openTab === undefined) {
+      void actions.openArtifact(output);
+      return;
+    }
+    actions.selectPanelTab(openTab.id);
+    if (openTab.versionId !== output.version.id) {
+      void actions.selectArtifactVersion(openTab.id, output);
+    }
+  }, [actions.openArtifact, actions.selectArtifactVersion, actions.selectPanelTab, state.tabs.tabs]);
+
 
   /** The runtime and the open Session's searches. The transcript's run cards
    *  read `runs` directly, which is why the hook exists at this level rather
@@ -991,53 +1016,22 @@ export function App({ initialToken }: Props) {
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
-  /**
-   * A 上游文件 link inside the open artifact dialog.
-   *
-   * The dialog stays on the artifact the reader was reading: pressing a
-   * dependency is a question about *this* document, and swapping the document
-   * under the cursor would throw away the context the question came from. The
-   * dependency opens beside it in the panel instead.
-   *
-   * The panel needs no room to itself — it is already a column of the window,
-   * and opening it is what the link asks for. `panelOffset` is what keeps the
-   * dialog from covering it; neither surface draws any extra chrome for the
-   * link.
-   */
+  // Keep the artifact dialog beside the panel when it opens a dependency.
   const openDependencyInPanel = (output: SessionArtifactOutput) => {
-    setWorkspaceOpen(true);
-    setPanelGroup("artifacts");
-    // The panel shows one record; a child's steps or a tool block would sit
-    // in front of the document the link asked for.
-    setOpenSubagentId(undefined);
-    setOpenTool(undefined);
+    openExactArtifactInPanel(output);
     setLinkedArtifactId(output.artifact.id);
-    // An open tab keeps its place and only its version moves: `openArtifact`
-    // focuses a tab that is already open rather than re-reading it, which
-    // would leave an older version of the dependency on screen.
-    const openTab = state.tabs.tabs.find(
-      (tab) => tab.artifactId === output.artifact.id,
-    );
-    if (openTab === undefined) {
-      void actions.openArtifact(output);
-      return;
-    }
-    actions.selectPanelTab(openTab.id);
-    if (openTab.versionId !== output.version.id) {
-      void actions.selectArtifactVersion(openTab.id, output);
-    }
   };
 
   // The dialog only keeps its offset while the panel is still showing the
   // dependency: pointing the panel at another document or another group ends
   // the gesture, and the dialog goes back to the middle of the window.
-  const activeArtifactId = state.tabs.tabs.find(
+  const activeArtifactTab = state.tabs.tabs.find(
     (tab) => tab.id === state.tabs.activeTabId,
-  )?.artifactId;
+  );
   const linkedToPanel = linkedArtifactId !== undefined
     && workspaceOpen
     && panelGroup === "artifacts"
-    && activeArtifactId === linkedArtifactId;
+    && activeArtifactTab?.artifactId === linkedArtifactId;
 
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
@@ -1200,6 +1194,12 @@ export function App({ initialToken }: Props) {
               ) : null}
               <CheckpointRefusedProvider value={state.running ? undefined : autoContinue.refusedStep}>
                 <Conversation
+                  artifactOutputs={runArtifactOutputs}
+                  onOpenArtifact={openExactArtifactInPanel}
+                  selectedArtifactVersionId={panelOpen && panelGroup === "artifacts" && !openSubagentId && !openTool
+                    ? activeArtifactTab?.versionId
+                    : undefined}
+                  terminalRuns={state.terminalRuns}
                   onOpenConfigurationSettings={openSettings}
                   client={client}
                   detail={state.detail}

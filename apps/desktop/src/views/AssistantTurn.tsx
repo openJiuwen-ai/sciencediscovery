@@ -99,6 +99,7 @@ export function AnswerBlock({
   actions,
   answered,
   content,
+  footer,
   live,
   onReferenceClick,
   references,
@@ -113,6 +114,7 @@ export function AnswerBlock({
   /** A later turn exists, so a checkpoint card here is history: it folds. */
   answered?: boolean;
   content: string;
+  footer?: ReactNode;
   /** Text still arriving: a cursor follows it and the next frame will be longer. */
   live?: boolean;
   /** Opens the memory card behind a `[alias]` chip in the answer. */
@@ -130,6 +132,7 @@ export function AnswerBlock({
         <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
       ) : null}
       {live ? <span className="spinner" /> : null}
+      {footer}
       {actions === true && !live ? <AnswerTools content={content} onBranch={onBranch} usage={usage} /> : null}
     </div>
   );
@@ -513,6 +516,7 @@ export const AssistantTurns = memo(function AssistantTurns({
   onBranch,
   answered,
   client,
+  footer,
   onDecide,
   onOpenSubagent,
   onOpenTool,
@@ -527,6 +531,7 @@ export const AssistantTurns = memo(function AssistantTurns({
    *  fold. The conversation is the only place that knows this. */
   answered?: boolean;
   client: ApiClient;
+  footer?: ReactNode;
   onDecide: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   /** Open one child's execution in the right panel. Absent where there is no
    *  such panel — the line still shows the task, it just is not a door. */
@@ -600,6 +605,10 @@ export const AssistantTurns = memo(function AssistantTurns({
     return (
       <>
         <RunStatusLine run={run} />
+        {footer && !run.error && (run.status === "completed" || run.status === "failed")
+          ? <div className="status-strip">{statusLabel(run.status)}</div>
+          : null}
+        {footer}
         {!live && usage ? <div className="answer-tools">{usage}</div> : null}
         <PendingCards context={tools} requests={pending} />
       </>
@@ -652,6 +661,7 @@ export const AssistantTurns = memo(function AssistantTurns({
               actions={!live}
               answered={answered}
               content={shown.content}
+              footer={footer}
               onBranch={onBranch}
               live={live && !shown.settled}
               onReferenceClick={onReferenceClick}
@@ -665,6 +675,7 @@ export const AssistantTurns = memo(function AssistantTurns({
               actions
               answered={answered}
               content={finalBody}
+              footer={footer}
               usage={usage}
               onBranch={onBranch}
               onReferenceClick={onReferenceClick}
@@ -674,6 +685,7 @@ export const AssistantTurns = memo(function AssistantTurns({
         </div>
       </div>
       <RunStatusLine run={run} />
+      {shown === undefined && !showFinal ? footer : null}
       {!live && shown === undefined && !showFinal && usage ? <div className="answer-tools">{usage}</div> : null}
       <PendingCards context={tools} requests={pending} />
     </>

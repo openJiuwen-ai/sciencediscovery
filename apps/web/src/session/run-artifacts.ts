@@ -12,62 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { SessionArtifactOutput, SessionRun, Subagent } from "@sciencediscovery/schema";
+import type { SessionArtifactOutput, SessionRun } from "@sciencediscovery/schema";
 
 import { isTerminalRunStatus } from "../run-stream/model.js";
 
-/**
- * Attribute declared Artifact versions to the top-level conversation Run that
- * produced them. Main-agent versions use `run.id` directly; subagent versions
- * use their subagent id and walk `parentTurnId` until they reach that Run.
- *
- * Versions with an unknown or cyclic execution lineage are deliberately left
- * out. Guessing from timestamps would turn project history into incorrect chat
- * history; those versions remain reachable from the project Artifact catalog.
- */
-export function groupArtifactOutputsByRun(
-  outputs: readonly SessionArtifactOutput[],
-  runs: readonly SessionRun[],
-  subagents: readonly Subagent[],
-): ReadonlyMap<string, readonly SessionArtifactOutput[]> {
-  const runIds = new Set(runs.map((run) => run.id));
-  const parentTurnBySubagentId = new Map(subagents.map((subagent) => [subagent.id, subagent.parentTurnId]));
-  const byRunAndArtifact = new Map<string, Map<string, SessionArtifactOutput>>();
-
-  function rootRunId(turnId: string | undefined): string | undefined {
-    const visited = new Set<string>();
-    let current = turnId;
-    while (current && !visited.has(current)) {
-      if (runIds.has(current)) return current;
-      visited.add(current);
-      current = parentTurnBySubagentId.get(current);
-    }
-    return undefined;
-  }
-
-  for (const output of outputs) {
-    const runId = rootRunId(output.version.turnId);
-    if (!runId) continue;
-    const byArtifact = byRunAndArtifact.get(runId) ?? new Map<string, SessionArtifactOutput>();
-    const existing = byArtifact.get(output.artifact.id);
-    if (!existing
-      || output.version.version > existing.version.version
-      || (output.version.version === existing.version.version
-        && output.version.createdAt > existing.version.createdAt)) {
-      byArtifact.set(output.artifact.id, output);
-    }
-    byRunAndArtifact.set(runId, byArtifact);
-  }
-
-  return new Map([...byRunAndArtifact].map(([runId, byArtifact]) => [
-    runId,
-    [...byArtifact.values()].toSorted((left, right) =>
-      left.version.createdAt.localeCompare(right.version.createdAt)
-      || left.version.version - right.version.version
-      || left.artifact.name.localeCompare(right.artifact.name),
-    ),
-  ]));
-}
+export { groupArtifactOutputsByRun } from "@sciencediscovery/schema";
 
 export interface ArtifactOutputAnchors {
   activeTimeline: readonly SessionArtifactOutput[];
