@@ -1,0 +1,15 @@
+{
+  "arxiv": "literature",
+  "biorxiv": "literature",
+  "chembl": "compound-drug",
+  "clinvar": "genome-variant-pathway",
+  "ensembl": "genome-variant-pathway",
+  "europe-pmc": "literature",
+  "geo": "dataset-knowledge",
+  "llm-wiki": "dataset-knowledge",
+  "medrxiv": "literature",
+  "pdb": "sequence-structure",
+  "pubmed": "literature",
+  "reactome": "genome-variant-pathway",
+  "uniprot": "sequence-structure"
+}
