@@ -105,8 +105,7 @@ export class McpSourceCatalog {
   constructor(
     private readonly registry: McpSourceRegistry,
     private readonly gateway: McpTransportClient,
-    /** Current per-server resolved proxies, sent with reloads so the gateway
-     *  rebuilds MCP connections under the right outbound configuration. */
+    /** Current resolved proxies apply to initial discovery and later refreshes. */
     private readonly proxyMapProvider?: () => Record<string, ResolvedProxy>,
     private readonly onCatalog?: (catalog: McpCatalog) => void,
     /** The broker's outage memory. It only decorates `getStatus`, so the
@@ -129,7 +128,7 @@ export class McpSourceCatalog {
 
   async refresh(signal?: AbortSignal): Promise<McpCatalog> {
     const revision = this.configurationRevision?.();
-    return this.applyCurrent(await this.gateway.catalog(signal), revision);
+    return this.applyCurrent(await this.gateway.catalog(signal, this.proxyMapProvider?.()), revision);
   }
 
   async reload(signal?: AbortSignal): Promise<McpCatalog> {

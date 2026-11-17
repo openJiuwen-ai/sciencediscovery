@@ -95,11 +95,12 @@ export async function startOAuthFixture({ transport = "http", expiresIn = 3600, 
         tokens.add(token); refreshTokens.add(refresh);
         return json(response, 200, { access_token: token, refresh_token: refresh, token_type: "Bearer", expires_in: expiresIn, scope: "tools:read" });
       }
-      if (["/mcp", "/sse", "/messages"].includes(url.pathname)) {
+      if (["/mcp", "/sse", "/messages", "/request-echo"].includes(url.pathname)) {
         if (!tokens.has(request.headers.authorization?.replace(/^Bearer /, ""))) {
           response.writeHead(401, { "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="tools:read"` }).end(); return;
         }
         if (stepUp) { response.writeHead(403, { "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="tools:write"' }).end(); return; }
+        if (url.pathname === "/request-echo") return json(response, 200, { method: request.method, body: await body(request), header: request.headers["x-fixture"] });
         if (transport === "sse") {
           if (url.pathname === "/sse" && request.method === "GET") {
             const wire = new SSEServerTransport("/messages", response);

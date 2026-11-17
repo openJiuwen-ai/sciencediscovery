@@ -17,10 +17,9 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { auth, extractWWWAuthenticateParams, type OAuthClientProvider, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CustomMcpServerConfig, McpAuthorizationStart, McpAuthorizationStatus, ResolvedProxy } from "@sciencediscovery/schema";
-import { proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
 import { decryptSecretValue, encryptSecretValue } from "../store/secrets.js";
+import { fetchMcpRequest } from "./fetch.js";
 
 export const MCP_OAUTH_CALLBACK = "/api/mcp/oauth/callback";
 const AUTH_REQUIRED = "MCP OAuth login required. Open MCP server settings to authorize this server.";
@@ -55,12 +54,13 @@ function signature(config: CustomMcpServerConfig): string {
 }
 
 // SDK discovery and token exchange never follow redirects with client credentials.
-function oauthFetch(proxy: ResolvedProxy = { mode: "environment" }): FetchLike {
+function oauthFetch(proxy: ResolvedProxy = { mode: "environment" }): typeof fetch {
   return (input, init) => {
-    const target = validateOAuthUrl(input instanceof Request ? input.url : input.toString());
-    const dispatcher = proxyDispatcher(proxy, target);
-    return proxyFetch(input, { ...init, redirect: "error", ...(dispatcher ? { dispatcher } : {}),
-      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) } as RequestInit);
+    const request = new Request(input, init);
+    validateOAuthUrl(request.url);
+    return fetchMcpRequest(new Request(request, {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
+    }), proxy);
   };
 }
 
@@ -291,22 +291,22 @@ export class McpOAuthManager {
     try { await operation; } finally { if (this.refreshing.get(id) === operation) this.refreshing.delete(id); }
   }
 
-  fetchFor(id: string, proxy = this.proxyFor(id)): FetchLike | undefined {
+  fetchFor(id: string, proxy = this.proxyFor(id)): typeof fetch | undefined {
     const config = this.config(id);
     if (config?.authMode !== "oauth") return undefined;
     const origin = new URL(config.url).origin;
     const expected = signature(config);
     return async (input, init) => {
-      const target = validateOAuthUrl(input instanceof Request ? input.url : input.toString());
+      const request = new Request(input, init);
+      const target = validateOAuthUrl(request.url);
       if (target.origin !== origin || !this.config(id) || signature(this.config(id)!) !== expected) throw new Error("OAuth request does not match the configured MCP server");
       await this.prepare(id, undefined, proxy);
       const token = this.current(id)?.tokens?.access_token;
       if (!token) throw new Error(AUTH_REQUIRED);
       const send = (accessToken: string) => {
-        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        const headers = new Headers(request.headers);
         headers.set("Authorization", `Bearer ${accessToken}`);
-        const dispatcher = proxyDispatcher(proxy ?? { mode: "environment" }, target);
-        return proxyFetch(input, { ...init, headers, redirect: "error", ...(dispatcher ? { dispatcher } : {}) } as RequestInit);
+        return fetchMcpRequest(new Request(request.clone(), { headers }), proxy);
       };
       let response = await send(token);
       if (response.status === 401 || response.status === 403) {

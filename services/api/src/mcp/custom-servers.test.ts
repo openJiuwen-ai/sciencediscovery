@@ -13,7 +13,7 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import { McpNodeClient } from "./node-client.js";
 import { SessionStore } from "../store.js";
 import { inspectMcpTool } from "./inspector.js";
 import type { McpCatalog } from "@sciencediscovery/schema";
+import { apiLog } from "../logging.js";
 
 const fixture = fileURLToPath(new URL("../../../../test/fixtures/mcp-echo.mjs", import.meta.url));
 
@@ -171,6 +172,59 @@ test("a catalog captured before a configuration edit cannot repopulate cleared t
     assert.equal(manager.list()[0]?.status, "untested");
     assert.equal(Object.keys(registry.get(saved.id).manifest.tools).length, 0);
   } finally { gate.resolve(); await manager.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+for (const fault of ["invalid JSON", "missing file", "unreadable file"] as const) {
+  test(`background snapshot failure (${fault}) is observable and a later save recovers`, async () => {
+    const f = await setup();
+    const path = join(f.dir, "extensions.json");
+    const previous = process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH;
+    try {
+      await writeFile(path, "{}");
+      process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH = path;
+      if (fault === "invalid JSON") await writeFile(path, "{");
+      else {
+        await rm(path);
+        if (fault === "unreadable file") await mkdir(path);
+      }
+      const saved = await f.manager.save({ name: "Recover snapshot", command: process.execPath, args: [fixture], enabled: true });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(f.manager.list()[0]?.status, "error");
+      assert.ok(f.manager.list()[0]?.error);
+      await rm(path, { recursive: true, force: true }); await writeFile(path, "{}");
+      await f.manager.save(saved, saved.id);
+      for (let attempt = 0; f.manager.list()[0]?.status === "untested" && attempt < 300; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(f.manager.list()[0]?.status, "ready");
+      assert.equal(f.manager.list()[0]?.tools.length, 2);
+    } finally {
+      if (previous === undefined) delete process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH;
+      else process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH = previous;
+      await f.close();
+    }
+  });
+}
+
+test("an error in background failure reporting cannot poison later refreshes", async context => {
+  const f = await setup();
+  let fail = true;
+  const original = f.manager.discoveryRevision.bind(f.manager);
+  context.mock.method(f.manager, "discoveryRevision", () => {
+    if (fail) throw new Error("broken configuration");
+    return original();
+  });
+  context.mock.method(apiLog, "warn", () => { if (fail) throw new Error("broken log sink"); });
+  try {
+    const saved = await f.manager.save({ name: "Recover logging", command: process.execPath, args: [fixture], enabled: true });
+    await new Promise(resolve => setImmediate(resolve));
+    fail = false;
+    await f.manager.save(saved, saved.id);
+    for (let attempt = 0; f.manager.list()[0]?.status === "untested" && attempt < 300; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(f.manager.list()[0]?.status, "ready");
+  } finally { await f.close(); }
 });
 
 test("custom stdio tools are discovered, authorized, invoked, audited and retained after restart", async () => {

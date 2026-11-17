@@ -39,7 +39,7 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 
 import { shortErrorMessage, type LogFields, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type {
@@ -58,6 +58,7 @@ import { effectiveRouting, loadExtensionsConfig, type ExtensionsConfigFile, type
 import type { McpOAuthManager } from "./oauth.js";
 import { apiLog } from "../logging.js";
 import { MCP_PROXY_ENV_VARS as PROXY_ENV_VARS } from "./runtime-environment.js";
+import { fetchMcpRequest } from "./fetch.js";
 
 const URL_PROXY_ENV_VARS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] as const;
 const STDERR_TAIL_LIMIT = 4_000;
@@ -67,12 +68,12 @@ const STDERR_TAIL_LIMIT = 4_000;
 function configuredMcpFetch(endpoint: string, proxy: ResolvedProxy = { mode: "environment" }): FetchLike {
   const origin = new URL(endpoint).origin;
   return (input, init) => {
-    const target = new URL(input instanceof Request ? input.url : input.toString());
+    const request = new Request(input, init);
+    const target = new URL(request.url);
     if (target.origin !== origin || target.username || target.password) {
       throw new Error("MCP request does not match the configured server origin");
     }
-    const dispatcher = proxyDispatcher(proxy, target);
-    return proxyFetch(input, { ...init, redirect: "error", ...(dispatcher ? { dispatcher } : {}) } as RequestInit);
+    return fetchMcpRequest(request, proxy);
   };
 }
 
@@ -98,7 +99,11 @@ function proxyFields(proxy: ResolvedProxy | undefined): LogFields {
 }
 
 function proxyApplied(server: McpServerEntry, proxy: ResolvedProxy | undefined): boolean {
-  if (server.transport !== "stdio" || !proxy || proxy.mode === "direct") return false;
+  if (server.transport !== "stdio") {
+    try { return Boolean(server.url && resolveProxyForUrl(proxy ?? { mode: "environment" }, server.url).mode === "url"); }
+    catch { return false; }
+  }
+  if (!proxy || proxy.mode === "direct") return false;
   if (proxy.mode === "url") return true;
   return URL_PROXY_ENV_VARS.some((name) => Boolean(process.env[name]));
 }
@@ -544,7 +549,8 @@ export class McpNodeClient {
     throw new Error("MCP tool catalog retry failed");
   }
 
-  async catalog(): Promise<McpCatalog> {
+  async catalog(_signal?: AbortSignal, proxies?: Record<string, ResolvedProxy>): Promise<McpCatalog> {
+    if (proxies) this.proxies = { ...proxies };
     const started = Date.now();
     const config = this.currentConfig();
     for (const id of this.sessions.keys()) {

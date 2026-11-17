@@ -284,17 +284,20 @@ export class CustomMcpServers {
     this.backgroundRefresh = this.backgroundRefresh
       .then(async () => {
         if (this.closed) return;
-        const revision = this.discoveryRevision();
         const configs = Object.entries(this.configs).filter(([, config]) => config.enabled);
         const started = Date.now();
+        let authorization: string | undefined;
         try {
+          authorization = this.oauth.discoveryRevision();
           await this.refresh();
         } catch (error) {
           let message = error instanceof Error ? error.message : String(error);
           for (const [, config] of configs) message = this.cleanError(config, message);
           message = shortErrorMessage(message);
-          if (revision === this.discoveryRevision()) {
-            for (const [id] of configs) {
+          // 错误处理仅检查内存绑定，不能再次读取可能已损坏的扩展配置。
+          if (authorization !== undefined && authorization === this.oauth.discoveryRevision()) {
+            for (const [id, config] of configs) {
+              if (this.configs[id] !== config) continue;
               this.checks.set(id, { checkedAt: new Date().toISOString(), tools: [], error: message, durationMs: Date.now() - started });
             }
             this.sync();
@@ -304,6 +307,10 @@ export class CustomMcpServers {
             serverIds: configs.map(([id]) => id),
           });
         }
+      })
+      .catch(() => {
+        // 状态同步或日志自身失败也不能让保存的队列保持拒绝状态。
+        try { apiLog.warn("custom_mcp_background_error_handler_failed", { reason }); } catch { /* 日志故障不影响后续刷新。 */ }
       });
   }
 
