@@ -428,6 +428,14 @@ test("dirWritable answers true for a writable dir and false for a read-only one"
   // fixture approximates with EACCES via mode bits; both are "cannot write").
   await chmod(join(root, "ro"), 0o555);
   assert.equal(await dirWritable(join(root, "rw")), true);
+  // On NTFS `chmod` only toggles the read-only attribute; the owner can still
+  // write, so this fixture cannot produce the state the assertion is about.
+  // Skip with the reason rather than assert something the host cannot make
+  // true — the DMG path it models keeps its coverage where `chmod` works.
+  if (await dirWritable(join(root, "ro"))) {
+    t.skip("host chmod cannot make a directory unwritable (NTFS)");
+    return;
+  }
   assert.equal(await dirWritable(join(root, "ro")), false);
 });
 
@@ -456,6 +464,15 @@ test("bootstrapPackaged degrades in-place to copy mode on a read-only payload (W
   await writeFile(join(jwVenv, "pyvenv.cfg"), "home = /builder/python\nversion_info = 3.12.7\n", "utf8");
   // read-only payload — what a DMG mount looks like to the shell
   await chmod(resources, 0o555);
+  // The payload has to actually be unwritable for the degradation to trigger.
+  // Where the host cannot produce that state (NTFS), the in-place branch runs
+  // and this test would assert a macOS DMG on a Windows host; skip, with the
+  // reason, instead. `expect-runner`-independent: no product behaviour is
+  // skipped, only the fixture.
+  if (await dirWritable(resources)) {
+    t.skip("host chmod cannot make a directory unwritable (NTFS)");
+    return;
+  }
 
   const dataDir = join(root, "data");
   const paths = packagedPaths(resources);

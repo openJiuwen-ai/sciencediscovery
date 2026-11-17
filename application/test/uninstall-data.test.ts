@@ -71,15 +71,22 @@ test("every footprint carries a zh label (dialog renders them raw)", () => {
 // dialog (uninstall-data.ts). Same style as installer-nsh.test.cjs, which
 // guards another non-TS packaged artifact.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "uninstall-mac.command");
 
-test("uninstall-mac.command: syntax-clean under macOS bash 3.2 (bash -n)", async () => {
+test("uninstall-mac.command: syntax-clean under macOS bash 3.2 (bash -n)", async (t) => {
   const { execFileSync } = await import("node:child_process");
-  // bash -n parses without executing; /bin/bash on macOS IS 3.2.
+  // bash -n parses without executing; /bin/bash on macOS IS 3.2, which is the
+  // grammar this script has to stay inside. Gate on that shell's presence, not
+  // on the platform: it is the capability the assertion needs, and a host
+  // without it (a stock Windows machine) has nothing to parse with.
+  if (!existsSync("/bin/bash")) {
+    t.skip("no /bin/bash on this host; the macOS 3.2 syntax check runs where that shell exists");
+    return;
+  }
   execFileSync("/bin/bash", ["-n", SCRIPT]);
 });
 
