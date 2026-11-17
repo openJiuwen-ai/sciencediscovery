@@ -43,6 +43,54 @@ export const CACHE_MEMBER_TAIL_CHARS = 143;
 /** Deepest linked member below a revision prefix for the same package set. */
 export const PREFIX_MEMBER_TAIL_CHARS = 129;
 
+/**
+ * On-disk names keep this much of a UUID. The public ids are unchanged
+ * (`task-<uuid>` and `rev-<uuid>`); only the directories are compact.
+ *
+ * With the reported default data directory (`C:\Users\33135\AppData\Local\
+ * ScienceDiscovery`), the full pair builds a 154-character prefix that reaches
+ * 283 with `PREFIX_MEMBER_TAIL_CHARS`, 24 over `MAX_PATH_USABLE`. Twelve hex
+ * characters per name cost 33 instead of 81, so the same prefix reaches 235.
+ * A 20-character profile directory name leaves the prefix at 121 and the
+ * reach at 250. Deeper custom roots still need the path-budget check.
+ *
+ * A task has one physical prefix for its lifetime, so this only has to be
+ * unique across environments; 48 random bits keep that risk negligible, and
+ * the store refuses to create a second environment with the same directory.
+ */
+export const COMPACT_DIRECTORY_ID_CHARS = 12;
+
+function compactDirectoryId(id: string, prefix: "rev" | "task"): string {
+  const body = id.slice(prefix.length + 1);
+  const hex = body.replaceAll("-", "");
+  if (!/^[a-f0-9-]+$/.test(body)) {
+    throw new Error("Environment metadata contains an unsafe identifier");
+  }
+  // Older catalogs may use short safe identifiers rather than generated
+  // UUIDs. Keep accepting them, and preserve their existing directory names.
+  if (hex.length <= COMPACT_DIRECTORY_ID_CHARS) return id;
+  return `${prefix}-${hex.slice(0, COMPACT_DIRECTORY_ID_CHARS)}`;
+}
+
+/** The directory that holds an environment's revisions.
+ *
+ * Starter names stay readable (and short); task ids shrink to the compact
+ * form. Existing installations keep their full-id directories — the store
+ * resolves those before falling back to this name, because a conda prefix
+ * cannot be renamed without invalidating its recorded paths. */
+export function environmentDirectoryName(environmentId: string): string {
+  if (environmentId === "starter-python" || environmentId === "starter-r") return environmentId;
+  if (/^task-[a-f0-9-]+$/.test(environmentId)) return compactDirectoryId(environmentId, "task");
+  throw new Error("Environment metadata contains an unsafe identifier");
+}
+
+/** The directory name for a revision prefix, compact for old and new installs
+ * alike: the revision id is public metadata, not a filesystem contract. */
+export function revisionDirectoryName(revisionId: string): string {
+  if (!/^rev-[a-f0-9-]+$/.test(revisionId)) throw new Error("Environment metadata contains an unsafe identifier");
+  return compactDirectoryId(revisionId, "rev");
+}
+
 export type PathBudgetArea = "package-cache" | "environment-prefix";
 
 export interface PathBudgetProblem {
