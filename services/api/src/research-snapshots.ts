@@ -13,14 +13,16 @@
 // limitations under the License.
 
 
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile, stat, lstat, readdir, utimes } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
+import { mkdir, readFile, writeFile, stat, lstat, readdir, utimes, copyFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
 import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/package.js";
-import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, writeResearchPackage, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
 import type { ArtifactAnnotation, ArtifactOriginMeta, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
@@ -333,6 +335,14 @@ export function packageRanEvolve(artifacts: Array<{ name?: unknown }> | undefine
     typeof artifact.name === "string" && artifact.name.startsWith("evolve/"));
 }
 
+/**
+ * What a restore receives: a parsed package, the file it arrived as, or its bytes.
+ *
+ * The file form is what a streamed upload produces (#1152 stage 2): the restore reads
+ * the objects from the unpacked directory and copies the archive instead of buffering it.
+ */
+export type ImportedPackageSource = { imported?: ImportedResearchPackage; packageFile?: string; bytes?: Buffer };
+
 export function createResearchSnapshots({ store, evolutionStore, evolveCandidates, memoryGraphClient, memoryGraphEnabled, provenanceRecorder }: Ports, sessionHasResearchHistory: (sessionId: string) => Promise<boolean>) {
   const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
   const previewDependencies = new Map<string, Set<string>>();
@@ -380,7 +390,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       shells: sessions.map((session) => store.shellExecutions.revisionSnapshot(session.id)), environments: store.listEnvironmentRevisions(),
       memory: [memoryGraphEnabled(), memoryGraphClient.snapshotRevision(sessions.map((session) => session.id))] });
   };
-  const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal): Promise<ExportInput> => {
+  const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal, options: { streamObjects?: boolean } = {}): Promise<ExportInput> => {
     signal.throwIfAborted();
     const previewObjectSizes = preview?.objectSizes;
     const project = store.getProject(projectId);
@@ -388,11 +398,26 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     const availableSessions = store.researchSessions(projectId);
     const sessions = availableSessions.filter((item) => cohort ? cohort.has(item.id) : (!item.researchSnapshot || item.researchSnapshot.state === "ready") && (!sessionId || item.id === sessionId));
     if (sessionId && !sessions.length) throw new SessionStoreHttpError("Session not found", 404);
-    const objects = new Map<string, { path: string; bytes: Uint8Array; kind: "artifact" | "evidence" | "log" | "other" }>();
+    const objects = new Map<string, import("@sciencediscovery/research-package").PackageObject | import("@sciencediscovery/research-package").PackageObjectStream>();
     const omissions: string[] = [];
+    // A background export streams from the source instead of holding every object:
+    // the CAS and the workspace file are read once to name the object and again while
+    // the archive is written, so the payload never accumulates in memory.
+    const streamObjects = options.streamObjects === true;
     const addObject = async (bytes: Uint8Array, kind: "artifact" | "evidence" | "log" | "other") => {
       const path = sha256(bytes);
       if (!objects.has(path)) objects.set(path, { path, bytes, kind });
+      return path;
+    };
+    const addObjectSource = (hash: string, kind: "artifact" | "evidence" | "log" | "other") => {
+      if (!objects.has(hash)) objects.set(hash, { path: hash, open: () => provenanceRecorder.cas.stream(hash), kind });
+      return hash;
+    };
+    const addFileSource = async (absolutePath: string, kind: "artifact" | "evidence" | "log" | "other") => {
+      const digest = createHash("sha256");
+      for await (const chunk of createReadStream(absolutePath)) digest.update(chunk as Buffer);
+      const path = digest.digest("hex");
+      if (!objects.has(path)) objects.set(path, { path, open: () => createReadStream(absolutePath) as AsyncIterable<Uint8Array>, kind });
       return path;
     };
     const addPreviewObject = (path: string, size: number, kind: "artifact" | "evidence" | "log") => {
@@ -567,7 +592,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         try {
           artifactObjectPaths.set(version.id, previewObjectSizes
             ? addPreviewObject(version.content.hash, version.content.size, "artifact")
-            : await addObject(await provenanceRecorder.cas.read(version.content.hash), "artifact"));
+            : streamObjects ? addObjectSource(version.content.hash, "artifact")
+              : await addObject(await provenanceRecorder.cas.read(version.content.hash), "artifact"));
         } catch (error) {
           omissions.push(`artifact:${version.id}:${error instanceof Error ? error.message : "unreadable"}`);
         }
@@ -692,7 +718,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         const retained: typeof record.workspace = [];
         for (const file of record.workspace) {
           try {
-            file.objectPath = await addObject(await readFile(resolveWorkspaceFile(store.workspacePath(record.session.id), file.path)), "evidence");
+            const absolute = resolveWorkspaceFile(store.workspacePath(record.session.id), file.path);
+            file.objectPath = streamObjects ? await addFileSource(absolute, "evidence")
+              : await addObject(await readFile(absolute), "evidence");
             retained.push(file);
           } catch (error) {
             omissions.push(`workspace:${record.session.id}:${file.path}:${error instanceof Error ? error.message : "unreadable"}`);
@@ -732,7 +760,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           let size = 0;
           for await (const chunk of provenanceRecorder.cas.stream(hash)) { signal.throwIfAborted(); size += chunk.byteLength; }
           addPreviewObject(hash, size, "log");
-        } else await addObject(await provenanceRecorder.cas.read(hash), "log");
+        } else if (streamObjects) addObjectSource(hash, "log");
+        else await addObject(await provenanceRecorder.cas.read(hash), "log");
       }
       catch { signal.throwIfAborted(); omissions.push(`cas:${hash}:unavailable source object`); }
     }
@@ -832,16 +861,19 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     .some((run) => run.status === "queued" || run.status === "running" || run.status === "blocked"));
   const previewResearchPackage = (projectId: string, sessionId: string | undefined, level: "necessary" | "complete", selectedFiles?: Set<string>, includeFullTrajectory = true, includeFullMemoryGraph = true) =>
     exportPreviews.get({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph });
-  const packageExports = new ResearchPackageExports(resolve(store.dataDir, "research-package-exports"), previewRevision, async (options: ResearchPackageExportOptions) => {
+  const packageExports = new ResearchPackageExports(resolve(store.dataDir, "research-package-exports"), previewRevision, async (options: ResearchPackageExportOptions, destination) => {
     const input = await buildResearchPackageInput(options.projectId, options.sessionId, options.level,
       options.selectedFiles ? new Set(options.selectedFiles) : undefined, undefined, undefined,
-      options.includeFullTrajectory, options.includeFullMemoryGraph);
+      options.includeFullTrajectory, options.includeFullMemoryGraph, undefined, { streamObjects: true });
     // An acknowledged over-cap export may use the safe ceiling; nothing beyond it.
-    return (await createResearchPackageAsync(input,
-      options.allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES)).bytes;
+    // Streaming writes tar → gzip → the task's file, so neither whole archive buffer
+    // is ever resident (#1152 stage 2).
+    await writeResearchPackage(input, destination,
+      options.allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES);
   });
 
-  const restorePackage = async (projectId: string, sessionId: string | undefined, bytes: Buffer, options: { operationId: string; sourceSessionId?: string; sourceMessageId?: string; imported?: ImportedResearchPackage }) => {
+  const restorePackage = async (projectId: string, sessionId: string | undefined, source: Buffer | ImportedPackageSource, options: { operationId: string; sourceSessionId?: string; sourceMessageId?: string }) => {
+    const pkg: ImportedPackageSource = Buffer.isBuffer(source) ? { bytes: source } : source;
     const operationId = options.operationId;
     const role = options.sourceSessionId ? "research_copy" as const : "imported_snapshot" as const;
     const restoredSessionIds: string[] = [];
@@ -856,7 +888,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           throw new SessionStoreHttpError("Session not found", 404);
         }
         if (sessionId) store.assertSessionWritable(sessionId);
-        const imported = options.imported ?? researchPackageProvider.importReadOnly(bytes);
+        const imported = pkg.imported ?? researchPackageProvider.importReadOnly(pkg.bytes ?? await readFile(pkg.packageFile!));
         snapshot = { operationId, role, state: "importing", createdAt, sessionIds: restoredSessionIds,
           packageChecksum: imported.receipt.packageChecksum, sourceSnapshotSessionId: options.sourceSessionId,
           exportLevel: imported.manifest.exportProfile?.level,
@@ -906,13 +938,14 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         await writeFile(resolve(root, "README.md"), imported.readme, { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
         });
-        const importedObjects = [...imported.objects];
-        for (let offset = 0; offset < importedObjects.length; offset += 16) {
-          await Promise.all(importedObjects.slice(offset, offset + 16).map(async ([hash, object]) => {
-            await writeFile(resolve(root, "objects", hash), object, { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
-              if (error.code !== "EEXIST") throw error;
-            });
-          }));
+        // One object at a time: the map can be directory-backed, where a spread would
+        // read every object into memory before the first write (#1200 review 1).
+        for (const hash of imported.objects.keys()) {
+          const object = imported.objects.get(hash);
+          if (!object) continue;
+          await writeFile(resolve(root, "objects", hash), object, { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "EEXIST") throw error;
+          });
         }
         const receipt = {
           ...imported.receipt,
@@ -978,15 +1011,18 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           ids.id(artifact.id);
           for (const version of artifact.versions ?? []) ids.id(version.id);
         }
-        // CAS addresses are content identities and remain stable across imports.
-        const casObjects = [...imported.objects.values()];
-        for (let offset = 0; offset < casObjects.length; offset += 16) {
-          await Promise.all(casObjects.slice(offset, offset + 16).map((object) => provenanceRecorder.cas.put(Buffer.from(object))));
+        // CAS addresses are content identities and remain stable across imports. Put one
+        // object at a time: a directory-backed map would materialise the whole package.
+        for (const hash of imported.objects.keys()) {
+          const object = imported.objects.get(hash);
+          // Hand the buffer over as it is: a directory-backed object is already a Buffer,
+          // and copying it would double the peak for this object (#1200 review 2, optional).
+          if (object) await provenanceRecorder.cas.put(Buffer.isBuffer(object) ? object : Buffer.from(object));
         }
         const versions = new VersionStore(store.dataDir);
         for (const ref of records.versionObjects ?? []) {
           const object = imported.objects.get(ref.digest.slice(7));
-          if (object) await versions.put(ref.pool, Buffer.from(object), ref.mediaType);
+          if (object) await versions.put(ref.pool, Buffer.isBuffer(object) ? object : Buffer.from(object), ref.mediaType);
         }
         const environmentRevisions = (records.environmentRevisions ?? []).map((revision) => ({
           ...revision, id: ids.id(revision.id), environmentId: ids.id(revision.environmentId),
@@ -1256,7 +1292,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           && !item.startsWith("This package contains no scientific memory snapshot")
           && isFatalRestoreOmission(item));
         if (options.sourceSessionId && restoreFailures.length) throw new Error(`研究记录复制未完整恢复：${restoreFailures.join("; ")}`);
-        let frozenBytes: Uint8Array = bytes;
+        let frozenBytes: Uint8Array | undefined = pkg.bytes;
+        let frozenFile: string | undefined = pkg.packageFile;
         let frozenChecksum = imported.receipt.packageChecksum;
         if (options.sourceSessionId) {
           const captured = await buildResearchPackageInput(projectId, undefined, "complete", undefined, new Set(restoredSessionIds));
@@ -1271,11 +1308,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           const frozen = researchPackageProvider.export({ ...captured, omissions, exportProfile: sourceProfile,
             records: { ...captured.records as Record<string, unknown>, exportLevel: sourceProfile?.level, exportProfile: sourceProfile } });
           frozenBytes = frozen.bytes;
+          frozenFile = undefined;
           frozenChecksum = frozen.receipt.packageChecksum;
         }
-        // A read-only import already has an immutable, checksummed package.
-        // Reusing its bytes avoids rebuilding and recompressing a large archive.
-        await writeFile(resolve(root, "snapshot.sdresearch"), frozenBytes, { flag: "wx" });
+        // A read-only import already has an immutable, checksummed package on disk:
+        // copying it keeps the snapshot byte-identical without holding it in memory.
+        if (frozenFile) await copyFile(frozenFile, resolve(root, "snapshot.sdresearch"), fsConstants.COPYFILE_EXCL);
+        else await writeFile(resolve(root, "snapshot.sdresearch"), frozenBytes!, { flag: "wx" });
         const continuationAvailable = restoreFailures.length === 0;
         const result = {
           ...imported.receipt,
@@ -1309,11 +1348,11 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
   };
 
   const activeImports = new Set<string>();
-  const persistImportedResearchPackage = async (projectId: string, sessionId: string | undefined, bytes: Buffer, imported?: ImportedResearchPackage) => {
+  const persistImportedResearchPackage = async (projectId: string, sessionId: string | undefined, source: Buffer | ImportedPackageSource) => {
     const key = sessionId ?? projectId;
     if (activeImports.has(key)) throw new SessionStoreHttpError("Research package import is already in progress", 409);
     activeImports.add(key);
-    try { return await restorePackage(projectId, sessionId, bytes, { operationId: randomUUID(), imported }); }
+    try { return await restorePackage(projectId, sessionId, source, { operationId: randomUUID() }); }
     finally { activeImports.delete(key); }
   };
   const continuations = createContinuationOperations({ store, memoryGraphClient }, restorePackage,

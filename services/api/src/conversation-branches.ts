@@ -251,7 +251,9 @@ export async function buildConversationBranch(
   while (queue.length) {
     const ref = queue.shift()!;
     const object = objects.get(ref.digest.slice(7));
-    if (!object || !ref.mediaType.includes("json")) continue;
+    // A branch is built from a resident package; a streamed source only appears on
+    // the background-export path, which never branches a conversation.
+    if (!object || !("bytes" in object) || !object.bytes || !ref.mediaType.includes("json")) continue;
     try {
       for (const child of versionRefs(JSON.parse(Buffer.from(object.bytes).toString("utf8")))) {
         const key = `${child.pool}:${child.digest}`;

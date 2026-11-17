@@ -1,8 +1,10 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { Writable } from "node:stream";
 
 export type ResearchPackageExportOptions = {
   projectId: string;
@@ -35,7 +37,7 @@ export class ResearchPackageExports {
   constructor(
     private readonly root: string,
     private readonly currentRevision: (projectId: string, sessionId?: string) => Promise<string>,
-    private readonly createPackage: (options: ResearchPackageExportOptions) => Promise<Uint8Array>,
+    private readonly createPackage: (options: ResearchPackageExportOptions, destination: Writable) => Promise<void>,
     private readonly now: () => number = () => Date.now(),
   ) {}
 
@@ -118,6 +120,7 @@ export class ResearchPackageExports {
     // from another tick, so the narrowed type is simply wrong here.
     const canceled = (): boolean => task.status === "canceled";
     const stopCanceled = (): void => { task.updatedAt = this.timestamp(); };
+    let outputPath: string | undefined;
     try {
       // A queued task cancelled before it reached the head of the queue must
       // not spend work on packaging: it was already answered "canceled".
@@ -126,21 +129,28 @@ export class ResearchPackageExports {
       const before = await this.currentRevision(options.projectId, options.sessionId);
       if (canceled()) { stopCanceled(); return; }
       if (before !== options.revision) throw new Error("会话内容已更新，请使用最新大小预览重新导出。");
-      const bytes = await this.createPackage(options);
-      // Cancellation requested while createPackage was running: drop the
-      // produced archive instead of persisting it.
-      if (canceled()) { stopCanceled(); return; }
+      // Stream straight into the task's own file: the archive is never held in memory,
+      // so a cancellation drops a partial file instead of discarding a buffer.
+      outputPath = resolve(this.root, `${task.id}.sdresearch`);
+      await this.createPackage(options, createWriteStream(outputPath, { flags: "wx" }));
+      // Cancellation requested while createPackage was running: drop the produced
+      // archive instead of persisting it.
+      if (canceled()) { await rm(outputPath, { force: true }); stopCanceled(); return; }
       const after = await this.currentRevision(options.projectId, options.sessionId);
-      if (canceled()) { stopCanceled(); return; }
-      if (after !== options.revision) throw new Error("导出期间会话内容发生变化，请基于最新内容重新导出。");
-      const outputPath = resolve(this.root, `${task.id}.sdresearch`);
-      await writeFile(outputPath, bytes, { flag: "wx" });
+      if (canceled()) { await rm(outputPath, { force: true }); stopCanceled(); return; }
+      if (after !== options.revision) {
+        await rm(outputPath, { force: true });
+        throw new Error("导出期间会话内容发生变化，请基于最新内容重新导出。");
+      }
       // A cancel can land while the final write is in flight; committing
       // "completed" unconditionally would keep and advertise an archive the
       // user cancelled, so drop it and stay cancelled.
       if (canceled()) { await rm(outputPath, { force: true }); stopCanceled(); return; }
       task.status = "completed"; task.outputPath = outputPath; task.updatedAt = this.timestamp();
     } catch (reason) {
+      if (outputPath) await rm(outputPath, { force: true }).catch(() => undefined);
+      // A partial archive is never a download: a streaming writer that failed halfway
+      // leaves a truncated file, so drop it before reporting the failure.
       // A user cancellation wins over a packaging failure (the failure may be
       // the direct result of tearing the work down).
       if (canceled()) { stopCanceled(); }

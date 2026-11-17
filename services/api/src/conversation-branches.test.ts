@@ -122,15 +122,23 @@ test("a branch carries only the searches that finished at or before its reply", 
 
 test("fork recovers a historical file by its exact CAS hash", async () => {
   const { input, source, oldHash } = branchFixture();
+  // A branch is built from a resident package, so every object here has its bytes;
+  // the streamed form belongs to the background export (#1152 stage 2).
+  const bytesOf = (object: unknown): Uint8Array => {
+    const bytes = (object as { bytes?: Uint8Array } | undefined)?.bytes;
+    assert.ok(bytes, "a resident package object carries its bytes");
+    return bytes;
+  };
   const original = input.objects!.find((object) => object.path.replace(/^objects\//, "") === oldHash)!;
+  const originalBytes = bytesOf(original);
   input.objects = input.objects!.filter((object) => object !== original);
   const reads: string[] = [];
   const output = await buildConversationBranch(input, source.session.id, "fixture-answer", async (hash) => {
-    reads.push(hash); assert.equal(hash, oldHash); return original.bytes;
+    reads.push(hash); assert.equal(hash, oldHash); return originalBytes;
   }, countExport);
   assert.deepEqual(reads, [oldHash]);
   assert.equal((output.records as Records).sessions[0]!.workspace[0]!.objectPath, oldHash);
-  assert.deepEqual(output.objects!.find((object) => object.path === oldHash)!.bytes, original.bytes);
+  assert.deepEqual(bytesOf(output.objects!.find((object) => object.path === oldHash)!), originalBytes);
 });
 
 test("missing historical file payload is disclosed instead of substituting the latest file", async () => {

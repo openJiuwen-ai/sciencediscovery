@@ -16,7 +16,8 @@ import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./er
 import { randomUUID } from "node:crypto";
 import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { testProxyConnectivity } from "../proxy-connectivity.js";
-import { createResearchSnapshots } from "../research-snapshots.js";
+import { createResearchSnapshots, type ImportedPackageSource } from "../research-snapshots.js";
+import { assertResearchPackageExportCapacity, assertResearchPackageRestoreCapacity, assertResearchPackageUploadCapacity, measureResearchPackageCapacity, researchPackageBudgetRefusal, researchPackageUnpackBudget, restoreSizeOf } from "../research-package-preflight.js";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { prepareSkillSandbox } from "../skill-sandbox.js";
@@ -25,10 +26,10 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
 import { handlePluginRequest } from "../plugins/http.js";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
-import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_TOO_LARGE_CODE, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, createResearchPackageAsync, researchPackageUploadBytes, type ImportedResearchPackage } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_TOO_LARGE_CODE, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, createResearchPackageAsync, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE, importResearchPackageStreamed, researchPackageUploadBytes, type ImportedResearchPackage } from "@sciencediscovery/research-package";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { sessionTrajectory, trajectoryMaxEvents } from "../trajectory.js";
@@ -38,7 +39,12 @@ import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-setti
 import { dirname, join, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
-type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
+type ResearchPackageInspectionCacheEntry = {
+  projectId: string; directory: string; packageFile: string; sizeBytes: number;
+  imported: ImportedResearchPackage; expiresAt: number;
+  /** An import is reading this directory: eviction must not delete it under that read. */
+  pinned: number;
+};
 const researchPackageInspectionCache = new Map<string, ResearchPackageInspectionCacheEntry>();
 const RESEARCH_PACKAGE_INSPECTION_CACHE_TTL_MS = 10 * 60_000;
 // The upload carries the compressed archive. Compression never makes the bytes
@@ -58,10 +64,10 @@ const RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES = RESEARCH_PACKAGE_UPLOAD_MAX_
 let researchPackageInspectionCacheBytes = 0;
 
 function inspectedResearchPackageCacheBytes(entry: ResearchPackageInspectionCacheEntry): number {
-  // The compressed upload and the decompressed tar-backed views are both kept
-  // alive until import or expiry, so count both against the process budget.
+  // The compressed upload on disk and the decompressed objects behind it are both
+  // kept alive until import or expiry, so count both against the process budget.
   const unpacked = entry.imported.manifest.inventory.reduce((total, item) => total + item.sizeBytes, 0);
-  return entry.bytes.byteLength + unpacked;
+  return entry.sizeBytes + unpacked;
 }
 
 function removeInspectedResearchPackage(key: string): void {
@@ -69,18 +75,32 @@ function removeInspectedResearchPackage(key: string): void {
   if (!entry) return;
   researchPackageInspectionCache.delete(key);
   researchPackageInspectionCacheBytes -= inspectedResearchPackageCacheBytes(entry);
+  // A pinned entry is being imported: the importer owns the directory now and deletes
+  // it when the restore finishes.
+  if (entry.pinned > 0) return;
+  // The cache owns the upload directory; dropping the entry drops its files.
+  void rm(entry.directory, { recursive: true, force: true }).catch(() => undefined);
 }
 
-function cacheInspectedResearchPackage(projectId: string, checksum: string, bytes: Buffer, imported: ImportedResearchPackage): void {
+/** A private directory for one upload: the compressed package plus its unpacked objects. */
+async function createResearchPackageUpload(dataDir: string, purpose: string): Promise<{ directory: string; packageFile: string }> {
+  const root = resolve(dataDir, "research-package-uploads");
+  await mkdir(root, { recursive: true });
+  const directory = await mkdtemp(resolve(root, `${purpose}-`));
+  return { directory, packageFile: resolve(directory, "package.sdresearch") };
+}
+
+function cacheInspectedResearchPackage(projectId: string, checksum: string,
+  upload: { directory: string; packageFile: string; sizeBytes: number }, imported: ImportedResearchPackage): boolean {
   const now = Date.now();
   for (const [key, entry] of researchPackageInspectionCache) if (entry.expiresAt <= now) removeInspectedResearchPackage(key);
   // Keep at most one large upload alive per project. The cache only bridges the
   // review and import requests made by the evidence-package dialog.
   for (const [key, entry] of researchPackageInspectionCache) if (entry.projectId === projectId && key !== checksum) removeInspectedResearchPackage(key);
   removeInspectedResearchPackage(checksum);
-  const entry = { projectId, bytes, imported, expiresAt: now + RESEARCH_PACKAGE_INSPECTION_CACHE_TTL_MS };
+  const entry = { projectId, ...upload, imported, expiresAt: now + RESEARCH_PACKAGE_INSPECTION_CACHE_TTL_MS, pinned: 0 };
   const size = inspectedResearchPackageCacheBytes(entry);
-  if (size > RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES) return;
+  if (size > RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES) return false;
   while (researchPackageInspectionCacheBytes + size > RESEARCH_PACKAGE_INSPECTION_CACHE_MAX_BYTES) {
     const oldest = researchPackageInspectionCache.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -88,6 +108,7 @@ function cacheInspectedResearchPackage(projectId: string, checksum: string, byte
   }
   researchPackageInspectionCache.set(checksum, entry);
   researchPackageInspectionCacheBytes += size;
+  return true;
 }
 
 import {
@@ -325,7 +346,7 @@ import { modelUsageAnalyticsToCsv } from "../model-usage.js";
 import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
-import { readBytes, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
+import { readBytes, readBytesToFile, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
@@ -1396,6 +1417,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if ((sized.archiveBytes ?? 0) > sizeCap)
             return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
           try {
+            assertResearchPackageExportCapacity(await measureResearchPackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+          } catch (error) {
+            return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+              (error as { code?: string }).code);
+          }
+          try {
             const task = await packageExports.start({
               projectId, sessionId, level: body.level,
               selectedFiles: body.filePaths as string[] | undefined,
@@ -1504,19 +1531,50 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         if (request.method === "POST" && researchPackageMatch[2] === "inspect") {
-          const bytes = await readBytes(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package");
-          const imported = researchPackageProvider.importReadOnly(bytes);
-          const inspection = {
-            manifest: imported.manifest,
-            packageChecksum: imported.receipt.packageChecksum,
-            files: imported.manifest.inventory,
-            recordsBytes: imported.receipt.importedRecordBytes,
-            objectCount: imported.receipt.importedObjectCount,
-            totalBytes: imported.manifest.inventory.reduce((sum, entry) => sum + entry.sizeBytes, 0),
-            valid: true as const,
-          };
-          cacheInspectedResearchPackage(projectId, inspection.packageChecksum, bytes, imported);
-          sendJson(response, 200, inspection);
+          // The archive lands on disk as it arrives and is parsed from there, so an
+          // upload never becomes one resident buffer (#1152 stage 2).
+          const upload = await createResearchPackageUpload(store.dataDir, "research-package-inspect");
+          try {
+            await readBytesToFile(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package", upload.packageFile);
+            // Bound the unpacking by the disk the restore can hold, so a highly
+            // compressible archive is refused before it fills the volume.
+            const opening = await measureResearchPackageCapacity(store.dataDir);
+            const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES);
+            const imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
+              objectDirectory: resolve(upload.directory, "objects"),
+              maxBytes: unpackBudget,
+            });
+            // An inspect writes nothing after this point: the unpacked objects are the
+            // ones the parser already wrote, and the upload file is the one it read.
+            // Its disk was bounded by `researchPackageUnpackBudget` above, so charging
+            // the restore's two remaining copies here would refuse a package that fits
+            // (#1200 review 3).
+            const inspection = {
+              manifest: imported.manifest,
+              packageChecksum: imported.receipt.packageChecksum,
+              files: imported.manifest.inventory,
+              recordsBytes: imported.receipt.importedRecordBytes,
+              objectCount: imported.receipt.importedObjectCount,
+              totalBytes: imported.manifest.inventory.reduce((sum, entry) => sum + entry.sizeBytes, 0),
+              valid: true as const,
+            };
+            const { size } = await stat(upload.packageFile);
+            if (!cacheInspectedResearchPackage(projectId, inspection.packageChecksum, { ...upload, sizeBytes: size }, imported))
+              await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+            sendJson(response, 200, inspection);
+          } catch (error) {
+            // The streamed parse stops at the measured free-disk budget: that is a disk
+            // answer, not an internal failure. Measure before dropping the staged upload,
+            // so the message compares what the package needs with the space it met.
+            if ((error as { code?: string }).code === RESEARCH_PACKAGE_UNPACK_BUDGET_CODE) {
+              const capacity = await measureResearchPackageCapacity(store.dataDir);
+              await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+              const refusal = researchPackageBudgetRefusal((error as { unpackedBytes?: number }).unpackedBytes ?? 0, capacity.freeDiskBytes);
+              return sendError(response, 507, refusal.message, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE);
+            }
+            await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+            throw error;
+          }
           return;
         }
         if (request.method === "POST" && researchPackageMatch[2] === "import") {
@@ -1525,11 +1583,66 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const reusable = cached && cached.projectId === projectId && cached.expiresAt > Date.now() ? cached : undefined;
           if (cached && cached.expiresAt <= Date.now()) removeInspectedResearchPackage(checksum!);
           if (checksum && !reusable && Number(request.headers["content-length"] ?? "0") === 0) return sendError(response, 409, "Inspected package expired; upload it again");
-          const bytes = reusable
-            ? reusable.bytes
-            : await readBytes(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package");
-          if (reusable) removeInspectedResearchPackage(checksum!);
-          sendJson(response, 201, await persistImportedResearchPackage(projectId, sessionId, bytes, reusable?.imported));
+          if (!reusable) {
+            // Refuse before a long upload when the machine cannot hold the work, and
+            // say what is missing rather than failing halfway through the restore.
+            try {
+              assertResearchPackageUploadCapacity(await measureResearchPackageCapacity(store.dataDir),
+                Number(request.headers["content-length"] ?? "0"));
+            } catch (error) {
+              return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+                (error as { code?: string }).code);
+            }
+          }
+          let source: ImportedPackageSource;
+          let owned: string | undefined;
+          let imported: ImportedResearchPackage;
+          if (reusable) {
+            // Pin the upload for this import: another inspect would evict the entry and
+            // delete the directory the restore is still reading (#1200 review 6).
+            reusable.pinned += 1;
+            removeInspectedResearchPackage(checksum!);
+            owned = reusable.directory;
+            imported = reusable.imported;
+            source = { imported, packageFile: reusable.packageFile };
+          } else {
+            const upload = await createResearchPackageUpload(store.dataDir, "research-package-import");
+            owned = upload.directory;
+            try {
+              await readBytesToFile(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package", upload.packageFile);
+              const opening = await measureResearchPackageCapacity(store.dataDir);
+              imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
+                objectDirectory: resolve(upload.directory, "objects"),
+                maxBytes: researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES),
+              });
+              source = { imported, packageFile: upload.packageFile };
+            } catch (error) {
+              if ((error as { code?: string }).code === RESEARCH_PACKAGE_UNPACK_BUDGET_CODE) {
+                const capacity = await measureResearchPackageCapacity(store.dataDir);
+                await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+                const refusal = researchPackageBudgetRefusal((error as { unpackedBytes?: number }).unpackedBytes ?? 0, capacity.freeDiskBytes);
+                return sendError(response, 507, refusal.message, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE);
+              }
+              await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+              throw error;
+            }
+          }
+          try {
+            // The compressed upload says nothing about the unpacked work: check what the
+            // restore will write and hold now that the archive has been parsed.
+            try {
+              assertResearchPackageRestoreCapacity(await measureResearchPackageCapacity(store.dataDir),
+                restoreSizeOf(imported.manifest.inventory, imported.receipt.importedRecordBytes));
+            } catch (error) {
+              return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+                (error as { code?: string }).code);
+            }
+            sendJson(response, 201, await persistImportedResearchPackage(projectId, sessionId, source));
+          } finally {
+            // The restore has already copied the archive into its snapshot and read
+            // every object it needed, so the upload is disposable now.
+            if (owned) await rm(owned, { recursive: true, force: true }).catch(() => undefined);
+          }
           return;
         }
         return sendError(response, 405, "Unsupported research package operation");
