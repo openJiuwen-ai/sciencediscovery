@@ -14,7 +14,7 @@
 
 import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { RunnerUnavailableError } from "./runner-readiness.js";
+import { RunnerUnavailableError, runnerBlockedModelText } from "./runner-readiness.js";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -1794,7 +1794,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       try { return await execute(...args); }
       catch (error) {
         if (!(error instanceof RunnerUnavailableError)) throw error;
-        return { isError: true, content: [{ type: "text", text: JSON.stringify(error.result) }], details: error.result };
+        return { isError: true, content: [{ type: "text", text: runnerBlockedModelText(error.result) }], details: error.result };
       }
     };
     tools.push(runShell);
