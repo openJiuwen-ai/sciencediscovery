@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import {
-  assertResearchPackageExportCapacity, assertResearchPackageRestoreCapacity, assertResearchPackageUploadCapacity,
-  measureResearchPackageCapacity, researchPackageBudgetRefusal, researchPackageExportRequirement, researchPackageRestoreRequirement,
+  assertResearchPackageExportCapacity, assertResearchPackageResponseExportCapacity, assertResearchPackageRestoreCapacity, assertResearchPackageUploadCapacity,
+  measureResearchPackageCapacity, researchPackageBudgetRefusal, researchPackageExportRequirement, researchPackageResponseExportRequirement, researchPackageRestoreRequirement,
   researchPackageUnpackBudget, researchPackageUploadRequirement, restoreSizeOf,
   RESEARCH_PACKAGE_DISK_CODE, RESEARCH_PACKAGE_MEMORY_CODE,
 } from "./research-package-preflight.js";
@@ -24,6 +24,29 @@ test("an export is charged the archive it writes, not the copies a restore adds"
   assert.throws(() => assertResearchPackageExportCapacity(CAPACITY(1024 * MIB), 1.5 * 1024 * MIB),
     (error: NodeJS.ErrnoException) => error.code === RESEARCH_PACKAGE_DISK_CODE);
   assert.equal(researchPackageExportRequirement(-1).diskBytes, 0, "an unknown size asks for nothing");
+});
+
+test("the response export is charged no disk because it writes the client's bytes", () => {
+  // The synchronous route streams into the HTTP response; nothing lands under dataDir,
+  // so a short data volume must not refuse a download the client has room for
+  // (#1216 review 1).
+  const size = 4 * 1024 * MIB;
+  assert.equal(researchPackageResponseExportRequirement(size).diskBytes, 0);
+  assert.equal(researchPackageResponseExportRequirement(size).memoryBytes, 512 * MIB + 256 * MIB);
+  assert.doesNotThrow(() => assertResearchPackageResponseExportCapacity(CAPACITY(0), size));
+  // Memory still bounds it: the writer holds one object at a time.
+  assert.throws(() => assertResearchPackageResponseExportCapacity(CAPACITY(0, 100 * MIB), size),
+    (error: NodeJS.ErrnoException) => error.code === RESEARCH_PACKAGE_MEMORY_CODE);
+});
+
+test("an inspect unpacks one copy where a restore adds three", () => {
+  const free = 12 * 1024 * MIB;
+  const unpacked = Math.floor(3.8 * 1024 * MIB);
+  // Restore: upload + snapshot objects + CAS blobs + workspace files = four copies.
+  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB) < unpacked,
+    "the restore budget must stay conservative");
+  // Inspect: the upload plus the one copy it unpacks, so it fits (#1216 review 3).
+  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB, 1) >= unpacked);
 });
 
 test("the upload check only stages the compressed file", () => {

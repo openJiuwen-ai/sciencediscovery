@@ -1086,11 +1086,29 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           }
           // Names only: the earlier version read every workspace object here, so a whole
           // session's workspace was resident before the first file was written (#1211 F1).
-          const workspaceEntries = (source?.workspace ?? []).flatMap((file) => {
+          // A legacy package leaves `objectPath` off the records row and only names it in
+          // the manifest, so both are consulted; without that the file was neither
+          // restored nor reported.
+          const manifestWorkspaceObjects = new Map<string, string>();
+          for (const file of (imported.manifest.source as { workspace?: Array<{ path?: string; objectPath?: string }> }).workspace ?? []) {
             const objectPath = file.objectPath?.replace(/^objects\//, "");
+            if (file.path && objectPath) manifestWorkspaceObjects.set(file.path, objectPath);
+          }
+          const workspaceEntries = (source?.workspace ?? []).flatMap((file) => {
+            const objectPath = file.objectPath?.replace(/^objects\//, "") ?? manifestWorkspaceObjects.get(file.path);
             return objectPath ? [{ file, objectPath }] : [];
           });
-          if (workspaceEntries.some((entry) => imported.objects.has(entry.objectPath))) {
+          // Every unresolved entry is an omission, even when none resolves: a package whose
+          // workspace digests the archive does not carry must be refused by the fatal
+          // omission rule, not silently import an empty workspace. Gating the omission
+          // push on "some object is present" lost that case (#1216 review 2).
+          const presentObjects = new Set(workspaceEntries
+            .filter((entry) => imported.objects.has(entry.objectPath))
+            .map((entry) => entry.objectPath));
+          for (const { file, objectPath } of workspaceEntries) {
+            if (!presentObjects.has(objectPath)) omissions.push(`workspace:${target.id}:${file.path}:missing object`);
+          }
+          if (presentObjects.size) {
             const workspaceRoot = store.workspacePath(target.id);
             // Acquire the workspace mutation lease once per restored session.
             // Large evidence packages often contain many files; taking the
@@ -1100,10 +1118,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
               const revisions: Array<Parameters<typeof store.recordWorkspaceFileRevisions>[1][number]> = [];
               for (const { file, objectPath } of workspaceEntries) {
                 const object = imported.objects.get(objectPath);
-                if (!object) {
-                  omissions.push(`workspace:${target.id}:${file.path}:missing object`);
-                  continue;
-                }
+                // The pre-pass above already recorded this entry's omission; reading can
+                // still fail if the unpacked file vanished, which throws instead.
+                if (!object) continue;
                 const targetPath = resolveWorkspaceFile(workspaceRoot, file.path);
                 await mkdir(dirname(targetPath), { recursive: true });
                 await writeFile(targetPath, object);

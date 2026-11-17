@@ -22,6 +22,20 @@ export function researchPackageExportRequirement(bytes: number): { diskBytes: nu
   return { diskBytes: safe, memoryBytes: Math.min(safe, 512 * 1024 * 1024) + 256 * 1024 * 1024 };
 }
 
+/**
+ * What the synchronous export writes: the HTTP response, and no disk at all.
+ *
+ * That route streams tar -> gzip straight into `ServerResponse`, and the volume
+ * the bytes land on is the client's, not `store.dataDir`'s. Charging an archive
+ * here refused exports that need no space on this machine — a 4 GiB package on a
+ * volume with 3 GiB free is exactly the multi-GiB case the streaming path exists
+ * for (#1216 review 1). Only the memory headroom applies: the writer still holds
+ * one object at a time.
+ */
+export function researchPackageResponseExportRequirement(bytes: number): { diskBytes: number; memoryBytes: number } {
+  return { diskBytes: 0, memoryBytes: researchPackageExportRequirement(bytes).memoryBytes };
+}
+
 /** What an upload needs before anything is parsed: the staged compressed file. */
 export function researchPackageUploadRequirement(bytes: number): { diskBytes: number; memoryBytes: number } {
   const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
@@ -42,6 +56,11 @@ function refusal(code: string, message: string): Error {
  */
 export function assertResearchPackageExportCapacity(capacity: PackageCapacity, archiveBytes: number): void {
   assertCapacity(capacity, researchPackageExportRequirement(archiveBytes));
+}
+
+/** The response route writes no disk, so only its memory headroom is charged. */
+export function assertResearchPackageResponseExportCapacity(capacity: PackageCapacity, archiveBytes: number): void {
+  assertCapacity(capacity, researchPackageResponseExportRequirement(archiveBytes));
 }
 
 /** The upload is the first bound a client meets; it only stages the compressed file. */
@@ -107,17 +126,20 @@ export function assertResearchPackageRestoreCapacity(capacity: PackageCapacity, 
 }
 
 /**
- * The unpacked budget the free disk can hold, given the copies a restore adds.
+ * The unpacked budget the free disk can hold, given the copies the route adds.
  *
- * The upload itself is one copy, and the restore adds three more — snapshot objects, CAS
- * blobs and workspace files — so `free / 4` is the size that keeps the later restore
- * check satisfiable (#1211 F5). The bound has to reach the parser itself: checking only
- * after the unpacking finishes would let a highly compressible archive fill the disk
- * before the check runs.
+ * The upload itself is one copy, and a restore adds three more — snapshot objects,
+ * CAS blobs and workspace files — so `free / 4` is the size that keeps the later
+ * restore check satisfiable (#1211 F5). An inspect unpacks one copy and writes
+ * nothing else, so it passes `copies: 1` and gets `free / 2`; sharing the restore
+ * budget refused an inspect whose objects fit (#1216 review 3). The bound has to
+ * reach the parser itself: checking only after the unpacking finishes would let a
+ * highly compressible archive fill the disk before the check runs.
  */
-export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number): number {
+export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number, copies = 3): number {
   if (!Number.isFinite(capacity.freeDiskBytes)) return ceiling;
-  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / 4)));
+  const perCopy = Math.max(1, Math.floor(copies) + 1);
+  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / perCopy)));
 }
 
 /** Derive the restore's size from a parsed package's inventory. */
