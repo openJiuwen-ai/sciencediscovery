@@ -411,6 +411,67 @@ test("a refusal names what to change, because its reader is the designer", async
   }
 });
 
+test("directed fields require a JSON starting point for custom scripts", async () => {
+  const { deps: d } = deps();
+  const result = await startProposedRun(proposal({
+    mode: "custom_script",
+    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
+    editableFields: ["equation"],
+  }), d);
+
+  assert.match(result.refusedBecause ?? "", /requires a JSON object starting point/);
+});
+
+test("custom scripts preserve directed fields for a confirmed JSON baseline", async () => {
+  let captured: EvolveGoal | undefined;
+  const { deps: d } = deps({
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "x", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async (input: { goal: EvolveGoal }) => {
+        captured = input.goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+  const result = await startProposedRun(proposal({
+    mode: "custom_script",
+    startingPointPath: undefined,
+    startingPointText: '{"equation":"linear","fixed":1}',
+    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
+    editableFields: ["equation"],
+  }), d);
+
+  assert.equal(result.refusedBecause, undefined);
+  assert.deepEqual(captured?.scorecard.direction, { editable: ["equation"] });
+});
+
+test("custom scripts accept directed fields from a workspace JSON baseline", async () => {
+  let captured: EvolveGoal | undefined;
+  const { deps: d, stored } = deps({
+    readText: async () => '{"equation":"linear","fixed":1}',
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "x", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async (input: { goal: EvolveGoal }) => {
+        captured = input.goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+  const result = await startProposedRun(proposal({
+    mode: "custom_script",
+    startingPointPath: "/workspace/evolve_ode/baseline.json",
+    startingPointText: undefined,
+    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
+    editableFields: ["equation"],
+  }), d);
+
+  assert.equal(result.refusedBecause, undefined);
+  assert.equal(stored[0]?.path, "evolve_ode/baseline.json");
+  assert.deepEqual(captured?.scorecard.direction, { editable: ["equation"] });
+});
+
 test("an evaluator too large to write inline can be pointed at, and its bytes are what runs", async () => {
   const source = 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n';
   const calls: Array<{ content?: string; path?: string }> = [];

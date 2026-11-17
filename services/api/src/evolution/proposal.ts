@@ -354,6 +354,17 @@ function shapeOfSearchTuning(search: EvolveSearchTuning | undefined): string | u
   return undefined;
 }
 
+function hasJsonObjectStartingPoint(text: string | undefined): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed) return false;
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 function shapeOf(proposal: EvolveRunProposal): string | undefined {
   const needsStart = proposal.mode !== "test_gate";
   if (needsStart && !proposal.startingPointPath && !proposal.startingPointText?.trim()) {
@@ -469,6 +480,24 @@ async function assembleGoal(
       ? await storePath(deps, "startingPointPath", proposal.startingPointPath)
       : await deps.store({ content: proposal.startingPointText! });
 
+  // Validate the bytes that the run will actually execute. A starting point
+  // can come from either inline text or a workspace path; checking only the
+  // proposal text rejects valid JSON files and would let a later file change
+  // alter what the directed search starts from.
+  if (proposal.mode !== "test_gate" && proposal.editableFields?.length) {
+    let text: string;
+    try {
+      text = await deps.readText(startCas);
+    } catch (error) {
+      throw new ProposalRefusal(`the starting point was stored but cannot be read back: ${
+        error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!hasJsonObjectStartingPoint(text)) {
+      throw new ProposalRefusal("editableFields requires a JSON object starting point; directed candidates without one "
+        + "cannot use directed-search fields");
+    }
+  }
+
   // The scoring definition goes into the store and into `frozen`, which is what
   // stops a candidate rewriting what marks it. Same treatment for a rubric and
   // an evaluator: both are the scoring, in different languages.
@@ -534,7 +563,8 @@ async function assembleGoal(
       derivedFrom: { draftRunId: "", statement: proposal.statement },
       hash: `sha256:agent-${proposal.mode}-${(scoringCas || startCas).slice(-12)}-${split.seed}`,
       schemaVersion: 1,
-      ...(proposal.editableFields?.length ? { direction: { editable: proposal.editableFields } } : {}),
+      ...(proposal.editableFields?.length
+        ? { direction: { editable: proposal.editableFields } } : {}),
       // A graded scorer rarely reaches 0.999, and at the default every rollout
       // asks for a proposal and the run reports below-threshold — which reads
       // as the reflector failing when nothing was ever counted as done. The

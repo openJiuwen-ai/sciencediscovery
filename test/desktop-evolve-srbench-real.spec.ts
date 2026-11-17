@@ -84,7 +84,8 @@ problem_seconds=20；candidate_timeout=120。
 algorithm=puct
 expansions=24
 workers=3
-thinking=disabled
+thinking=enabled
+thinking_effort=low
 search.cPuct=1.0
 priorExponent 省略
 split: gateShards=8, rolloutShards=4, testShards=2, seed=0
@@ -92,6 +93,12 @@ split: gateShards=8, rolloutShards=4, testShards=2, seed=0
 packages=["numpy","scipy"]
 temperature=0.7, max_tokens=12000, reply_attempts=4, staleness=guarded
 模型偏好 deepseek-v4-flash
+
+【运行边界】
+运行时和依赖已经由测试栈准备好。不要安装 pip、执行 get-pip.py 或联网下载依赖；
+可以用 read_file/list_files 读取工作区中已经预置的数据文件并按 evolve-design skill 完成 evaluator 设计；
+不要调用 run_shell、安装依赖、执行临时 Python 或 shell 评分脚本，也不要新建 evaluator.py 或复制评分器；
+由 create_evolve_run 的 packages 提供依赖，完成设计后立即调用它。
 
 【验收对照】
 记录：linear baseline digits≈1.58 → best digits=12、acc=1。你的 run 在 id_test 上报告同样指标。”`;
@@ -109,7 +116,8 @@ const CONTINUATION = "你决定，按文档推荐规模直接跑；使用 PUCT�
  * second "you decide" invites the same. A person watching it would stop the
  * checking and say start with what is in the workspace.
  */
-const START_NOW = "不要再核对评估器或候选程序的细节，用工作区里现有的 evaluator 和 candidate 立即调用 create_evolve_run，"
+const START_NOW = "不要再核对评估器或候选程序的细节，也不要调用 run_shell 做临时 Python 验证；"
+  + "用工作区里现有的 evaluator 和 candidate 立即调用 create_evolve_run，"
   + "按文档推荐规模启动 lsr_transform_i.34.1_2_0 的 PUCT 搜索。只跑这一道题。";
 
 /**
