@@ -132,8 +132,8 @@ export function App({ initialToken }: Props) {
   const [linkedArtifactId, setLinkedArtifactId] = useState<string | undefined>();
   /** The task sidebar folds away; the conversation's does too when the panel
    *  needs the room. */
-  // The permission mode new conversations inherit: the reader's last choice in this
-  // window, never persisted and never applied to a session that already exists (#1204).
+  // The permission mode new conversations inherit: the reader's last choice, stored so
+  // it survives a restart, and never applied to a session that already exists (#1204).
   const [lastApprovalMode, setLastApprovalMode] = useState(inheritedApprovalMode());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [workspaceOpen, setWorkspaceOpen] = useState(() =>
@@ -929,7 +929,10 @@ export function App({ initialToken }: Props) {
     // nothing else to read it from.
     rememberApprovalMode(mode);
     setLastApprovalMode(mode);
-    if (state.detail) void actions.setApprovalMode(mode);
+    // Unconditional: the action itself is a no-op without an open session, while
+    // `state.detail` is cleared during a read, so guarding on it loses the choice
+    // made in that window.
+    void actions.setApprovalMode(mode);
   },
     onClearAttachments: actions.clearAttachments,
     onClearCommand: () => setSeededCommand(undefined),
