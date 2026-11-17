@@ -1443,7 +1443,11 @@ function createWindow(): void {
   });
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
     logToDisk(`[renderer:gone] reason=${details.reason} exitCode=${details.exitCode ?? ""}`);
+    // The renderer will never send its own streamAbort: close every open export and
+    // delete the partial archive (#1216 F5).
+    exportStreams.abortAll();
   });
+  mainWindow.webContents.on("destroyed", () => { exportStreams.abortAll(); });
   // First-run race: the health gate watches the control API (4410), but the
   // ui origin (4310 adapter) binds several seconds later on cold machines —
   // the first loadURL died with ERR_CONNECTION_REFUSED and the window sat
@@ -2095,6 +2099,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", event => {
+  // An export still streaming when the app quits leaves no one to finish it: drop the
+  // partial archives rather than keep a truncated file (#1216 F5).
+  exportStreams.abortAll();
   stopConsoleSweep();
   clearAgentWatch();
   stackDeathWatchSeq += 1; // quitting stops the owned stack on purpose, not a crash

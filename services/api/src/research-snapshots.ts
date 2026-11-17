@@ -410,6 +410,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       return path;
     };
     const addObjectSource = async (hash: string, kind: "artifact" | "evidence" | "log" | "other") => {
+      // Dedupe before anything else: a reference already in the inventory must not be
+      // probed again (#1216 F1).
+      if (objects.has(hash)) return hash;
       // A lazy source has no read to fail in: check the address now, or the miss would
       // surface inside the writer and fail the whole export instead of becoming an
       // omission like the resident path (#1211 F7).
@@ -420,7 +423,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         omissions.push(`cas:${hash}:unavailable source object`);
         return undefined;
       }
-      if (!objects.has(hash)) objects.set(hash, { path: hash, open: () => provenanceRecorder.cas.stream(hash), kind });
+      objects.set(hash, { path: hash, open: () => provenanceRecorder.cas.stream(hash), kind });
       return hash;
     };
     const addFileSource = async (absolutePath: string, kind: "artifact" | "evidence" | "log" | "other") => {
@@ -797,6 +800,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           addPreviewObject(ref.digest.slice(7), size, "log");
           continue;
         }
+        // Version objects are still read whole here: making them lazy changes which
+        // objects a package carries, and the preview/actual parity case rejects the
+        // naive version (#1216 F2, tracked separately).
         const bytes = await versions.read(ref);
         if (previewObjectSizes) addPreviewObject(ref.digest.slice(7), bytes.byteLength, "log");
         else await addObject(bytes, "log");
