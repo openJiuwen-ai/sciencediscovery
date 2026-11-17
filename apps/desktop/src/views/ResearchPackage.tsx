@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
-import { cancelExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, readExportBlob, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
-import { exportHistoryBridge, exportShellBridge, type ExportHistoryRow } from "../app/export-bridge.js";
+import { cancelExport, importPackage, inspectPackage, openExportStream, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
+import { canStreamExport, exportHistoryBridge, exportShellBridge, writeExportStream, type ExportHistoryRow } from "../app/export-bridge.js";
 import { ExportHistoryList } from "./ExportHistoryList.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
@@ -163,11 +163,23 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const persistArchive = useCallback(async (record: ExportRecord) => {
     patchExport(record.id, { phase: "saving" });
     try {
-      const blob = await readExportBlob(client, record.project, record.task);
+      const response = await openExportStream(client, record.project, record.task);
       const bridge = exportShellBridge();
       let savedToken: string | undefined;
-      if (bridge && record.destinationToken) {
-        await bridge.write(record.destinationToken, await blob.arrayBuffer(), {
+      if (bridge && record.destinationToken && canStreamExport(bridge) && response.body) {
+        await writeExportStream(bridge, record.destinationToken, response.body, {
+          level: record.level,
+          projectId: record.project,
+          recordId: record.id,
+          sessionId: record.sessionId,
+          sessionTitle: record.sessionTitle,
+        });
+        savedToken = record.destinationToken;
+        await refreshHistory();
+      } else if (bridge && record.destinationToken) {
+        // An older shell without the streaming channels; the archive arrives as
+        // one buffer, which is what this shell can accept.
+        await bridge.write(record.destinationToken, await (await response.blob()).arrayBuffer(), {
           level: record.level,
           projectId: record.project,
           recordId: record.id,
@@ -177,6 +189,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         savedToken = record.destinationToken;
         await refreshHistory();
       } else {
+        const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a"); anchor.href = url; anchor.download = record.task.filename;
         document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);

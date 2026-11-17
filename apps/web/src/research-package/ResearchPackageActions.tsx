@@ -5,6 +5,7 @@ import type { ResearchPackageExportProfileView as ResearchPackageExportProfile }
 import { trackResearchPackageExport } from "./ResearchPackageExportTasks.js";
 import { ContinueResearchButton } from "./ContinueResearchButton.js";
 import { ExportPreviewCache, PreviewBudgetExpired } from "./export-preview-cache.js";
+import { savePackageResponse } from "./save-stream.js";
 import { ApiRequestError } from "../api/auth.js";
 import { isAbortError } from "../api/client.js";
 import { translateActive, useLocale } from "../i18n/index.js";
@@ -218,8 +219,8 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     setBusy(true); setMessage(undefined); setError(undefined);
     try {
       const safeTitle = sessionTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || t("researchPackage.scientificSession");
-      download(await client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged), `${safeTitle}.sdresearch`);
-      onClose();
+      const outcome = await savePackageResponse(() => client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged), `${safeTitle}.sdresearch`);
+      if (outcome === "saved") onClose();
     }
     catch (reason) { setError(errorText(reason)); } finally { setBusy(false); }
   };

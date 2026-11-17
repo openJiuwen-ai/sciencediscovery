@@ -66,7 +66,11 @@ export class PluginApiClient extends AuthApiClient {
     } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
 
-  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false, allowOverCap = false): Promise<Blob> {
+  /**
+   * Returns the live response instead of a Blob: a 5 GiB archive must reach the
+   * disk through `body`, not through a buffer that has to hold the whole thing.
+   */
+  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false, allowOverCap = false): Promise<Response> {
     const params = new URLSearchParams({ level });
     if (allowOverCap) params.set("allowOverCap", "1");
     if (sessionId) params.set("sessionId", sessionId);
@@ -84,7 +88,7 @@ export class PluginApiClient extends AuthApiClient {
       const payload = await response.json().catch(() => undefined) as { code?: string } | undefined;
       throw new ApiRequestError("Research package export failed", response.status, payload?.code);
     }
-    return response.blob();
+    return response;
   }
 
   startResearchPackageExport(projectId: string, options: {
