@@ -87,16 +87,18 @@ export type PackageRestoreSize = { unpackedBytes: number; largestObjectBytes: nu
 /**
  * What a restore still has to write, from the moment it is checked.
  *
- * The unpacked objects are already on disk — the streamed import wrote them — so only
- * two more copies remain: the snapshot's own object directory and one CAS blob per
- * object. Charging three here double-counted the copy that already exists (#1200
- * review 3). It reads one object at a time, so its memory is the largest single object.
+ * The unpacked objects are already on disk — the streamed import wrote them — and the
+ * restore adds three more copies: the snapshot's object directory, one CAS blob per
+ * object, and the workspace files (plus a version blob per version object, which for the
+ * normal shape equals the object bytes). Two was one short once the workspace write is
+ * counted (#1211 F5). It reads one object at a time, so its memory is the largest single
+ * object.
  */
 export function researchPackageRestoreRequirement(size: PackageRestoreSize): { diskBytes: number; memoryBytes: number } {
   const unpacked = Number.isFinite(size.unpackedBytes) && size.unpackedBytes > 0 ? size.unpackedBytes : 0;
   const records = Number.isFinite(size.recordsBytes) && size.recordsBytes > 0 ? size.recordsBytes : 0;
   const largest = Number.isFinite(size.largestObjectBytes) && size.largestObjectBytes > 0 ? size.largestObjectBytes : 0;
-  return { diskBytes: unpacked * 2 + records, memoryBytes: Math.max(largest, records) + 256 * 1024 * 1024 };
+  return { diskBytes: unpacked * 3 + records, memoryBytes: Math.max(largest, records) + 256 * 1024 * 1024 };
 }
 
 /** The same refusals as `assertResearchPackageCapacity`, measured on what the restore will do. */
@@ -105,17 +107,17 @@ export function assertResearchPackageRestoreCapacity(capacity: PackageCapacity, 
 }
 
 /**
- * The unpacked budget the free disk can hold, given the two copies a restore adds.
+ * The unpacked budget the free disk can hold, given the copies a restore adds.
  *
- * One copy is the unpacked upload itself, plus two more when it is restored — the
- * snapshot objects and the CAS blobs — so `free / 3` is the size that keeps the later
- * restore check satisfiable (#1200 review 3). The bound has to reach the parser itself:
- * checking only after the unpacking finishes would let a highly compressible archive
- * fill the disk before the check runs.
+ * The upload itself is one copy, and the restore adds three more — snapshot objects, CAS
+ * blobs and workspace files — so `free / 4` is the size that keeps the later restore
+ * check satisfiable (#1211 F5). The bound has to reach the parser itself: checking only
+ * after the unpacking finishes would let a highly compressible archive fill the disk
+ * before the check runs.
  */
 export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number): number {
   if (!Number.isFinite(capacity.freeDiskBytes)) return ceiling;
-  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / 3)));
+  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / 4)));
 }
 
 /** Derive the restore's size from a parsed package's inventory. */

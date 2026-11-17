@@ -409,7 +409,17 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       if (!objects.has(path)) objects.set(path, { path, bytes, kind });
       return path;
     };
-    const addObjectSource = (hash: string, kind: "artifact" | "evidence" | "log" | "other") => {
+    const addObjectSource = async (hash: string, kind: "artifact" | "evidence" | "log" | "other") => {
+      // A lazy source has no read to fail in: check the address now, or the miss would
+      // surface inside the writer and fail the whole export instead of becoming an
+      // omission like the resident path (#1211 F7).
+      try {
+        if (!(await provenanceRecorder.cas.has(hash))) throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
+      } catch {
+        signal.throwIfAborted();
+        omissions.push(`cas:${hash}:unavailable source object`);
+        return undefined;
+      }
       if (!objects.has(hash)) objects.set(hash, { path: hash, open: () => provenanceRecorder.cas.stream(hash), kind });
       return hash;
     };
@@ -590,10 +600,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     for (const artifact of artifacts) {
       for (const version of artifact.versions) {
         try {
-          artifactObjectPaths.set(version.id, previewObjectSizes
+          const artifactPath = previewObjectSizes
             ? addPreviewObject(version.content.hash, version.content.size, "artifact")
-            : streamObjects ? addObjectSource(version.content.hash, "artifact")
-              : await addObject(await provenanceRecorder.cas.read(version.content.hash), "artifact"));
+            : streamObjects ? await addObjectSource(version.content.hash, "artifact")
+              : await addObject(await provenanceRecorder.cas.read(version.content.hash), "artifact");
+          // A missing lazy source already recorded its omission; the version then keeps
+          // no objectPath rather than pointing at an address the package will not carry.
+          if (artifactPath) artifactObjectPaths.set(version.id, artifactPath);
         } catch (error) {
           omissions.push(`artifact:${version.id}:${error instanceof Error ? error.message : "unreadable"}`);
         }
@@ -760,7 +773,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           let size = 0;
           for await (const chunk of provenanceRecorder.cas.stream(hash)) { signal.throwIfAborted(); size += chunk.byteLength; }
           addPreviewObject(hash, size, "log");
-        } else if (streamObjects) addObjectSource(hash, "log");
+        } else if (streamObjects) await addObjectSource(hash, "log");
         else await addObject(await provenanceRecorder.cas.read(hash), "log");
       }
       catch { signal.throwIfAborted(); omissions.push(`cas:${hash}:unavailable source object`); }
@@ -1071,16 +1084,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
               omissions.push(`run:${run.id}:${error instanceof Error ? error.message : "restore failed"}`);
             }
           }
-          const workspaceFiles = (source?.workspace ?? []).flatMap((file) => {
+          // Names only: the earlier version read every workspace object here, so a whole
+          // session's workspace was resident before the first file was written (#1211 F1).
+          const workspaceEntries = (source?.workspace ?? []).flatMap((file) => {
             const objectPath = file.objectPath?.replace(/^objects\//, "");
-            const object = objectPath ? imported.objects.get(objectPath) : undefined;
-            if (!object) {
-              omissions.push(`workspace:${target.id}:${file.path}:missing object`);
-              return [];
-            }
-            return [{ file, object }];
+            return objectPath ? [{ file, objectPath }] : [];
           });
-          if (workspaceFiles.length) {
+          if (workspaceEntries.some((entry) => imported.objects.has(entry.objectPath))) {
             const workspaceRoot = store.workspacePath(target.id);
             // Acquire the workspace mutation lease once per restored session.
             // Large evidence packages often contain many files; taking the
@@ -1088,7 +1098,12 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
             // import time grow linearly with avoidable transaction overhead.
             await withWorkspaceMutation(new VersionStore(store.dataDir), workspaceRoot, async () => {
               const revisions: Array<Parameters<typeof store.recordWorkspaceFileRevisions>[1][number]> = [];
-              for (const { file, object } of workspaceFiles) {
+              for (const { file, objectPath } of workspaceEntries) {
+                const object = imported.objects.get(objectPath);
+                if (!object) {
+                  omissions.push(`workspace:${target.id}:${file.path}:missing object`);
+                  continue;
+                }
                 const targetPath = resolveWorkspaceFile(workspaceRoot, file.path);
                 await mkdir(dirname(targetPath), { recursive: true });
                 await writeFile(targetPath, object);
