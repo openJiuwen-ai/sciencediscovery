@@ -27,18 +27,24 @@ function branchFixture() {
   source.runEvents!.push({ ...structuredClone(source.runEvents![0]!), runId: "later-run" });
   source.runEvents![0]!.streams[0]!.events.push({ ...source.runEvents![0]!.streams[0]!.events[0]!, sequence: 99, createdAt: later });
   // A search that finished before the selected reply travels with the branch; one
-  // that finished after it must not (#1176 review F2).
+  // that finished after it must not (#1176 review F2). Their candidate sources are
+  // package objects, so a kept entry needs its object and a dropped one must not
+  // bring its own (#1176 review F4).
   const answerAt = Date.parse(source.messages[1]!.createdAt);
   const evolveBefore = new Date(answerAt - 3_600_000).toISOString();
   const evolveAfter = new Date(answerAt + 3_600_000).toISOString();
+  const candidateBytes = Buffer.from("print('candidate source kept by the branch')\n");
+  const candidateHash = sha256(candidateBytes);
+  const droppedCandidateBytes = Buffer.from("print('candidate source of a search past the reply')\n");
+  const droppedCandidateHash = sha256(droppedCandidateBytes);
   (records as Records & { evolve?: unknown }).evolve = {
     runs: [
       { events: [], run: { createdAt: evolveBefore, finishedAt: evolveBefore, id: "evolve-before", sessionId: source.session.id } },
       { events: [], run: { createdAt: evolveAfter, finishedAt: evolveAfter, id: "evolve-after", sessionId: source.session.id } },
     ],
     candidates: [
-      { hash: "sha256:before", objectPath: "before", runId: "evolve-before" },
-      { hash: "sha256:after", objectPath: "after", runId: "evolve-after" },
+      { hash: "sha256:before", objectPath: candidateHash, runId: "evolve-before" },
+      { hash: "sha256:after", objectPath: droppedCandidateHash, runId: "evolve-after" },
     ],
   };
   const detail = structuredClone(source.trajectory.details[0]!);
@@ -63,8 +69,12 @@ function branchFixture() {
     artifact_id: artifact.id, version: 5, content_hash: futureHash, session_id: source.session.id,
   } });
   const input: ExportInput = { source: imported.manifest.source, records,
-    objects: [...imported.objects].map(([path, bytes]) => ({ path, bytes })).concat([{ path: futureHash, bytes: Uint8Array.from(futureBytes) }]) };
-  return { input, records, source, oldHash, futureHash };
+    objects: [...imported.objects].map(([path, bytes]) => ({ path, bytes })).concat([
+      { path: futureHash, bytes: Uint8Array.from(futureBytes) },
+      { path: candidateHash, bytes: Uint8Array.from(candidateBytes) },
+      { path: droppedCandidateHash, bytes: Uint8Array.from(droppedCandidateBytes) },
+    ]) };
+  return { input, records, source, oldHash, futureHash, candidateHash, droppedCandidateHash };
 }
 
 test("fork selects the message prefix, exact old file bytes and matching evidence without mutating the source", async () => {
@@ -93,13 +103,21 @@ test("a branch carries only the searches that finished at or before its reply", 
   // #1176 review F2: the evolve payload is part of the history the branch trims.
   // A run started after the branch point, and the candidate source of a run the
   // branch did not keep, must not reach the branch package.
-  const { input, source } = branchFixture();
+  const { input, source, candidateHash, droppedCandidateHash } = branchFixture();
+  const original = structuredClone(input);
   const output = await buildConversationBranch(input, source.session.id, "fixture-answer", async () => { throw new Error("missing"); }, countExport);
   const evolve = (output.records as Records & {
     evolve?: { candidates: Array<{ runId: string }>; runs: Array<{ run: { id: string } }> };
   }).evolve!;
   assert.deepEqual(evolve.runs.map((entry) => entry.run.id), ["evolve-before"]);
   assert.deepEqual(evolve.candidates.map((entry) => entry.runId), ["evolve-before"]);
+  // #1176 review F4: the kept entry is only usable with its source object, and the
+  // dropped search must not smuggle its own object into the branch.
+  assert.ok(output.objects!.some((object) => object.path === candidateHash),
+    "the kept search keeps its candidate source object");
+  assert.ok(!output.objects!.some((object) => object.path === droppedCandidateHash),
+    "a search the branch drops must not carry its candidate source object");
+  assert.deepEqual(input, original);
 });
 
 test("fork recovers a historical file by its exact CAS hash", async () => {
