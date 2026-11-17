@@ -4,6 +4,7 @@
 import { expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession,
   scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
@@ -25,7 +26,7 @@ import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSessi
  * CostSideEffects: No billable requests; each project and model is deleted.
  */
 
-type Flow = "delegated" | "puct" | "direct";
+type Flow = "delegated" | "tc" | "puct" | "direct";
 const DAILY_CASES = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/daily-flow-smoke-plan.json", import.meta.url)), "utf8")) as ReadonlyArray<readonly [string, Flow]>;
 
 function safeName(id: string): string {
@@ -37,12 +38,35 @@ async function runDailySmoke(page: Page, id: string, flow: Flow) {
   const name = safeName(id);
   const report = `${name}-report.md`;
   const notes = `${name}-notes.md`;
-  const delegated = flow === "delegated";
+  const delegated = flow === "delegated" || flow === "tc";
   const puct = flow === "puct";
+  const headers = authorizationHeader();
+  let connectorId: string | undefined;
+  let specialistId: string | undefined;
+  let specialistTool: string | undefined;
+  if (flow === "tc") {
+    const connector = await page.request.post(`${apiBaseUrl()}/api/mcp/servers`, { headers, data: {
+      name: `daily-smoke-${name}-mcp`, command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: true,
+    } });
+    expect(connector.ok()).toBe(true);
+    connectorId = (await connector.json()).id;
+    const tools = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${connectorId}/tools`, { headers });
+    expect(tools.ok()).toBe(true);
+    const echo = (await tools.json() as Array<{ id: string; mcpToolName: string }>).find(item => item.mcpToolName === "echo");
+    expect(echo).toBeDefined();
+    specialistTool = `mcp__${connectorId}__${echo!.id}`;
+    const specialist = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: {
+      name: `daily-smoke-${name}-specialist`, description: "Deterministic TC smoke reviewer",
+      instructions: "Use the assigned echo MCP and return its result unchanged.", connectorIds: [connectorId], enabledSkillIds: [],
+    } });
+    expect(specialist.ok()).toBe(true);
+    specialistId = (await specialist.json()).id;
+  }
   const stub = await scriptedModel(
     delegated
       ? [[
-        { tool: "task", arguments: { description: `Prepare synthetic notes for ${id}`, subagent_type: "general-purpose",
+        { tool: "task", arguments: { ...(specialistId ? { specialistId } : {}), description: `Prepare synthetic notes for ${id}`, subagent_type: "general-purpose",
           prompt: `Write and declare ${notes}; use synthetic fixture content only.`, max_turns: 4, timeout_seconds: 30 } },
         { tool: "read_artifact", arguments: { name: notes, version: 1 } },
         { tool: "run_shell", arguments: { command: `printf '# ${id} smoke report\\n\\nSynthetic workflow evidence.\\n' > ${report}` } },
@@ -55,6 +79,7 @@ async function runDailySmoke(page: Page, id: string, flow: Flow) {
         { text: `${id} smoke workflow completed and delivered ${report}.` },
       ]],
     delegated ? [
+      ...(specialistTool ? [{ tool: specialistTool, arguments: { text: id } }] : []),
       { tool: "run_shell", arguments: { command: `printf '# ${id} notes\\n\\nSynthetic source note.\\n' > ${notes}` } },
       { tool: "declare_artifact", arguments: { path: notes } },
       { text: `Synthetic notes for ${id} are ready in ${notes}.` },
@@ -94,7 +119,11 @@ async function runDailySmoke(page: Page, id: string, flow: Flow) {
     }
   } finally {
     try { if (fixture) await cleanupJourney(page, fixture); }
-    finally { await stub.stop(); }
+    finally {
+      await stub.stop();
+      if (specialistId) await page.request.delete(`${apiBaseUrl()}/api/specialists/${specialistId}`, { headers }).catch(() => undefined);
+      if (connectorId) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${connectorId}`, { headers }).catch(() => undefined);
+    }
   }
 }
 

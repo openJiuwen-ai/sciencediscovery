@@ -4,7 +4,7 @@
   ["DRB-62", "delegated"],
   ["DRB-64", "delegated"],
   ["DRB-75", "delegated"],
-  ["TC-E2E-01", "delegated"],
+  ["TC-E2E-01", "tc"],
   ["PUCT-COMPRESS", "puct"],
   ["J5", "direct"],
   ["Inline Plan", "direct"],
