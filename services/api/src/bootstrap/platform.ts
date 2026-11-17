@@ -222,7 +222,14 @@ export function createPlatformServices(
   const mcpRegistry = createMcpSourceRegistry();
   // Sources register before discovery. They still use the existing MCP governance broker.
   const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
-  const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
+  const customMcpServers = new CustomMcpServers(
+    config.dataDir,
+    mcpRegistry,
+    (ids) => store.setCustomConnectorIds(ids),
+    () => mcpCatalog.reload(),
+    (id) => store.removeCustomConnectorReferences(id),
+    (id) => store.resolveProxy(store.mcpProxyPolicy(id)),
+  );
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
     ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog, { dataDir: config.dataDir });
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {

@@ -15,7 +15,13 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { CustomMcpServerConfig, CustomMcpServerDetails, McpCatalog, McpCatalogTool } from "@sciencediscovery/schema";
+import type {
+  CustomMcpServerConfig,
+  CustomMcpServerDetails,
+  McpCatalog,
+  McpCatalogTool,
+  ResolvedProxy,
+} from "@sciencediscovery/schema";
 import type { ConfigurationExternalOperation, ConfigurationExternalOutcome } from "../configuration/types.js";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
@@ -134,6 +140,7 @@ export class CustomMcpServers {
   private key?: Buffer;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly path: string;
+  private backgroundRefresh: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly dataDir: string,
@@ -141,6 +148,7 @@ export class CustomMcpServers {
     private readonly onIdsChanged: (ids: string[]) => void,
     private readonly refresh: () => Promise<unknown>,
     private readonly onRemoved: (id: string) => Promise<void> = async () => undefined,
+    private readonly probeProxy: (id: string) => ResolvedProxy | undefined = () => undefined,
   ) {
     this.path = resolve(dataDir, "custom-mcp-servers.enc");
     this.oauth = new McpOAuthManager(dataDir, (id) => this.configs[id]);
@@ -257,6 +265,16 @@ export class CustomMcpServers {
     const result = this.queue.then(operation);
     this.queue = result.catch(() => undefined);
     return result;
+  }
+
+  private scheduleRefresh(): void {
+    this.backgroundRefresh = this.backgroundRefresh
+      .then(async () => {
+        await this.refresh();
+      })
+      .catch(() => {
+        console.warn("custom_mcp_background_refresh_failed");
+      });
   }
 
   private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = [], pendingDeletions = this.pendingConfigurationDeletions): Promise<void> {
@@ -528,7 +546,6 @@ export class CustomMcpServers {
       this.checks.delete(serverId);
       await this.persist({ ...this.configs, [serverId]: config });
       if (previous && JSON.stringify([previous.url, previous.transport, previous.authMode, previous.oauth]) !== JSON.stringify([config.url, config.transport, config.authMode, config.oauth])) await this.oauth.clear(serverId);
-      await this.refresh();
       return this.list().find((item) => item.id === serverId)!;
     });
   }
@@ -543,7 +560,7 @@ export class CustomMcpServers {
       this.registry.remove(id);
       this.checks.delete(id);
       await this.onRemoved(id);
-      await this.refresh();
+      this.scheduleRefresh();
     });
   }
 
@@ -565,27 +582,33 @@ export class CustomMcpServers {
     });
   }
 
+  private async probe(id: string): Promise<CustomMcpServerDetails> {
+    const config = this.configs[id];
+    if (!config) throw new Error("MCP server not found");
+    // A separate client can probe a disabled server without enabling it for any Agent.
+    const { McpNodeClient } = await import("./node-client.js");
+    const probe = new McpNodeClient(() => ({ path: undefined, signature: id, servers: { [id]: { ...entry(config), enabled: true } } }), this.oauth);
+    const started = Date.now();
+    try {
+      const proxy = this.probeProxy(id);
+      const catalog = proxy ? await probe.reload({ [id]: proxy }) : await probe.catalog();
+      const server = catalog.servers[0]!;
+      let error = server.error ? this.cleanError(config, server.error) : undefined;
+      let tools = error ? [] : server.tools;
+      try { customMcpAdapter(id, config, tools); } catch { error = "The server returned an unsupported tool input schema"; tools = []; }
+      this.checks.set(id, { checkedAt: catalog.loadedAt, durationMs: Date.now() - started, tools, ...(error ? { error } : {}) });
+      this.sync();
+      const check = this.checks.get(id);
+      if (check) check.durationMs = Date.now() - started;
+      return this.list().find((item) => item.id === id)!;
+    } finally { await probe.close(); }
+  }
+
   test(id: string): Promise<CustomMcpServerDetails> {
     return this.mutate(async () => {
-      const config = this.configs[id];
-      if (!config) throw new Error("MCP server not found");
-      // A separate client can probe a disabled server without enabling it for any Agent.
-      const { McpNodeClient } = await import("./node-client.js");
-      const probe = new McpNodeClient(() => ({ path: undefined, signature: id, servers: { [id]: { ...entry(config), enabled: true } } }), this.oauth);
-      const started = Date.now();
-      try {
-        const catalog = await probe.catalog();
-        const server = catalog.servers[0]!;
-        let error = server.error ? this.cleanError(config, server.error) : undefined;
-        let tools = error ? [] : server.tools;
-        try { customMcpAdapter(id, config, tools); } catch { error = "The server returned an unsupported tool input schema"; tools = []; }
-        this.checks.set(id, { checkedAt: catalog.loadedAt, durationMs: Date.now() - started, tools, ...(error ? { error } : {}) });
-        this.sync();
-        if (config.enabled) await this.refresh();
-        const check = this.checks.get(id);
-        if (check) check.durationMs = Date.now() - started;
-        return this.list().find((item) => item.id === id)!;
-      } finally { await probe.close(); }
+      const result = await this.probe(id);
+      if (this.configs[id]?.enabled) this.scheduleRefresh();
+      return result;
     });
   }
 }
