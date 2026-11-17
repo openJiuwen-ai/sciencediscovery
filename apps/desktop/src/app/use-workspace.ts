@@ -85,6 +85,7 @@ import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run
 import { pendingPermissions, reconcilePermissions } from "../run-stream/permission.js";
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
+import { newSessionRequest } from "./approval-mode-preference.js";
 
 /** A run in one of these states has not finished. `blocked` counts: the model
  *  is waiting on a permission decision, so the turn is still open. */
@@ -774,7 +775,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     const token = {};
     const creation = (async () => {
       try {
-        const created = await createSession(client, projectId, explicitModelId ? { modelId: explicitModelId } : {});
+        const created = await createSession(client, projectId, newSessionRequest(explicitModelId));
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
