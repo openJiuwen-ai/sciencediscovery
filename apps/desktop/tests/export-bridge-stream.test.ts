@@ -44,10 +44,21 @@ test("the archive crosses the shell boundary chunk by chunk", async () => {
   assert.deepEqual(bytes, [1, 2, 3, 4, 5]);
 });
 
-test("a failed chunk aborts the destination instead of leaving a truncated archive", async () => {
+test("a failed chunk aborts the destination and cancels the response body", async () => {
+  // #1216 F3: releasing the lock only unlocks; the server keeps producing into a body
+  // nobody reads, so the failure path has to cancel it.
   const { bridge, events } = recordingBridge(2);
-  await assert.rejects(writeExportStream(bridge, "token-1", streamOf([[1], [2]])), /disk full/);
+  const reads: string[] = [];
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      controller.enqueue(new Uint8Array([2]));
+    },
+    cancel: () => { reads.push("cancel"); },
+  });
+  await assert.rejects(writeExportStream(bridge, "token-1", body), /disk full/);
   assert.deepEqual(events, ["begin", "chunk:1", "abort"], "no end after a failure");
+  assert.deepEqual(reads, ["cancel"], "the response body is cancelled");
 });
 
 test("a shell without the streaming channels is refused rather than silently buffered", async () => {

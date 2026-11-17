@@ -51,13 +51,14 @@ export class ExportSinks {
   }
 
   /** Close the file and report how much was written, so the caller can record
-   *  the history row. The caller owns the "written" flag so a failed close
-   *  cannot report a saved archive. */
+   *  the history row. The caller owns the "written" flag so a failed close cannot
+   *  report a saved archive. On a close error the entry stays in the map, so
+   *  `abort` can still delete the partial file (#1216 F4). */
   end(token: string): number {
     const sink = this.open.get(token);
     if (!sink) return 0;
-    this.open.delete(token);
     this.io.close(sink.handle);
+    this.open.delete(token);
     return sink.bytes;
   }
 
@@ -68,6 +69,12 @@ export class ExportSinks {
     this.open.delete(token);
     try { this.io.close(sink.handle); } catch { /* already gone */ }
     try { this.io.remove(sink.path); } catch { /* already gone */ }
+  }
+
+  /** Drop every open stream: a renderer that reloaded or crashed will never send
+   *  its own abort, so each partial archive must go with it (#1216 F5). */
+  abortAll(): void {
+    for (const token of [...this.open.keys()]) this.abort(token);
   }
 
   has(token: string): boolean {

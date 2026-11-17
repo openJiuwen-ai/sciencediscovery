@@ -130,6 +130,10 @@ export async function writeExportStream(
     }
     await bridge.streamEnd!(token, meta);
   } catch (reason) {
+    // Cancelling the body also ends the server's write: the sync GET route streams into
+    // the response, so an abandoned reader would leave it producing an archive nobody
+    // consumes (#1216 F3).
+    await reader.cancel().catch(() => undefined);
     await bridge.streamAbort!(token).catch(() => undefined);
     throw reason;
   } finally {
