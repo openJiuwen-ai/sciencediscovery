@@ -30,6 +30,7 @@ const modalStack: symbol[] = [];
 
 interface Props {
   children: ReactNode;
+  closeDisabled?: boolean;
   /** One line under the title that says what the form is for. Optional: a
    *  dialog whose title already says it renders without one. */
   hint?: ReactNode;
@@ -50,12 +51,15 @@ interface Props {
  * key here first is what keeps only the modal from closing. Between two
  * settings modals the stack above decides which one is on top.
  */
-export function SettingsModal({ children, hint, label, onClose, wide = false }: Props) {
+export function SettingsModal({ children, closeDisabled = false, hint, label, onClose, wide = false }: Props) {
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback
   // through a ref and registers once.
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  const close = () => {
+    if (!closeDisabled) onClose();
+  };
+  const closeRef = useRef(close);
+  closeRef.current = close;
 
   useEffect(() => {
     const id = Symbol("settings-modal");
@@ -81,7 +85,7 @@ export function SettingsModal({ children, hint, label, onClose, wide = false }: 
         // A nested picker draws over this scrim; closing this dialog too would
         // close both on one click.
         event.stopPropagation();
-        onClose();
+        close();
       }}
     >
       <div
@@ -99,6 +103,7 @@ export function SettingsModal({ children, hint, label, onClose, wide = false }: 
           <button
             aria-label={TEXT.settings.close}
             className="settings-modal-close"
+            disabled={closeDisabled}
             onClick={onClose}
             type="button"
           >

@@ -28,6 +28,7 @@ import type { Attachment } from "../app/attachments.js";
 import { commitsOnEnter } from "../app/ime-enter.js";
 import type { LandingCategory, LandingSeed } from "../app/landing.js";
 import { skillChoices, skillDraft, skillMark, slashQuery } from "../app/slash.js";
+import { useLoaded } from "../app/use-loaded.js";
 import { TEXT } from "../text.js";
 import type { EvolveDirectionInput } from "@sciencediscovery/schema";
 import { AttachmentTray } from "./AttachmentTray.js";
@@ -741,30 +742,11 @@ export function Composer({
   const row = useRef<HTMLDivElement>(null);
   const token = useRef<HTMLSpanElement>(null);
 
-  /** 专家's catalog. Read once per client, not per menu opening: the row's
-   *  value is the bound expert's name, and reopening the menu must not show 无
-   *  for the half second a fresh fetch takes. A disabled expert cannot be
-   *  bound — the server drops it — so it is not listed here. */
-  const [experts, setExperts] = useState<Specialist[]>([]);
-  const [expertsLoading, setExpertsLoading] = useState(false);
-  useEffect(() => {
-    if (client === undefined) return;
-    let cancelled = false;
-    setExpertsLoading(true);
-    void listSpecialists(client)
-      .then((rows) => {
-        if (!cancelled) setExperts(rows.filter((row) => row.enabled !== false));
-      })
-      .catch(() => {
-        if (!cancelled) setExperts([]);
-      })
-      .finally(() => {
-        if (!cancelled) setExpertsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
+  // Keep the bound expert's name visible while refreshing after a settings change.
+  const experts = useLoaded(
+    () => client === undefined ? Promise.resolve([]) : listSpecialists(client),
+    client === undefined ? undefined : { client, key: "composer-specialists" },
+  );
 
   /** The skills `/` can offer. Read once with the experts: both are small
    *  catalogs, and the palette has to have something to draw the moment the
@@ -1089,7 +1071,11 @@ export function Composer({
             className="composer-plus composer-settings"
             onClick={(event) => {
               event.stopPropagation();
-              setMenu(menu === "settings" ? undefined : "settings");
+              if (menu === "settings") setMenu(undefined);
+              else {
+                experts.reload();
+                setMenu("settings");
+              }
             }}
             title={TEXT.composer.sessionSettings}
             type="button"
@@ -1098,8 +1084,8 @@ export function Composer({
           </button>
           {menu === "settings" ? (
             <SessionSettingsMenu
-              experts={experts}
-              expertsLoading={expertsLoading}
+              experts={experts.value?.filter((expert) => expert.enabled !== false) ?? []}
+              expertsLoading={experts.loading}
               onClose={() => setMenu(undefined)}
               // The draft is carried into the setup dialog: a sentence already
               // written is the task the new design would start from.
