@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ApiClient } from "../src/api/client.js";
-import { cancelExport, importPackage, packagePreview, readExportBlob, startCopy, startExport } from "../src/api/research-package.js";
+import { cancelExport, importPackage, openExportStream, packagePreview, startCopy, startExport } from "../src/api/research-package.js";
 
 test("package preview preserves scope, options, selected files and authentication", async () => {
   const previous = globalThis.fetch;
@@ -77,14 +77,19 @@ test("cancelExport POSTs to the task's cancel action", async () => {
   } finally { globalThis.fetch = previous; }
 });
 
-test("readExportBlob downloads the completed archive bytes", async () => {
+test("openExportStream hands the completed archive over as a live body", async () => {
   const previous = globalThis.fetch;
   globalThis.fetch = async (input) => {
     assert.match(String(input), /\/exports\/task-1\/download$/);
     return new Response(new Uint8Array([1, 2, 3]));
   };
   try {
-    const blob = await readExportBlob(new ApiClient("token"), "p", { id: "task-1", status: "completed", filename: "p.sdresearch" });
-    assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [1, 2, 3]);
+    const response = await openExportStream(new ApiClient("token"), "p", { id: "task-1", status: "completed", filename: "p.sdresearch" });
+    // The caller saves through `body`; nothing here may pre-buffer the archive.
+    assert.ok(response.body, "the archive must stay readable as a stream");
+    const reader = response.body.getReader();
+    const chunk = await reader.read();
+    assert.deepEqual([...(chunk.value ?? [])], [1, 2, 3]);
+    reader.releaseLock();
   } finally { globalThis.fetch = previous; }
 });

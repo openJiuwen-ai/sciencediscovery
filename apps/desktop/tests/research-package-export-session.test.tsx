@@ -74,6 +74,42 @@ function stubShell(writes: Array<{ meta?: { sessionId?: string; sessionTitle?: s
 
 const task = { filename: "pkg.sdresearch", id: "task-1", status: "queued" };
 
+/** A shell that exposes the streaming channels (#1211 F2), recording every
+ *  boundary crossing so the test can tell a streamed save from a buffered one. */
+function stubStreamingShell(events: string[], chunks: number[]): () => void {
+  const globals = globalThis as unknown as { window?: unknown };
+  const previous = globals.window;
+  const writes: Array<{ meta?: { sessionId?: string } }> = [];
+  globals.window = {
+    sdShell: {
+      exportFile: {
+        saveDialog: async () => ({ canceled: false, token: "token-A" }),
+        write: async (_token: string, _data: ArrayBuffer, meta?: { sessionId?: string }) => {
+          writes.push({ meta });
+          events.push("write");
+          return { ok: true };
+        },
+        streamBegin: async () => { events.push("begin"); return { ok: true }; },
+        streamChunk: async (_token: string, data: ArrayBuffer) => {
+          chunks.push(...new Uint8Array(data));
+          events.push("chunk");
+          return { ok: true };
+        },
+        streamEnd: async () => { events.push("end"); return { ok: true }; },
+        streamAbort: async () => { events.push("abort"); return { ok: true }; },
+        showInFolder: async () => ({ ok: true }),
+        downloadsDir: async () => "C:\\Users\\me\\Downloads",
+      },
+      exportHistory: {
+        list: async () => [],
+        reveal: async () => ({ missing: false, ok: true }),
+        forget: async () => ({ ok: true }),
+      },
+    },
+  };
+  return () => { globals.window = previous; };
+}
+
 /** Answers the export dialog's reads: previews, session details, and one export
  *  task that is still queued until the poller asks again. */
 function client(completed: { value: boolean }) {
@@ -136,6 +172,60 @@ test("a package that finishes after another session's dialog opened is filed und
     assert.equal(writes.length, 1, "the archive was written once");
     assert.equal(writes[0]!.meta?.sessionId, "s1", "filed under the session that exported it");
     assert.equal(writes[0]!.meta?.sessionTitle, "会话 A");
+  } finally {
+    act(() => { view.unmount(); });
+    restoreShell();
+    restoreDocument();
+    context.mock.timers.reset();
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
+
+/** Answers like `client`, but the archive arrives as a live body. */
+function streamingClient(completed: { value: boolean }) {
+  const base = client(completed) as unknown as { fetchStream: () => Promise<Response> };
+  base.fetchStream = async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2]));
+      controller.enqueue(new Uint8Array([3, 4]));
+      controller.close();
+    },
+  }));
+  return base as never;
+}
+
+test("a shell with the streaming channels saves the archive chunk by chunk", async (context) => {
+  const previousAct = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const restoreDocument = stubDocument();
+  const events: string[] = [];
+  const chunks: number[] = [];
+  const restoreShell = stubStreamingShell(events, chunks);
+  const completed = { value: false };
+  let view!: ReturnType<typeof create>;
+  try {
+    await act(async () => {
+      view = create(React.createElement(ResearchPackage, {
+        ...props,
+        client: streamingClient(completed),
+        request: { kind: "export", projectId: "p1", sessionId: "s1" },
+      }));
+    });
+    await act(async () => { for (let tick = 0; tick < 8; tick += 1) await Promise.resolve(); });
+
+    const start = view.root.findAllByType("button").find((button) => button.props.className === "primary-button");
+    assert.ok(start, "the dialog offers 开始后台导出");
+    await act(async () => { start!.props.onClick(); });
+
+    completed.value = true;
+    await act(async () => { context.mock.timers.tick(1_000); });
+    await act(async () => { for (let tick = 0; tick < 12; tick += 1) await Promise.resolve(); });
+
+    // #1211 F2: the archive crosses the boundary as it arrives; `write` -- the
+    // one-shot whole-buffer channel -- must not be used when streaming exists.
+    assert.deepEqual(events, ["begin", "chunk", "chunk", "end"]);
+    assert.deepEqual(chunks, [1, 2, 3, 4]);
   } finally {
     act(() => { view.unmount(); });
     restoreShell();

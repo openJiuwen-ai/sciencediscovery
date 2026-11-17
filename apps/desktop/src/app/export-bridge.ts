@@ -20,6 +20,9 @@
  *   saveDialog(suggestedName) → { canceled, token } — native "save as"; the
  *                              chosen path stays in the main process
  *   write(token, data)        → { ok }              — destination-bound write
+ *   streamBegin/streamChunk/streamEnd/streamAbort   — the same destination,
+ *                              written chunk by chunk so a multi-GiB archive is
+ *                              never held in one buffer on either side
  *   showInFolder(token)       → { ok }              — reveal in the OS manager
  *   downloadsDir()            → string              — the OS downloads folder
  *
@@ -39,6 +42,12 @@ export interface ExportSaveResult {
 export interface ExportShellBridge {
   saveDialog: (suggestedName: string) => Promise<ExportSaveResult>;
   write: (token: string, data: ArrayBuffer, meta?: ExportWriteMeta) => Promise<{ ok: boolean }>;
+  /** Streaming write (a 5 GiB archive must not arrive as one ArrayBuffer).
+   *  Missing on an older shell: callers fall back to `write`. */
+  streamBegin?: (token: string) => Promise<{ ok: boolean }>;
+  streamChunk?: (token: string, data: ArrayBuffer) => Promise<{ ok: boolean }>;
+  streamEnd?: (token: string, meta?: ExportWriteMeta) => Promise<{ ok: boolean }>;
+  streamAbort?: (token: string) => Promise<{ ok: boolean }>;
   showInFolder: (token: string) => Promise<{ ok: boolean }>;
   downloadsDir: () => Promise<string>;
 }
@@ -83,6 +92,49 @@ export function exportShellBridge(): ExportShellBridge | null {
   const bridge = shell?.exportFile;
   if (!bridge || typeof bridge.saveDialog !== "function" || typeof bridge.write !== "function") return null;
   return bridge;
+}
+
+/** True when the shell exposes the streaming write (older shells do not). */
+export function canStreamExport(bridge: ExportShellBridge): boolean {
+  return typeof bridge.streamBegin === "function"
+    && typeof bridge.streamChunk === "function"
+    && typeof bridge.streamEnd === "function";
+}
+
+/**
+ * Forward an archive body to the shell chunk by chunk.
+ *
+ * The shell keeps the destination open for the length of the transfer, writes
+ * each chunk as it arrives, and only marks the destination written at `streamEnd`.
+ * A failure anywhere aborts, which deletes the partial archive rather than
+ * leaving a truncated file that the next attempt would treat as complete.
+ */
+export async function writeExportStream(
+  bridge: ExportShellBridge,
+  token: string,
+  body: ReadableStream<Uint8Array>,
+  meta?: ExportWriteMeta,
+): Promise<void> {
+  if (!canStreamExport(bridge)) throw new Error("The shell does not support streaming saves.");
+  await bridge.streamBegin!(token);
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      // A view can sit inside a larger buffer; slice so only its own bytes cross
+      // the IPC boundary.
+      const chunk = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+      await bridge.streamChunk!(token, chunk);
+    }
+    await bridge.streamEnd!(token, meta);
+  } catch (reason) {
+    await bridge.streamAbort!(token).catch(() => undefined);
+    throw reason;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /** The durable export history, or null outside the shell (a browser keeps no

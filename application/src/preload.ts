@@ -80,7 +80,11 @@ const wizard = {
  *  `write` also carries the export's own metadata (which task, which session,
  *  which profile): the main process records the finished export in the durable
  *  history, so the row keeps the token that can still reveal it after a
- *  restart. */
+ *  restart.
+ *
+ *  The stream* channels write the same archive chunk by chunk, so a multi-GiB
+ *  package is never held as one ArrayBuffer; `streamEnd` carries the same
+ *  metadata and records the same history row. */
 const exportFile = {
   saveDialog: (suggestedName: string): Promise<{ canceled: boolean; token: string | null }> =>
     ipcRenderer.invoke("sd-shell:export-save-dialog", { suggestedName }),
@@ -92,6 +96,20 @@ const exportFile = {
     level?: "necessary" | "complete";
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("sd-shell:export-write", { token, data, meta }),
+  streamBegin: (token: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-stream-begin", token),
+  streamChunk: (token: string, data: ArrayBuffer): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-stream-chunk", { token, data }),
+  streamEnd: (token: string, meta?: {
+    recordId?: string;
+    projectId?: string;
+    sessionId?: string;
+    sessionTitle?: string;
+    level?: "necessary" | "complete";
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-stream-end", { token, meta }),
+  streamAbort: (token: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("sd-shell:export-stream-abort", token),
   showInFolder: (token: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("sd-shell:export-show-in-folder", token),
   downloadsDir: (): Promise<string> => ipcRenderer.invoke("sd-shell:export-downloads-dir"),

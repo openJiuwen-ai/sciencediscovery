@@ -29,6 +29,7 @@ import { COLD_BACKEND_TIMEOUT_MS, killStackTree, spawnStack, startupBudgetMs, st
 import { shouldRetryUiLoad, UI_LOAD_RETRY_LIMIT, uiLoadRetryDelayMs, waitForUiOrigin } from "./ui-retry.ts";
 import { loadWindowState, saveWindowState } from "./window-state.ts";
 import { loadExportState, saveExportState } from "./export-state.ts";
+import { ExportSinks } from "./export-sink.ts";
 import { ExportDestinations } from "./export-tokens.ts";
 import { ExportHistoryStore } from "./export-history.ts";
 import {
@@ -1587,6 +1588,8 @@ ipcMain.handle("sd-shell:report-locale", (_event, locale: unknown) => {
 let lastExportDir: string | null = null;
 let lastExportDirLoaded = false;
 const exportDestinations = new ExportDestinations();
+/** Open streaming writers, keyed by the same destination token. */
+const exportStreams = new ExportSinks();
 /** The durable list of finished exports. Read lazily: a corrupt or unreadable
  *  history must not stop the shell from starting, and `loadExportHistory`
  *  already reads a broken file as empty. */
@@ -1654,6 +1657,41 @@ ipcMain.handle("sd-shell:export-save-dialog", async (_event, args: unknown) => {
   return { canceled: false, token };
 });
 
+/** Record a finished export in the durable history. The package is already on
+ *  disk by then: a row that cannot be persisted must not turn a successful save
+ *  into 保存失败, so this only logs. */
+function recordExportRow(token: string, path: string, written: number, meta: unknown): void {
+  // Recorded only after the write succeeded: a canceled or failed save leaves
+  // no row, and a re-save of the same task keeps the same row (its id).
+  const details = (meta ?? {}) as {
+    level?: unknown; projectId?: unknown; recordId?: unknown;
+    sessionId?: unknown; sessionTitle?: unknown;
+  };
+  const recordId = typeof details.recordId === "string" && details.recordId.trim()
+    ? details.recordId.trim()
+    : token;
+  const level = details.level === "necessary" || details.level === "complete" ? details.level : undefined;
+  try {
+    exportHistory().record({
+      bytes: written,
+      filename: basename(path),
+      id: recordId,
+      ...(level ? { level } : {}),
+      path,
+      ...(typeof details.projectId === "string" ? { projectId: details.projectId } : {}),
+      savedAt: new Date().toISOString(),
+      ...(typeof details.sessionId === "string" ? { sessionId: details.sessionId } : {}),
+      ...(typeof details.sessionTitle === "string" ? { sessionTitle: details.sessionTitle } : {}),
+      token,
+    });
+  } catch (error) {
+    // The package is already on disk: a history row that cannot be persisted
+    // must not turn a successful save into 保存失败. The row is simply absent,
+    // and the shell log says why.
+    log(`[export] history row not recorded: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
   const { token, data, meta } = (args ?? {}) as { token?: unknown; data?: unknown; meta?: unknown };
   const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
@@ -1666,35 +1704,44 @@ ipcMain.handle("sd-shell:export-write", async (_event, args: unknown) => {
   if (!bytes) throw new Error("导出数据无效。");
   writeFileSync(destination.path, bytes);
   exportDestinations.markWritten(token as string);
-  // Recorded only after the write succeeded: a canceled or failed save leaves
-  // no row, and a re-save of the same task keeps the same row (its id).
-  const details = (meta ?? {}) as {
-    level?: unknown; projectId?: unknown; recordId?: unknown;
-    sessionId?: unknown; sessionTitle?: unknown;
-  };
-  const recordId = typeof details.recordId === "string" && details.recordId.trim()
-    ? details.recordId.trim()
-    : token as string;
-  const level = details.level === "necessary" || details.level === "complete" ? details.level : undefined;
-  try {
-    exportHistory().record({
-      bytes: bytes.byteLength,
-      filename: basename(destination.path),
-      id: recordId,
-      ...(level ? { level } : {}),
-      path: destination.path,
-      ...(typeof details.projectId === "string" ? { projectId: details.projectId } : {}),
-      savedAt: new Date().toISOString(),
-      ...(typeof details.sessionId === "string" ? { sessionId: details.sessionId } : {}),
-      ...(typeof details.sessionTitle === "string" ? { sessionTitle: details.sessionTitle } : {}),
-      token: token as string,
-    });
-  } catch (error) {
-    // The package is already on disk: a history row that cannot be persisted
-    // must not turn a successful save into 保存失败. The row is simply absent,
-    // and the shell log says why.
-    log(`[export] history row not recorded: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  recordExportRow(token as string, destination.path, bytes.byteLength, meta);
+  return { ok: true };
+});
+
+// Streaming save: the renderer forwards the archive body chunk by chunk, so
+// neither side ever holds the whole package. The path still only comes from the
+// token this process issued with the native dialog.
+ipcMain.handle("sd-shell:export-stream-begin", async (_event, token: unknown) => {
+  const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
+  if (!destination) throw new Error("保存位置无效，请重新选择。");
+  exportStreams.begin(token as string, destination.path);
+  return { ok: true };
+});
+
+ipcMain.handle("sd-shell:export-stream-chunk", async (_event, args: unknown) => {
+  const { token, data } = (args ?? {}) as { token?: unknown; data?: unknown };
+  if (typeof token !== "string" || !exportDestinations.resolve(token)) throw new Error("保存位置无效，请重新选择。");
+  let bytes: Uint8Array | null = null;
+  if (data instanceof Uint8Array) bytes = data;
+  else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+  if (!bytes || bytes.byteLength === 0) return { ok: true };
+  exportStreams.write(token, bytes);
+  return { ok: true };
+});
+
+ipcMain.handle("sd-shell:export-stream-end", async (_event, args: unknown) => {
+  const { token, meta } = (args ?? {}) as { token?: unknown; meta?: unknown };
+  const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
+  if (!destination) throw new Error("保存位置无效，请重新选择。");
+  const written = exportStreams.end(token as string);
+  exportDestinations.markWritten(token as string);
+  recordExportRow(token as string, destination.path, written, meta);
+  return { ok: true };
+});
+
+ipcMain.handle("sd-shell:export-stream-abort", async (_event, token: unknown) => {
+  if (typeof token !== "string") return { ok: false };
+  exportStreams.abort(token);
   return { ok: true };
 });
 

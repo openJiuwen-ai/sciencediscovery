@@ -39,7 +39,7 @@ test("evidence export choices update the estimate and custom workspace selection
       previews.push({ level, paths });
       return { estimatedBytes: level === "complete" ? 2048 : 1024, files: [{ path: "data/result.csv", size: 20 }, { path: "analysis.ipynb", size: 40 }].map((file) => ({ ...file, selected: paths ? paths.includes(file.path) : level === "complete" || file.path === "data/result.csv" })), omissions: ["省略历史轨迹"] };
     },
-    exportResearchPackage: async () => new Blob(),
+    exportResearchPackage: async () => new Response(),
   } as unknown as ApiClient;
   let renderer: ReactTestRenderer | undefined;
   try {
@@ -129,7 +129,7 @@ test("a deleted scope keeps the last estimate but disables both export buttons",
       return defaults;
     },
     previewResearchPackage: async () => preview,
-    exportResearchPackage: async () => new Blob(),
+    exportResearchPackage: async () => new Response(),
     startResearchPackageExport: async () => ({ id: "task", status: "queued", filename: "x.sdresearch" }),
   } as unknown as ApiClient;
   let renderer: ReactTestRenderer | undefined;
@@ -172,7 +172,7 @@ test("a scope already gone at open claims no snapshot and stops promising a size
   const client = {
     getResearchPackagePreviews: async () => { throw new ApiRequestError("该项目或会话已不存在；上方为删除前的大小，已不能导出。", 410, "EXPORT_PREVIEW_RESOURCE_DELETED"); },
     previewResearchPackage: async () => ({ revision: "r1", estimatedBytes: 1024, files: [], omissions: [] }),
-    exportResearchPackage: async () => new Blob(),
+    exportResearchPackage: async () => new Response(),
   } as unknown as ApiClient;
   let renderer: ReactTestRenderer | undefined;
   try {
@@ -221,7 +221,7 @@ test("a gone scope still admits the sizes its scope cards are showing", async (c
     previewResearchPackage: async () => {
       throw new ApiRequestError("Preview file is no longer available", 404, "EXPORT_PREVIEW_RESOURCE_DELETED");
     },
-    exportResearchPackage: async () => new Blob(),
+    exportResearchPackage: async () => new Response(),
     startResearchPackageExport: async () => ({ id: "task", status: "queued", filename: "x.sdresearch" }),
   } as unknown as ApiClient;
   let renderer: ReactTestRenderer | undefined;

@@ -50,9 +50,10 @@ export function readExport(client: ApiClient, project: string, id: string) {
 export function cancelExport(client: ApiClient, project: string, id: string) {
   return client.request<ExportOperation>(`${projectPath(project)}/exports/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }
-/** Pull the completed archive bytes; the caller decides where they are saved
- *  (native save dialog in the shell, or a browser download as a fallback). */
-export async function readExportBlob(client: ApiClient, project: string, task: ExportOperation): Promise<Blob> {
-  const response = await client.fetchStream(`${projectPath(project)}/exports/${encodeURIComponent(task.id)}/download`);
-  return response.blob();
+/** Open the completed archive as a live response. The caller decides where the
+ *  body goes: the shell writes it chunk by chunk through its opaque destination
+ *  token, and a plain browser falls back to a browser download. Nothing here
+ *  buffers the archive. */
+export async function openExportStream(client: ApiClient, project: string, task: ExportOperation): Promise<Response> {
+  return client.fetchStream(`${projectPath(project)}/exports/${encodeURIComponent(task.id)}/download`);
 }
