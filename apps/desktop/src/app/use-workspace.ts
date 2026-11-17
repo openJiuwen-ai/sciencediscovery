@@ -1562,7 +1562,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // The listing is a mirror, so the row may be the one already open; the
         // open costs one read, and `openSession` returns before doing even that
         // when the ids match.
-        void openSession(reusable.id, target);
+        // An untouched draft is a new conversation too: give it the remembered
+        // mode before its read lands, and open it even if that write fails.
+        void (async () => {
+          try { await inheritForSession(reusable.id, (id, body) => updateSession(client, id, body)); }
+          catch { /* the draft keeps the service default */ }
+          await openSession(reusable.id, target);
+        })();
         return;
       }
 
@@ -1588,7 +1594,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // The service creates a project's first conversation with its own default; a
         // new conversation inherits the remembered mode here too, or this supported
         // path would be the one place the rule does not hold.
-        await inheritForSession(created.firstSession.id, (target, body) => updateSession(client, target, body));
+        try {
+          await inheritForSession(created.firstSession.id, (target, body) => updateSession(client, target, body));
+        } catch {
+          // The project already exists server-side; a failed inheritance write must
+          // not hide it. The conversation keeps the service default.
+        }
         setProjects((current) => [...current, created.project]);
         await openSession(created.firstSession.id, created.project.id);
         await refreshSessionLists();

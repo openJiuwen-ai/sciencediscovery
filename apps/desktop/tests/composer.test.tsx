@@ -177,7 +177,7 @@ test("会话设置 carries the way into program evolution above its own settings
 
 test("a permission option says on screen what it allows", () => {
   const markup = renderToStaticMarkup(
-    <PermissionFlyout fullAccess={false} onApprovalMode={() => {}} onClose={() => {}} />,
+    <PermissionFlyout mode="ask_for_dangerous" onApprovalMode={() => {}} onClose={() => {}} />,
   );
   // Both consequences are text in the row. They were `title`s, which only a
   // mouse reaches, and this is the one switch that widens the session's reach.
@@ -596,4 +596,15 @@ test("with nothing remembered the control says it follows the settings, not that
   assert.match(markup, /composer-permission-label">跟随设置</u);
   assert.match(markup, /class="composer-permission is-unset"/u);
   assert.doesNotMatch(markup, /is-danger/u, "an unknown mode is neither of the two known colours");
+});
+
+test("with no mode chosen neither permission option claims to be the choice", () => {
+  const markup = renderToStaticMarkup(<PermissionFlyout onApprovalMode={() => {}} onClose={() => {}} />);
+  assert.equal(markup.split("is-selected").length - 1, 0, "no row is marked");
+  assert.equal(markup.split("session-flyout-check").length - 1, 0, "no tick is drawn");
+});
+
+test("the settings row follows the settings until a mode is chosen", () => {
+  assert.match(settingsMenu(undefined), />跟随设置</);
+  assert.match(settingsMenu("always_allow"), />完全访问</);
 });

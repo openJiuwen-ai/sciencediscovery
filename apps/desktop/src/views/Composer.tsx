@@ -241,11 +241,12 @@ function NoneGlyph() {
  * Exported because it is only mounted while its row is open.
  */
 export function PermissionFlyout({
-  fullAccess,
+  mode,
   onApprovalMode,
   onClose,
 }: {
-  fullAccess: boolean;
+  /** The current mode, or `undefined` while nothing has been chosen. */
+  mode?: ApprovalMode;
   onApprovalMode: (mode: ApprovalMode) => void;
   onClose: () => void;
 }) {
@@ -254,7 +255,7 @@ export function PermissionFlyout({
       <button
         aria-describedby="session-permission-ask-desc"
         aria-label={TEXT.composer.permission}
-        className={`session-flyout-row${fullAccess ? "" : " is-selected"}`}
+        className={`session-flyout-row${mode === "ask_for_dangerous" ? " is-selected" : ""}`}
         onClick={() => {
           onApprovalMode("ask_for_dangerous");
           onClose();
@@ -270,16 +271,16 @@ export function PermissionFlyout({
             {TEXT.composer.permissionAskDesc}
           </span>
         </span>
-        {fullAccess ? null : (
+        {mode === "ask_for_dangerous" ? (
           <span className="session-flyout-check">
             <CheckGlyph />
           </span>
-        )}
+        ) : null}
       </button>
       <button
         aria-describedby="session-permission-full-desc"
         aria-label={TEXT.composer.permissionFull}
-        className={`session-flyout-row is-danger${fullAccess ? " is-selected" : ""}`}
+        className={`session-flyout-row is-danger${mode === "always_allow" ? " is-selected" : ""}`}
         onClick={() => {
           onApprovalMode("always_allow");
           onClose();
@@ -295,7 +296,7 @@ export function PermissionFlyout({
             {TEXT.composer.permissionFullDesc}
           </span>
         </span>
-        {fullAccess ? (
+        {mode === "always_allow" ? (
           <span className="session-flyout-check">
             <CheckGlyph />
           </span>
@@ -387,7 +388,8 @@ export function SessionSettingsMenu({
                 <ShieldGlyph />
               </span>
               <span className="session-menu-value-text">
-                {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
+                {approvalMode === undefined ? TEXT.composer.permissionFollowSettings
+              : fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
               </span>
               <ChevronRightGlyph />
             </span>
@@ -423,7 +425,7 @@ export function SessionSettingsMenu({
         </div>
 
         {panel === "permission" ? (
-          <PermissionFlyout fullAccess={fullAccess} onApprovalMode={onApprovalMode} onClose={onClose} />
+          <PermissionFlyout mode={approvalMode} onApprovalMode={onApprovalMode} onClose={onClose} />
         ) : null}
 
         {panel === "experts" ? (
@@ -1131,7 +1133,7 @@ export function Composer({
           {menu === "permission" ? (
             <div className="composer-dropdown is-permission" onPointerDown={(event) => event.stopPropagation()}>
               <PermissionFlyout
-                fullAccess={fullAccess}
+                mode={approvalMode}
                 onApprovalMode={onApprovalMode}
                 onClose={() => setMenu(undefined)}
               />
