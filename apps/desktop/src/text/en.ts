@@ -110,7 +110,6 @@ export const EN: Text = {
   },
 
   sessionBar: {
-    export: "Export",
     workspaceToggle: "Workspace panel",
     sessionMenu: "Session menu",
     sessionTitle: "Session name",

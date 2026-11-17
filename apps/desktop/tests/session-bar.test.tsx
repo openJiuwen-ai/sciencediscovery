@@ -120,3 +120,13 @@ test("an unreadable timestamp leaves the time out instead of printing Invalid Da
   // recorded as a defect in TEST-PLAN rather than papered over here.
   assert.match(markup, /class="sep"><\/span><span><\/span>/);
 });
+
+test("the bar carries no session export control: the session menu owns that action", () => {
+  const markup = render();
+  // #1183: a second export entry in the header duplicates the session menu's, and a
+  // persistent header control is exactly what the report asked to remove.
+  assert.doesNotMatch(markup, /task-head-export/);
+  assert.doesNotMatch(markup, /导出/);
+  // The panel toggle is the bar's only action now.
+  assert.equal((markup.match(/<button/gu) ?? []).length, 1);
+});

@@ -109,7 +109,6 @@ export const ZH = {
   },
 
   sessionBar: {
-    export: "导出",
     workspaceToggle: "工作区面板",
     sessionMenu: "会话菜单",
     sessionTitle: "会话名称",
