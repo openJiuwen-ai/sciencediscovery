@@ -11,7 +11,7 @@ import { expect } from "@playwright/test";
 import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
+  sendUserMessage, waitForRunChainTerminal, waitForMcpTool } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { deliverableHeadingRule, startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
 
@@ -84,9 +84,8 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     expect(skills.some(s => s.id === "science-research-team")).toBe(true);
     const response = await page.request.post(`${apiBaseUrl()}/api/mcp/servers`, { headers, data: { name: `signoff-${Date.now()}`, transport: "http", url: checker.url, enabled: true } });
     expect(response.ok()).toBe(true); connector = (await response.json()).id;
-    const tools = await api<any[]>(`/api/mcp/sources/${connector}/tools`);
-    expect(tools.map(t => t.mcpToolName)).toEqual(["deliverable_check"]);
-    const toolName = `mcp__${connector}__${tools[0].id}`;
+    const tool = await waitForMcpTool(page, connector!, "deliverable_check");
+    const toolName = `mcp__${connector}__${tool.id}`;
     const reviewerInstructions = "Use only your mounted deliverable_check MCP for delivery audit. Pass the supplied full report unchanged as report_text. Return the actual ok/missing/message result and the supplied artifact/version identity. Do not rewrite the report or invent a passing result.";
     const specialistResponse = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: {
       name: "deliverable-reviewer", description: "Final delivery section audit with custom MCP", instructions: reviewerInstructions,

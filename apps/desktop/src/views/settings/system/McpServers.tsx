@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 
 import type { ConnectorId } from "@sciencediscovery/schema";
+import { useMcpDiscoveryRefresh } from "@sciencediscovery/configuration-ui";
 
 import type { ApiClient } from "../../../api/client.js";
 import {
@@ -34,6 +35,7 @@ import type {
 } from "../../../api/types.js";
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
+import { writeSettingsCache } from "../../../app/settings-cache.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
 import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
@@ -243,6 +245,21 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   const [openId, setOpenId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
+  const [discovery, setDiscovery] = useState<{ base: Page; servers: CustomMcpServerDetails[] }>();
+  const servers = discovery?.base === loaded.value ? discovery?.servers : loaded.value?.custom;
+
+  useMcpDiscoveryRefresh(client, servers, async (isCurrent) => {
+    const base = loaded.value;
+    try {
+      const items = await listMcpServers(client);
+      if (!isCurrent() || !base) return;
+      setDiscovery({ base, servers: items });
+      writeSettingsCache(client, "mcp-servers", { ...base, custom: items });
+    } catch (reason) {
+      if (isCurrent()) setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+      throw reason;
+    }
+  });
 
   useEffect(() => setFailure(undefined), [draft]);
 
@@ -354,7 +371,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                     {TEXT.settings.system.mcp.clearSelection}
                   </button>
                 </div>
-                {page.custom.map((server) => (
+                {(servers ?? page.custom).map((server) => (
                   <div className="settings-card" key={server.id}>
                     <span className="settings-card-mark">{initialOf(server.name)}</span>
                     <div className="settings-card-main">

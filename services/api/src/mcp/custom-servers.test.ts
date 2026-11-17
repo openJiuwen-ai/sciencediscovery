@@ -25,6 +25,7 @@ import { CustomMcpServers, normalizeCustomMcpConfig } from "./custom-servers.js"
 import { McpNodeClient } from "./node-client.js";
 import { SessionStore } from "../store.js";
 import { inspectMcpTool } from "./inspector.js";
+import type { McpCatalog } from "@sciencediscovery/schema";
 
 const fixture = fileURLToPath(new URL("../../../../test/fixtures/mcp-echo.mjs", import.meta.url));
 
@@ -50,12 +51,13 @@ test("custom MCP mutations do not wait for the full catalog refresh", async () =
   try {
     await manager.load();
     const saved = await manager.save({ name: "Disabled server", transport: "http", url: "http://127.0.0.1/mcp", enabled: false });
-    assert.equal(refreshCalls, 0);
+    assert.equal(refreshCalls, 1);
     await manager.remove(manager.list()[0]!.id);
     assert.equal(refreshCalls, 1);
     assert.equal(saved.status, "disabled");
   } finally {
     gate.resolve();
+    await manager.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -77,7 +79,7 @@ test("custom MCP testing probes through the server's effective proxy policy", as
   try {
     McpNodeClient.prototype.reload = (async function (this: McpNodeClient, proxies: Record<string, unknown>) {
       capturedProxy = proxies;
-      return { loadedAt: new Date(0).toISOString(), revision: "", servers: [{ id: "custom-000000000000", tools: [] }] };
+      return { loadedAt: new Date(0).toISOString(), revision: "", servers: [{ id: "custom-000000000000", enabled: true, transport: "http", tools: [] }] };
     }) as typeof McpNodeClient.prototype.reload;
     McpNodeClient.prototype.close = async () => undefined;
     await manager.load();
@@ -104,11 +106,72 @@ async function setup() {
     // Isolate this integration test from bundled Python servers and external providers.
     return { ...config, servers: Object.fromEntries(Object.entries(config.servers).filter(([id]) => id.startsWith("custom-"))) };
   });
-  const catalog = new McpSourceCatalog(registry, client, undefined, (snapshot) => manager.applyCatalog(snapshot));
+  const catalog = new McpSourceCatalog(registry, client, undefined, (snapshot) => manager.applyCatalog(snapshot), undefined,
+    () => manager.discoveryRevision());
   await manager.load();
   await store.load();
-  return { dir, registry, store, manager, client, catalog, close: async () => { await client.close(); await rm(dir, { recursive: true, force: true }); } };
+  return { dir, registry, store, manager, client, catalog, close: async () => { await manager.close(); await client.close(); await rm(dir, { recursive: true, force: true }); } };
 }
+
+test("saving an enabled MCP discovers tools without a separate connection test", async () => {
+  const f = await setup();
+  try {
+    const saved = await f.manager.save({ name: "Background echo", command: process.execPath, args: [fixture], enabled: true });
+    assert.equal(saved.status, "untested");
+    for (let attempt = 0; f.manager.list()[0]?.status === "untested" && attempt < 200; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(f.manager.list()[0]?.status, "ready");
+    assert.equal(Object.keys(f.registry.get(saved.id).manifest.tools).length, 2);
+  } finally { await f.close(); }
+});
+
+test("background discovery failure is redacted and a later save recovers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "custom-mcp-recovery-"));
+  let fail = true;
+  const manager = new CustomMcpServers(dir, createMcpSourceRegistry(), () => undefined, async () => {
+    if (fail) throw new Error("Failed Bearer private-fixture-secret at http://127.0.0.1/private");
+    manager.applyCatalog({ loadedAt: new Date().toISOString(), revision: "ready", servers: manager.list().map((item) => ({ id: item.id, enabled: true, tools: [], transport: "http" })) });
+  });
+  try {
+    await manager.load();
+    const saved = await manager.save({ name: "Recovery", url: "http://127.0.0.1/private", headers: { Authorization: "Bearer private-fixture-secret" }, enabled: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(manager.list()[0]?.status, "error");
+    assert.doesNotMatch(manager.list()[0]?.error ?? "", /private-fixture-secret|\/private/);
+    fail = false;
+    await manager.save(saved, saved.id);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(manager.list()[0]?.status, "ready");
+  } finally { await manager.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a catalog captured before a configuration edit cannot repopulate cleared tools", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "custom-mcp-stale-"));
+  const gate = deferred();
+  const registry = createMcpSourceRegistry();
+  let snapshot!: McpCatalog;
+  let calls = 0;
+  const manager = new CustomMcpServers(dir, registry, () => undefined, () => catalog.reload());
+  const catalog = new McpSourceCatalog(registry, {
+    catalog: async () => snapshot,
+    reload: async () => { calls += 1; await gate.promise; return snapshot; },
+    invoke: async () => { throw new Error("unused"); },
+  }, undefined, (value) => manager.applyCatalog(value), undefined, () => manager.discoveryRevision());
+  try {
+    await manager.load();
+    const saved = await manager.save({ name: "Edited", url: "http://127.0.0.1/old", enabled: true });
+    snapshot = { loadedAt: new Date().toISOString(), revision: "old", servers: [{ id: saved.id, enabled: true, transport: "http", tools: [{ name: "old", description: "old", inputSchema: { type: "object" }, schemaHash: "old" }] }] };
+    assert.equal(calls, 1);
+    await manager.save({ ...saved, url: "http://127.0.0.1/new" }, saved.id);
+    // 关闭后只排空正在执行的旧刷新，不执行排队的新刷新，以观察旧结果是否被拒绝。
+    const closing = manager.close();
+    gate.resolve();
+    await closing;
+    assert.equal(manager.list()[0]?.status, "untested");
+    assert.equal(Object.keys(registry.get(saved.id).manifest.tools).length, 0);
+  } finally { gate.resolve(); await manager.close(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test("custom stdio tools are discovered, authorized, invoked, audited and retained after restart", async () => {
   const f = await setup();

@@ -11,7 +11,7 @@
 import { fileURLToPath } from "node:url";
 import { expect, type Locator } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
+import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal, waitForMcpTool } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
@@ -210,10 +210,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
     } });
     expect(savedResponse.ok()).toBe(true);
     const saved = await savedResponse.json() as { id: string };
-    const toolsResponse = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${saved.id}/tools`, { headers: authorizationHeader() });
-    expect(toolsResponse.ok()).toBe(true);
-    const tools = await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>;
-    const tool = tools.find((item) => item.mcpToolName === "echo")!;
+    const tool = await waitForMcpTool(page, saved.id, "echo");
     return { id: saved.id, name: serverName, toolId: tool.id, toolName: `mcp__${saved.id}__${tool.id}` };
   };
   const first = await makeServer("first");

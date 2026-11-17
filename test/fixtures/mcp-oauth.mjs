@@ -10,6 +10,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 const require = createRequire(new URL("../../services/api/package.json", import.meta.url));
 const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
@@ -18,7 +19,7 @@ const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js"
 const { ListToolsRequestSchema, CallToolRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
 
 // Deterministic loopback identity provider and real MCP transport, never a vendor account.
-export async function startOAuthFixture({ transport = "http", expiresIn = 3600, registration = true } = {}) {
+export async function startOAuthFixture({ transport = "http", expiresIn = 3600, registration = true, tls, publicOrigin } = {}) {
   let origin;
   let mcpUrl;
   let stepUp = false;
@@ -42,7 +43,7 @@ export async function startOAuthFixture({ transport = "http", expiresIn = 3600, 
     connections.add(server);
     return server;
   };
-  const http = createServer(async (request, response) => {
+  const handleRequest = async (request, response) => {
     try {
       const url = new URL(request.url, origin);
       if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) return json(response, 200, { resource: mcpUrl, authorization_servers: [origin], scopes_supported: ["tools:read"] });
@@ -120,12 +121,14 @@ export async function startOAuthFixture({ transport = "http", expiresIn = 3600, 
       }
       json(response, 404, {});
     } catch { if (!response.headersSent) json(response, 500, { error: "fixture_failure" }); else response.end(); }
-  });
+  };
+  const http = tls ? createHttpsServer(tls, handleRequest) : createServer(handleRequest);
   await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
-  origin = `http://127.0.0.1:${http.address().port}`;
+  const localOrigin = `${tls ? "https" : "http"}://127.0.0.1:${http.address().port}`;
+  origin = publicOrigin ?? localOrigin;
   mcpUrl = `${origin}/${transport === "sse" ? "sse" : "mcp"}`;
   return {
-    origin, mcpUrl, counts,
+    origin, localOrigin, mcpUrl, counts,
     expire: () => tokens.clear(), revokeRefresh: () => refreshTokens.clear(),
     setStepUp: (value) => { stepUp = value; },
     setTokenDelay: (promise) => { delayToken = promise; },

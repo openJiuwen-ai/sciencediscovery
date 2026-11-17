@@ -38,6 +38,8 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
 
 import { shortErrorMessage, type LogFields, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type {
@@ -62,14 +64,15 @@ const STDERR_TAIL_LIMIT = 4_000;
 
 /** Header credentials belong to the configured origin. Match the existing OAuth
  * transport policy: configure a final endpoint rather than forwarding on 3xx. */
-function configuredMcpFetch(endpoint: string): FetchLike {
+function configuredMcpFetch(endpoint: string, proxy: ResolvedProxy = { mode: "environment" }): FetchLike {
   const origin = new URL(endpoint).origin;
   return (input, init) => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
     if (target.origin !== origin || target.username || target.password) {
       throw new Error("MCP request does not match the configured server origin");
     }
-    return fetch(input, { ...init, redirect: "error" });
+    const dispatcher = proxyDispatcher(proxy, target);
+    return proxyFetch(input, { ...init, redirect: "error", ...(dispatcher ? { dispatcher } : {}) } as RequestInit);
   };
 }
 
@@ -440,8 +443,8 @@ export class McpNodeClient {
       } finally { if (timer) clearTimeout(timer); }
     };
     try {
-      await this.oauth?.prepare(serverId);
-      const authorizedFetch = this.oauth?.fetchFor(serverId);
+      await this.oauth?.prepare(serverId, undefined, this.proxies[serverId]);
+      const authorizedFetch = this.oauth?.fetchFor(serverId, this.proxies[serverId]);
       if (server.transport === "stdio") {
         if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
         if (pythonFailure) throw pythonFailure;
@@ -475,13 +478,13 @@ export class McpNodeClient {
         if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
         await connect(new SSEClientTransport(new URL(server.url), {
           requestInit: { headers: server.headers },
-          fetch: authorizedFetch ?? configuredMcpFetch(server.url),
+          fetch: authorizedFetch ?? configuredMcpFetch(server.url, this.proxies[serverId]),
         }));
       } else {
         if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
         await connect(new StreamableHTTPClientTransport(new URL(server.url), {
           requestInit: { headers: server.headers },
-          fetch: authorizedFetch ?? configuredMcpFetch(server.url),
+          fetch: authorizedFetch ?? configuredMcpFetch(server.url, this.proxies[serverId]),
         }));
       }
     } catch (error) {
@@ -529,7 +532,8 @@ export class McpNodeClient {
         tools.sort((a, b) => a.name.localeCompare(b.name));
         return tools;
       } catch (error) {
-        const retryable = attempt === 0 && error instanceof Error && /timeout/i.test(error.message);
+        const retryable = server.transport === "http" && attempt === 0 && error instanceof Error
+          && ((error as Error & { code?: number }).code === ErrorCode.RequestTimeout || /timed out|timeout/i.test(error.message));
         if (!retryable) throw error;
         // A stateless streamable HTTP endpoint can time out on its first
         // post-initialize request after a successful handshake. Rebuild the

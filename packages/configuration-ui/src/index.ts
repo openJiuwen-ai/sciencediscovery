@@ -12,3 +12,4 @@ export { configurationCompactToggleCopy } from "./compact-toggle-copy.js";
 export { configurationImpactText } from "./impact-messages.js";
 export { memoryConfigurationCopy } from "./memory-copy.js";
 export { mcpConfigurationText, mcpConfigurationChoiceLabel, mcpConfigurationChangeText } from "./mcp-copy.js";
+export { useMcpDiscoveryRefresh } from "./use-mcp-discovery-refresh.js";

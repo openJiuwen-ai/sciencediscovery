@@ -24,7 +24,9 @@ import type {
 } from "@sciencediscovery/schema";
 import type { ConfigurationExternalOperation, ConfigurationExternalOutcome } from "../configuration/types.js";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
+import { apiLog } from "../logging.js";
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
 import { canonicalMcpEnvironmentName, mcpEnvironmentRemovalEffect } from "./runtime-environment.js";
 import { isMcpCredentialHeader, isMcpHeaderCredentialValue } from "./header-credential-policy.js";
@@ -141,6 +143,7 @@ export class CustomMcpServers {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly path: string;
   private backgroundRefresh: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(
     private readonly dataDir: string,
@@ -151,7 +154,7 @@ export class CustomMcpServers {
     private readonly probeProxy: (id: string) => ResolvedProxy | undefined = () => undefined,
   ) {
     this.path = resolve(dataDir, "custom-mcp-servers.enc");
-    this.oauth = new McpOAuthManager(dataDir, (id) => this.configs[id]);
+    this.oauth = new McpOAuthManager(dataDir, (id) => this.configs[id], probeProxy);
   }
 
   async load(): Promise<void> {
@@ -218,6 +221,14 @@ export class CustomMcpServers {
     ])).digest("hex");
   }
 
+  /** 以配置及用户授权绑定校验发现结果，允许发现期间正常续期令牌。 */
+  discoveryRevision(): string {
+    if (!this.key) return "not_loaded";
+    return createHmac("sha256", this.key).update(JSON.stringify([
+      this.transportConfig().signature, this.oauth.discoveryRevision(),
+    ])).digest("hex");
+  }
+
   applyCatalog(catalog: McpCatalog): void {
     for (const [id, config] of Object.entries(this.configs)) {
       if (!config.enabled) continue;
@@ -267,14 +278,40 @@ export class CustomMcpServers {
     return result;
   }
 
-  private scheduleRefresh(): void {
+  /** Queue discovery separately from mutations; one failed refresh cannot stop later work. */
+  private scheduleRefresh(reason: string): void {
+    if (this.closed) return;
     this.backgroundRefresh = this.backgroundRefresh
       .then(async () => {
-        await this.refresh();
-      })
-      .catch(() => {
-        console.warn("custom_mcp_background_refresh_failed");
+        if (this.closed) return;
+        const revision = this.discoveryRevision();
+        const configs = Object.entries(this.configs).filter(([, config]) => config.enabled);
+        const started = Date.now();
+        try {
+          await this.refresh();
+        } catch (error) {
+          let message = error instanceof Error ? error.message : String(error);
+          for (const [, config] of configs) message = this.cleanError(config, message);
+          message = shortErrorMessage(message);
+          if (revision === this.discoveryRevision()) {
+            for (const [id] of configs) {
+              this.checks.set(id, { checkedAt: new Date().toISOString(), tools: [], error: message, durationMs: Date.now() - started });
+            }
+            this.sync();
+          }
+          apiLog.warn("custom_mcp_background_refresh_failed", {
+            errorMessage: message, reason, durationMs: Date.now() - started,
+            serverIds: configs.map(([id]) => id),
+          });
+        }
       });
+  }
+
+  /** Stop scheduling discovery and drain the active refresh before transport shutdown. */
+  async close(): Promise<void> {
+    this.closed = true;
+    await this.queue;
+    await this.backgroundRefresh;
   }
 
   private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = [], pendingDeletions = this.pendingConfigurationDeletions): Promise<void> {
@@ -546,6 +583,7 @@ export class CustomMcpServers {
       this.checks.delete(serverId);
       await this.persist({ ...this.configs, [serverId]: config });
       if (previous && JSON.stringify([previous.url, previous.transport, previous.authMode, previous.oauth]) !== JSON.stringify([config.url, config.transport, config.authMode, config.oauth])) await this.oauth.clear(serverId);
+      this.scheduleRefresh("save");
       return this.list().find((item) => item.id === serverId)!;
     });
   }
@@ -560,7 +598,7 @@ export class CustomMcpServers {
       this.registry.remove(id);
       this.checks.delete(id);
       await this.onRemoved(id);
-      this.scheduleRefresh();
+      this.scheduleRefresh("remove");
     });
   }
 
@@ -607,7 +645,7 @@ export class CustomMcpServers {
   test(id: string): Promise<CustomMcpServerDetails> {
     return this.mutate(async () => {
       const result = await this.probe(id);
-      if (this.configs[id]?.enabled) this.scheduleRefresh();
+      if (this.configs[id]?.enabled) this.scheduleRefresh("test");
       return result;
     });
   }

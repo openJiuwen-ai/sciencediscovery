@@ -8,7 +8,7 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel,
-  sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
+  sendUserMessage, waitForRunTerminal, waitForMcpTool } from "./helpers/journeys.ts";
 
 /**
  * E2E-META
@@ -46,10 +46,7 @@ test("Custom Specialist receives dedicated MCP and returns results through Swarm
     } });
     expect(saved.ok()).toBe(true);
     serverId = (await saved.json()).id;
-    const tools = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${serverId}/tools`, { headers });
-    expect(tools.ok()).toBe(true);
-    const echo = (await tools.json() as Array<{ id: string; mcpToolName: string }>).find(t => t.mcpToolName === "echo");
-    expect(echo).toBeDefined();
+    const echo = await waitForMcpTool(page, serverId!, "echo");
     const toolName = `mcp__${serverId}__${echo!.id}`;
     const savedSpecialist = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: {
       name: marker, description: "Synthetic dedicated MCP Specialist", instructions,

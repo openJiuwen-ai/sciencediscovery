@@ -14,6 +14,7 @@
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { CustomMcpServerDetails, CustomMcpServerInput, McpSourceManifest } from "@sciencediscovery/schema";
+import { useMcpDiscoveryRefresh } from "@sciencediscovery/configuration-ui";
 import type { ApiClient } from "./api.js";
 import { useLocale } from "./i18n/index.js";
 import { AlertCircleIcon, CheckIcon, CloseIcon, DatabaseIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon, UploadIcon } from "./icons.js";
@@ -90,6 +91,19 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   const [inspecting, setInspecting] = useState<string>();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const root = useRef<HTMLElement>(null);
+
+  useMcpDiscoveryRefresh(client, servers, async (isCurrent) => {
+    try {
+      const items = await client.listMcpServers();
+      if (!isCurrent()) return;
+      writeSettingsCache(client, "mcp-servers", items);
+      setServers(items);
+      await onChanged();
+    } catch (reason) {
+      if (isCurrent()) setError(reason instanceof Error ? reason.message : String(reason));
+      throw reason;
+    }
+  });
 
   useEffect(() => {
     let active = true;
