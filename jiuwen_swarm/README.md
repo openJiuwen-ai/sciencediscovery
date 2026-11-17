@@ -22,6 +22,16 @@ and transport bugs; research business logic remains in ScienceDiscovery.
   Container/local startup only verifies that receipt; it does not patch code,
   clone repositories, or require Git for verification. Binary packaging verifies
   the receipt before bundling the payload.
+- The patch set pins `greenlet>=3.5.5,<4`. greenlet 3.3.1–3.5.4 Windows wheels
+  dynamically link `MSVCP140.dll`, so the packaged venv only imports on machines
+  that happen to have the VC++ x64 redistributable; 3.5.5 restored the static C++
+  runtime. An existing source checkout must rerun `setup` after updating (the
+  patch set changed, so `swarm-patches.py` restores the pinned files and
+  `uv sync` installs the patched lock's greenlet 3.5.5). A packaged installation gets the fix only from the new
+  payload: its user data directory is preserved, but the read-only `backend\jw`
+  venv is replaced. Packaging refuses a payload whose `_greenlet*.pyd` still
+  imports `MSVCP140.dll`, so the build machine's own redistributable cannot mask
+  the defect.
 - The Git tag is the source identity. The `workswarm0.2.6` tag currently contains
   package metadata `0.2.5.beta1`; do not infer source identity from that metadata.
   Release builds still need their normal boot/tool smoke checks: hash verification

@@ -42,6 +42,58 @@ const TRAMPOLINE_MARKER = "uv trampoline";
  * unrelated PATH Python silently masked it (third false-positive class). */
 const RUNTIME_DLL_RE = /^(python3.*\.dll|vcruntime.*\.dll)$/i;
 
+/**
+ * greenlet wheels 3.3.1..3.5.4 link the C++ runtime dynamically
+ * (`MSVCP140.dll`), so `import _greenlet` dies on a clean Windows machine that
+ * has no Microsoft Visual C++ x64 redistributable. 3.5.5 restored the static
+ * C++ runtime. Copying DLLs from the build machine would hide the dependency,
+ * not remove it; the payload must ship the self-contained wheel.
+ */
+export const MIN_SELF_CONTAINED_GREENLET_VERSION = "3.5.5";
+
+/** Compare the numeric release prefix ("3.5.5.post1" → 3.5.5). A pre-release
+ * such as "3.5.5rc1" does not count as the fixed release. */
+export function greenletVersionAtLeast(version, minimum = MIN_SELF_CONTAINED_GREENLET_VERSION) {
+  const parse = (value) => /^(\d+)\.(\d+)\.(\d+)(?:[.+]|$)/.exec(String(value).trim())?.slice(1).map(Number);
+  const have = parse(version);
+  const need = parse(minimum);
+  if (!have || !need) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (have[index] !== need[index]) return have[index] > need[index];
+  }
+  return true;
+}
+
+const GREENLET_EXTENSION_RE = /^_greenlet.*\.pyd$/i;
+
+/**
+ * Inspect the shipped greenlet package, not the build machine's ability to
+ * import it. Returns a diagnostic when the native extension still names the
+ * dynamic C++ runtime, or when the package/extension is missing; null when it
+ * is self-contained.
+ */
+export async function greenletRuntimeProblem(sitePackagesDir) {
+  const packageDir = join(sitePackagesDir, "greenlet");
+  let entries;
+  try {
+    entries = await readdir(packageDir, { withFileTypes: true });
+  } catch {
+    return "greenlet is not installed in the payload venv";
+  }
+  const extensions = entries.filter((entry) => entry.isFile() && GREENLET_EXTENSION_RE.test(entry.name));
+  if (!extensions.length) {
+    return "greenlet's native extension (_greenlet*.pyd) is missing from the payload venv";
+  }
+  for (const extension of extensions) {
+    const bytes = await readFile(join(packageDir, extension.name));
+    if (bytes.toString("latin1").toLowerCase().includes("msvcp140.dll")) {
+      return `${extension.name} references MSVCP140.dll, so the payload may depend on the Microsoft Visual C++ x64 redistributable on the user's machine. `
+        + `greenlet 3.3.1..3.5.4 Windows wheels have this defect; pin greenlet>=${MIN_SELF_CONTAINED_GREENLET_VERSION} and re-provision the venv.`;
+    }
+  }
+  return null;
+}
+
 /** The runtime DLL file names shipped in the bundled python root. Pure. */
 export async function bundledRuntimeDlls(pythonHome) {
   let entries;
