@@ -1,0 +1,208 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { AssetCard } from "../components/AssetCard.js";
+import { CategoryTree } from "../components/CategoryTree.js";
+import { HARDWARE_LABELS, SKILL_TYPE_LABELS, SOURCE_LABELS } from "../labels.js";
+
+import type { JSX } from "react";
+import type { Asset, CategoryNode } from "../catalog/types.js";
+import type { CopyKey, Language } from "../i18n.js";
+import type { Route } from "../router.js";
+
+interface ListViewProps {
+  assets: Asset[];
+  basePath: string;
+  categories?: CategoryNode[];
+  copy: (key: CopyKey) => string;
+  /** Connectors read better grouped by function even when nothing is selected. */
+  groupByCategory?: boolean;
+  language: Language;
+  onOpen: (asset: Asset) => void;
+  onFilter: (changes: Record<string, string | null>) => void;
+  route: Route;
+  total: number;
+}
+
+/** The selected value for the tree, whichever parameter this tab filters by. */
+function selectedGroup(route: Route, groupByCategory: boolean): { domain: string | null; subdomain: string | null } {
+  return {
+    domain: route.params.get(groupByCategory ? "function" : "domain"),
+    subdomain: route.params.get("sub"),
+  };
+}
+
+function categoryFields(asset: Asset): { domain?: string; function?: string; subdomain?: string } {
+  return asset.kind === "specialist" ? {} : asset.category as { domain?: string; function?: string; subdomain?: string };
+}
+
+function matches(asset: Asset, route: Route): boolean {
+  const query = route.params.get("q")?.trim().toLowerCase();
+  if (query) {
+    const haystack = [asset.name, asset.description, asset.id, ...asset.tags].join(" ").toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+  const source = route.params.get("source");
+  if (source && asset.source !== source) return false;
+  const domain = route.params.get("domain");
+  const subdomain = route.params.get("sub");
+  const group = route.params.get("function");
+  if (domain || subdomain || group) {
+    const category = categoryFields(asset);
+    if (domain && category.domain !== domain) return false;
+    if (subdomain && category.subdomain !== subdomain) return false;
+    if (group && category.function !== group) return false;
+  }
+  if (asset.kind !== "skill" && asset.kind !== "team-skill") return true;
+  const type = route.params.get("type");
+  if (type && asset.type !== type) return false;
+  const hardware = route.params.get("hardware");
+  if (hardware && asset.hardware !== hardware) return false;
+  return true;
+}
+
+function options(assets: Asset[]): { hardware: string[]; type: string[] } {
+  const types = new Set<string>();
+  const hardware = new Set<string>();
+  for (const asset of assets) {
+    if (asset.kind !== "skill" && asset.kind !== "team-skill") continue;
+    if (asset.type) types.add(asset.type);
+    if (asset.hardware) hardware.add(asset.hardware);
+  }
+  return { hardware: [...hardware].toSorted(), type: [...types].toSorted() };
+}
+
+function FilterSelect(props: {
+  label: string;
+  onChange: (value: string | null) => void;
+  options: { label: string; value: string }[];
+  value: string | null;
+}): JSX.Element {
+  return (
+    <label className="filter">
+      <span>{props.label}</span>
+      <select onChange={(event) => props.onChange(event.target.value || null)} value={props.value ?? ""}>
+        <option value="">—</option>
+        {props.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+export function ListView(props: ListViewProps): JSX.Element {
+  const { assets, categories, copy, language, onFilter, route } = props;
+  const visible = assets.filter((asset) => matches(asset, route));
+  const { hardware, type } = options(assets);
+  const selected = selectedGroup(route, props.groupByCategory === true);
+  const sourceOptions = Object.entries(SOURCE_LABELS)
+    .filter(([id]) => assets.some((asset) => asset.source === id))
+    .map(([id, label]) => ({ label: label[language], value: id }));
+  // A filter with one possible value is noise: show the section only when it
+  // can actually narrow the list.
+  const hasFilters = type.length > 0 || hardware.length > 0 || sourceOptions.length > 1;
+
+  const cards = visible.map((asset) => (
+    <AssetCard
+      asset={asset}
+      basePath={props.basePath}
+      downloadLabel={copy("download")}
+      key={asset.id}
+      language={language}
+      onOpen={() => props.onOpen(asset)}
+    />
+  ));
+
+  const groups = props.groupByCategory && !route.params.get("function") && categories
+    ? categories.map((category) => ({
+      cards: visible.filter((asset) => categoryFields(asset).function === category.id).map((asset) => (
+        <AssetCard
+          asset={asset}
+          basePath={props.basePath}
+          downloadLabel={copy("download")}
+          key={asset.id}
+          language={language}
+          onOpen={() => props.onOpen(asset)}
+        />
+      )),
+      id: category.id,
+      label: category.label[language],
+    })).filter((group) => group.cards.length)
+    : null;
+
+  return (
+    <div className={`layout${categories || hasFilters ? "" : " layout-plain"}`}>
+      {categories || hasFilters ? <aside className="sidebar">
+        {categories ? (
+          <CategoryTree
+            labels={{ all: copy("all"), categories: copy("categories") }}
+            language={language}
+            nodes={categories}
+            onSelect={(domain, subdomain) => onFilter(props.groupByCategory
+              ? { function: domain, sub: subdomain }
+              : { domain, sub: subdomain })}
+            selected={selected}
+            total={props.total}
+          />
+        ) : null}
+        {hasFilters ? <div className="filters">
+          <p className="tree-title">{copy("filters")}</p>
+          {type.length ? (
+            <FilterSelect
+              label={copy("type")}
+              onChange={(value) => onFilter({ type: value })}
+              options={type.map((id) => ({ label: SKILL_TYPE_LABELS[id]?.[language] ?? id, value: id }))}
+              value={route.params.get("type")}
+            />
+          ) : null}
+          {hardware.length ? (
+            <FilterSelect
+              label={copy("hardware")}
+              onChange={(value) => onFilter({ hardware: value })}
+              options={hardware.map((id) => ({ label: HARDWARE_LABELS[id]?.[language] ?? id, value: id }))}
+              value={route.params.get("hardware")}
+            />
+          ) : null}
+          {sourceOptions.length > 1 ? (
+            <FilterSelect
+              label={copy("source")}
+              onChange={(value) => onFilter({ source: value })}
+              options={sourceOptions}
+              value={route.params.get("source")}
+            />
+          ) : null}
+        </div> : null}
+      </aside> : null}
+      <section className="main">
+        <div className="main-head">
+          <input
+            aria-label={copy("search")}
+            className="search"
+            onChange={(event) => onFilter({ q: event.target.value || null })}
+            placeholder={copy("search")}
+            type="search"
+            value={route.params.get("q") ?? ""}
+          />
+          <span className="muted">{visible.length} {copy("count")}</span>
+        </div>
+        {visible.length === 0 ? <p className="empty">{copy("empty")}</p> : null}
+        {groups ? groups.map((group) => (
+          <section key={group.id}>
+            <h2 className="group-heading">{group.label}</h2>
+            <div className="grid">{group.cards}</div>
+          </section>
+        )) : <div className="grid">{cards}</div>}
+      </section>
+    </div>
+  );
+}
