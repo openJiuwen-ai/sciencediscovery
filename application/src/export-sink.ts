@@ -45,9 +45,11 @@ export class ExportSinks {
     this.io = io;
   }
 
-  /** Open the temporary that will become `path` on `end`. */
+  /** Open the temporary that will become `path` on `end`. A token that is still
+   *  streaming is aborted, never committed: reusing a live token must not publish a
+   *  truncated archive over the destination (#1216 review 3). */
   begin(token: string, path: string): void {
-    if (this.open.has(token)) this.end(token);
+    if (this.open.has(token)) this.abort(token);
     const part = partPath(path, token);
     this.open.set(token, { handle: this.io.open(part), path, part, bytes: 0 });
   }
@@ -69,6 +71,13 @@ export class ExportSinks {
     const sink = this.open.get(token);
     if (!sink) return 0;
     this.io.close(sink.handle);
+    // Nothing arrived: drop the empty temporary instead of publishing it over the
+    // destination (#1216 review 3, optional).
+    if (sink.bytes === 0) {
+      this.open.delete(token);
+      try { this.io.remove(sink.part); } catch { /* already gone */ }
+      return 0;
+    }
     this.io.rename(sink.part, sink.path);
     this.open.delete(token);
     return sink.bytes;

@@ -60,15 +60,19 @@ test("a chunk for a destination this process never opened is refused", () => {
   assert.throws(() => sinks.write("forged", new Uint8Array([1])), /导出流无效/);
 });
 
-test("reusing a token closes the previous handle before truncating", () => {
+test("reusing a live token aborts the previous stream instead of publishing it", () => {
+  // #1216 review 3: `begin` used to `end()` the previous stream, which now renames - so a
+  // reused token would publish a truncated archive over the destination.
   const { io, events } = recordingIo();
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
+  sinks.write("t1", new Uint8Array([1, 2]));
   sinks.begin("t1", "C:/exports/a.sdresearch");
   assert.deepEqual(events, [
     "open:C:/exports/a.sdresearch.t1.part",
+    "write:1:2",
     "close:1",
-    "rename:C:/exports/a.sdresearch.t1.part->C:/exports/a.sdresearch",
+    "remove:C:/exports/a.sdresearch.t1.part",
     "open:C:/exports/a.sdresearch.t1.part",
   ]);
   assert.equal(sinks.size, 1);
@@ -109,6 +113,21 @@ test("abortAll drops every open stream when the renderer disappears", () => {
     "close:2", "remove:C:/exports/b.sdresearch.t2.part",
   ]);
   assert.equal(sinks.size, 0);
+});
+
+test("an empty stream is dropped instead of published as a finished export", () => {
+  // #1216 review 3 (optional): a 0-byte stream must not replace the destination or be
+  // recorded as a completed export.
+  const { io, events } = recordingIo();
+  const sinks = new ExportSinks(io);
+  sinks.begin("t1", "C:/exports/a.sdresearch");
+  const written = sinks.end("t1");
+  assert.equal(written, 0);
+  assert.deepEqual(events, [
+    "open:C:/exports/a.sdresearch.t1.part",
+    "close:1",
+    "remove:C:/exports/a.sdresearch.t1.part",
+  ], "no rename when nothing was written");
 });
 
 test("an aborted save over an existing destination leaves the old bytes", async () => {
