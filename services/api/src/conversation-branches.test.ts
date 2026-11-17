@@ -26,6 +26,21 @@ function branchFixture() {
     userMessageId: "later-question", assistantMessageId: "later-answer", queueOrder: 2 });
   source.runEvents!.push({ ...structuredClone(source.runEvents![0]!), runId: "later-run" });
   source.runEvents![0]!.streams[0]!.events.push({ ...source.runEvents![0]!.streams[0]!.events[0]!, sequence: 99, createdAt: later });
+  // A search that finished before the selected reply travels with the branch; one
+  // that finished after it must not (#1176 review F2).
+  const answerAt = Date.parse(source.messages[1]!.createdAt);
+  const evolveBefore = new Date(answerAt - 3_600_000).toISOString();
+  const evolveAfter = new Date(answerAt + 3_600_000).toISOString();
+  (records as Records & { evolve?: unknown }).evolve = {
+    runs: [
+      { events: [], run: { createdAt: evolveBefore, finishedAt: evolveBefore, id: "evolve-before", sessionId: source.session.id } },
+      { events: [], run: { createdAt: evolveAfter, finishedAt: evolveAfter, id: "evolve-after", sessionId: source.session.id } },
+    ],
+    candidates: [
+      { hash: "sha256:before", objectPath: "before", runId: "evolve-before" },
+      { hash: "sha256:after", objectPath: "after", runId: "evolve-after" },
+    ],
+  };
   const detail = structuredClone(source.trajectory.details[0]!);
   detail.entry = { ...detail.entry, id: "later-input", runId: "later-run", timestamp: later };
   source.trajectory.index.entries.push(detail.entry);
@@ -72,6 +87,19 @@ test("fork selects the message prefix, exact old file bytes and matching evidenc
   assert.deepEqual(branch.memoryGraph.edges.map((edge) => [edge.source, edge.target]), [["code", "artifact"]]);
   assert.ok(!output.objects?.some((object) => object.path.replace(/^objects\//, "") === futureHash));
   assert.deepEqual(input, original);
+});
+
+test("a branch carries only the searches that finished at or before its reply", async () => {
+  // #1176 review F2: the evolve payload is part of the history the branch trims.
+  // A run started after the branch point, and the candidate source of a run the
+  // branch did not keep, must not reach the branch package.
+  const { input, source } = branchFixture();
+  const output = await buildConversationBranch(input, source.session.id, "fixture-answer", async () => { throw new Error("missing"); }, countExport);
+  const evolve = (output.records as Records & {
+    evolve?: { candidates: Array<{ runId: string }>; runs: Array<{ run: { id: string } }> };
+  }).evolve!;
+  assert.deepEqual(evolve.runs.map((entry) => entry.run.id), ["evolve-before"]);
+  assert.deepEqual(evolve.candidates.map((entry) => entry.runId), ["evolve-before"]);
 });
 
 test("fork recovers a historical file by its exact CAS hash", async () => {
