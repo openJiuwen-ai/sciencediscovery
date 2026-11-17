@@ -153,14 +153,30 @@ async function drop(id: string, bytes: Uint8Array, sidecarValue: unknown = sidec
   return dir;
 }
 
-async function publish(sessionsDir: string, options: { outDir?: string } = {}): Promise<{
+async function publish(sessionsDir: string, options: {
+  outDir?: string;
+  previousIndex?: SessionIndex;
+  unpublish?: string[];
+} = {}): Promise<{
+  added: string[];
   index: SessionIndex;
   indexFile: string;
+  kept: number;
   outDir: string;
+  unpublished: string[];
   warnings: string[];
 }> {
   const outDir = options.outDir ?? await tempDir("hub-publish-");
-  return { ...await publishSessions({ catalogPath: await writeCatalog(), outDir, sessionsDir }), outDir };
+  return {
+    ...await publishSessions({
+      catalogPath: await writeCatalog(),
+      outDir,
+      previousIndex: options.previousIndex,
+      sessionsDir,
+      unpublish: options.unpublish,
+    }),
+    outDir,
+  };
 }
 
 /** Rebuilds a package with a mutated manifest, keeping every payload byte. */
@@ -349,22 +365,77 @@ describe("session package publication", () => {
     assert.deepEqual(sessionCategories(collectSessions(index, "/sessions")).map((node) => node.id), ["uncategorized"]);
   });
 
-  it("drops a removed package from the index but leaves its uploaded file", async () => {
+  it("keeps published entries a later run does not deliver", async () => {
     const sessionsDir = await tempDir("hub-sessions-");
     await writeFile(path.join(sessionsDir, "kept.sdresearch"), makePackage());
     await writeFile(path.join(sessionsDir, "kept.json"), `${JSON.stringify(sidecar())}\n`);
-    await writeFile(path.join(sessionsDir, "removed.sdresearch"), makePackage());
-    await writeFile(path.join(sessionsDir, "removed.json"), `${JSON.stringify(sidecar())}\n`);
-    const outDir = await tempDir("hub-publish-");
-    const first = await publishSessions({ catalogPath: await writeCatalog(), outDir, sessionsDir });
-    assert.deepEqual(first.index.sessions.map((entry) => entry.id), ["kept", "removed"]);
+    await writeFile(path.join(sessionsDir, "old.sdresearch"), makePackage());
+    await writeFile(path.join(sessionsDir, "old.json"), `${JSON.stringify(sidecar())}\n`);
+    const first = await publish(sessionsDir);
+    assert.deepEqual(first.index.sessions.map((entry) => entry.id), ["kept", "old"]);
 
-    await rm(path.join(sessionsDir, "removed.sdresearch"));
-    await rm(path.join(sessionsDir, "removed.json"));
-    const second = await publishSessions({ catalogPath: await writeCatalog(), outDir, sessionsDir });
+    // A later run delivers only `kept`; `old` must survive the merge.
+    await rm(path.join(sessionsDir, "old.sdresearch"));
+    await rm(path.join(sessionsDir, "old.json"));
+    const second = await publish(sessionsDir, { outDir: first.outDir, previousIndex: first.index });
+    assert.deepEqual(second.index.sessions.map((entry) => entry.id), ["kept", "old"]);
+    assert.deepEqual(second.added, ["kept"]);
+    assert.equal(second.kept, 1);
+  });
+
+  it("unpublishes only explicitly named entries and leaves their files", async () => {
+    const sessionsDir = await tempDir("hub-sessions-");
+    for (const id of ["kept", "removed"]) {
+      await writeFile(path.join(sessionsDir, `${id}.sdresearch`), makePackage());
+      await writeFile(path.join(sessionsDir, `${id}.json`), `${JSON.stringify(sidecar())}\n`);
+    }
+    const first = await publish(sessionsDir);
+
+    // An empty drop is allowed when a previous index anchors the merge.
+    const empty = await tempDir("hub-empty-drop-");
+    const second = await publish(empty, {
+      outDir: first.outDir,
+      previousIndex: first.index,
+      unpublish: ["removed"],
+    });
     assert.deepEqual(second.index.sessions.map((entry) => entry.id), ["kept"]);
+    assert.deepEqual(second.unpublished, ["removed"]);
+    assert.match(second.warnings[0]!, /no new session packages/);
     // The old URL keeps working because the uploaded object is never deleted.
-    await access(path.join(outDir, "sessions", "removed.sdresearch"));
+    await access(path.join(first.outDir, "sessions", "removed.sdresearch"));
+  });
+
+  it("rejects an unpublish that is unknown or delivered by the same run", async () => {
+    const sessionsDir = await drop("same-run", makePackage());
+    const first = await publish(sessionsDir);
+
+    await assert.rejects(
+      () => publish(sessionsDir, { outDir: first.outDir, previousIndex: first.index, unpublish: ["missing"] }),
+      /cannot unpublish "missing": it is not in the published index/,
+    );
+    await assert.rejects(
+      () => publish(sessionsDir, { outDir: first.outDir, previousIndex: first.index, unpublish: ["same-run"] }),
+      /cannot unpublish "same-run": the same publish delivers it/,
+    );
+  });
+
+  it("lets a delivered package replace its earlier entry", async () => {
+    const sessionsDir = await drop("replaced", makePackage());
+    const first = await publish(sessionsDir);
+    const republishedDrop = await drop("replaced", makePackage(), sidecar({ name: "Updated title" }));
+    const second = await publish(republishedDrop, {
+      outDir: first.outDir,
+      previousIndex: first.index,
+    });
+    assert.deepEqual(second.added, ["replaced"]);
+    assert.equal(second.kept, 0);
+    assert.equal(second.index.sessions.length, 1);
+    assert.equal(second.index.sessions[0]!.name, "Updated title");
+  });
+
+  it("rejects an empty drop when there is no published index to merge", async () => {
+    const empty = await tempDir("hub-empty-drop-");
+    await assert.rejects(() => publish(empty), /no \.sdresearch packages to publish/);
   });
 });
 
