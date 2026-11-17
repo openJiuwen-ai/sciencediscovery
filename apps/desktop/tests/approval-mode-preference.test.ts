@@ -16,31 +16,52 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
+import { APPROVAL_MODE_STORAGE_KEY, type ReadableStorage } from "../src/state/storage.js";
 import {
+  inheritForSession,
   inheritedApprovalMode,
   newSessionRequest,
   rememberApprovalMode,
-  resetApprovalModePreference,
 } from "../src/app/approval-mode-preference.js";
 
-test("a new conversation is created in the mode the reader selected last", () => {
-  resetApprovalModePreference();
-  assert.deepEqual(newSessionRequest(), {}, "with no choice yet the service default applies");
-  rememberApprovalMode("always_allow");
-  assert.equal(inheritedApprovalMode(), "always_allow");
-  assert.deepEqual(newSessionRequest("model-2"), { modelId: "model-2", approvalMode: "always_allow" });
-  rememberApprovalMode("ask_for_dangerous");
-  assert.deepEqual(newSessionRequest(), { approvalMode: "ask_for_dangerous" }, "the later choice wins");
-  resetApprovalModePreference();
-  assert.deepEqual(newSessionRequest(), {}, "a fresh instance starts with no inherited choice");
+/** The storage shape the shell provides, with nothing else attached. */
+function fakeStorage(seed?: string): ReadableStorage {
+  const values = new Map<string, string>();
+  if (seed !== undefined) values.set(APPROVAL_MODE_STORAGE_KEY, seed);
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+}
+
+test("a new conversation is created in the mode remembered from the last run", () => {
+  const storage = fakeStorage();
+  assert.deepEqual(newSessionRequest(undefined, storage), {},
+    "with nothing stored the service default applies");
+  rememberApprovalMode("always_allow", storage);
+  // A fresh call is what a restart looks like: this module keeps no state of its own.
+  assert.equal(inheritedApprovalMode(storage), "always_allow");
+  assert.deepEqual(newSessionRequest("model-2", storage),
+    { modelId: "model-2", approvalMode: "always_allow" });
+  rememberApprovalMode("ask_for_dangerous", storage);
+  assert.deepEqual(newSessionRequest(undefined, storage), { approvalMode: "ask_for_dangerous" },
+    "the later choice wins");
 });
 
-test("the inherited mode travels only in a creation body", () => {
-  resetApprovalModePreference();
-  rememberApprovalMode("always_allow");
-  const body = newSessionRequest();
-  // The preference must not arrive as a settings override or a title: those are the
-  // fields that can be written onto a session after it exists.
-  assert.deepEqual(Object.keys(body), ["approvalMode"]);
-  resetApprovalModePreference();
+test("a stored value that is not a mode is ignored", () => {
+  assert.equal(inheritedApprovalMode(fakeStorage("never_ask")), undefined);
+  assert.equal(inheritedApprovalMode(fakeStorage("")), undefined);
+  assert.deepEqual(newSessionRequest(undefined, fakeStorage("garbage")), {});
+});
+
+test("a conversation created by another path gets the remembered mode", async () => {
+  const calls: Array<{ id: string; body: unknown }> = [];
+  const storage = fakeStorage();
+  const update = async (id: string, body: { approvalMode: string }) => { calls.push({ id, body }); };
+  assert.equal(await inheritForSession("s1", update, storage), false, "nothing remembered: no request");
+  assert.deepEqual(calls, []);
+  rememberApprovalMode("always_allow", storage);
+  assert.equal(await inheritForSession("s1", update, storage), true);
+  assert.deepEqual(calls, [{ id: "s1", body: { approvalMode: "always_allow" } }]);
 });

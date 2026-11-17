@@ -102,8 +102,8 @@ test("the composer offers the model pill, upload and session settings", () => {
   assert.match(markup, /class="composer-model-pill"/);
   assert.match(markup, /aria-label="上传文件"/);
   assert.match(markup, /aria-label="会话设置"/);
-  // The approval pill moved into 会话设置; a second copy in the footer would
-  // give the same choice two homes.
+  // The footer selector is the visible door (#1204) and 会话设置 still lists the
+  // mode; the retired pilot class must not come back alongside them.
   assert.doesNotMatch(markup, /composer-permission-pill/);
   assert.doesNotMatch(markup, /class="composer-options"/);
   const longName = "Desktop configuration 长模型名称 85fedd8a-9420-47f7-9790-1ece4fd4cfa4";
@@ -521,7 +521,7 @@ test("a deleted model is shown as unavailable instead of selecting the first pro
 });
 
 test("the permission selector follows the + and settings buttons and names the active mode", () => {
-  const markup = render();
+  const markup = render(false, { approvalMode: "ask_for_dangerous" });
   const plus = markup.indexOf('class="composer-plus"');
   const settings = markup.indexOf("composer-settings");
   const selector = markup.indexOf("composer-permission");
@@ -586,4 +586,14 @@ test("the selector opens the two scope explanations and reports the choice", asy
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
     else (globalThis as { document?: unknown }).document = originalDocument;
   }
+});
+
+test("with nothing remembered the control says it follows the settings, not that it asks", () => {
+  // No session detail and no stored choice: the service will apply the project or
+  // global default, which can be full access, so claiming 请求批准 would be a lie.
+  const markup = render();
+  assert.match(markup, /aria-label="跟随设置"/u);
+  assert.match(markup, /composer-permission-label">跟随设置</u);
+  assert.match(markup, /class="composer-permission is-unset"/u);
+  assert.doesNotMatch(markup, /is-danger/u, "an unknown mode is neither of the two known colours");
 });
