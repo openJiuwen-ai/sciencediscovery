@@ -32,10 +32,11 @@ export function parseRoute(basePath: string, location: Location = globalThis.loc
   const base = normalizeBase(basePath);
   let rest = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : location.pathname;
   rest = rest.replace(/^\/+/u, "").replace(/\/+$/u, "");
-  const [segment, id] = rest.split("/");
+  const [segment, ...idParts] = rest.split("/");
   const tab = (TABS as readonly string[]).includes(segment ?? "") ? segment as Tab : "skills";
   return {
-    id: id ? decodeURIComponent(id) : null,
+    // External skill ids are paths, so everything after the tab is the id.
+    id: idParts.length ? decodeURIComponent(idParts.join("/")) : null,
     params: new URLSearchParams(location.search),
     tab,
   };
@@ -45,7 +46,7 @@ export function routePath(basePath: string, route: Route): string {
   const base = normalizeBase(basePath);
   const segments = [route.tab, route.id].filter((part): part is string => Boolean(part));
   const search = route.params.toString();
-  return `${base || ""}/${segments.map((part) => encodeURIComponent(part)).join("/")}${search ? `?${search}` : ""}`;
+  return `${base || ""}/${segments.join("/").split("/").map((part) => encodeURIComponent(part)).join("/")}${search ? `?${search}` : ""}`;
 }
 
 export function useRoute(basePath: string): { route: Route; setRoute: (route: Route, options?: { replace?: boolean }) => void } {

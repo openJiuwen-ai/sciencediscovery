@@ -104,3 +104,6 @@ data-*/
 
 # one-click packaging stamps/logs (scripts/package-sd-windows.sh)
 /.package-stamps/
+
+# frozen MindScienceSkills snapshot used by local hub builds
+/.hub-cache/

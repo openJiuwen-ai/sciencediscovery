@@ -35,7 +35,10 @@ export interface CollectedSkill {
 interface SkillInput {
   categories: Record<string, SkillCategory>;
   repoRoot: string;
+  warnings?: string[];
 }
+
+const FALLBACK_CATEGORY: SkillCategory = { domain: "research_tools", subdomain: "general_tools" };
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -99,8 +102,12 @@ export async function collectBuiltinSkills(input: SkillInput): Promise<Collected
     const teamSkill = frontmatter.kind === "team-skill";
     const members = teamSkill ? membersOf(frontmatter) : undefined;
     if (teamSkill && !members) throw new Error(`skills/${id} declares kind: team-skill without members`);
-    const category = input.categories[id];
-    if (!category) throw new Error(`skills/${id} has no entry in scripts/hub/skill-categories.json`);
+    let category = input.categories[id];
+    if (!category) {
+      // An unmapped skill must stay visible rather than break the catalogue.
+      input.warnings?.push(`skills/${id} has no entry in scripts/hub/skill-categories.json; filed under research_tools/general_tools`);
+      category = FALLBACK_CATEGORY;
+    }
 
     const asset: SkillAsset = {
       author: null,

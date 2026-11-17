@@ -14,4 +14,10 @@
 
 // Cross-cutting filter labels live with the exporter so a new skill type or
 // hardware profile only has to be named once.
-export { HARDWARE_LABELS, SKILL_TYPE_LABELS, SOURCE_LABELS } from "../../../scripts/hub/category-labels.js";
+export {
+  DOMAIN_LABELS,
+  HARDWARE_LABELS,
+  SKILL_TYPE_LABELS,
+  SOURCE_LABELS,
+  SUBDOMAIN_LABELS,
+} from "../../../scripts/hub/category-labels.js";
