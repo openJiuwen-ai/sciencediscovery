@@ -23,6 +23,7 @@
   "include": [
     "packages/*/src/**/*.test.ts",
     "packages/*/src/**/*.test.tsx",
+    "scripts/hub/**/*.test.ts",
     "services/*/src/**/*.test.ts",
     "services/*/src/**/*.test.tsx"
   ]

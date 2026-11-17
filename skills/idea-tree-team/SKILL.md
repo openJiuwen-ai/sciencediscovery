@@ -1,6 +1,11 @@
 ---
 name: idea-tree-team
 description: "Use when the composer message starts with /idea-tree or /idea-tree-team, or the user explicitly asks for autonomous Idea Tree research: prepare supplied inputs for the research and explain its saved results."
+kind: team-skill
+members:
+  - creative-material-design
+  - assessment-screener
+  - insight-aggregator
 ---
 
 # Idea Tree Research
