@@ -154,6 +154,7 @@ export const ZH = {
     permissionAskShort: "询问",
     permissionAskDesc: "编辑外部文件和使用互联网时始终询问",
     permissionFull: "完全访问",
+  permissionFollowSettings: "跟随设置",
     permissionFullDesc: "可不受限制地访问互联网和您电脑上的任何文件",
     permissionLocked: "这一轮跑完才能切换权限",
     attachHint: (limit?: string) => limit === undefined

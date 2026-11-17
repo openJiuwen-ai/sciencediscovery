@@ -85,7 +85,7 @@ import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run
 import { pendingPermissions, reconcilePermissions } from "../run-stream/permission.js";
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
-import { newSessionRequest } from "./approval-mode-preference.js";
+import { inheritForSession, newSessionRequest } from "./approval-mode-preference.js";
 
 /** A run in one of these states has not finished. `blocked` counts: the model
  *  is waiting on a permission decision, so the turn is still open. */
@@ -1585,6 +1585,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     async (name: string) => {
       try {
         const created = await createProjectRequest(client, name);
+        // The service creates a project's first conversation with its own default; a
+        // new conversation inherits the remembered mode here too, or this supported
+        // path would be the one place the rule does not hold.
+        await inheritForSession(created.firstSession.id, (target, body) => updateSession(client, target, body));
         setProjects((current) => [...current, created.project]);
         await openSession(created.firstSession.id, created.project.id);
         await refreshSessionLists();
@@ -1631,7 +1635,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * Change the open session's approval mode.
    *
    * With no session open there is nothing to write: the choice applies to the
-   * session that exists, and a draft inherits the server's default. The reply
+   * session that exists, and a new one inherits the remembered preference. The reply
    * is read back rather than assumed — the detail is what the composer's
    * picker shows, and a failed write must not leave it claiming a mode the
    * session does not have.

@@ -12,43 +12,73 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ApprovalMode } from "../api/types.js";
-import type { CreateSessionRequest } from "../api/types.js";
+import type { ApprovalMode, CreateSessionRequest } from "../api/types.js";
+import { APPROVAL_MODE_STORAGE_KEY, readStoredText, writeStoredText, type ReadableStorage } from "../state/storage.js";
 
 /**
- * The permission mode the reader chose last, for new conversations in this run.
+ * The permission mode new conversations start in (#1204).
  *
- * #1204 asks that a new conversation start in the mode the reader last picked,
- * while conversations that already exist keep their own. The choice therefore
- * lives here, in the running application instance — not in storage: it is
- * deliberately not restored after a restart, and nothing reads it for a session
+ * The choice is the reader's last explicit selection and it outlives a restart, so
+ * desktop storage is the source of truth rather than a module variable. It is read
+ * only when a conversation is created; no code path here writes it onto a session
  * that already exists.
  */
-let lastSelected: ApprovalMode | undefined;
+const MODES: readonly ApprovalMode[] = ["ask_for_dangerous", "always_allow"];
 
-export function rememberApprovalMode(mode: ApprovalMode): void {
-  lastSelected = mode;
+function isApprovalMode(value: string | null): value is ApprovalMode {
+  return value !== null && (MODES as readonly string[]).includes(value);
 }
 
-/** The mode a new conversation starts in, or `undefined` to let the service default. */
-export function inheritedApprovalMode(): ApprovalMode | undefined {
-  return lastSelected;
+function browserStorage(): ReadableStorage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    // A blocked storage (private mode, a restrictive webview) means "no preference",
+    // not a failed render: the service default still applies.
+    return undefined;
+  }
+}
+
+export function rememberApprovalMode(mode: ApprovalMode, storage: ReadableStorage | undefined = browserStorage()): void {
+  if (storage) writeStoredText(storage, APPROVAL_MODE_STORAGE_KEY, mode);
+}
+
+/** The remembered mode, or `undefined` when nothing valid was stored. */
+export function inheritedApprovalMode(storage: ReadableStorage | undefined = browserStorage()): ApprovalMode | undefined {
+  const stored = storage ? readStoredText(storage, APPROVAL_MODE_STORAGE_KEY) : null;
+  return isApprovalMode(stored) ? stored : undefined;
 }
 
 /**
  * The body for creating a conversation: an explicit model choice when the reader
- * made one, plus the inherited permission mode. Both are creation-time values;
+ * made one, plus the remembered permission mode. Both are creation-time values;
  * the second never touches an existing session.
  */
-export function newSessionRequest(explicitModelId?: string): CreateSessionRequest {
-  const approvalMode = inheritedApprovalMode();
+export function newSessionRequest(explicitModelId?: string,
+  storage: ReadableStorage | undefined = browserStorage()): CreateSessionRequest {
+  const approvalMode = inheritedApprovalMode(storage);
   return {
     ...(explicitModelId ? { modelId: explicitModelId } : {}),
     ...(approvalMode ? { approvalMode } : {}),
   };
 }
 
-/** Tests only: the preference is process-wide, so a test must start from none. */
-export function resetApprovalModePreference(): void {
-  lastSelected = undefined;
+/**
+ * Apply the remembered mode to a session created by another path (a new project's
+ * first conversation), which the service creates with its own default. Returns
+ * whether anything was applied; the caller passes its own update function so this
+ * module stays free of API plumbing.
+ */
+export async function inheritForSession(sessionId: string,
+  update: (sessionId: string, body: { approvalMode: ApprovalMode }) => Promise<unknown>,
+  storage: ReadableStorage | undefined = browserStorage()): Promise<boolean> {
+  const approvalMode = inheritedApprovalMode(storage);
+  if (!approvalMode) return false;
+  await update(sessionId, { approvalMode });
+  return true;
+}
+
+/** Tests only: drop the stored preference. */
+export function resetApprovalModePreference(storage: ReadableStorage | undefined = browserStorage()): void {
+  try { storage?.removeItem?.(APPROVAL_MODE_STORAGE_KEY); } catch { /* nothing to reset */ }
 }

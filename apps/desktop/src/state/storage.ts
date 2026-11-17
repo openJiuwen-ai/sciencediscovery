@@ -55,6 +55,10 @@ export const DATA_DIR_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:data-dir`;
  *  the guide is replayed from 设置, so a replay that is abandoned half-way does
  *  not bring it back on the next start. */
 export const GUIDE_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:guide`;
+/** The permission mode new conversations start in (#1204). Unlike the guide flag,
+ *  this is a live preference: the shell writes it on every selection and reads it
+ *  when a conversation is created, including after a restart. */
+export const APPROVAL_MODE_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:approval-mode`;
 
 function safeRead(storage: ReadableStorage, key: string): string | null {
   try {
