@@ -971,13 +971,20 @@ jobs:
       - name: Install the Electron workspace
         run: pnpm --dir application install --frozen-lockfile
 
-      - name: Test and typecheck the desktop shell
-        run: |
-          pnpm --dir application test
-          pnpm --dir application typecheck
+      # Two steps on purpose: in one pwsh block the step reports the last
+      # command's exit code, so a failing suite used to be recorded as a green
+      # step (#1182 review F1, #1187 review F2).
+      - name: Test the desktop shell
+        run: pnpm --dir application test
+
+      - name: Typecheck the desktop shell
+        run: pnpm --dir application typecheck
 
       - name: Build the Windows installer
-        run: pnpm --dir application dist
+        # Build-only gate: electron-builder treats CI detection plus the
+        # configured github publish provider as "upload now", and this job has
+        # no token (#1187 review F1). Publishing stays manual.
+        run: pnpm --dir application dist --publish never
 
       - name: Verify and upload the Windows installer
         if: always()
