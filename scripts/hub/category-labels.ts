@@ -33,7 +33,7 @@ export const DOMAIN_LABELS: Record<string, Label> = {
 };
 
 export const SUBDOMAIN_LABELS: Record<string, Label> = {
-  "astronomical-analysis": label("Astronomical analysis", "天文分析"),
+  astronomical_analysis: label("Astronomical analysis", "天文分析"),
   bioinformatics: label("Bioinformatics", "生物信息"),
   cancer_genomics: label("Cancer genomics", "癌症基因组"),
   cheminformatics: label("Cheminformatics", "化学信息学"),
@@ -52,7 +52,7 @@ export const SUBDOMAIN_LABELS: Record<string, Label> = {
   geospatial: label("Geospatial", "地理空间"),
   hpc_orchestration: label("HPC orchestration", "HPC 编排"),
   machine_learning: label("Machine learning", "机器学习"),
-  medical_imaging_and_signal_processing: label("Medical imaging and signal processing", "医学影像与信号处理"),
+  medical_imaging_and__signal_processing: label("Medical imaging and signal processing", "医学影像与信号处理"),
   meteorology: label("Meteorology", "气象"),
   molecular_dynamics: label("Molecular dynamics", "分子动力学"),
   multi_omics_integration: label("Multi-omics integration", "多组学整合"),

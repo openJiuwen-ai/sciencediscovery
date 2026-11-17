@@ -38,6 +38,8 @@ const COPY = {
   notFound: { en: "This asset does not exist in the catalog.", zh: "目录中没有这个条目。" },
   resources: { en: "Files", zh: "文件" },
   search: { en: "Search name or description", zh: "搜索名称或描述" },
+  snapshot: { en: "Snapshot", zh: "快照" },
+  upstream: { en: "View source", zh: "查看上游文件" },
   sessions: { en: "Session packages", zh: "会话包" },
   skills: { en: "Skills", zh: "技能" },
   source: { en: "Source", zh: "来源" },
