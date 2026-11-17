@@ -96,14 +96,27 @@ function resolveRelated(related: RelatedAsset | undefined, catalog: SessionCatal
 /**
  * Pairs every package with its sidecar before reading anything: a half-dropped
  * package is a mistake in the drop, not something to skip quietly.
+ *
+ * An empty drop is allowed only when the publish merges into an existing index
+ * (`allowEmpty`): a manual run may deliver only unpublishes, or no packages at
+ * all, and still rebuild the site from what is already live.
  */
-async function pairDrop(directory: string): Promise<{ packages: Map<string, string>; sidecars: Map<string, string> }> {
+async function pairDrop(
+  directory: string,
+  allowEmpty: boolean,
+): Promise<{ packages: Map<string, string>; sidecars: Map<string, string> }> {
   const packages = new Map<string, string>();
   const sidecars = new Map<string, string>();
-  const entries = (await readdir(directory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .toSorted();
+  let entries: string[];
+  try {
+    entries = (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .toSorted();
+  } catch (error) {
+    if (allowEmpty && (error as NodeJS.ErrnoException).code === "ENOENT") return { packages, sidecars };
+    throw error;
+  }
 
   for (const entry of entries) {
     if (entry.endsWith(PACKAGE_EXTENSION)) {
@@ -115,7 +128,7 @@ async function pairDrop(directory: string): Promise<{ packages: Map<string, stri
   for (const [id, file] of sidecars) {
     if (!packages.has(id)) throw new Error(`${path.join(directory, file)}: there is no ${id}${PACKAGE_EXTENSION} package`);
   }
-  if (!packages.size) throw new Error(`${directory}: no ${PACKAGE_EXTENSION} packages to publish`);
+  if (!packages.size && !allowEmpty) throw new Error(`${directory}: no ${PACKAGE_EXTENSION} packages to publish`);
   for (const [id, file] of packages) {
     if (!ID_PATTERN.test(id)) throw new Error(`${path.join(directory, file)}: the id must match ${ID_PATTERN.source}`);
     if (!sidecars.has(id)) throw new Error(`${path.join(directory, file)}: sidecar ${id}${SIDECAR_EXTENSION} is missing`);
@@ -141,11 +154,16 @@ function cleanCategory(sidecar: SessionSidecar, sidecarPath: string, warnings: s
   };
 }
 
-export async function verifySessionDrop(options: { catalogPath: string; sessionsDir: string }): Promise<VerifiedDrop> {
+export async function verifySessionDrop(options: {
+  allowEmpty?: boolean;
+  catalogPath: string;
+  sessionsDir: string;
+}): Promise<VerifiedDrop> {
   const catalog = await loadSessionCatalog(options.catalogPath);
-  const { packages, sidecars } = await pairDrop(options.sessionsDir);
+  const { packages, sidecars } = await pairDrop(options.sessionsDir, options.allowEmpty ?? false);
   const warnings: string[] = [];
   const sessions: VerifiedSession[] = [];
+  if (!packages.size) warnings.push(`${options.sessionsDir}: no new session packages; keeping the published entries`);
 
   for (const [id, packageFile] of [...packages].toSorted(([left], [right]) => left.localeCompare(right))) {
     const packagePath = path.join(options.sessionsDir, packageFile);
