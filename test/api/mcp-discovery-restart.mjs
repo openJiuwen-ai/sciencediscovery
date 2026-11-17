@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import { startMcpFixture, startMcpProxy } from "../support/mcp-network-fixtures.ts";
 
 const root = process.cwd();
+await mkdir(resolve(root, ".tmp/pr1197"), { recursive: true });
 const directory = await mkdtemp(resolve(root, ".tmp/pr1197/restart-"));
 const token = randomBytes(32).toString("hex");
 const extensionPath = resolve(directory, "extensions.json");
