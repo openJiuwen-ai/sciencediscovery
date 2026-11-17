@@ -23,7 +23,7 @@ import {
 } from "../labels.js";
 
 import type { JSX } from "react";
-import type { Asset, Catalog, ConnectorAsset, SkillAsset, SpecialistAsset } from "../catalog/types.js";
+import type { Asset, Catalog, ConnectorAsset, SessionAsset, SkillAsset, SpecialistAsset } from "../catalog/types.js";
 import type { CopyKey, Language } from "../i18n.js";
 import type { Tab } from "../router.js";
 
@@ -171,6 +171,69 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
       ) : null}
       <Links catalog={catalog} ids={specialist.skills} label={copy("boundSkills")} onNavigate={onNavigate} />
       <Links catalog={catalog} ids={specialist.connectors} label={copy("boundConnectors")} onNavigate={onNavigate} />
+    </article>
+  );
+}
+
+function formatDuration(durationMs: number | undefined): string | null {
+  if (durationMs === undefined) return null;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function SessionDetail({ asset, basePath, catalog, copy, language, onNavigate }: DetailProps): JSX.Element {
+  const session = asset as SessionAsset;
+  const { benchmark, contents, run } = session;
+  const meta = [
+    `${copy("benchmark")} ${benchmark.name}`,
+    `${copy("caseId")} ${benchmark.caseId}`,
+    `${copy("score")} ${benchmark.score ?? "—"}`,
+    benchmark.runAt ? `${copy("runAt")} ${benchmark.runAt}` : null,
+    benchmark.dataset ? `Dataset ${benchmark.dataset}` : null,
+    benchmark.commit ? `Commit ${benchmark.commit}` : null,
+  ].filter((part): part is string => Boolean(part)).join(" · ");
+  const duration = formatDuration(run?.durationMs);
+  const runMeta = [
+    run?.model ? `${copy("model")} ${run.model}` : null,
+    duration ? `${copy("duration")} ${duration}` : null,
+    run?.tokens !== undefined ? `${copy("tokens")} ${run.tokens.toLocaleString(language === "zh" ? "zh-CN" : "en-US")}` : null,
+    run?.productVersion ? `${copy("version")} ${run.productVersion}` : null,
+    session.download.size ? `${(session.download.size / 1024 / 1024).toFixed(1)} MB` : null,
+  ].filter((part): part is string => Boolean(part)).join(" · ");
+  const stats: [string, number | string][] = [
+    [copy("messages"), contents.messages],
+    [copy("artifacts"), contents.artifacts],
+    [copy("files"), contents.files],
+    [copy("executions"), contents.executions],
+    [copy("memoryNodes"), contents.memoryNodes],
+    [copy("trajectory"), copy(contents.trajectory === "complete" ? "trajectoryComplete" : "trajectorySummary")],
+  ];
+  return (
+    <article className="detail">
+      <div className="detail-head">
+        <div>
+          <h1>{session.name}</h1>
+          <p className="muted">{meta}</p>
+          {runMeta ? <p className="muted">{runMeta}</p> : null}
+        </div>
+        <DownloadButton basePath={basePath} label={copy("downloadPackage")} url={session.download.url} />
+      </div>
+      <p>{session.description}</p>
+      <section aria-label={copy("contents")} className="session-contents">
+        {stats.map(([label, value]) => (
+          <div className="session-stat" key={label}>
+            <span className="muted">{label}</span>
+            <b>{value}</b>
+          </div>
+        ))}
+      </section>
+      <MarkdownFile basePath={basePath} url={session.readme} />
+      <Links catalog={catalog} ids={session.related?.specialists ?? []} label={copy("specialists")} onNavigate={onNavigate} />
+      <Links catalog={catalog} ids={session.related?.skills ?? []} label={copy("skills")} onNavigate={onNavigate} />
+      <Links catalog={catalog} ids={session.related?.connectors ?? []} label={copy("connectors")} onNavigate={onNavigate} />
     </article>
   );
 }

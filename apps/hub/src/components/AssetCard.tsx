@@ -36,13 +36,17 @@ function formatSize(bytes: number | undefined): string {
 
 export function AssetCard({ asset, basePath, downloadLabel, language, onOpen }: AssetCardProps): JSX.Element {
   const source = SOURCE_LABELS[asset.source];
+  // A session card leads with the benchmark it belongs to and the score it
+  // earned; the producer badge says less than either.
+  const session = asset.kind === "session-package" ? asset : null;
   return (
     <article className="card" onClick={onOpen}>
       <header className="card-head">
         <h3 className="card-title">{asset.name}</h3>
         <span className="badges">
           {asset.kind === "team-skill" ? <span className="badge badge-team">{language === "zh" ? "团队" : "Team"}</span> : null}
-          {source ? <span className="badge">{source[language]}</span> : null}
+          {session ? <span className="badge">{session.benchmark.name}</span> : null}
+          {!session && source ? <span className="badge">{source[language]}</span> : null}
         </span>
       </header>
       <p className="card-description">{asset.description}</p>
@@ -52,10 +56,17 @@ export function AssetCard({ asset, basePath, downloadLabel, language, onOpen }: 
         </p>
       ) : null}
       <footer className="card-foot">
-        <span className="muted">
-          {language === "zh" ? "版本" : "Version"} {asset.version ?? "—"}
-          {asset.download.size ? ` · ${formatSize(asset.download.size)}` : ""}
-        </span>
+        {session ? (
+          <span className="muted">
+            {language === "zh" ? "分数" : "Score"} {session.benchmark.score ?? "—"}
+            {asset.download.size ? ` · ${formatSize(asset.download.size)}` : ""}
+          </span>
+        ) : (
+          <span className="muted">
+            {language === "zh" ? "版本" : "Version"} {asset.version ?? "—"}
+            {asset.download.size ? ` · ${formatSize(asset.download.size)}` : ""}
+          </span>
+        )}
         <DownloadButton basePath={basePath} label={downloadLabel} url={asset.download.url} />
       </footer>
     </article>

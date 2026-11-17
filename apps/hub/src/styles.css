@@ -309,6 +309,16 @@ pre {
 .tools li:last-child { border-bottom: 0; }
 .tools p { margin: 4px 0 0; }
 
+.session-contents {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin: 18px 0;
+}
+.session-stat { background: var(--surface-subtle); border-radius: var(--radius-m); padding: 10px 14px; }
+.session-stat span { display: block; font-size: 12.5px; }
+.session-stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
 .governance { margin: 0; }
 .governance div { border-bottom: 1px solid var(--border); display: grid; gap: 16px; grid-template-columns: 200px 1fr; padding: 8px 0; }
 .governance dt { color: var(--muted); }
