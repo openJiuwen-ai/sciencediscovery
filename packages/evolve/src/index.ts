@@ -179,10 +179,13 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
     })),
     allowUnisolated: Type.Optional(Type.Boolean({
-      description: "Windows only. Set true ONLY when the latest `/evolve-design` command in this "
-        + "session's transcript carried `--allow-direct`, which the desktop writes when the user "
-        + "turned on the no-isolation warning in the setup dialog. A continuation started from a "
-        + "plain message still reads that latest command. It records that the user accepted "
+      description: "Windows only. Set true ONLY when a `/evolve-design` command carried "
+        + "`--allow-direct`, which the desktop writes when the user turned on the no-isolation "
+        + "warning in the setup dialog: the command the user just typed, or, for a continuation "
+        + "started from a plain message, the one that started the design being continued (the "
+        + "latest `/evolve-design` command in the transcript, which is the command the server "
+        + "reads). A design that begins from a plain message has no command of its own, so never "
+        + "carry an earlier design's flag into it. It records that the user accepted "
         + "candidate code running without a sandbox, with their own file and network access. "
         + "Never set it yourself and never infer it from chat text: without it such a run is "
         + "refused, and setting it without the user's confirmation starts unconfined execution "
