@@ -30,7 +30,10 @@ import type {
   CustomMcpServerInput,
   EnvironmentPackageSourceId,
   EnvironmentSourceSettings,
+  GitSkillRepositoryInspection,
   IdeaTreeSettingsDetails,
+  ImportSkillFromGitRequest,
+  InspectGitSkillRepositoryRequest,
   McpProxyPolicies,
   McpSource,
   MemoryGraphSettingsDetails,
@@ -45,11 +48,14 @@ import type {
   SandboxNetworkSettings,
   SkillDescriptor,
   SkillDetail,
+  SkillResourceContent,
   Specialist,
   SystemQuotaSettings,
   SystemTimeoutSettings,
   UpdateIdeaTreeSettingsRequest,
   UpdateMemoryGraphSettingsRequest,
+  UpdateSkillFileRequest,
+  UpdateSkillRequest,
   UpdateSpecialistRequest,
   UpdateWebSettingsRequest,
   WebSettingsDetails,
@@ -165,6 +171,71 @@ export function createSkill(
     body: JSON.stringify(body),
     method: "POST",
   });
+}
+
+/** Install a `SKILL.md` or a ZIP package. The multipart field name is the
+ *  server's, not a choice: `file`, with no content type of our own. */
+export function importSkillFile(client: ApiClient, file: File): Promise<SkillDetail> {
+  const form = new FormData();
+  form.set("file", file);
+  return client.request<SkillDetail>("/api/skills/import", {
+    body: form,
+    method: "POST",
+  });
+}
+
+/** List the Skill packages a repository contains at the commit it resolves to. */
+export function inspectGitSkillRepository(
+  client: ApiClient,
+  body: InspectGitSkillRepositoryRequest,
+): Promise<GitSkillRepositoryInspection> {
+  return client.request<GitSkillRepositoryInspection>("/api/skills/import-git/inspect", {
+    body: JSON.stringify(body),
+    method: "POST",
+  });
+}
+
+/** Install one inspected package. `overwrite` and `expectedRevision` are the
+ *  only way to replace an installed Skill, and both are checked server-side. */
+export function importSkillFromGit(
+  client: ApiClient,
+  body: ImportSkillFromGitRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>("/api/skills/import-git", {
+    body: JSON.stringify(body),
+    method: "POST",
+  });
+}
+
+export function updateSkill(
+  client: ApiClient,
+  skillId: string,
+  body: UpdateSkillRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}`, {
+    body: JSON.stringify(body),
+    method: "PUT",
+  });
+}
+
+export function updateSkillFile(
+  client: ApiClient,
+  skillId: string,
+  path: string,
+  body: UpdateSkillFileRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(path)}`, {
+    body: JSON.stringify(body),
+    method: "PUT",
+  });
+}
+
+export function readSkillResource(
+  client: ApiClient,
+  skillId: string,
+  path: string,
+): Promise<SkillResourceContent> {
+  return client.request<SkillResourceContent>(`/api/skills/${encodeURIComponent(skillId)}/resources/${encodeURIComponent(path)}`);
 }
 
 /**

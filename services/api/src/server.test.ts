@@ -3959,6 +3959,18 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     method: "POST",
   })).status, 400);
 
+  // Both are rejected before any checkout, so they need no reachable repository.
+  assert.equal((await fetch(`${origin}/api/skills/import-git`, {
+    body: JSON.stringify({ overwrite: true, repositoryUrl: "https://example.com/skills.git" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  })).status, 400);
+  assert.equal((await fetch(`${origin}/api/skills/import-git`, {
+    body: JSON.stringify({ commit: "not-a-commit", repositoryUrl: "https://example.com/skills.git" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  })).status, 400);
+
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({

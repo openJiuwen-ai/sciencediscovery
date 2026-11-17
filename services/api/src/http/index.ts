@@ -4788,6 +4788,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_CONFLICT" || code === "SKILL_READ_ONLY") sendError(response, 409, message);
+      // A package the caller handed over is wrong, whatever wording the
+      // validator chose: the code is the stable signal, not its prose.
+      else if (code === "SKILL_VALIDATION") sendError(response, 400, message);
       else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
       else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);

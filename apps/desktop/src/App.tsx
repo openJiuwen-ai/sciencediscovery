@@ -119,6 +119,12 @@ export function App({ initialToken }: Props) {
    *  reopening lands where the user left off. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroup>("general");
+  /** Bumped when 设置 closes after showing 技能. The composer's `/` palette reads
+   *  the skill catalog once, so a skill installed or edited behind that surface
+   *  would otherwise stay missing from — or stale in — the palette until the
+   *  window reloads. Another page's close does not re-read it. */
+  const [skillsEpoch, setSkillsEpoch] = useState(0);
+  const skillsVisited = useRef(false);
   /** The citation whose memory card is open. It is a dialog over whichever
    *  document cites it, not a surface: closing it leaves the reader exactly
    *  where the chip was pressed. */
@@ -926,7 +932,18 @@ export function App({ initialToken }: Props) {
 
   const openSettings = (group: SettingsGroup) => {
     setSettingsGroup(group);
+    if (group === "skills") skillsVisited.current = true;
     setSettingsOpen(true);
+  };
+
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    // 导入 or a card's 编辑 happens on this surface, so closing it after 技能 is
+    // the moment the composer's palette is known to be out of date.
+    if (skillsVisited.current) {
+      skillsVisited.current = false;
+      setSkillsEpoch((epoch) => epoch + 1);
+    }
   };
 
   /** The run the 任务 tab shows: the one the reader picked, else the one that
@@ -1077,6 +1094,7 @@ export function App({ initialToken }: Props) {
     running: state.running,
     seededCommand,
     selectedModelId: state.selectedModelId,
+    skillsEpoch,
     unavailableModel: Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
@@ -1252,8 +1270,11 @@ export function App({ initialToken }: Props) {
           actions={actions}
           client={client}
           group={settingsGroup}
-          onClose={() => setSettingsOpen(false)}
-          onGroupChange={setSettingsGroup}
+          onClose={closeSettings}
+          onGroupChange={(next) => {
+            if (next === "skills") skillsVisited.current = true;
+            setSettingsGroup(next);
+          }}
           // 设置 is where a user looks when the interface is what they cannot
           // find, so the guide's one replay lives there. The dialog has to go
           // first: the cards point at the page behind it.

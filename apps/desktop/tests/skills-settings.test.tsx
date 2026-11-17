@@ -40,7 +40,17 @@ const text = (view: ReactTestRenderer) => JSON.stringify(view.toJSON());
 
 async function mount(client: ApiClient): Promise<ReactTestRenderer> {
   let view: ReactTestRenderer | undefined;
-  await act(async () => { view = create(<SkillsSettings adding client={client} onAddingChange={noChange} />); });
+  await act(async () => {
+    view = create(
+      <SkillsSettings
+        adding
+        client={client}
+        importing={false}
+        onAddingChange={noChange}
+        onImportingChange={noChange}
+      />,
+    );
+  });
   assert.ok(view);
   return view;
 }

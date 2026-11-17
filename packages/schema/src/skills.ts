@@ -244,6 +244,21 @@ export interface DistillSessionSkillRequest {
 }
 
 export interface ImportSkillFromGitRequest {
+  /**
+   * Commit returned by inspection. When present, the import is rejected if the
+   * ref has moved, so what the user reviewed is what gets installed.
+   */
+  commit?: string;
+  /**
+   * Allow replacing an already installed managed Skill. Omitted keeps the
+   * historical conflict for callers that never inspected the repository.
+   */
+  overwrite?: boolean;
+  /**
+   * Required with `overwrite`: the revision the user saw. A mismatch is a
+   * conflict rather than a silent replacement of an edit made meanwhile.
+   */
+  expectedRevision?: number;
   ref?: string;
   repositoryUrl: string;
   subdirectory?: string;
