@@ -227,6 +227,8 @@ export interface WorkspaceActions {
   renameSession: (session: Session, title: string) => Promise<void>;
   /** Re-read the model catalog after the wizard or settings changed it. */
   refreshCatalog: () => Promise<void>;
+  /** Keep upload preflight in step with the quota response confirmed by the service. */
+  applyQuotaSettings: (settings: import("../api/types.js").SystemQuotaSettings) => void;
   /** Reconcile a saved card and follow its server-created continuation. */
   refreshConfiguration: (request: DesktopConfigurationRequest) => void;
   /** Re-read session rows after research import, continuation or branching. */
@@ -2145,6 +2147,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           },
         }),
       refreshCatalog,
+      applyQuotaSettings: (settings) => setUploadLimit(settings.uploadMaxFileBytes),
       refreshConfiguration,
       refreshSessions: async () => { await refreshSessionLists(); },
       removeAttachment,

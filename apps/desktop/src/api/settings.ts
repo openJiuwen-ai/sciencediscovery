@@ -22,6 +22,16 @@
 
 import type { ApiClient } from "./client.js";
 import type {
+  CreateEnvironmentRequest,
+  CreateProxyServerRequest,
+  Environment,
+  EnvironmentInstallStatus,
+  EnvironmentRevision,
+  InstallEnvironmentRequest,
+  ScientificEnvironmentSetup,
+  UpdateProxyServerRequest,
+  UpdateProxySettingsRequest,
+  ResolvedProxy,
   ConnectorManifest,
   CreateSkillPackageRequest,
   JiuwenSwarmSkillsResponse,
@@ -336,7 +346,7 @@ export function updateProxyDefault(
 
 export function createProxyServer(
   client: ApiClient,
-  body: { kind: string; name: string; url?: string },
+  body: CreateProxyServerRequest,
 ): Promise<ProxyServer> {
   return client.request<ProxyServer>("/api/proxy/servers", {
     body: JSON.stringify(body),
@@ -347,7 +357,7 @@ export function createProxyServer(
 export function updateProxyServer(
   client: ApiClient,
   serverId: string,
-  body: { kind?: string; name?: string; url?: string },
+  body: UpdateProxyServerRequest,
 ): Promise<ProxyServer> {
   return client.request<ProxyServer>(`/api/proxy/servers/${encodeURIComponent(serverId)}`, {
     body: JSON.stringify(body),
@@ -620,4 +630,35 @@ export function deleteSpecialist(
   return client.request<{ deleted: string }>(`/api/specialists/${encodeURIComponent(specialistId)}`, {
     method: "DELETE",
   });
+}
+
+/** Environment operations are scoped to a Runner; package source preferences remain global. */
+export function runnerEnvironmentApi(client: ApiClient, runnerId: string) {
+  const root = `/api/runners/${encodeURIComponent(runnerId)}`;
+  return {
+    setup: () => client.request<ScientificEnvironmentSetup>(`${root}/environment-setup`),
+    initialize: () => client.request<ScientificEnvironmentSetup>(`${root}/environment-setup`, {
+      method: "POST", body: JSON.stringify({ confirmed: true }),
+    }),
+    list: () => client.request<Environment[]>(`${root}/environments`),
+    revisions: () => client.request<EnvironmentRevision[]>(`${root}/environment-revisions`),
+    create: (body: CreateEnvironmentRequest) => client.request<Environment>(`${root}/environments`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+    install: (id: string, body: InstallEnvironmentRequest) => client.request<EnvironmentInstallStatus>(`${root}/environments/${encodeURIComponent(id)}/install`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+    remove: (id: string) => client.request(`${root}/environments/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  };
+}
+
+export function updateProxySettings(client: ApiClient, body: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
+  return client.request("/api/proxy/settings", { method: "PUT", body: JSON.stringify(body) });
+}
+
+/** Diagnostic runs on the service host and tests only the returned target. */
+export function testProxyConnectivity(client: ApiClient, proxy: ResolvedProxy): Promise<{
+  ok: boolean; message: string; elapsedMs: number; target: string;
+}> {
+  return client.request("/api/proxy/test", { method: "POST", body: JSON.stringify(proxy) });
 }

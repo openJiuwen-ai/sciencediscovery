@@ -32,6 +32,20 @@ import type {
 } from "@sciencediscovery/schema";
 
 export type {
+  CreateEnvironmentRequest,
+  CreateProxyServerRequest,
+  Environment,
+  EnvironmentInstallStatus,
+  EnvironmentPackageManager,
+  InstallEnvironmentRequest,
+  ResolvedProxy,
+  ScientificEnvironmentSetup,
+  ScientificLanguage,
+  UpdateProxyServerRequest,
+  UpdateProxySettingsRequest,
+} from "@sciencediscovery/schema";
+
+export type {
   ApprovalMode,
   ArtifactCodeProvenance,
   ArtifactExecutionLogProvenance,
