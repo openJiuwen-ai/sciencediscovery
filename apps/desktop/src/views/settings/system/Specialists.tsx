@@ -26,12 +26,13 @@ import type { ConnectorManifest, SkillDescriptor, Specialist } from "../../../ap
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
-import { SettingsModal } from "../SettingsModal.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
 
 interface Props {
   client: ApiClient;
+  /** Present while the settings header's create action is open. */
+  onCancelCreate?: () => void;
   onConfirm: (request: ConfirmRequest) => void;
 }
 
@@ -49,10 +50,9 @@ interface Page {
  * specialist is always enabled, so the switch is drawn only where it means
  * something.
  *
- * A row's 编辑 opens the same form 添加模型 uses: the list stays in place
- * behind the scrim, and the specialist's own record is what it edits.
+ * The new action and each custom row share a form over the list.
  */
-export function SpecialistsSettings({ client, onConfirm }: Props) {
+export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props) {
   const loaded = useLoaded<Page>(async () => {
     const [specialists, connectors, skills] = await Promise.all([
       listSpecialists(client),
@@ -65,7 +65,11 @@ export function SpecialistsSettings({ client, onConfirm }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
 
-  const close = () => setEditing(undefined);
+  const creating = onCancelCreate !== undefined;
+  const close = () => {
+    setEditing(undefined);
+    onCancelCreate?.();
+  };
 
   const toggle = async (specialist: Specialist, next: boolean) => {
     setBusy(true);
@@ -99,8 +103,6 @@ export function SpecialistsSettings({ client, onConfirm }: Props) {
       setBusy(false);
     }
   };
-
-  const open = editing !== undefined;
 
   return (
     <LoadGate loaded={loaded}>
@@ -178,25 +180,19 @@ export function SpecialistsSettings({ client, onConfirm }: Props) {
             )}
           </Group>
 
-          {open ? (
-            <SettingsModal
-              label={TEXT.settings.system.specialists.editTitle}
-              onClose={close}
-              wide
-            >
-              <SpecialistForm
-                client={client}
-                connectors={page.connectors}
-                key={editing?.id ?? "new"}
-                onCancel={close}
-                onSaved={() => {
-                  close();
-                  loaded.reload();
-                }}
-                specialist={editing}
-                skills={page.skills}
-              />
-            </SettingsModal>
+          {creating || editing !== undefined ? (
+            <SpecialistForm
+              client={client}
+              connectors={page.connectors}
+              key={creating ? "create" : editing?.id}
+              onCancel={close}
+              onSaved={() => {
+                close();
+                loaded.reload();
+              }}
+              specialist={creating ? undefined : editing}
+              skills={page.skills}
+            />
           ) : null}
 
           {failure ? <small className="row-note is-error">{failure}</small> : null}

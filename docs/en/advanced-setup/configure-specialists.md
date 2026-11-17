@@ -8,7 +8,9 @@ Specify the role's input, judgments, and output. This example checks data rather
 
 ## 2. Create the role
 
-Open **System settings → Specialists**, choose the new-role action, and enter:
+In Desktop, open **Settings → Specialists** and choose **Add specialist**. In
+the legacy Web UI, open **System settings → Specialists** and choose the
+new-role action. Enter a name, description, and instructions:
 
 | Field | Example |
 | --- | --- |
@@ -48,8 +50,8 @@ Use the trial to improve the description, instructions, and resource scope, then
 
 ## Codex Specialist runtime
 
-Create a custom Specialist through `POST /api/specialists` (there is no runtime
-picker yet):
+Select **Codex** in the Desktop form's runtime picker, or create a custom
+Specialist through `POST /api/specialists`:
 
 ```json
 {
