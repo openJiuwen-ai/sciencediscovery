@@ -100,13 +100,14 @@ function makePosixVenv(root: string, name: string, absTarget: string): string {
 }
 
 test("replaceVenvSymlinks rewrites burned-in absolute targets to the relative bundled target", async (t) => {
-  // This block models a darwin venv: `replaceVenvSymlinks` is only reached from
-  // the darwin assembly and bootstrap paths. A win32 host cannot reproduce it
-  // faithfully — without Developer Mode the symlink fixture raises EPERM, and
-  // on an elevated runner the link is created but `readlink` answers in the
-  // Windows dialect, so the relative-target comparison fails for a reason that
-  // is not the code. Gate this test, not the file: the trampoline and
-  // regular-file cases above and below still run here.
+  // The capability this case needs is a POSIX filesystem that stores symlink
+  // targets as POSIX paths, and that is exactly what `win32` does not offer:
+  // `replaceVenvSymlinks` is reached only from the darwin assembly and
+  // bootstrap paths, a Windows host without Developer Mode raises EPERM on the
+  // fixture, and the elevated runner creates the link but answers `readlink`
+  // in the Windows dialect. So the platform gate is the capability gate here,
+  // not a guess: this fixture cannot describe a Windows venv at all. Gate this
+  // test, not the file — the trampoline and regular-file cases keep running.
   if (process.platform === "win32") {
     t.skip("models a darwin venv; POSIX symlink targets only exist on POSIX hosts");
     return;
