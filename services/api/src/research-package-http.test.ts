@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import type { TestContext } from "node:test";
 import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, createResearchPackage, importResearchPackage, estimateResearchPackageBytes, researchPackageArchiveBytes, sha256, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { createApiServer, closeApiServer } from "./http/index.js";
+import type { ApiServerDependencies } from "./http/index.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 import { ResearchExportPreviews } from "./research-export-previews.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
@@ -21,7 +22,7 @@ import type { ServerConfig } from "./bootstrap/config.js";
 import type { ArtifactVersionProvenance, WorkspaceFileProvenance, SessionRun, AgentShellExecution, SessionRunEvent, ArtifactReviewRun, Claim, EvidenceItem, EvidenceLink } from "@sciencediscovery/schema";
 import type { SessionDetail, ResearchContinuationOperation } from "@sciencediscovery/schema";
 
-async function fixture(context: TestContext, graphAvailable = false, sampleSession = false) {
+async function fixture(context: TestContext, graphAvailable = false, sampleSession = false, dependencies: Partial<ApiServerDependencies> = {}) {
   const root = await mkdtemp(resolve(tmpdir(), "research-package-http-"));
   const snapshots: ReturnType<typeof researchHistoryFixture>["records"]["memoryGraph"][] = [];
   let graphExports = 0;
@@ -58,11 +59,13 @@ async function fixture(context: TestContext, graphAvailable = false, sampleSessi
     mcpTransport: offlineMcpTransport,
     // These tests exercise HTTP/package semantics. Use an ample synthetic capacity
     // so a small CI runner cannot turn the over-cap acknowledgement case into a
-    // 507 before the request reaches the behavior under test.
+    // 507 before the request reaches the behavior under test; a case that cares
+    // about the charge overrides it through `dependencies`.
     measureResearchPackageCapacity: async () => ({
       freeDiskBytes: Number.POSITIVE_INFINITY,
       freeMemoryBytes: Number.POSITIVE_INFINITY,
     }),
+    ...dependencies,
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   context.after(async () => { await closeApiServer(server); await new Promise<void>((done) => graph.close(() => done())); await rm(root, { force: true, recursive: true }); });
@@ -75,6 +78,7 @@ async function fixture(context: TestContext, graphAvailable = false, sampleSessi
         freeDiskBytes: Number.POSITIVE_INFINITY,
         freeMemoryBytes: Number.POSITIVE_INFINITY,
       }),
+      ...dependencies,
     });
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -904,4 +908,92 @@ test("an over-cap export is refused before it starts, and accepted once acknowle
   const beyond = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ ...body, allowOverCap: true }) });
   assert.equal(beyond.status, 413);
   assert.equal((await beyond.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
+});
+
+test("the streamed export is not refused when only the data volume is short", async (context) => {
+  // The GET route writes the HTTP response, not a file under dataDir, so a full data
+  // volume must not turn a download the client has room for into a 507 (#1216 review 1).
+  const { request, project } = await fixture(context, false, false, {
+    measureResearchPackageCapacity: async () => ({ freeDiskBytes: 0, freeMemoryBytes: 8 * 1024 * 1024 * 1024 }),
+  });
+  // Size the package explicitly: the point is the capacity charge, not the preview.
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => ({
+    revision: "small", estimatedBytes: 1024, estimateKind: "uncompressed" as const,
+    files: [], omissions: [], maxBytes: RESEARCH_PACKAGE_MAX_BYTES, archiveBytes: 1024,
+  }));
+  const target = await project();
+  const exported = await request(`/api/projects/${target.id}/research-package?sessionId=${target.firstSession.id}`);
+  assert.equal(exported.status, 200);
+  assert.equal(exported.headers.get("content-type"), "application/octet-stream");
+  const bytes = Buffer.from(await exported.arrayBuffer());
+  assert.equal(bytes[0], 0x1f, "the body is the gzip archive, not an error document");
+  assert.equal(bytes[1], 0x8b);
+  const parsed = importResearchPackage(new Uint8Array(bytes));
+  assert.equal(parsed.manifest.source.projectId, target.id);
+});
+
+test("the inspected package is admitted where the same volume refuses a restore", async (context) => {
+  const payload = Buffer.alloc(2 * 1024 * 1024, 7);
+  const digest = sha256(payload);
+  const pkg = createResearchPackage({
+    source: { projectId: "p", title: "inspect budget" },
+    records: { sessions: [{ session: { id: "s" }, messages: [], workspace: [{ path: "results/a.bin", objectPath: digest, size: payload.length }] }] },
+    objects: [{ path: digest, bytes: payload }],
+  }).bytes;
+  const parsed = importResearchPackage(new Uint8Array(pkg));
+  // The parser counts every unpacked entry (objects, records, readme).
+  const unpacked = parsed.manifest.inventory.reduce((sum, entry) => sum + entry.sizeBytes, 0);
+  // Inspect packs one copy (`free / 2`), while a restore adds three more
+  // (`3 × objects + records`), so this volume admits the inspect and refuses the
+  // restore (#1216 review 3).
+  const capacity = { freeDiskBytes: unpacked * 2 + 4096, freeMemoryBytes: 8 * 1024 * 1024 * 1024 };
+  const { rawRequest, project } = await fixture(context, false, false, { measureResearchPackageCapacity: async () => capacity });
+  const target = await project();
+  const inspected = await rawRequest(`/api/projects/${target.id}/research-package/inspect`, { method: "POST", body: Buffer.from(pkg) });
+  assert.equal(inspected.status, 200, `inspect must be admitted at one copy: ${await inspected.text()}`);
+  const imported = await rawRequest(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, { method: "POST", body: Buffer.from(pkg) });
+  assert.equal(imported.status, 507, "the same volume cannot hold the restore's three copies");
+  assert.equal((await imported.json() as { code: string }).code, "RESEARCH_PACKAGE_INSUFFICIENT_DISK");
+});
+
+test("the background export still charges the archive it writes", async (context) => {
+  const { rawRequest, project } = await fixture(context, false, false, {
+    measureResearchPackageCapacity: async () => ({ freeDiskBytes: 0, freeMemoryBytes: 8 * 1024 * 1024 * 1024 }),
+  });
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => ({
+    revision: "small", estimatedBytes: 1024, estimateKind: "uncompressed" as const,
+    files: [], omissions: [], maxBytes: RESEARCH_PACKAGE_MAX_BYTES, archiveBytes: 1024,
+  }));
+  const target = await project();
+  const sessionId = target.firstSession.id;
+  const base = `/api/projects/${target.id}/research-package`;
+  const task = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ level: "necessary", sessionId, revision: "small" }) });
+  assert.equal(task.status, 507, "this route writes the archive under dataDir, so the disk is charged");
+  assert.equal((await task.json() as { code: string }).code, "RESEARCH_PACKAGE_INSUFFICIENT_DISK");
+});
+
+test("a package whose workspace objects are all absent reports the loss instead of importing empty", async (context) => {
+  // Legacy-shaped package: the manifest still names the workspace object, the records
+  // row has no `objectPath`, and the archive carries neither — so the earlier
+  // "missing workspace object" pre-flight does not see it. That used to import an empty
+  // workspace with no omission at all (#1216 review 2).
+  const { rawRequest, request, project } = await fixture(context);
+  const target = await project();
+  const absent = sha256(Buffer.from("payload the archive does not carry"));
+  const pkg = createResearchPackage({
+    source: { projectId: "p", title: "absent workspace", workspace: [{ path: "results/absent.csv", objectPath: absent, size: 31 }] } as never,
+    records: { sessions: [{ session: { id: "s" }, messages: [], workspace: [{ path: "results/absent.csv", size: 31 }] }] },
+    objects: [],
+  }).bytes;
+  const response = await rawRequest(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(pkg),
+  });
+  const text = await response.text();
+  assert.equal(response.status, 201, text);
+  const receipt = JSON.parse(text) as { omissions: string[]; continuationAvailable: boolean };
+  assert.ok(receipt.omissions.some((item) => /^workspace:.*:results\/absent\.csv:missing object$/.test(item)),
+    `the empty workspace must be reported: ${JSON.stringify(receipt.omissions)}`);
+  assert.equal(receipt.continuationAvailable, false, "a copy with a missing object cannot be continued");
+  const detail = await (await request(`/api/sessions/${target.firstSession.id}`)).json() as { messages: unknown[] };
+  assert.deepEqual(detail.messages, []);
 });

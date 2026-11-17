@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { testProxyConnectivity } from "../proxy-connectivity.js";
 import { createResearchSnapshots, type ImportedPackageSource } from "../research-snapshots.js";
-import { assertResearchPackageExportCapacity, assertResearchPackageRestoreCapacity, assertResearchPackageUploadCapacity, measureResearchPackageCapacity, researchPackageBudgetRefusal, researchPackageUnpackBudget, restoreSizeOf } from "../research-package-preflight.js";
+import { assertResearchPackageExportCapacity, assertResearchPackageResponseExportCapacity, assertResearchPackageRestoreCapacity, assertResearchPackageUploadCapacity, measureResearchPackageCapacity, researchPackageBudgetRefusal, researchPackageUnpackBudget, restoreSizeOf, type PackageCapacity } from "../research-package-preflight.js";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { prepareSkillSandbox } from "../skill-sandbox.js";
@@ -574,6 +574,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     store,
     webBroker,
   } = platform;
+  /** How much room a package operation has. The test seam lets a case report a
+   *  short volume without filling one; production measures `dataDir`'s. */
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   /** Availability plus the isolation a run would actually get.
@@ -1521,8 +1523,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // The archive streams straight into the response: with the 5 GiB default the old
           // path held payload + tar + gzip and then copied the archive again for the body,
           // which OOMed the API on a package the cap allowed (#1211 F2).
+          // This route writes the response, not a file: only its memory headroom is
+          // charged, so a short data volume cannot refuse a streamed download (#1216
+          // review 1).
           try {
-            assertResearchPackageExportCapacity(await measureResearchPackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+            assertResearchPackageResponseExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
           } catch (error) {
             return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
               (error as { code?: string }).code);
@@ -1553,7 +1558,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             // Bound the unpacking by the disk the restore can hold, so a highly
             // compressible archive is refused before it fills the volume.
             const opening = await measurePackageCapacity(store.dataDir);
-            const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES);
+            // An inspect unpacks one copy and writes nothing else, so it is bounded at
+            // `free / 2`; the restore's three extra copies would refuse it (#1216 review 3).
+            const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES, 1);
             const imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
               objectDirectory: resolve(upload.directory, "objects"),
               maxBytes: unpackBudget,
