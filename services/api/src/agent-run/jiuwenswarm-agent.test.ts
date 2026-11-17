@@ -2119,12 +2119,13 @@ test("with the desktop launcher an empty staging leaves global skill switches un
 });
 
 for (const desktop of [false, true]) for (const fresh of [false, true]) {
-  test(`first-use import ${fresh ? "with an empty installed list " : ""}${desktop ? "keeps Desktop catalog explicit and imports Library references" : "imports non-Desktop skills"}`, async () => {
+  test(`first-use import ${fresh ? "with an empty installed list " : ""}${desktop ? "imports bundled skills and Library references while keeping managed Desktop catalog explicit" : "imports non-Desktop skills"}`, async () => {
     const adapter = await fakeAdapter(async ({ body, method, url }, response) => {
       response.writeHead(200);
       if (method === "GET" && url === "/agent/skills") {
         response.end(JSON.stringify({ skills: fresh ? [] : [
           { name: "disabled", enabled: false, skillId: "disabled", source: "sciencediscovery" },
+          { name: "literature-searcher", enabled: false, skillId: "literature-searcher", source: "sciencediscovery" },
         ] }));
       } else if (body.skills) {
         response.end(JSON.stringify({ skills: Object.fromEntries(body.skills.map(({ id }: { id: string }) => [id, { name: id }])) }));
@@ -2132,25 +2133,29 @@ for (const desktop of [false, true]) for (const fresh of [false, true]) {
     });
     try {
       await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, ...(desktop ? { skillSelection: "desktop" as const } : {}) })(skillOptions({
-        skills: [skill("catalog"), { ...skill("library"), importOnRun: true }, ...(fresh ? [] : [{ ...skill("disabled"), importOnRun: true }])],
+        skills: [skill("evolve-design"), skill("catalog"), { ...skill("library"), importOnRun: true },
+          ...(fresh ? [] : [skill("literature-searcher"), { ...skill("disabled"), importOnRun: true }])],
       })).execute("go");
       const imports = adapter.requests.filter((request) => request.body.skills);
       assert.equal(imports.length, 1);
-      assert.deepEqual(imports[0]?.body.skills.map(({ id }: { id: string }) => id), desktop ? ["library"] : ["catalog", "library"]);
+      assert.deepEqual(imports[0]?.body.skills.map(({ id }: { id: string }) => id), desktop ? ["evolve-design", "library"] : ["evolve-design", "catalog", "library"]);
       assert.equal(adapter.requests.some((request) => request.url.includes("/enabled")), false);
       const run = adapter.requests.find((request) => request.body.tools)?.body;
       const reader = run.tools.find((tool: { name: string }) => tool.name === "read_skill");
       assert.doesNotMatch(JSON.stringify(reader.inputSchema), /disabled/);
+      assert.match(JSON.stringify(reader.inputSchema), /evolve-design/);
+      assert.doesNotMatch(JSON.stringify(reader.inputSchema), /literature-searcher/);
       if (desktop) assert.doesNotMatch(JSON.stringify(reader.inputSchema), /catalog/);
     } finally { await adapter.close(); }
   });
 }
 
-test("with the desktop selection missing skill packages still respects global switches", async () => {
+test("with the desktop selection missing skill packages defaults bundled readers on but respects saved disables", async () => {
   const adapter = await fakeAdapter(async ({ method, url }, response) => {
     response.writeHead(200);
     response.end(method === "GET" && url === "/agent/skills"
-      ? JSON.stringify({ skills: [] }) : line({ done: { finalText: "ok" } }));
+      ? JSON.stringify({ skills: [{ name: "evolve-design", skillId: "evolve-design", enabled: false, source: "sciencediscovery" }] })
+      : line({ done: { finalText: "ok" } }));
   });
   try {
     const config = { ...jiuwenSwarmConfigFromEnv({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: adapter.url, SCIENCE_AGENT_SKILL_SELECTION: "desktop" })! };
@@ -2158,7 +2163,10 @@ test("with the desktop selection missing skill packages still respects global sw
     assert.equal(adapter.requests.filter((request) => request.url.startsWith("/agent/skills")).length, 1);
     const run = adapter.requests.find((request) => request.body.tools)?.body;
     assert.ok(run);
-    assert.equal(run.tools.some((tool: { name: string }) => tool.name === "read_skill"), false);
+    const reader = run.tools.find((tool: { name: string }) => tool.name === "read_skill");
+    assert.ok(reader);
+    assert.match(JSON.stringify(reader.inputSchema), /skill-creator/);
+    assert.doesNotMatch(JSON.stringify(reader.inputSchema), /evolve-design/);
   } finally {
     await adapter.close();
   }

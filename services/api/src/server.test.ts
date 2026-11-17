@@ -558,7 +558,7 @@ async function startTestApi(
   return { origin };
 }
 
-test("desktop skill switches import a new package and preserve global state on repeat writes", async (context) => {
+test("desktop skill switches persist a disable before first use and preserve global state on repeat writes", async (context) => {
   const root = resolve(process.cwd(), ".tmp/r", `skill-switch-${randomUUID()}`);
   const token = randomUUID();
   const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
@@ -597,7 +597,7 @@ test("desktop skill switches import a new package and preserve global state on r
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  for (const enabled of [true, false, true]) {
+  for (const enabled of [false, false, true, false]) {
     const result = await fetch(`${origin}/api/jiuwenswarm/skills-by-id/literature-searcher`, {
       method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ enabled }),
