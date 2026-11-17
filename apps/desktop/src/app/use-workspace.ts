@@ -82,6 +82,8 @@ import type {
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
 import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run-stream/model.js";
+import { modelForNewConversation, readRememberedModel, writeRememberedModel } from "./session-model-memory.js";
+import type { ReadableStorage } from "../state/storage.js";
 import { pendingPermissions, reconcilePermissions } from "../run-stream/permission.js";
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
@@ -301,6 +303,11 @@ interface ReplayBatch {
   replays: RunReplay[];
 }
 
+/** The browser storage when this app runs with one; a test or a restricted host may not. */
+function modelStorage(): ReadableStorage | undefined {
+  return (globalThis as { localStorage?: ReadableStorage }).localStorage;
+}
+
 /**
  * All of this app's state, in one place.
  *
@@ -382,6 +389,15 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  them one. `refreshSessionLists` is the only reader that may not fail. */
   const inboxRef = useRef<Project | undefined>(undefined);
   const draftModelOverride = useRef<string | undefined>(undefined);
+  /**
+   * The last model the user picked themselves, for conversations created later.
+   *
+   * Only an explicit pick writes it: opening a conversation reads that conversation's
+   * own model and must not become the default for the next one (#1205). It is restored
+   * from desktop storage at mount, so a conversation created after a restart still starts
+   * from it.
+   */
+  const rememberedModelId = useRef<string | undefined>(readRememberedModel(modelStorage()));
   const modelSelectionEpoch = useRef(0);
   const modelSelectionQueue = useRef(Promise.resolve());
   const runningRef = useRef(false);
@@ -637,10 +653,18 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         }
         if (!profiles.length) {
           draftModelOverride.current = undefined;
+          rememberedModelId.current = undefined;
+          writeRememberedModel(modelStorage(), undefined);
           setDefaultModelId(undefined);
           setSelectedModelId(undefined);
           setBoot("setup");
           return;
+        }
+        // A remembered pick that left the catalog would point new conversations at a
+        // model this instance cannot run, so drop it and fall back below (#1205).
+        if (rememberedModelId.current && modelForNewConversation(rememberedModelId.current, profiles) === undefined) {
+          rememberedModelId.current = undefined;
+          writeRememberedModel(modelStorage(), undefined);
         }
         setDefaultModelId(settings.overrides.modelId);
         setDefaultApprovalMode((target ? undefined : projectSettings?.effective.defaultApprovalMode)
@@ -656,7 +680,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           setSelectedModelId(fresh.effective.modelId);
         } else {
           const inherited = projectSettings ? projectSettings.effective.modelId : settings.overrides.modelId;
-          setSelectedModelId(draftModelOverride.current ?? inherited ?? profiles[0]?.id);
+          setSelectedModelId(draftModelOverride.current ?? modelForNewConversation(rememberedModelId.current, profiles) ?? inherited ?? profiles[0]?.id);
         }
       } catch (reason) {
         // Background reads retry on the next tick; rejected credentials still
@@ -778,11 +802,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     const inFlight = sessionCreation.current;
     if (inFlight !== undefined && inFlight.projectId === projectId) return inFlight.promise;
     const epoch = viewEpoch.current;
-    const explicitModelId = draftModelOverride.current;
+    // The pick the user made for the previous conversation is the default for this one,
+    // as long as this instance still has that model (#1205).
+    const explicitModelId = draftModelOverride.current ?? modelForNewConversation(rememberedModelId.current, models);
     const token = {};
     const creation = (async () => {
       try {
-        const created = await createSession(client, projectId, newSessionRequest(explicitModelId));
+        // #1206 remembers the approval mode for the new conversation; #1207 keeps the
+        // remembered model out of the top-level `modelId` shortcut, which the service
+        // expands into the session's review model as well.
+        const created = await createSession(client, projectId, {
+          ...newSessionRequest(),
+          ...(explicitModelId ? { settingsOverrides: { modelId: explicitModelId } } : {}),
+        });
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
@@ -805,7 +837,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     })();
     sessionCreation.current = { projectId, promise: creation, token };
     return creation;
-  }, [client, refreshSessionLists, report, toast]);
+  }, [client, models, refreshSessionLists, report, toast]);
 
   /**
    * The session a write should land in, created if the app has none open.
@@ -1608,17 +1640,29 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           // not hide it. The conversation keeps the service default.
         }
         setProjects((current) => [...current, created.project]);
+        // A Project arrives with one untitled conversation. Give it the model the user
+        // last picked, so "new conversation" means the same thing on this path too
+        // (#1205). A failure here is not fatal: opening the Session reads its real model.
+        const remembered = modelForNewConversation(rememberedModelId.current, models);
+        if (remembered && created.firstSession.modelId !== remembered) {
+          try { await updateSession(client, created.firstSession.id, { modelId: remembered }); }
+          catch { /* the stored selection still applies to the next conversation */ }
+        }
         await openSession(created.firstSession.id, created.project.id);
         await refreshSessionLists();
       } catch (reason) {
         report(reason);
       }
     },
-    [client, openSession, refreshSessionLists, report],
+    [client, models, openSession, refreshSessionLists, report],
   );
 
   const selectModel = useCallback(
     async (modelId: string) => {
+      // Written before the session update: a conversation created while that write is in
+      // flight must already start from the pick the user just made, and a restart keeps it.
+      rememberedModelId.current = modelId;
+      writeRememberedModel(modelStorage(), modelId);
       modelSelectionEpoch.current += 1;
       const epoch = modelSelectionEpoch.current;
       const target = sessionRef.current;
