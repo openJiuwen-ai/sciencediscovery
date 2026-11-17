@@ -52,6 +52,7 @@
     "test:list": "node test/support/tagged/shared.mjs list",
     "test:run": "node test/support/tagged/shared.mjs run",
     "test:daily:replay": "node scripts/run-daily-model-replay.mjs",
+    "test:daily:smoke": "node scripts/run-daily-flow-smoke.mjs",
     "test:policy": "node test/support/tagged/shared.mjs policy",
     "test:tagged:selftest": "node test/support/tagged/selftest.mjs",
     "test:tagged:list": "node test/support/tagged/cli.mjs list",

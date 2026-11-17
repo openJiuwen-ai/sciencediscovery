@@ -1,0 +1,14 @@
+[
+  ["DRB-58", "delegated"],
+  ["DRB-59", "delegated"],
+  ["DRB-62", "delegated"],
+  ["DRB-64", "delegated"],
+  ["DRB-75", "delegated"],
+  ["TC-E2E-01", "delegated"],
+  ["PUCT-COMPRESS", "puct"],
+  ["J5", "direct"],
+  ["Inline Plan", "direct"],
+  ["Inline Markdown", "direct"],
+  ["Biomni DA-13-3", "delegated"],
+  ["Biomni DA-14-1", "delegated"]
+]
