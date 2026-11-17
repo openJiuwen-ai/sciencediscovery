@@ -14,8 +14,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 
 import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { McpSourceCatalog, proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
+import { createMcpTestTls, startMcpProxy } from "../../../../test/support/mcp-network-fixtures.js";
 import { CustomMcpServers, normalizeCustomMcpConfig } from "./custom-servers.js";
 import { McpNodeClient } from "./node-client.js";
 import { decryptSecretValue } from "../store/secrets.js";
@@ -48,7 +51,57 @@ async function setup(transport = "http", registration = true) {
     await manager.oauth.complete(callback.searchParams.get("state")!, callback.searchParams.get("code"), false);
     return callback;
   };
-  return { fixture, dir, manager, server, client, approve, login, close: async () => { await client.close(); await fixture.close(); await rm(dir, { recursive: true, force: true }); } };
+  return { fixture, dir, manager, server, client, approve, login, close: async () => { await manager.close(); await client.close(); await fixture.close(); await rm(dir, { recursive: true, force: true }); } };
+}
+
+for (const transport of ["http", "sse"] as const) {
+  test(`${transport} OAuth discovery, PKCE, refresh and disabled-server probe use the effective HTTPS proxy`, async () => {
+    const tls = await createMcpTestTls();
+    const authorities = getCACertificates("default");
+    setDefaultCACertificates([...authorities, tls.cert]);
+    const fixture = await startOAuthFixture({ transport, tls, publicOrigin: "https://mcp-fixture.invalid" });
+    const proxy = await startMcpProxy(fixture.localOrigin);
+    const policy = { mode: "url", url: proxy.url, noProxy: "" } as const;
+    const dir = await mkdtemp(join(tmpdir(), "mcp-oauth-proxy-"));
+    const registry = createMcpSourceRegistry();
+    const manager = new CustomMcpServers(dir, registry, () => undefined, async () => undefined, undefined, () => policy);
+    let client: McpNodeClient | undefined;
+    try {
+      await manager.load();
+      const saved = await manager.save({ name: "Proxied OAuth", transport, url: fixture.mcpUrl, authMode: "oauth", enabled: false });
+      const begun = await manager.oauth.begin(saved.id, redirectUrl);
+      const approval = new URL(begun.authorizationUrl); approval.pathname = "/approve";
+      const response = await proxyFetch(approval, { redirect: "manual", dispatcher: proxyDispatcher(policy, approval) } as RequestInit);
+      assert.equal(response.status, 302);
+      const callback = new URL(response.headers.get("location")!);
+      await manager.oauth.complete(callback.searchParams.get("state")!, callback.searchParams.get("code"), false);
+      assert.equal(fixture.counts.pkce, 1);
+      assert.equal(fixture.counts.registrations, 1);
+      const probed = await manager.test(saved.id);
+      assert.equal(probed.error, undefined);
+      assert.equal(probed.tools.length, 1);
+      assert.equal(probed.enabled, false, "a connection test cannot enable a connector");
+      client = new McpNodeClient(() => {
+        const config = manager.transportConfig();
+        return { ...config, servers: { [saved.id]: { ...config.servers[saved.id]!, enabled: true } } };
+      }, manager.oauth);
+      await manager.save({ ...manager.list()[0]!, enabled: true }, saved.id);
+      const sourceCatalog = new McpSourceCatalog(registry, client, () => ({ [saved.id]: policy }),
+        (snapshot) => manager.applyCatalog(snapshot), undefined, () => manager.discoveryRevision());
+      const revision = manager.discoveryRevision();
+      fixture.expire();
+      const catalog = await sourceCatalog.reload();
+      assert.equal(catalog.servers[0]?.tools.length, 1, catalog.servers[0]?.error ?? "");
+      assert.equal(fixture.counts.refreshes, 1);
+      assert.equal(manager.discoveryRevision(), revision, "token renewal preserves the discovery binding");
+      assert.equal(manager.list()[0]?.status, "ready", "a refreshed token cannot discard a valid catalog");
+      assert.ok(proxy.requests.some((request) => request === "CONNECT mcp-fixture.invalid:443"));
+      await assert.rejects(manager.oauth.fetchFor(saved.id, policy)!("https://other.invalid/mcp"), /does not match/);
+    } finally {
+      await manager.close(); await client?.close(); await proxy.close(); await fixture.close();
+      await rm(dir, { recursive: true, force: true }); setDefaultCACertificates(authorities);
+    }
+  });
 }
 
 for (const transport of ["http", "sse"]) {

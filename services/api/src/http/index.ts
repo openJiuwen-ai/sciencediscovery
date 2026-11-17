@@ -4817,6 +4817,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     mcpBroker.close();
     webBroker.close();
     try {
+      await platform.customMcpServers.close();
       await mcpGateway.close?.();
     } catch (error) {
       apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });

@@ -113,6 +113,8 @@ export class McpSourceCatalog {
      *  readiness view can report a dead provider without changing the gate:
      *  every caller decides on `status`, which this never touches (#1081). */
     private readonly outages: SourceOutages = sourceOutages,
+    /** Reject discovery results captured before a configuration/auth mutation. */
+    private readonly configurationRevision?: () => string,
   ) {}
 
   private apply(catalog: McpCatalog): McpCatalog {
@@ -126,11 +128,21 @@ export class McpSourceCatalog {
   }
 
   async refresh(signal?: AbortSignal): Promise<McpCatalog> {
-    return this.apply(await this.gateway.catalog(signal));
+    const revision = this.configurationRevision?.();
+    return this.applyCurrent(await this.gateway.catalog(signal), revision);
   }
 
   async reload(signal?: AbortSignal): Promise<McpCatalog> {
-    return this.apply(await this.gateway.reload(this.proxyMapProvider?.(), signal));
+    const revision = this.configurationRevision?.();
+    return this.applyCurrent(await this.gateway.reload(this.proxyMapProvider?.(), signal), revision);
+  }
+
+  /** Leave the current registry untouched when an in-flight snapshot expired. */
+  private applyCurrent(catalog: McpCatalog, revision: string | undefined): McpCatalog {
+    if (revision !== this.configurationRevision?.()) {
+      return { ...catalog, revision: createHash("sha256").update("[]").digest("hex"), servers: [] };
+    }
+    return this.apply(catalog);
   }
 
   getCatalog(): McpCatalog | undefined {

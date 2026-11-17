@@ -258,7 +258,9 @@ export function createPlatformServices(
     // One instance for both sides: the broker records an outage and the catalog
   // reports it in `getStatus`, so they must not fall back to two defaults.
   const mcpSourceOutages = new SourceOutages();
-  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap, (catalog) => customMcpServers.applyCatalog(catalog), mcpSourceOutages);
+  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap,
+    (catalog) => customMcpServers.applyCatalog(catalog), mcpSourceOutages,
+    () => customMcpServers.discoveryRevision());
   // WebBroker mirrors successful web_search / web_fetch to the graph (WebPage
   // nodes by URL); the registry's ``toolGraphType(...)`` gates the emit. The
   // sink is the same instance used by the MCP broker — fire-and-forget in

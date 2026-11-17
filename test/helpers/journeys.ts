@@ -154,6 +154,17 @@ async function apiJson<T>(
   return response.json() as Promise<T>;
 }
 
+/** 等待保存后的后台 MCP 发现发布目标工具，避免把异步目录当作即时结果。 */
+export async function waitForMcpTool(page: Pick<Page, "request">, serverId: string, toolName: string): Promise<{ id: string; mcpToolName: string }> {
+  let tool: { id: string; mcpToolName: string } | undefined;
+  await expect.poll(async () => {
+    const tools = await apiJson<Array<{ id: string; mcpToolName: string }>>(page, `/api/mcp/sources/${serverId}/tools`);
+    tool = tools.find((item) => item.mcpToolName === toolName);
+    return tool !== undefined;
+  }, { timeout: 120_000, intervals: [250, 500, 1_000], message: `MCP ${serverId} should discover ${toolName}` }).toBe(true);
+  return tool!;
+}
+
 type ScriptedTurns = ScriptedModelStep[] | ScriptedModelStep[][];
 type ChatMessage = {
   content?: unknown;

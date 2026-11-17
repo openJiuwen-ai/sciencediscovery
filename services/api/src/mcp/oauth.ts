@@ -18,7 +18,8 @@ import { resolve } from "node:path";
 import { auth, extractWWWAuthenticateParams, type OAuthClientProvider, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { CustomMcpServerConfig, McpAuthorizationStart, McpAuthorizationStatus } from "@sciencediscovery/schema";
+import type { CustomMcpServerConfig, McpAuthorizationStart, McpAuthorizationStatus, ResolvedProxy } from "@sciencediscovery/schema";
+import { proxyDispatcher, proxyFetch } from "@sciencediscovery/data-source";
 import { decryptSecretValue, encryptSecretValue } from "../store/secrets.js";
 
 export const MCP_OAUTH_CALLBACK = "/api/mcp/oauth/callback";
@@ -54,10 +55,14 @@ function signature(config: CustomMcpServerConfig): string {
 }
 
 // SDK discovery and token exchange never follow redirects with client credentials.
-const oauthFetch: FetchLike = (input, init) => {
-  validateOAuthUrl(input instanceof Request ? input.url : input.toString());
-  return fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) });
-};
+function oauthFetch(proxy: ResolvedProxy = { mode: "environment" }): FetchLike {
+  return (input, init) => {
+    const target = validateOAuthUrl(input instanceof Request ? input.url : input.toString());
+    const dispatcher = proxyDispatcher(proxy, target);
+    return proxyFetch(input, { ...init, redirect: "error", ...(dispatcher ? { dispatcher } : {}),
+      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) } as RequestInit);
+  };
+}
 
 export class McpOAuthManager {
   private saved: Record<string, Credentials> = {};
@@ -72,7 +77,8 @@ export class McpOAuthManager {
   private vaultRevision = "empty";
   private readonly path: string;
 
-  constructor(dataDir: string, private readonly config: (id: string) => CustomMcpServerConfig | undefined) {
+  constructor(dataDir: string, private readonly config: (id: string) => CustomMcpServerConfig | undefined,
+    private readonly proxyFor: (id: string) => ResolvedProxy | undefined = () => undefined) {
     this.path = resolve(dataDir, "mcp-oauth.enc");
   }
 
@@ -139,6 +145,14 @@ export class McpOAuthManager {
       .map(id => [id, this.saved[id] ?? null, this.status(id)?.state ?? null]))).digest("hex") : "not_loaded";
     const ids = [...new Set([...Object.keys(this.saved), ...this.pending.keys()])].sort();
     return createHash("sha256").update(JSON.stringify([this.vaultRevision, ids.map(id => [id, this.status(id)?.state])])).digest("hex");
+  }
+
+  /** 仅跟踪用户授权绑定；正常令牌续期仍可发布本轮发现结果。 */
+  discoveryRevision(): string {
+    const ids = [...new Set([...Object.keys(this.saved), ...this.generations.keys()])].sort();
+    return createHash("sha256").update(JSON.stringify(ids.map((id) => [
+      id, this.generations.get(id) ?? 0, this.saved[id]?.signature, Boolean(this.saved[id]?.tokens),
+    ]))).digest("hex");
   }
 
   cancel(id: string): void {
@@ -219,11 +233,11 @@ export class McpOAuthManager {
       let challenge = this.challenges.get(id);
       if (!challenge) {
         const headers = Object.fromEntries(Object.entries(config.headers).map(([key, value]) => [key, value.startsWith("$") ? process.env[value.slice(1)] ?? "" : value]));
-        const response = await oauthFetch(config.url, { headers: { ...headers, Accept: "application/json, text/event-stream" } });
+        const response = await oauthFetch(this.proxyFor(id))(config.url, { headers: { ...headers, Accept: "application/json, text/event-stream" } });
         challenge = extractWWWAuthenticateParams(response);
         await response.body?.cancel();
       }
-      await auth(this.provider(id, credentials, generation, pending), { serverUrl: config.url, ...challenge, fetchFn: oauthFetch });
+      await auth(this.provider(id, credentials, generation, pending), { serverUrl: config.url, ...challenge, fetchFn: oauthFetch(this.proxyFor(id)) });
       if (!pending.authorizationUrl) throw new Error("OAuth server did not return a login URL");
       return { authorizationUrl: pending.authorizationUrl, expiresAt: new Date(pending.expiresAt).toISOString() };
     } catch {
@@ -241,7 +255,7 @@ export class McpOAuthManager {
       if (denied || !code || code.length > 16_384) throw new Error("Authorization denied");
       const config = this.config(pending.id);
       if (!config) throw new Error("Server removed");
-      await auth(this.provider(pending.id, pending.credentials, pending.generation, pending), { serverUrl: config.url, authorizationCode: code, fetchFn: oauthFetch });
+      await auth(this.provider(pending.id, pending.credentials, pending.generation, pending), { serverUrl: config.url, authorizationCode: code, fetchFn: oauthFetch(this.proxyFor(pending.id)) });
       if (this.activePending(pending.id) !== pending || this.generations.get(pending.id) !== pending.generation) throw new Error("OAuth authorization was cancelled");
       this.saved[pending.id] = pending.credentials;
       await this.persist();
@@ -254,7 +268,7 @@ export class McpOAuthManager {
     } finally { if (this.pending.get(pending.id) === pending) this.pending.delete(pending.id); }
   }
 
-  async prepare(id: string, rejectedToken?: string): Promise<void> {
+  async prepare(id: string, rejectedToken?: string, proxy = this.proxyFor(id)): Promise<void> {
     if (this.config(id)?.authMode !== "oauth") return;
     const credentials = this.current(id);
     if (!credentials?.tokens || this.errors.has(id)) throw new Error(AUTH_REQUIRED);
@@ -267,7 +281,7 @@ export class McpOAuthManager {
     const operation = (async () => {
       try {
         if (!credentials.tokens?.refresh_token) throw new Error(AUTH_REQUIRED);
-        await auth(this.provider(id, structuredClone(credentials), generation), { serverUrl: this.config(id)!.url, ...this.challenges.get(id), fetchFn: oauthFetch });
+        await auth(this.provider(id, structuredClone(credentials), generation), { serverUrl: this.config(id)!.url, ...this.challenges.get(id), fetchFn: oauthFetch(proxy) });
       } catch {
         if (this.generations.get(id) === generation) this.errors.set(id, AUTH_REQUIRED);
         throw new Error(AUTH_REQUIRED);
@@ -277,7 +291,7 @@ export class McpOAuthManager {
     try { await operation; } finally { if (this.refreshing.get(id) === operation) this.refreshing.delete(id); }
   }
 
-  fetchFor(id: string): FetchLike | undefined {
+  fetchFor(id: string, proxy = this.proxyFor(id)): FetchLike | undefined {
     const config = this.config(id);
     if (config?.authMode !== "oauth") return undefined;
     const origin = new URL(config.url).origin;
@@ -285,13 +299,14 @@ export class McpOAuthManager {
     return async (input, init) => {
       const target = validateOAuthUrl(input instanceof Request ? input.url : input.toString());
       if (target.origin !== origin || !this.config(id) || signature(this.config(id)!) !== expected) throw new Error("OAuth request does not match the configured MCP server");
-      await this.prepare(id);
+      await this.prepare(id, undefined, proxy);
       const token = this.current(id)?.tokens?.access_token;
       if (!token) throw new Error(AUTH_REQUIRED);
       const send = (accessToken: string) => {
         const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
         headers.set("Authorization", `Bearer ${accessToken}`);
-        return fetch(input, { ...init, headers, redirect: "error" });
+        const dispatcher = proxyDispatcher(proxy ?? { mode: "environment" }, target);
+        return proxyFetch(input, { ...init, headers, redirect: "error", ...(dispatcher ? { dispatcher } : {}) } as RequestInit);
       };
       let response = await send(token);
       if (response.status === 401 || response.status === 403) {
@@ -302,7 +317,7 @@ export class McpOAuthManager {
           return response;
         }
         await response.body?.cancel();
-        await this.prepare(id, token);
+        await this.prepare(id, token, proxy);
         response = await send(this.current(id)!.tokens!.access_token);
         if (response.status === 401) { this.errors.set(id, AUTH_REQUIRED); await response.body?.cancel(); throw new Error(AUTH_REQUIRED); }
       }
