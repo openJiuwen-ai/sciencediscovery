@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { loadCatalog } from "./catalog/load.js";
 import { useCopy, useLanguage } from "./i18n.js";
 import { TABS, useRoute } from "./router.js";
-import { ConnectorDetail, SkillDetail, SpecialistDetail } from "./views/Detail.js";
+import { ConnectorDetail, SessionDetail, SkillDetail, SpecialistDetail } from "./views/Detail.js";
 import { ListView } from "./views/ListView.js";
 
 import type { JSX } from "react";
@@ -95,6 +95,7 @@ export function App(): JSX.Element {
     if (asset.kind === "skill" || asset.kind === "team-skill") return <SkillDetail {...props} />;
     if (asset.kind === "specialist") return <SpecialistDetail {...props} />;
     if (asset.kind === "connector") return <ConnectorDetail {...props} />;
+    if (asset.kind === "session-package") return <SessionDetail {...props} />;
     return <p className="empty">{copyText("notFound")}</p>;
   }
 
@@ -112,13 +113,17 @@ export function App(): JSX.Element {
         </>
       );
     }
-    if (route.tab === "sessions" && list.length === 0) return <p className="empty">{copy("empty")}</p>;
+    if (route.tab === "sessions" && list.length === 0) return <p className="empty">{copy("sessionsEmpty")}</p>;
 
     return (
       <ListView
         assets={list}
         basePath={BASE_PATH}
-        categories={route.tab === "skills" ? catalog.categories.skill : route.tab === "connectors" ? catalog.categories.connector : undefined}
+        categories={route.tab === "skills"
+          ? catalog.categories.skill
+          : route.tab === "connectors"
+            ? catalog.categories.connector
+            : route.tab === "sessions" ? catalog.categories.sessionPackage : undefined}
         copy={copy}
         groupByCategory={route.tab === "connectors"}
         language={language}

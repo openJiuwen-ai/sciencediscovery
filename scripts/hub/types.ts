@@ -116,25 +116,40 @@ export interface ConnectorAsset extends BaseAsset {
   tools: ConnectorTool[];
 }
 
+export interface SessionBenchmark {
+  caseId: string;
+  name: string;
+  commit?: string;
+  dataset?: string;
+  rubric?: string;
+  runAt?: string;
+  score?: number;
+}
+
+/** Counts read from the package's own `manifest.exportProfile`. */
+export interface SessionContents {
+  artifacts: number;
+  executions: number;
+  files: number;
+  memoryNodes: number;
+  messages: number;
+  trajectory: "complete" | "summary";
+}
+
+export interface SessionRun {
+  durationMs?: number;
+  model?: string;
+  productVersion?: string;
+  tokens?: number;
+}
+
 export interface SessionAsset extends BaseAsset {
-  benchmark: {
-    caseId: string;
-    name: string;
-    rubric?: string;
-    runAt?: string;
-    score?: number;
-  };
+  benchmark: SessionBenchmark;
   category: SessionCategory;
-  contents: {
-    artifacts: number;
-    executions: number;
-    files: number;
-    memoryNodes: number;
-    messages: number;
-    trajectory: "complete" | "summary";
-  };
+  contents: SessionContents;
   kind: "session-package";
   readme: string;
+  run: SessionRun | null;
 }
 
 export type Asset = SkillAsset | SpecialistAsset | ConnectorAsset | SessionAsset;
@@ -150,5 +165,6 @@ export interface Catalog {
   schemaVersion: 1;
   sources: {
     externalSkills?: { commit: string; fetchedAt: string; ref: string; repo: string };
+    sessions?: { count: number; updatedAt: string | null };
   };
 }

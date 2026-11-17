@@ -47,6 +47,11 @@ function categoryFields(asset: Asset): { domain?: string; function?: string; sub
   return asset.kind === "specialist" ? {} : asset.category as { domain?: string; function?: string; subdomain?: string };
 }
 
+/** Session packages filter by the benchmark's origin, not by how they were published. */
+function sourceOf(asset: Asset): string {
+  return asset.kind === "session-package" ? asset.category.source : asset.source;
+}
+
 function matches(asset: Asset, route: Route): boolean {
   const query = route.params.get("q")?.trim().toLowerCase();
   if (query) {
@@ -54,7 +59,7 @@ function matches(asset: Asset, route: Route): boolean {
     if (!haystack.includes(query)) return false;
   }
   const source = route.params.get("source");
-  if (source && asset.source !== source) return false;
+  if (source && sourceOf(asset) !== source) return false;
   const domain = route.params.get("domain");
   const subdomain = route.params.get("sub");
   const group = route.params.get("function");
@@ -106,7 +111,7 @@ export function ListView(props: ListViewProps): JSX.Element {
   const { hardware, type } = options(assets);
   const selected = selectedGroup(route, props.groupByCategory === true);
   const sourceOptions = Object.entries(SOURCE_LABELS)
-    .filter(([id]) => assets.some((asset) => asset.source === id))
+    .filter(([id]) => assets.some((asset) => sourceOf(asset) === id))
     .map(([id, label]) => ({ label: label[language], value: id }));
   // A filter with one possible value is noise: show the section only when it
   // can actually narrow the list.
