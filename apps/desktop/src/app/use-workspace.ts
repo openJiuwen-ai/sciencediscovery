@@ -134,6 +134,8 @@ export interface WorkspaceState {
   connection: Connection;
   confirm: ConfirmRequest | undefined;
   defaultModelId?: string;
+  /** The mode a conversation created now would run under (project/global default). */
+  defaultApprovalMode?: ApprovalMode;
   detail?: SessionDetail;
   /** Counts the drafts started since the app opened. Two consecutive drafts
    *  share no Session id, so this is what tells them apart. */
@@ -332,6 +334,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [presets, setPresets] = useState<ModelProviderPreset[]>([]);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [defaultModelId, setDefaultModelId] = useState<string>();
+  /** The mode a conversation created right now would run under: the project or
+   *  global default the service applies (#1204). */
+  const [defaultApprovalMode, setDefaultApprovalMode] = useState<ApprovalMode>();
   const [selectedModelId, setSelectedModelId] = useState<string>();
   const [run, setRun] = useState<RunStreamState>(emptyRunStream);
   const [running, setRunning] = useState(false);
@@ -638,6 +643,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           return;
         }
         setDefaultModelId(settings.overrides.modelId);
+        setDefaultApprovalMode((target ? undefined : projectSettings?.effective.defaultApprovalMode)
+          ?? settings.effective.defaultApprovalMode ?? "ask_for_dangerous");
         if (fresh && target) {
           setDetail(current => {
             if (!current || current.id !== target) return current;
@@ -2156,6 +2163,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     connection,
     confirm,
     defaultModelId,
+    defaultApprovalMode,
     detail,
     draftEpoch,
     inboxProject,

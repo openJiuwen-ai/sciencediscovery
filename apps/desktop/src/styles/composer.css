@@ -455,10 +455,6 @@
   background: rgba(194, 65, 12, 0.08);
 }
 
-.composer-permission.is-unset {
-  color: #8c8c8c;
-}
-
 .composer-permission:disabled {
   color: #c2c2c2;
   cursor: default;

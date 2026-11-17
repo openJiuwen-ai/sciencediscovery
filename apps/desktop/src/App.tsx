@@ -916,7 +916,9 @@ export function App({ initialToken }: Props) {
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
     activeProjectId: state.activeProjectId,
-    approvalMode: state.detail?.approvalMode ?? lastApprovalMode,
+    // The session's own mode, else the reader's last choice, else the project/global
+  // default the service would apply — never a third "follow settings" state (#1204).
+  approvalMode: state.detail?.approvalMode ?? lastApprovalMode ?? state.defaultApprovalMode ?? "ask_for_dangerous",
     attachBlocked: canUpload ? undefined : TEXT.composer.attachArchived,
     attachLimit,
     attachments: state.attachments,

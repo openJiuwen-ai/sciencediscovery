@@ -588,14 +588,14 @@ test("the selector opens the two scope explanations and reports the choice", asy
   }
 });
 
-test("with nothing remembered the control says it follows the settings, not that it asks", () => {
-  // No session detail and no stored choice: the service will apply the project or
-  // global default, which can be full access, so claiming 请求批准 would be a lie.
+test("with nothing remembered the control asks for approval", () => {
+  // The shell resolves the effective default (project or global defaultApprovalMode)
+  // before the composer sees it; when nothing is set anywhere that default is asking,
+  // so the closed control never needs a third state (#1204 owner decision).
   const markup = render();
-  assert.match(markup, /aria-label="跟随设置"/u);
-  assert.match(markup, /composer-permission-label">跟随设置</u);
-  assert.match(markup, /class="composer-permission is-unset"/u);
-  assert.doesNotMatch(markup, /is-danger/u, "an unknown mode is neither of the two known colours");
+  assert.match(markup, /aria-label="请求批准"/u);
+  assert.match(markup, /composer-permission-label">请求批准</u);
+  assert.doesNotMatch(markup, /is-danger/u, "asking is not the warning colour");
 });
 
 test("with no mode chosen neither permission option claims to be the choice", () => {
@@ -604,7 +604,7 @@ test("with no mode chosen neither permission option claims to be the choice", ()
   assert.equal(markup.split("session-flyout-check").length - 1, 0, "no tick is drawn");
 });
 
-test("the settings row follows the settings until a mode is chosen", () => {
-  assert.match(settingsMenu(undefined), />跟随设置</);
+test("the settings row names the mode, asking when none is set", () => {
+  assert.match(settingsMenu(undefined), />询问</);
   assert.match(settingsMenu("always_allow"), />完全访问</);
 });

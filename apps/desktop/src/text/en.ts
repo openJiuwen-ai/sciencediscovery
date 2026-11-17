@@ -154,7 +154,6 @@ export const EN: Text = {
     permissionAskShort: "Ask",
     permissionAskDesc: "Always ask before editing external files or using the internet",
     permissionFull: "Full access",
-  permissionFollowSettings: "Follow settings",
     permissionFullDesc: "Access the internet and any file on your computer without restriction",
     permissionLocked: "You can change permissions when this run finishes",
     attachHint: (limit?: string) => limit === undefined
