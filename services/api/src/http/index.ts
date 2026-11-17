@@ -26,7 +26,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
 import { handlePluginRequest } from "../plugins/http.js";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
-import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_TOO_LARGE_CODE, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, createResearchPackageAsync, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE, importResearchPackageStreamed, researchPackageUploadBytes, type ImportedResearchPackage } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_TOO_LARGE_CODE, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, createResearchPackageAsync, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE, importResearchPackageStreamed, researchPackageUploadBytes, writeResearchPackage, type ImportedResearchPackage } from "@sciencediscovery/research-package";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -1518,17 +1518,30 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             includeFullTrajectory, includeFullMemoryGraph);
           if ((sized.archiveBytes ?? 0) > sizeCap)
             return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
-          const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, undefined, includeFullTrajectory, includeFullMemoryGraph);
-          const result = await createResearchPackageAsync(input, sizeCap);
+          // The archive streams straight into the response: with the 5 GiB default the old
+          // path held payload + tar + gzip and then copied the archive again for the body,
+          // which OOMed the API on a package the cap allowed (#1211 F2).
+          try {
+            assertResearchPackageExportCapacity(await measureResearchPackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+          } catch (error) {
+            return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+              (error as { code?: string }).code);
+          }
+          const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, undefined,
+            includeFullTrajectory, includeFullMemoryGraph, undefined, { streamObjects: true });
           const packageFileName = ((sessionId ? store.getSession(sessionId)?.title : undefined) || input.source.title || projectId).trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || "科研会话";
           response.writeHead(200, {
             "cache-control": "no-store",
             "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${packageFileName}.sdresearch`)}`,
-            "content-length": result.bytes.byteLength,
             "content-type": "application/octet-stream",
             "x-content-type-options": "nosniff",
           });
-          response.end(Buffer.from(result.bytes));
+          try {
+            await writeResearchPackage(input, response, sizeCap);
+          } catch (error) {
+            // Headers are out already; a truncated body is the honest signal the client gets.
+            response.destroy(error instanceof Error ? error : undefined);
+          }
           return;
         }
         if (request.method === "POST" && researchPackageMatch[2] === "inspect") {
