@@ -1,6 +1,11 @@
 ---
 name: idea-tree-team
 description: Prepare supplied inputs for autonomous Idea Tree research and explain its saved results.
+kind: team-skill
+members:
+  - creative-material-design
+  - assessment-screener
+  - insight-aggregator
 ---
 
 # Idea Tree Research
