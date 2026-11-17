@@ -848,14 +848,14 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(true);
   };
 
-  /** 会话设置's row goes to the search that wants attention — a running one,
-   *  else the newest — and starts one only when the session has none. The
-   *  composer's draft rides into the new design's task field: a sentence
-   *  already written is the one the design would start from. */
+  /** 会话设置's row always starts a new design. A search already in the
+   *  session stays reachable through its card in the transcript, so opening
+   *  the newest one here would only hide the create dialog behind a run that
+   *  has nothing left to do. The composer's draft rides into the new design's
+   *  task field: a sentence already written is the one the design would start
+   *  from. */
   const openEvolve = (draft?: string) => {
-    const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
-    if (target === undefined) setEvolveCreate({ goal: evolveDraftTask(draft ?? "") });
-    else showEvolveRun(target.id);
+    setEvolveCreate({ goal: evolveDraftTask(draft ?? "") });
   };
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);

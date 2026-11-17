@@ -229,6 +229,21 @@ test("a search started in this window opens its task tab by itself", async ({ pa
   await expect(page.locator("#evolve-panel-title")).toHaveText("让压缩比更高");
 });
 
+test("the settings row starts a new design even when the session already has a search", async ({ page }) => {
+  await installMockApi(page, {
+    evolveRunsBySession: { "session-1": [liveRun()] },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  // The settings row is the create dialog's entry, not a shortcut into the
+  // newest run: an existing search must not hide the way to design another.
+  await openEvolve(page);
+
+  await expect(page.getByRole("dialog", { name: "新建程序演进实验" })).toBeVisible();
+  await expect(page.locator(".evolve-detail")).toHaveCount(0);
+});
+
 test("the create dialog collects the task and hands the whole command to the composer", async ({ page }) => {
   const mock = await installMockApi(page, { sessions: [makeSession()] });
   await page.goto("/");

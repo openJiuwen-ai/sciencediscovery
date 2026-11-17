@@ -179,12 +179,14 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
     })),
     allowUnisolated: Type.Optional(Type.Boolean({
-      description: "Windows only. Set true ONLY when the `/evolve-design` command carried "
-        + "`--allow-direct`, which the desktop writes when the user turned on the no-isolation "
-        + "warning in the setup dialog. It records that the user accepted candidate code running "
-        + "without a sandbox, with their own file and network access. Never set it yourself and "
-        + "never infer it: without it such a run is refused, and setting it without the user's "
-        + "confirmation starts unconfined execution they did not approve.",
+      description: "Windows only. Set true ONLY when the latest `/evolve-design` command in this "
+        + "session's transcript carried `--allow-direct`, which the desktop writes when the user "
+        + "turned on the no-isolation warning in the setup dialog. A continuation started from a "
+        + "plain message still reads that latest command. It records that the user accepted "
+        + "candidate code running without a sandbox, with their own file and network access. "
+        + "Never set it yourself and never infer it from chat text: without it such a run is "
+        + "refused, and setting it without the user's confirmation starts unconfined execution "
+        + "they did not approve.",
     })),
     checkpointMode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("confirm")], {
       description: "The pace the user chose for the design conversation. `auto` when the "

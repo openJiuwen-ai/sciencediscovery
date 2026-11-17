@@ -91,9 +91,9 @@ interface Props {
   onApprovalMode: (mode: ApprovalMode) => void;
   /** 新建项目 from the landing strip: a Project needs nothing but a name. */
   onCreateProject: (name: string) => void;
-  /** Opens the session's searches, or starts a new experiment when it has
-   *  none. It is a row in 会话设置 rather than a control of its own: the
-   *  header no longer carries a second entry point. The composer's draft rides
+  /** Starts a new experiment. It is a row in 会话设置 rather than a control of
+   *  its own: the header no longer carries a second entry point. Existing
+   *  searches keep their cards in the transcript. The composer's draft rides
    *  along, so a sentence already written becomes the new design's task. */
   onEvolve?: (draft: string) => void;
   onOpenSettings: () => void;
