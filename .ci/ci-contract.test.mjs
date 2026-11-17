@@ -431,6 +431,11 @@ test("Windows distribution gate builds the native Electron installer", async () 
     "typecheck must be a separate step, not a second command in the test step");
   assert.doesNotMatch(job, /Test and typecheck the desktop shell/,
     "the combined step masked a failing suite and must not return");
+  // The other half of this gate: without the flag electron-builder attempts an
+  // implicit GitHub publish, which fails without a token (#1187). The plain
+  // `dist` regex above matches either form, so pin the flag itself.
+  assert.match(job, /pnpm --dir application dist --publish never/,
+    "the installer gate must build only; implicit publish fails without a token (#1187)");
   const installer = artifactUploads(job).find((upload) => upload.artifact === "windows-desktop-installer");
   assert.ok(installer, "Windows installer artifact was not found");
   assert.deepEqual(installer.paths, ["application/release"]);
