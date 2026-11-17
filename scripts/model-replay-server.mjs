@@ -62,12 +62,32 @@ function scrub(value) {
 function fingerprint(body) {
   // Tool results and generated system/tool catalogs can change between capture and replay.
   // Match the stable user/assistant transcript while omitting runtime plumbing.
-  const canonical = scrub(body ?? {});
-  if (Array.isArray(canonical?.messages)) {
-    canonical.messages = canonical.messages.filter((message) =>
-      message?.role !== "tool" && message?.role !== "system");
-  }
-  delete canonical.tools;
+  const source = scrub(body ?? {});
+  const canonical = {
+    model: source?.model,
+    stream: source?.stream,
+    messages: Array.isArray(source?.messages) ? source.messages
+      .filter((message) => message?.role !== "tool" && message?.role !== "system")
+      .map((message) => {
+        const normalized = { role: message?.role, content: message?.content };
+        if (Array.isArray(message?.tool_calls)) {
+          normalized.tool_calls = message.tool_calls.map((call) => ({
+            type: call?.type,
+            function: call?.function ? {
+              name: call.function.name,
+              arguments: call.function.arguments,
+            } : undefined,
+          }));
+        }
+        if (message?.function_call) {
+          normalized.function_call = {
+            name: message.function_call.name,
+            arguments: message.function_call.arguments,
+          };
+        }
+        return normalized;
+      }) : [],
+  };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
@@ -93,6 +113,7 @@ function taskClass(body) {
 }
 
 function streamKey(body) {
+  if (typeof body?._replay_stream === "string") return body._replay_stream;
   const text = JSON.stringify(body ?? {});
   const match = text.match(/(?:agent-workspaces|sessions)\/([^\"\/]+)/);
   return match?.[1];
