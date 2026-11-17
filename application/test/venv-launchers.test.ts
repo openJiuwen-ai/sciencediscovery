@@ -99,7 +99,18 @@ function makePosixVenv(root: string, name: string, absTarget: string): string {
   return join(root, name);
 }
 
-test("replaceVenvSymlinks rewrites burned-in absolute targets to the relative bundled target", async () => {
+test("replaceVenvSymlinks rewrites burned-in absolute targets to the relative bundled target", async (t) => {
+  // This block models a darwin venv: `replaceVenvSymlinks` is only reached from
+  // the darwin assembly and bootstrap paths. A win32 host cannot reproduce it
+  // faithfully — without Developer Mode the symlink fixture raises EPERM, and
+  // on an elevated runner the link is created but `readlink` answers in the
+  // Windows dialect, so the relative-target comparison fails for a reason that
+  // is not the code. Gate this test, not the file: the trampoline and
+  // regular-file cases above and below still run here.
+  if (process.platform === "win32") {
+    t.skip("models a darwin venv; POSIX symlink targets only exist on POSIX hosts");
+    return;
+  }
   const dir = mkdtempSync(join(tmpdir(), "sd-sym-"));
   try {
     const venv = makePosixVenv(dir, "v", "/Users/builder/.workbuddy/binaries/.../bin/python3");
