@@ -426,13 +426,16 @@ async function hostMadeReadOnly(dir: string): Promise<boolean> {
   const probe = join(dir, ".sd-write-probe");
   try {
     await writeFile(probe, "probe");
-    await rm(probe, { force: true });
-    return false;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
     throw error;
   }
+  // The write just proved the directory writable, so whatever the unlink does
+  // (a scanner or indexer can hold a fresh file on Windows) it says nothing
+  // about the fixture: classify the write only, and clean up defensively.
+  await rm(probe, { force: true }).catch(() => {});
+  return false;
 }
 
 test("dirWritable answers true for a writable dir and false for a read-only one", async (t) => {
@@ -448,15 +451,17 @@ test("dirWritable answers true for a writable dir and false for a read-only one"
   // must catch EACCES/EROFS alike (the DMG case surfaces EROFS, this
   // fixture approximates with EACCES via mode bits; both are "cannot write").
   await chmod(join(root, "ro"), 0o555);
+  // The writable half needs no host capability, so it runs before any skip;
+  // skipping first would leave `dirWritable(rw)` without a CI signal here.
+  assert.equal(await dirWritable(join(root, "rw")), true);
   // On NTFS `chmod` only toggles the read-only attribute; the owner can still
-  // write, so this fixture cannot produce the state the assertions are about.
-  // Skip with that reason — asked with a write, so the fixture is judged
-  // independently of the function whose answer is being asserted.
+  // write, so this fixture cannot produce the state the assertion below is
+  // about. Skip with that reason — asked with a write, so the fixture is
+  // judged independently of the function whose answer is being asserted.
   if (!(await hostMadeReadOnly(join(root, "ro")))) {
     t.skip("host chmod cannot make a directory unwritable (NTFS)");
     return;
   }
-  assert.equal(await dirWritable(join(root, "rw")), true);
   assert.equal(await dirWritable(join(root, "ro")), false);
 });
 
