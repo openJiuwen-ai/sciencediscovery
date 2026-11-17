@@ -244,7 +244,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "nothing to fix, so it discards the approach and re-rolls instead of repairing.",
       maxLength: 200_000, minLength: 1,
     })),
-    editableFields: Type.Optional(Type.Array(Type.String({ maxLength: 80, minLength: 1 }), { maxItems: 50 })),
+    editableFields: Type.Optional(Type.Array(Type.String({ maxLength: 80, minLength: 1 }), { maxItems: 50, description: "Top-level JSON fields a directed search may change; requires a JSON-object starting point." })),
     expansions: Type.Integer({ maximum: 40, minimum: 1 }),
     frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
     howScored: Type.String({ maxLength: 400, minLength: 1 }),

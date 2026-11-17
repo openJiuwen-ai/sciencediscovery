@@ -403,7 +403,7 @@ export interface EvolveRunProposal {
    *  run it before proposing — that is the whole advantage of designing inside
    *  a loop that has an interpreter. Exactly one of this and `evaluatorPath`. */
   evaluatorSource?: string;
-  /** The JSON fields this run may change. */
+  /** Top-level JSON fields a directed search may change. Requires a JSON-object starting point. */
   editableFields?: string[];
   /** `custom_script`: a workspace file holding the evaluator, read once when
    *  the run is proposed and stored exactly as `evaluatorSource` would be.
