@@ -642,7 +642,7 @@ test.describe("技能", () => {
     await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toBeChecked();
   });
 
-  test("a switch updates JiuwenSwarm globally and survives a reload", async ({ page }) => {
+  test("a bundled skill defaults on and its first disable survives a reload", async ({ page }) => {
     const mock = await installMockApi(page, {
       models: MODELS,
       jiuwenSwarmSkills: [{ skillId: "skill-1", name: "skill-1", description: "", enabled: true, source: "sciencediscovery" }],
@@ -651,12 +651,12 @@ test.describe("技能", () => {
     const dialog = await openSettings(page, "技能");
 
     const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
-    await expect(card).toContainText("已停用");
-    await card.getByRole("switch", { name: "启用或停用「分子绘图」" }).click();
     await expect(card).toContainText("已启用");
+    await card.getByRole("switch", { name: "启用或停用「分子绘图」" }).click();
+    await expect(card).toContainText("已停用");
 
-    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: true });
-    expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: false });
+    expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(false);
     expect(mock.calls.some((call) => call.method === "PUT" && /\/projects\/[^/]+\/settings$/u.test(call.path))).toBe(false);
 
     await page.keyboard.press("Escape");
@@ -665,12 +665,13 @@ test.describe("技能", () => {
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const reopened = page.getByRole("dialog", { name: "设置" });
     await reopened.getByRole("button", { name: "技能", exact: true }).click();
-    await expect(reopened.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已启用");
+    await expect(reopened.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
   });
 
   test("bulk enable continues after one skill fails and shows the saved state", async ({ page }) => {
     const mock = await installMockApi(page, {
       models: MODELS, skills, skillToggleFailures: ["skill-1"],
+      jiuwenSwarmSkills: [{ skillId: "skill-1", name: "skill-1", description: "", enabled: false, source: "sciencediscovery" }],
     });
     const dialog = await openSettings(page, "技能");
     await expect(dialog.locator(".settings-card")).toHaveCount(2);
@@ -678,7 +679,9 @@ test.describe("技能", () => {
     await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已启用");
     await expect(dialog.locator(".settings-card").filter({ hasText: "文献检索" })).toContainText("已停用");
     await expect(dialog).toContainText("Skill switch failed");
+    expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-1")?.enabled).toBe(false);
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: true });
   });
 
   test("a card opens to the skill's source, version and file count", async ({ page }) => {

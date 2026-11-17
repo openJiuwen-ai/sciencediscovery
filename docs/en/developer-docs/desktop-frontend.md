@@ -137,7 +137,7 @@ Which layer a write lands in is not uniform, and the difference is not visible f
 | Setting | Route | Why that route |
 |---|---|---|
 | default model, sandbox network | `PUT /api/settings`, or the dedicated route | global, and the whole-object write needs a read-merge-write |
-| skills | `GET /api/jiuwenswarm/skills`, `PUT /api/jiuwenswarm/skills/:name`, `PUT /api/jiuwenswarm/skills-by-id/:skillId` | JiuwenSwarm owns the global switches; ScienceDiscovery bundled skills default to enabled and import on first use; managed catalog packages are imported on first enable. Runs never mirror Project/Session selections into those switches. Native mode retains catalog browsing and creation without these switches. |
+| skills | `GET /api/jiuwenswarm/skills`, `PUT /api/jiuwenswarm/skills/:name`, `PUT /api/jiuwenswarm/skills-by-id/:skillId` | JiuwenSwarm owns the global switches; ScienceDiscovery bundled skills default to enabled; tasks import their selected enabled bundled packages before the first model turn; managed catalog packages are imported on first enable. Runs never mirror Project/Session selections into those switches. Native mode retains catalog browsing and creation without these switches. |
 | a remote machine's registration, credentials and host key | `POST /api/remote-hosts`, `PUT /api/remote-hosts/:id/credentials`, `POST /api/remote-hosts/:id/trust-host-key` | credentials only ever travel inward, and the response to a credential write is itself the result of a fresh probe; accepting a host key is a step of its own and cannot be folded into another write |
 | which machines a Project may use | `PATCH /api/projects/:id` (`runnerIds`) | it is a field of the Project itself, and it has to be sent whole — it is a complete list, not a delta |
 
