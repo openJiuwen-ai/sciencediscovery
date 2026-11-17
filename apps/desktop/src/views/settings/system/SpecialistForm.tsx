@@ -25,6 +25,7 @@ import type {
 } from "../../../api/types.js";
 import { TEXT } from "../../../text.js";
 import { Row, Select } from "../rows.js";
+import { SettingsModal } from "../SettingsModal.js";
 import { AbilityPicker, type AbilityTab } from "./AbilityPicker.js";
 
 interface Props {
@@ -51,8 +52,8 @@ type CapabilityAccess = "all" | "specific";
 
 /** What the fields say above their counters, and what the inputs stop at. */
 const NAME_MAX_LENGTH = 80;
-const DESCRIPTION_MAX_LENGTH = 1000;
-const INSTRUCTIONS_MAX_LENGTH = 32_768;
+const DESCRIPTION_MAX_LENGTH = 500;
+const INSTRUCTIONS_MAX_LENGTH = 20_000;
 const INSTRUCTIONS_MAX_DISPLAY = INSTRUCTIONS_MAX_LENGTH.toLocaleString("en-US");
 
 interface Draft {
@@ -118,7 +119,7 @@ function bodyOf(draft: Draft): CreateSpecialistRequest {
     connectorIds: (draft.access === "all" ? [] : draft.connectorIds) as CreateSpecialistRequest["connectorIds"],
     description: draft.description.trim(),
     enabledSkillIds: draft.access === "all" ? [] : draft.enabledSkillIds,
-    instructions: draft.instructions,
+    instructions: draft.instructions.trim(),
     name: draft.name.trim(),
     runtime: runtimeOf(draft),
   };
@@ -140,6 +141,8 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
   const [failure, setFailure] = useState<string>();
   const [abilityTab, setAbilityTab] = useState<AbilityTab>("skills");
   const [picking, setPicking] = useState<AbilityTab>();
+  const creating = specialist === undefined;
+  const canSave = [draft.name, draft.description, draft.instructions].every((value) => value.trim() !== "");
 
   const selectedSkills = skills.filter((skill) => draft.enabledSkillIds.includes(skill.id));
   const selectedConnectors = connectors.filter((connector) => draft.connectorIds.includes(connector.id));
@@ -154,6 +157,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
   };
 
   const save = async () => {
+    if (busy || !canSave) return;
     setBusy(true);
     setFailure(undefined);
     try {
@@ -169,27 +173,34 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
   };
 
   return (
-    <>
+    <SettingsModal
+      closeDisabled={busy}
+      label={creating ? TEXT.settings.system.specialists.add : TEXT.settings.system.specialists.editTitle}
+      onClose={onCancel}
+      wide
+    >
       <div className="settings-card is-form">
         <div className="settings-card-form">
           <label className="settings-field">
             <span className="settings-field-head">
-              <span className="settings-field-label">{TEXT.settings.system.specialists.name}</span>
+              <span className="settings-field-label is-required">{TEXT.settings.system.specialists.name}</span>
               <span className="settings-field-count">{draft.name.length} / {NAME_MAX_LENGTH}</span>
             </span>
             <input
               aria-label={TEXT.settings.system.specialists.name}
+              autoFocus={creating}
               className="field-input"
               disabled={busy}
               maxLength={NAME_MAX_LENGTH}
               onChange={(event) => setDraft({ ...draft, name: event.target.value })}
               placeholder={TEXT.settings.system.specialists.namePlaceholder}
+              required
               value={draft.name}
             />
           </label>
           <label className="settings-field">
             <span className="settings-field-head">
-              <span className="settings-field-label">{TEXT.settings.system.specialists.description}</span>
+              <span className="settings-field-label is-required">{TEXT.settings.system.specialists.description}</span>
               <span className="settings-field-count">{draft.description.length} / {DESCRIPTION_MAX_LENGTH}</span>
             </span>
             <input
@@ -199,11 +210,12 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
               maxLength={DESCRIPTION_MAX_LENGTH}
               onChange={(event) => setDraft({ ...draft, description: event.target.value })}
               placeholder={TEXT.settings.system.specialists.descriptionPlaceholder}
+              required
               value={draft.description}
             />
           </label>
           <div className="settings-field">
-            <span className="settings-field-label">{TEXT.settings.system.specialists.instructions}</span>
+            <span className="settings-field-label is-required">{TEXT.settings.system.specialists.instructions}</span>
             <span className="settings-field-hint">{TEXT.settings.system.specialists.instructionsHint}</span>
             <span className="settings-textarea-wrap">
               <textarea
@@ -213,6 +225,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
                 maxLength={INSTRUCTIONS_MAX_LENGTH}
                 onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
                 placeholder={TEXT.settings.system.specialists.instructionsPlaceholder}
+                required
                 rows={6}
                 value={draft.instructions}
               />
@@ -367,14 +380,14 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
               </span>
             </p>
           </div>
-          {failure ? <small className="row-note is-error">{failure}</small> : null}
+          {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
           <div className="settings-card-actions">
             <button className="secondary-button" disabled={busy} onClick={onCancel} type="button">
               {TEXT.settings.cancel}
             </button>
             <button
               className="primary-button"
-              disabled={busy || draft.name.trim() === ""}
+              disabled={busy || !canSave}
               onClick={() => void save()}
               type="button"
             >
@@ -403,6 +416,6 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
           skills={skills}
         />
       )}
-    </>
+    </SettingsModal>
   );
 }

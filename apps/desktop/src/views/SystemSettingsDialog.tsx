@@ -95,6 +95,7 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [addingSkill, setAddingSkill] = useState(false);
+  const [addingSpecialist, setAddingSpecialist] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -107,6 +108,7 @@ export function SystemSettingsDialog({
   useEffect(() => {
     setAddingModel(false);
     setAddingSkill(false);
+    setAddingSpecialist(false);
   }, [group]);
 
   useEffect(() => {
@@ -155,7 +157,13 @@ export function SystemSettingsDialog({
           />
         );
       case "specialists":
-        return <SpecialistsSettings client={client} onConfirm={actions.confirmAction} />;
+        return (
+          <SpecialistsSettings
+            client={client}
+            onCancelCreate={addingSpecialist ? () => setAddingSpecialist(false) : undefined}
+            onConfirm={actions.confirmAction}
+          />
+        );
       case "sandbox-network":
         return (
           <NetworkSettings
@@ -256,6 +264,10 @@ export function SystemSettingsDialog({
               ) : group === "skills" ? (
                 <button className="pill-button is-dark" onClick={() => setAddingSkill(true)} type="button">
                   {TEXT.settings.skills.add}
+                </button>
+              ) : group === "specialists" ? (
+                <button className="primary-button" onClick={() => setAddingSpecialist(true)} type="button">
+                  <span aria-hidden="true">＋ </span>{TEXT.settings.system.specialists.add}
                 </button>
               ) : null}
             </header>

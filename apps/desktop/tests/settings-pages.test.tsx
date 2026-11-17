@@ -425,8 +425,8 @@ describe("the specialist form", () => {
       />,
     );
 
-  it("keeps 保存 disabled until the specialist has a name", () => {
-    assert.match(form(), /disabled=""[^>]*>保存<\/button>/, "保存 is enabled with no name");
+  it("keeps 保存 disabled while required fields are blank", () => {
+    assert.match(form(), /disabled=""[^>]*>保存<\/button>/, "保存 is enabled with blank required fields");
   });
 
   it("fills the form from the specialist it edits", () => {
@@ -434,14 +434,14 @@ describe("the specialist form", () => {
     assert.ok(markup.includes(`value="${existing.name}"`), "the name is not filled in");
     assert.ok(markup.includes(`value="${existing.description}"`), "the description is not filled in");
     assert.ok(markup.includes(existing.instructions), "the instructions are not filled in");
-    assert.doesNotMatch(markup, /disabled=""[^>]*>保存<\/button>/, "保存 is disabled for a named specialist");
+    assert.doesNotMatch(markup, /disabled=""[^>]*>保存<\/button>/, "保存 is disabled for a complete specialist");
   });
 
   it("shows the counters and placeholders the design asks for", () => {
     const markup = form().replaceAll("<!-- -->", "");
     assert.ok(markup.includes("0 / 80"), "the name counter is missing");
-    assert.ok(markup.includes("0 / 1000"), "the description counter is missing");
-    assert.ok(markup.includes("0 / 32,768"), "the instructions counter is missing");
+    assert.ok(markup.includes("0 / 500"), "the description counter is missing");
+    assert.ok(markup.includes("0 / 20,000"), "the instructions counter is missing");
     assert.ok(markup.includes(TEXT.settings.system.specialists.namePlaceholder), "the name placeholder is missing");
     assert.ok(
       markup.includes(TEXT.settings.system.specialists.descriptionPlaceholder),
@@ -460,8 +460,8 @@ describe("the specialist form", () => {
       "the instructions placeholder is missing",
     );
     assert.match(markup, /maxlength="80"/iu);
-    assert.match(markup, /maxlength="1000"/iu);
-    assert.match(markup, /maxlength="32768"/iu);
+    assert.match(markup, /maxlength="500"/iu);
+    assert.match(markup, /maxlength="20000"/iu);
   });
 
   it("only asks for a model name on an external runtime", () => {

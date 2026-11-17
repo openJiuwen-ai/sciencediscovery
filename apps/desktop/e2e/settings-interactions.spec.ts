@@ -22,6 +22,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { LOCALE_STORAGE_KEY } from "../src/state/storage.js";
 import {
   TOKEN,
   TOKEN_STORAGE_KEY,
@@ -94,10 +95,10 @@ function skill(over: JsonRecord = {}): JsonRecord {
   };
 }
 
-async function openSettings(page: Page, group: string): Promise<Locator> {
+async function openSettings(page: Page, group: string, settingsLabel = "设置"): Promise<Locator> {
   await page.goto("/");
-  await page.getByRole("button", { name: "设置", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "设置" });
+  await page.getByRole("button", { name: settingsLabel, exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: settingsLabel });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: group, exact: true }).click();
   return dialog;
@@ -135,12 +136,125 @@ test.describe("专家", () => {
     specialists: [specialist(over)],
   });
 
+  test("create the first specialist, discard a draft and save with defaults", async ({ page: browser }) => {
+    await browser.addInitScript((key) => localStorage.setItem(key, "en"), LOCALE_STORAGE_KEY);
+    const mock = await installMockApi(browser);
+    const form = browser.getByRole("dialog", { name: "Add specialist" });
+    await test.step("1. Open Add specialist from an empty catalog and discard a draft", async () => {
+      const dialog = await openSettings(browser, "Specialists", "Settings");
+      const add = dialog.getByRole("button", { name: "Add specialist" });
+      await expect(dialog.getByText("No specialists yet.")).toBeVisible();
+      await add.click();
+      await form.getByRole("textbox", { name: "Name" }).fill("Discard this draft");
+      await form.getByRole("combobox", { name: "Runtime" }).selectOption("codex");
+      await form.getByRole("button", { name: "Cancel" }).click();
+      await expect(form).toBeHidden();
+      expect(writeCall(mock, "POST", "/api/specialists")).toBeUndefined();
+      await add.click();
+    });
+
+    await test.step("2. Enter the required fields and save a Native specialist", async () => {
+      const name = form.getByRole("textbox", { name: "Name" });
+      const description = form.getByRole("textbox", { name: "Description" });
+      const instructions = form.getByRole("textbox", { name: "Instructions" });
+      const save = form.getByRole("button", { name: "Save", exact: true });
+      await expect(name).toBeFocused();
+      await expect(name).toHaveValue("");
+      await expect(description).toHaveValue("");
+      await expect(instructions).toHaveValue("");
+      await expect(description).toHaveAttribute("maxlength", "500");
+      await expect(instructions).toHaveAttribute("maxlength", "20000");
+      await expect(form.getByRole("combobox", { name: "Runtime" })).toHaveValue("native");
+      await expect(form.getByRole("radio", { name: /Full access/u })).toBeChecked();
+      await expect(save).toBeDisabled();
+      await name.fill("  Data quality reviewer  ");
+      await description.fill("Checks missing values");
+      await instructions.fill("   ");
+      await expect(save).toBeDisabled();
+      await instructions.fill("  Report anomalies with evidence.  ");
+      await save.click();
+      await expect(form).toBeHidden();
+      await expect(browser.locator(".settings-card").filter({ hasText: "Data quality reviewer" })).toBeVisible();
+      expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(1);
+      expect(writeCall(mock, "POST", "/api/specialists")).toEqual({
+        connectorIds: [],
+        description: "Checks missing values",
+        enabledSkillIds: [],
+        instructions: "Report anomalies with evidence.",
+        name: "Data quality reviewer",
+        runtime: { kind: "native" },
+      });
+    });
+  });
+
+  test("retry a refused specialist creation and find the new expert in the session picker", async ({ page: browser }) => {
+    const options = {
+      ...page(),
+      fail: { message: "Specialist name already exists", method: "POST", path: "/api/specialists", status: 400 },
+      hold: { method: "POST", path: "/api/specialists" },
+    };
+    const mock = await installMockApi(browser, options);
+    const dialog = await openSettings(browser, "专家");
+    const form = browser.getByRole("dialog", { name: "新增专家" });
+    const save = form.getByRole("button", { name: "保存", exact: true });
+    const name = form.getByRole("textbox", { name: "名称" });
+
+    await test.step("1. Set up a new expert with an external runtime and specific capabilities", async () => {
+      await dialog.getByRole("button", { name: "新增专家" }).click();
+      await name.fill("晶体专家");
+      await form.getByRole("textbox", { name: "描述" }).fill("复核文献引用");
+      await form.getByRole("textbox", { name: "指令" }).fill("对照原文核对引用。");
+      await form.getByRole("combobox", { name: "运行时" }).selectOption("codex");
+      await form.locator(".settings-row", { hasText: "模型" }).locator("input").fill("gpt-5");
+      await form.getByRole("button", { name: "添加技能" }).click();
+      const picker = browser.getByRole("dialog", { name: "添加技能和连接器" });
+      await picker.getByRole("checkbox", { name: /文献检索/u }).check();
+      await picker.getByRole("tab", { name: /连接器/u }).click();
+      await picker.getByRole("checkbox", { name: /PubMed/u }).check();
+      await picker.getByRole("button", { name: "添加", exact: true }).click();
+      await expect(picker).toBeHidden();
+    });
+
+    await test.step("2. Keep the draft on a duplicate name error and save with a different name", async () => {
+      await save.click();
+      await expect(save).toBeDisabled();
+      await expect(form.getByRole("button", { name: "取消" })).toBeDisabled();
+      await browser.keyboard.press("Escape");
+      await expect(form).toBeVisible();
+      mock.release();
+      await expect(form.getByRole("alert")).toHaveText("Specialist name already exists");
+      await expect(name).toHaveValue("晶体专家");
+      await expect(form.getByRole("textbox", { name: "指令" })).toHaveValue("对照原文核对引用。");
+      await expect(form.getByRole("combobox", { name: "运行时" })).toHaveValue("codex");
+      options.fail.path = "/not-this-request";
+      await name.fill("文献核查专家");
+      await save.click();
+      await expect(form).toBeHidden();
+      await expect(dialog.locator(".settings-card").filter({ hasText: "文献核查专家" })).toBeVisible();
+      expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(2);
+      expect(lastWriteCall(mock, "POST", "/api/specialists")).toMatchObject({
+        connectorIds: ["connector-1"],
+        description: "复核文献引用",
+        enabledSkillIds: ["skill-1"],
+        name: "文献核查专家",
+        runtime: { kind: "codex", model: "gpt-5" },
+      });
+    });
+
+    await test.step("3. Find the new expert without changing the current selection", async () => {
+      await browser.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await browser.getByRole("button", { name: "会话设置" }).click();
+      await browser.getByRole("button", { name: /^专家/u }).click();
+      await expect(browser.getByRole("button", { name: /文献核查专家/u })).toBeVisible();
+      await expect(browser.getByRole("button", { name: "无", exact: true })).toHaveAttribute("aria-current", "true");
+    });
+  });
+
   test("a specialist's form writes its runtime and the capabilities picked in it", async ({ page: browser }) => {
     const mock = await installMockApi(browser, page());
     const dialog = await openSettings(browser, "专家");
 
-    // The page can edit an existing row; there is no 新增专家 since #584, so
-    // the form is reached through the card it belongs to.
     const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
     await card.getByRole("button", { name: "编辑" }).click();
     const form = browser.getByRole("dialog", { name: "编辑专家" });
@@ -149,7 +263,7 @@ test.describe("专家", () => {
     // the form shows as 完全访问 rather than as two empty lists.
     await expect(form.getByRole("radio", { name: /完全访问/u })).toBeChecked();
 
-    await form.getByLabel("描述（可选）").fill("看分子结构");
+    await form.getByLabel("描述").fill("看分子结构");
     await form.getByLabel("运行时").selectOption("codex");
     await form.locator(".settings-row", { hasText: "模型" }).locator("input").fill("gpt-5");
 
