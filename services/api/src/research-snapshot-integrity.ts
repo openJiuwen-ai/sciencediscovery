@@ -38,7 +38,27 @@ function graphRows(snapshot: MemoryGraphSnapshot) {
 }
 
 /** Fail closed before publishing a writable copy. CAS hashes cover file/log bytes. */
-export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, ids: ResearchPackageIds, sessions: Map<string, string>, projectId: string): void {
+export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, ids: ResearchPackageIds, sessions: Map<string, string>, projectId: string,
+  /** Source evolve run id -> restored run id: a remapped run renames its result
+   *  artifact (`evolve/<run>/<entrypoint>`), so the expected side is remapped the
+   *  same way before comparing (#1176 review F3). */
+  evolveRunIds?: Map<string, string>): void {
+  const remapEvolveName = (value: unknown): unknown => {
+    if (typeof value !== "string" || !evolveRunIds) return value;
+    const match = /^evolve\/([^/]+)\//.exec(value);
+    if (!match) return value;
+    for (const [sourceRunId, restoredRunId] of evolveRunIds) {
+      if (sourceRunId.slice(0, 8) === match[1]) return value.replace(`evolve/${match[1]}/`, `evolve/${restoredRunId.slice(0, 8)}/`);
+    }
+    return value;
+  };
+  const remapEvolveOrigin = (value: unknown): unknown => {
+    if (typeof value !== "object" || value === null || !evolveRunIds) return value;
+    const meta = value as Record<string, unknown>;
+    const id = meta.evolveRunId;
+    const mapped = typeof id === "string" ? evolveRunIds.get(id) : undefined;
+    return mapped && mapped !== id ? { ...meta, evolveRunId: mapped } : meta;
+  };
   const source = sourceValue as Records, target = targetValue as Records;
   equal("session count", source.sessions?.length ?? 0, target.sessions?.length ?? 0);
   for (const original of source.sessions ?? []) {
@@ -154,12 +174,20 @@ export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, i
   for (const artifact of source.artifacts ?? []) {
     const restored = target.artifacts?.find((item) => item.id === ids.id(String(artifact.id)));
     if (!restored) throw new Error("Research copy artifact missing");
-    for (const field of ["name", "logicalName", "title", "description", "kind", "origin", "originMeta", "createdAt", "updatedAt", "currentVersion"]) equal(`artifact.${field}`, artifact[field] ?? null, restored[field] ?? null);
+    for (const field of ["name", "logicalName", "title", "description", "kind", "origin", "originMeta", "createdAt", "updatedAt", "currentVersion"]) {
+      const expected = field === "name" || field === "logicalName"
+        ? remapEvolveName(artifact[field])
+        : field === "originMeta" ? remapEvolveOrigin(artifact[field]) : artifact[field];
+      equal(`artifact.${field}`, expected ?? null, restored[field] ?? null);
+    }
     equal("artifact version count", artifact.versions?.length ?? 0, restored.versions?.length ?? 0);
     for (const version of artifact.versions ?? []) {
       const found = restored.versions?.find((item) => item.id === ids.id(version.id));
       if (!found) throw new Error("Research copy artifact version missing");
-      for (const field of ["content", "mediaType", "sourcePath", "createdAt", "version"] as const) equal(`artifact.${field}`, version[field] ?? null, found[field] ?? null);
+      for (const field of ["content", "mediaType", "sourcePath", "createdAt", "version"] as const) {
+        const expected = field === "sourcePath" ? remapEvolveName(version[field]) : version[field];
+        equal(`artifact.${field}`, expected ?? null, found[field] ?? null);
+      }
       equal("artifact session", ids.id(version.sessionId), found.sessionId);
       equal("artifact turn", version.turnId ? ids.id(version.turnId) : null, found.turnId ?? null);
       equal("artifact executions", version.executionRunIds.map((id) => ids.id(id)), found.executionRunIds);

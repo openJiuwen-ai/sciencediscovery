@@ -213,6 +213,28 @@ export async function buildConversationBranch(
     }
     records.memoryGraph = { nodes, edges };
   }
+  // Evolve searches belong to the history the branch carries: keep the runs that
+  // finished at or before the selected reply (a run still active at the cutoff is
+  // not part of it either), drop another session's runs, and drop the candidate
+  // sources of a run the branch did not keep. Without this the branch package
+  // carries searches from turns it deliberately excludes (#1176 review F2).
+  const evolve = records.evolve as { candidates?: unknown; runs?: unknown } | undefined;
+  if (evolve && Array.isArray(evolve.runs)) {
+    const keptRuns = evolve.runs.filter((entry) => {
+      const run = (entry as { run?: { createdAt?: unknown; finishedAt?: unknown; sessionId?: unknown } } | undefined)?.run;
+      if (!run) return false;
+      if (typeof run.sessionId === "string" && run.sessionId !== sourceId) return false;
+      return before(run.finishedAt ?? run.createdAt);
+    });
+    const keptIds = new Set(keptRuns.map((entry) => String((entry as { run?: { id?: unknown } } | undefined)?.run?.id ?? "")));
+    records.evolve = {
+      ...evolve,
+      candidates: Array.isArray(evolve.candidates)
+        ? evolve.candidates.filter((candidate) => keptIds.has(String((candidate as { runId?: unknown } | undefined)?.runId ?? "")))
+        : [],
+      runs: keptRuns,
+    };
+  }
   source.session.updatedAt = new Date(cutoff).toISOString();
   source.session.conversationBranch = undefined;
   records.sessions = [source];

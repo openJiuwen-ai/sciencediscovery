@@ -306,15 +306,16 @@ function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = fa
       // import rejects the kind as unsupported.
       ...(withEvolve ? [{
         id: "artifact-evolve", projectId: "source-project", createdInSessionId: "source-one",
-        createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/83cbb6de/main.py",
-        logicalName: "evolve/83cbb6de/main.py", kind: "other", origin: "llm_declared", currentVersion: 1,
+        createdInSessionTitle: "原始研究", sessionId: "source-one", name: "evolve/evolve-r/main.py",
+        logicalName: "evolve/evolve-r/main.py", kind: "other", origin: "llm_declared", currentVersion: 1,
+        originMeta: { evolveRunId: "evolve-run-source" },
         createdAt: date, updatedAt: date,
         versions: [{
           id: "version-evolve", artifactId: "artifact-evolve", sessionId: "source-one",
           projectId: "source-project", version: 1, createdAt: date,
           content: { hash: sha256(evolveSource), size: evolveSource.length },
           mediaType: "text/plain; charset=utf-8",
-          sourcePath: "evolve/83cbb6de/main.py", inputArtifactVersionIds: [], executionRunIds: [],
+          sourcePath: "evolve/evolve-r/main.py", inputArtifactVersionIds: [], executionRunIds: [],
           turnId: "run-source", ...(legacy ? {} : { objectPath: sha256(evolveSource) }),
         }],
       }] : []),
@@ -446,6 +447,17 @@ test("a package carrying evolve candidate source restores it beside the imported
   assert.equal(secondRuns.length, 1);
   assert.notEqual(secondRuns[0]!.id, "evolve-run-source");
   assert.equal(await readFile(resolve(root, "evolve-candidates", secondRuns[0]!.id, `${digest}.py`), "utf8"), "print('candidate source')\n");
+  // A remapped run's result artifact must carry the restored id, in its name and
+  // in its origin: `get_evolve_run` recomputes that name from the restored run,
+  // so a prefix left on the source id would point at a file this session has no
+  // artifact for (#1176 review F3).
+  const secondOutputs = await (await request(`/api/sessions/${second.firstSession.id}/artifact-outputs`)).json() as Array<{
+    artifact: { logicalName?: string; name: string; originMeta?: Record<string, unknown> };
+  }>;
+  const remappedArtifact = secondOutputs.find((entry) => String(entry.artifact.logicalName ?? entry.artifact.name).startsWith("evolve/"));
+  assert.ok(remappedArtifact, "the restored session carries the run's result artifact");
+  assert.equal(remappedArtifact.artifact.logicalName, `evolve/${secondRuns[0]!.id.slice(0, 8)}/main.py`);
+  assert.equal(remappedArtifact.artifact.originMeta?.evolveRunId, secondRuns[0]!.id);
 
   const operation = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "evolve-copy-regression" }),
@@ -455,11 +467,18 @@ test("a package carrying evolve candidate source restores it beside the imported
     await new Promise((done) => setTimeout(done, 50));
     completed = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation;
   }
-  assert.equal(completed.state, "ready", completed.error);
+  assert.equal(completed.state, "ready", completed.error ?? "Research continuation did not finish");
   const copyRuns = await (await request(`/api/evolve/runs?sessionId=${completed.entrySessionId}`)).json() as Array<{ id: string }>;
   assert.equal(copyRuns.length, 1);
   assert.notEqual(copyRuns[0]!.id, secondRuns[0]!.id);
   assert.equal(await readFile(resolve(root, "evolve-candidates", copyRuns[0]!.id, `${digest}.py`), "utf8"), "print('candidate source')\n");
+  const copiedOutputs = await (await request(`/api/sessions/${completed.entrySessionId}/artifact-outputs`)).json() as Array<{
+    artifact: { logicalName?: string; name: string; originMeta?: Record<string, unknown> };
+  }>;
+  const copiedArtifact = copiedOutputs.find((entry) => String(entry.artifact.logicalName ?? entry.artifact.name).startsWith("evolve/"));
+  assert.ok(copiedArtifact, "the writable copy carries the run's result artifact");
+  assert.equal(copiedArtifact.artifact.logicalName, `evolve/${copyRuns[0]!.id.slice(0, 8)}/main.py`);
+  assert.equal(copiedArtifact.artifact.originMeta?.evolveRunId, copyRuns[0]!.id);
   const events = await (await request(`/api/evolve/runs/${copyRuns[0]!.id}/events`)).json() as Array<{ event: { type: string } }>;
   assert.equal(events[0]?.event.type, "log");
   const candidate = await (await request(`/api/evolve/runs/${copyRuns[0]!.id}/candidates/sha256:${digest}`)).json() as { source: string };

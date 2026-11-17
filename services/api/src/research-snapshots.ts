@@ -23,7 +23,7 @@ import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/packa
 import { createResearchPackageAsync, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, sha256, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
-import type { ArtifactAnnotation, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
+import type { ArtifactAnnotation, ArtifactOriginMeta, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
 import { createLocalSessionTitle } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { listWorkspaceFiles } from "./artifacts/index.js";
@@ -938,6 +938,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           memoryGraphSummary?: ScientificMemorySummary;
           versionObjects?: ReturnType<typeof versionRefs>;
         };
+        /** Source run id -> restored run id; filled by the evolve restore and
+         *  read by the artifact pass, which runs after the session loop. */
+        const evolveRunIdMap = new Map<string, string>();
         const sourceSessions = Array.isArray(records.sessions) ? records.sessions : [];
         const targetBySource = new Map<string, string>();
         const omissions = [...imported.receipt.omissions];
@@ -1067,6 +1070,12 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           const packedEvolve = packageEvolveRunsFor(records.evolve, source?.session?.id);
           if (packedEvolve.length) {
             const restoredEvolve = await restoreEvolveRuns(evolutionStore, { projectId, sessionId: target.id }, { runs: packedEvolve });
+            // A colliding run gets a fresh id; its result artifact has to carry
+            // that id, because `get_evolve_run` recomputes the artifact name from
+            // the restored run (#1176 review F3).
+            for (const [sourceRunId, restoredRunId] of restoredEvolve.runIds) {
+              evolveRunIdMap.set(sourceRunId, restoredRunId);
+            }
             omissions.push(...restoredEvolve.omissions);
             const restoredRunIds = new Set(restoredEvolve.runIds.keys());
             for (const candidate of packageEvolveCandidateSourcesFor(records.evolve, restoredRunIds)) {
@@ -1082,6 +1091,27 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           }
         }
 
+        /** Rewrites the `evolve/<run>/` prefix of an artifact name when that run
+         *  was restored under a fresh id. */
+        const remapEvolveName = (value: string): string => {
+          if (!value) return value;
+          const match = /^evolve\/([^/]+)\//.exec(value);
+          if (!match) return value;
+          // The published prefix is the run id's first 8 characters.
+          const sourcePrefix = match[1]!;
+          let mapped: string | undefined;
+          for (const [sourceRunId, restoredRunId] of evolveRunIdMap) {
+            if (sourceRunId.slice(0, 8) === sourcePrefix) { mapped = restoredRunId; break; }
+          }
+          if (!mapped || mapped.slice(0, 8) === sourcePrefix) return value;
+          return value.replace(`evolve/${sourcePrefix}/`, `evolve/${mapped.slice(0, 8)}/`);
+        };
+        const remapEvolveMeta = (meta: ArtifactOriginMeta | undefined): ArtifactOriginMeta | undefined => {
+          if (!meta) return meta;
+          const id = meta.evolveRunId;
+          const mapped = typeof id === "string" ? evolveRunIdMap.get(id) : undefined;
+          return mapped && mapped !== id ? { ...meta, evolveRunId: mapped } : meta;
+        };
         const artifactIdMap = new Map<string, string>();
         const versionIdMap = new Map<string, string>();
         for (const artifact of Array.isArray(records.artifacts) ? records.artifacts : []) {
@@ -1109,14 +1139,14 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
               executionRunIds: version.executionRunIds.map((id) => ids.id(id)),
               inputArtifactVersionIds: dependencies,
               kind: artifact.kind,
-              logicalName: artifact.logicalName || artifact.name,
+              logicalName: remapEvolveName(artifact.logicalName || artifact.name),
               mediaType: version.mediaType,
               origin: artifact.origin,
-              originMeta: artifact.originMeta,
+              originMeta: remapEvolveMeta(artifact.originMeta),
               references: remapReferences(version.references, ids, projectId) ?? [],
               restorationIds: { artifactId: ids.id(artifact.id), versionId: ids.id(version.id) },
               sessionId: targetBySource.get(version.sessionId) ?? targetSessionId,
-              sourcePath: version.sourcePath,
+              sourcePath: version.sourcePath === undefined ? undefined : remapEvolveName(version.sourcePath),
               title: artifact.title,
               turnId: ids.optional(version.turnId),
               forceNewArtifact: true,
@@ -1227,7 +1257,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           if (records.memoryGraph && !(captured.records as { memoryGraph?: MemoryGraphSnapshot }).memoryGraph) {
             throw new Error("无法核对已恢复的科学记忆，请检查图谱服务后重新导入。");
           }
-          verifyResearchCopy(imported.records, captured.records, ids, targetBySource, projectId);
+          verifyResearchCopy(imported.records, captured.records, ids, targetBySource, projectId, evolveRunIdMap);
           // Internal capture preserves every restored record; it must not relabel a necessary package as complete.
           const sourceProfile = imported.manifest.exportProfile;
           const frozen = researchPackageProvider.export({ ...captured, omissions, exportProfile: sourceProfile,
