@@ -840,8 +840,8 @@ export function App({ initialToken }: Props) {
     ?? evolve.runs.find((run) => isEvolveRunActive(run.status))
     ?? evolve.runs[0];
 
-  /** Open a run in the panel: the card and 会话设置 both land here, and neither
-   *  should have to open the panel first. */
+  /** Open a run in the panel from its card in the transcript: the card should
+   *  not have to open the panel first. */
   const showEvolveRun = (id: string) => {
     setEvolveRunId(id);
     setPanelGroup("task");
