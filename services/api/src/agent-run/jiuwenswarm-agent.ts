@@ -30,7 +30,7 @@ import { RunDeadlines } from "./run-deadlines.js";
 import { jiuwenSwarmWebResult } from "./jiuwenswarm-web-settings.js";
 
 import { resolveModelClientPolicy, type streamModelTurn } from "@sciencediscovery/model";
-import { subagentCapableParentRunTimeoutMs } from "@sciencediscovery/specialist";
+import { BUNDLED_SKILL_IDS, subagentCapableParentRunTimeoutMs } from "@sciencediscovery/specialist";
 
 import {
   composeSystemPrompt,
@@ -90,7 +90,7 @@ export interface JiuwenSwarmAgentConfig {
    */
   skills?: "jiuwenswarm" | "ours";
   /**
-   * Desktop catalog packages require explicit first enable (SCIENCE_AGENT_SKILL_SELECTION=desktop).
+   * Desktop managed catalog packages require explicit first enable (SCIENCE_AGENT_SKILL_SELECTION=desktop).
    * JiuwenSwarm owns the global switches; starting a run never changes them.
    */
   skillSelection?: "desktop";
@@ -488,9 +488,11 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     this.enabledSkillIds = new Set(skills.filter((skill) => {
       const existing = installedById.get(skill.id);
       if (existing) return existing.enabled;
-      // Desktop catalog packages enter through explicit enable. Library references
-      // and non-Desktop runs retain first-use import; neither may override a saved disable.
-      return this.config.skillSelection !== "desktop" || skill.importOnRun === true;
+      // Bundled skills default to enabled until JiuwenSwarm has a saved switch.
+      // Managed Desktop packages still require explicit enable; Library references
+      // and non-Desktop runs retain first-use import.
+      return BUNDLED_SKILL_IDS.some((id) => id === skill.id)
+        || this.config.skillSelection !== "desktop" || skill.importOnRun === true;
     }).map((skill) => skill.id));
     return { ...this.options, skills: skills.filter((skill) => this.enabledSkillIds.has(skill.id)) };
   }

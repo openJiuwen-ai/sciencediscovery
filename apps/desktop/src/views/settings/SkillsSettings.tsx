@@ -101,7 +101,10 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     if (catalog.status === "rejected") throw catalog.reason;
     const jiuwenSwarm = state.status === "fulfilled" ? state.value : undefined;
     return {
-      enabled: jiuwenSwarm?.skills.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []) ?? [],
+      enabled: catalog.value.flatMap((skill) => {
+        const installed = jiuwenSwarm?.skills.find((entry) => entry.skillId === skill.id);
+        return (installed ? installed.enabled : skill.source === "built-in") ? [skill.id] : [];
+      }),
       jiuwenSwarmSkills: jiuwenSwarm?.skills.filter((skill) => skill.source !== "sciencediscovery") ?? [],
       native: jiuwenSwarm?.backend === "native",
       skills: catalog.value,

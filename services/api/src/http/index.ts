@@ -264,6 +264,7 @@ import { createPromptManifest } from "../prompt-manifest.js";
 import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
 import { createWebWorkspaceTools } from "@sciencediscovery/data-source";
 import {
+  BUNDLED_SKILL_IDS,
   createDialogueSkillDraft,
   createSessionSkillDraft,
   SkillCatalogError,
@@ -1885,7 +1886,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sendJson(response, 200, { enabled: body.enabled, name: existingName, skillId });
           return;
         }
-        if (!body.enabled) {
+        // Persist a disable even before a default-enabled bundled skill is first used.
+        if (!body.enabled && !BUNDLED_SKILL_IDS.some((id) => id === skillId)) {
           sendJson(response, 200, { enabled: false, name: null, skillId });
           return;
         }
@@ -1896,8 +1898,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], packagesRoot);
           const name = imported.get(snapshot.id);
           if (!name) throw new ApiStatusError(502, "JiuwenSwarm did not import the skill");
-          await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, true);
-          sendJson(response, 200, { enabled: true, name, skillId });
+          await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, body.enabled);
+          sendJson(response, 200, { enabled: body.enabled, name, skillId });
         } catch (error) {
           throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
         } finally {

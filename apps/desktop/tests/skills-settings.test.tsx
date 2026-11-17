@@ -107,3 +107,27 @@ test("a failed first enable stays visible even when the refreshed catalog is emp
     assert.ok(view.root.findAllByProps({ role: "alert" }).length > 0);
   } finally { await act(async () => { view.unmount(); }); }
 });
+
+test("bundled skills default on while saved disables and managed defaults remain off", async () => {
+  const bundled = { ...skill, id: "evolve-design", source: "built-in" as const };
+  const disabled = { ...skill, id: "literature-searcher", source: "built-in" as const };
+  const saved = { name: disabled.id, skillId: disabled.id, enabled: false, source: "sciencediscovery" };
+  const catalog = [bundled, disabled, skill];
+  const stub = new StubClient().reply(catalog).reply({ backend: "jiuwenswarm", skills: [saved] });
+  const view = await mount(stub.asClient());
+  try {
+    assert.deepEqual(view.root.findAllByProps({ role: "switch" }).map((node) => node.props["aria-checked"]), [true, false, false]);
+    stub.reply({}).reply(catalog).reply({ backend: "jiuwenswarm", skills: [saved,
+      { name: bundled.id, skillId: bundled.id, enabled: false, source: "sciencediscovery" },
+    ] });
+    await act(async () => {
+      const toggle = view.root.findAllByProps({ role: "switch" })[0];
+      assert.ok(toggle);
+      toggle.props.onClick();
+    });
+    const write = stub.calls.find((call) => call.path.includes("skills-by-id"));
+    assert.equal(write?.path, "/api/jiuwenswarm/skills-by-id/evolve-design");
+    assert.deepEqual(JSON.parse(String(write?.init.body)), { enabled: false });
+    assert.deepEqual(view.root.findAllByProps({ role: "switch" }).map((node) => node.props["aria-checked"]), [false, false, false]);
+  } finally { await act(async () => { view.unmount(); }); }
+});
