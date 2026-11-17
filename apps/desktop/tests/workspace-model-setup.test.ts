@@ -33,7 +33,7 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
     if (path === "/api/health") return { status: "ok" };
     if (path === "/api/models") return data.models;
     if (path === "/api/providers") return { providers: [], presets: [] };
-    if (path === "/api/settings") return { overrides: { modelId: data.globalModel } };
+    if (path === "/api/settings") return { overrides: { modelId: data.globalModel }, effective: { modelId: data.globalModel, defaultApprovalMode: "ask_for_dangerous" } };
     if (path === "/api/projects/inbox/settings") return { effective: { modelId: data.projectModel ?? data.globalModel } };
     if (path === "/api/inbox") return { id: "inbox" };
     // Deliberately include history: it must never bypass an empty catalog gate.
