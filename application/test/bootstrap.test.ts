@@ -414,6 +414,27 @@ test("bootstrapPackaged in-place mode skips copy and fixes bundled venvs directl
 
 // --- W16: read-only payload (running off a mounted DMG) -----------------------
 
+/** Did this host's `chmod` actually make `dir` unwritable?
+ *
+ *  Probed with a write on purpose. The tests below must not ask `dirWritable`
+ *  whether the fixture is read-only: that is the function under test, so a
+ *  regression that over-reported writability would turn the assertion into a
+ *  skip instead of a failure (and `dirWritable(ro) === false` could never
+ *  fail). The probe only reports what the filesystem did; `dirWritable` keeps
+ *  its own falsifiable assertions below. */
+async function hostMadeReadOnly(dir: string): Promise<boolean> {
+  const probe = join(dir, ".sd-write-probe");
+  try {
+    await writeFile(probe, "probe");
+    await rm(probe, { force: true });
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
+    throw error;
+  }
+}
+
 test("dirWritable answers true for a writable dir and false for a read-only one", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "sd-shell-writable-"));
   t.after(() => {
@@ -427,15 +448,15 @@ test("dirWritable answers true for a writable dir and false for a read-only one"
   // must catch EACCES/EROFS alike (the DMG case surfaces EROFS, this
   // fixture approximates with EACCES via mode bits; both are "cannot write").
   await chmod(join(root, "ro"), 0o555);
-  assert.equal(await dirWritable(join(root, "rw")), true);
   // On NTFS `chmod` only toggles the read-only attribute; the owner can still
-  // write, so this fixture cannot produce the state the assertion is about.
-  // Skip with the reason rather than assert something the host cannot make
-  // true — the DMG path it models keeps its coverage where `chmod` works.
-  if (await dirWritable(join(root, "ro"))) {
+  // write, so this fixture cannot produce the state the assertions are about.
+  // Skip with that reason — asked with a write, so the fixture is judged
+  // independently of the function whose answer is being asserted.
+  if (!(await hostMadeReadOnly(join(root, "ro")))) {
     t.skip("host chmod cannot make a directory unwritable (NTFS)");
     return;
   }
+  assert.equal(await dirWritable(join(root, "rw")), true);
   assert.equal(await dirWritable(join(root, "ro")), false);
 });
 
@@ -467,9 +488,9 @@ test("bootstrapPackaged degrades in-place to copy mode on a read-only payload (W
   // The payload has to actually be unwritable for the degradation to trigger.
   // Where the host cannot produce that state (NTFS), the in-place branch runs
   // and this test would assert a macOS DMG on a Windows host; skip, with the
-  // reason, instead. `expect-runner`-independent: no product behaviour is
-  // skipped, only the fixture.
-  if (await dirWritable(resources)) {
+  // reason, instead. The probe writes, so it does not ask `dirWritable` the
+  // very question this test is meant to keep falsifiable.
+  if (!(await hostMadeReadOnly(resources))) {
     t.skip("host chmod cannot make a directory unwritable (NTFS)");
     return;
   }

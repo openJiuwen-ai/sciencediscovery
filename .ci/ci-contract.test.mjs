@@ -421,6 +421,16 @@ test("Windows distribution gate builds the native Electron installer", async () 
   assert.match(job, /actions\/download-artifact@v4[\s\S]*pattern: windows-runner-sea-\*/);
   assert.match(job, /merge-multiple: true/);
   assert.match(job, /pnpm --dir application dist/);
+  // A single pwsh block reports only the last command's exit code, so the
+  // desktop suite must have its own step; otherwise a failing suite is recorded
+  // as a green step (#1182 review F1, #1187 review F2). Pinned here so the
+  // split cannot be folded back into one step unnoticed.
+  assert.match(job, /name: Test the desktop shell\n\s+run: pnpm --dir application test/,
+    "the desktop suite must run in its own step");
+  assert.match(job, /name: Typecheck the desktop shell\n\s+run: pnpm --dir application typecheck/,
+    "typecheck must be a separate step, not a second command in the test step");
+  assert.doesNotMatch(job, /Test and typecheck the desktop shell/,
+    "the combined step masked a failing suite and must not return");
   const installer = artifactUploads(job).find((upload) => upload.artifact === "windows-desktop-installer");
   assert.ok(installer, "Windows installer artifact was not found");
   assert.deepEqual(installer.paths, ["application/release"]);
