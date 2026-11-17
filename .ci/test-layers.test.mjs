@@ -52,7 +52,7 @@ test('PR inputs cannot enable real calls; every merge_group gets L3',()=>{
 });
 
 test('aggregate gate rejects failed, missing, skipped and cancelled required jobs',()=>{
-  const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker','windows-desktop','macos-desktop'].map(n=>[n,{result:'success'}]));
+  const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','e2e-desktop','real-merge','real-scheduled','binary','docker','windows-desktop','macos-desktop'].map(n=>[n,{result:'success'}]));
   for(const n of ['real-scheduled','binary','docker','windows-desktop','macos-desktop']) needs[n]={result:'skipped'};
   assert.deepEqual(gate('merge',needs),[]);
   for(const value of ['failure','cancelled','skipped',undefined]) {
@@ -67,7 +67,7 @@ test('aggregate gate rejects failed, missing, skipped and cancelled required job
 
 test('PR requires builds without E2E; merge requires E2E without builds; daily and release require both',()=>{
   for(const profile of ['pr','merge','daily','release']) {
-    const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','real-merge','real-scheduled','binary','docker','windows-desktop','macos-desktop'].map(n=>[n,{result:'success'}]));
+    const needs=Object.fromEntries(['policy','l1','ut','st','e2e-plan','e2e','e2e-desktop','real-merge','real-scheduled','binary','docker','windows-desktop','macos-desktop'].map(n=>[n,{result:'success'}]));
     const distribution=profile!=='merge';
     if(profile!=='merge') needs['real-merge']={result:'skipped'};
     if(!['daily','release'].includes(profile)) needs['real-scheduled']={result:'skipped'};

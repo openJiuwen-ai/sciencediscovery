@@ -614,6 +614,63 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The desktop front end has a browser entry of its own: every `/api/**`
+  # response is answered by `apps/desktop/e2e/fixtures.ts`, so unlike L2 above
+  # it needs neither the Python stack nor credentials and can gate a PR. It
+  # shares the lockfile-pinned Playwright install with the shared suite rather
+  # than installing a second copy that could drift.
+  e2e-desktop:
+    name: Desktop E2E (mocked)
+    needs: [policy, l1]
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      # The same key as the L2 job: both layers must run the browser the one
+      # committed lockfile pins, and a second cache would let them disagree.
+      - name: Cache the pinned Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/e2e.package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      # The app's own dependencies (Vite, React) come from the pnpm workspace;
+      # Playwright and the browser come from the shared `.e2e` install below.
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      - name: Install the shared Chromium
+        run: .e2e/node_modules/.bin/playwright install chromium
+
+      # `@playwright/test` is installed for the shared suite only, and the
+      # desktop entry is not a workspace package. Link it rather than let the
+      # two copies resolve different versions.
+      - name: Link the shared Playwright install
+        run: ln --symbolic --force ../../../.e2e/node_modules apps/desktop/e2e/node_modules
+
+      - name: Run the desktop journeys
+        run: apps/desktop/e2e/node_modules/.bin/playwright test --config apps/desktop/e2e/playwright.config.ts
+
+      # Trace, screenshot and console log for the failing spec.
+      - name: Upload desktop E2E evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-results
+          path: apps/desktop/e2e/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
   # The single-file release binaries, each built on its own architecture.
   #
   # The script can cross build, but the four-entry smoke gate can only boot an
@@ -1096,7 +1153,7 @@ jobs:
     # Keep the required check name for PR and queue events. Manual package
     # runs report a distinct check even if the policy fails to resolve inputs.
     name: ${{ inputs.profile == 'package' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && 'package-gate' || 'merge-gate' }}
-    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
+    needs: [policy, l1, ut, st, e2e-plan, e2e, e2e-desktop, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

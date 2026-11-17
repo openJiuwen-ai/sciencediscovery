@@ -15,6 +15,7 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../../api/client.js";
+import { getReviewerSettings, updateReviewerSettings } from "../../../api/reviewer.js";
 import {
   deleteSpecialist,
   listConnectors,
@@ -22,11 +23,17 @@ import {
   listSpecialists,
   updateSpecialist,
 } from "../../../api/settings.js";
-import type { ConnectorManifest, SkillDescriptor, Specialist } from "../../../api/types.js";
+import type {
+  ConnectorManifest,
+  ReviewerSpecialistSettings,
+  SkillDescriptor,
+  Specialist,
+} from "../../../api/types.js";
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
-import { BulkToggles, Group, LoadGate, Switch, Tag } from "../rows.js";
+import { SettingsModal } from "../SettingsModal.js";
+import { BulkToggles, Group, LoadGate, Row, Switch, Tag } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
 
 interface Props {
@@ -38,6 +45,7 @@ interface Props {
 
 interface Page {
   connectors: ConnectorManifest[];
+  reviewer: ReviewerSpecialistSettings;
   skills: SkillDescriptor[];
   specialists: Specialist[];
 }
@@ -54,12 +62,13 @@ interface Page {
  */
 export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props) {
   const loaded = useLoaded<Page>(async () => {
-    const [specialists, connectors, skills] = await Promise.all([
+    const [specialists, connectors, skills, reviewer] = await Promise.all([
       listSpecialists(client),
       listConnectors(client),
       listSkills(client),
+      getReviewerSettings(client),
     ]);
-    return { connectors, skills, specialists };
+    return { connectors, reviewer, skills, specialists };
   }, { client, key: "specialists" });
   const [editing, setEditing] = useState<Specialist>();
   const [busy, setBusy] = useState(false);
@@ -104,10 +113,42 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
     }
   };
 
+  /** The system-wide Reviewer switch. It is not a specialist row the way a
+   *  user-written one is — it has no instructions or tools of its own — but it
+   *  is the gate every session's automatic review passes through, so it lives
+   *  above the list rather than inside it. */
+  const setReviewerEnabled = async (current: ReviewerSpecialistSettings, next: boolean) => {
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await updateReviewerSettings(client, { ...current, enabled: next });
+      loaded.reload();
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const open = editing !== undefined;
+
   return (
     <LoadGate loaded={loaded}>
       {(page) => (
         <>
+          <Group heading={TEXT.settings.system.reviewer.heading}>
+            <Row
+              hint={TEXT.settings.system.reviewer.hint}
+              title={TEXT.settings.system.reviewer.label}
+            >
+              <Switch
+                disabled={busy}
+                label={TEXT.settings.system.reviewer.label}
+                onChange={(next) => void setReviewerEnabled(page.reviewer, next)}
+                value={page.reviewer.enabled}
+              />
+            </Row>
+          </Group>
           <Group>
             <p className="settings-note">{TEXT.settings.system.specialists.help}</p>
             {page.specialists.length === 0 ? (

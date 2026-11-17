@@ -21,9 +21,11 @@ import type {
   ModelProfile,
   ModelProvider,
   Project,
+  ReviewerSpecialistLevel,
   SkillDescriptor,
   Specialist,
 } from "../api/types.js";
+import { REVIEWER_LEVELS } from "../api/reviewer.js";
 import type { Attachment } from "../app/attachments.js";
 import { commitsOnEnter } from "../app/ime-enter.js";
 import type { LandingCategory, LandingSeed } from "../app/landing.js";
@@ -37,6 +39,7 @@ import { filterExperts } from "./expert-catalog.js";
 import { modelBrand } from "./model-brand.js";
 import { modelLabel, providerName } from "./provider-name.js";
 import { ProjectPicker } from "./ProjectPicker.js";
+import { Switch } from "./settings/rows.js";
 
 /** The category chip the welcome page puts in front of the input. */
 export interface ComposerTag {
@@ -70,6 +73,16 @@ export interface SeededCommand {
 
 interface Props {
   approvalMode?: ApprovalMode;
+  /** The open session's Reviewer preferences. `undefined` before the session's
+   *  own record has been read — the menu then leaves the switch at its product
+   *  default rather than claiming the user turned it off. */
+  automaticReviewEnabled?: boolean;
+  /** The system-wide Reviewer switch. `false` means the session's own switch
+   *  has no effect, and the menu says why instead of pretending it works. */
+  reviewerEnabled?: boolean;
+  reviewLevel?: ReviewerSpecialistLevel;
+  onAutomaticReview?: (enabled: boolean) => void;
+  onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
   /** The Project the next conversation would go into, for the landing strip's
    *  picker to mark. Undefined until the boot knows which Projects exist. */
   activeProjectId?: string;
@@ -175,7 +188,26 @@ function SlidersGlyph() {
   );
 }
 
-type SettingsPanel = "experts";
+type SettingsPanel = "experts" | "permission" | "reviewer";
+
+/** The page-with-check that marks 自动审阅. */
+function ReviewGlyph() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="18">
+      <path d="M7 4.5h10a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 17 20.5H7A1.5 1.5 0 0 1 5.5 19V6A1.5 1.5 0 0 1 7 4.5z" />
+      <path d="m9 12.6 2.2 2.2L15 10.6" />
+    </svg>
+  );
+}
+
+/** Three shrinking bars: the level row, which is about how much is checked. */
+function LevelGlyph() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="18">
+      <path d="M5 8.5h14M7.5 12.5h9M10.5 16.5h3" />
+    </svg>
+  );
+}
 
 /** The shield that marks permission, and its warning form for 完全访问. */
 function ShieldGlyph({ alert = false }: { alert?: boolean }) {
@@ -328,14 +360,33 @@ export function PermissionFlyout({
  * composer never gets there.
  */
 export function SessionSettingsMenu({
+  approvalMode,
+  automaticReviewEnabled,
+  reviewerEnabled,
   experts,
   expertsLoading,
+  onApprovalMode,
+  onAutomaticReview,
   onClose,
   onEvolve,
   onIdeaTree,
+  onReviewLevel,
   onSelectSpecialist,
+  reviewLevel,
+  running,
   selectedSpecialistId,
 }: {
+  approvalMode?: ApprovalMode;
+  /** Absent until the session's Reviewer record has been read. */
+  automaticReviewEnabled?: boolean;
+  /** Absent while the system-wide switch has not been read. */
+  reviewerEnabled?: boolean;
+  onApprovalMode?: (mode: ApprovalMode) => void;
+  onAutomaticReview?: (enabled: boolean) => void;
+  onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
+  reviewLevel?: ReviewerSpecialistLevel;
+  /** True while a run holds the menu's choices locked. */
+  running?: boolean;
   /** The experts a session can be bound to, already read by the composer.
    *  Held there rather than here so reopening the menu does not blank the row
    *  above it back to 无 while the catalog is fetched again. */
@@ -400,6 +451,73 @@ export function SessionSettingsMenu({
             </>
           )}
           <button
+            aria-expanded={panel === "permission"}
+            aria-haspopup="true"
+            className={`session-menu-row${panel === "permission" ? " is-open" : ""}`}
+            disabled={running}
+            onClick={() => toggle("permission")}
+            title={running ? TEXT.composer.permissionLocked : undefined}
+            type="button"
+          >
+            <span className="session-menu-icon">
+              <ShieldGlyph />
+            </span>
+            <span className="session-menu-label">{TEXT.composer.permissionMode}</span>
+            <span className="session-menu-value">
+              <span className="session-menu-value-icon">
+                <ShieldGlyph />
+              </span>
+              <span className="session-menu-value-text">
+                {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
+              </span>
+              <ChevronRightGlyph />
+            </span>
+          </button>
+          <div className="session-menu-divider" />
+          {/* 自动审阅 is a switch, not a flyout: it has one value and no
+              choices behind it, exactly as the permission row's neighbour in
+              the reference. The level row below is the one with options. */}
+          <div className="session-menu-row is-static">
+            <span className="session-menu-icon">
+              <ReviewGlyph />
+            </span>
+            <span className="session-menu-label">{TEXT.reviewer.settings}</span>
+            {onAutomaticReview === undefined ? null : (
+              <Switch
+                disabled={reviewerEnabled === false}
+                label={TEXT.reviewer.settings}
+                onChange={onAutomaticReview}
+                value={automaticReviewEnabled ?? true}
+              />
+            )}
+          </div>
+          {/* The master switch is somewhere else entirely; a row that still
+              offered a working switch would be lying about the outcome. */}
+          {reviewerEnabled === false ? (
+            <p className="session-menu-note" role="status">{TEXT.reviewer.unavailable}</p>
+          ) : null}
+          <button
+            aria-expanded={panel === "reviewer"}
+            aria-haspopup="true"
+            className={`session-menu-row${panel === "reviewer" ? " is-open" : ""}`}
+            disabled={automaticReviewEnabled === false}
+            onClick={() => toggle("reviewer")}
+            title={automaticReviewEnabled === false ? TEXT.reviewer.settingsHint : undefined}
+            type="button"
+          >
+            <span className="session-menu-icon">
+              <LevelGlyph />
+            </span>
+            <span className="session-menu-label">{TEXT.reviewer.level}</span>
+            <span className="session-menu-value">
+              <span className="session-menu-value-text">
+                {TEXT.reviewer.levelName(reviewLevel ?? "quick")}
+              </span>
+              <ChevronRightGlyph />
+            </span>
+          </button>
+          <div className="session-menu-divider" />
+          <button
             aria-describedby="session-experts-hint"
             aria-expanded={panel === "experts"}
             aria-haspopup="true"
@@ -427,6 +545,38 @@ export function SessionSettingsMenu({
           </button>
           <span className="sr-only" id="session-experts-hint">{TEXT.composer.expertsHint}</span>
         </div>
+
+        {panel === "permission" ? (
+          <PermissionFlyout mode={approvalMode} onApprovalMode={onApprovalMode} onClose={onClose} />
+        ) : null}
+
+        {panel === "reviewer" ? (
+          <div className="session-menu-flyout">
+            {REVIEWER_LEVELS.map((level) => (
+              <button
+                className={`session-flyout-row${reviewLevel === level ? " is-selected" : ""}`}
+                key={level}
+                onClick={() => {
+                  onReviewLevel?.(level);
+                  onClose();
+                }}
+                type="button"
+              >
+                <span className="session-flyout-text">
+                  <span className="session-flyout-label">{TEXT.reviewer.levelName(level)}</span>
+                  <span className="session-flyout-desc">
+                    {level === "deep" ? TEXT.reviewer.levelDeepDesc : TEXT.reviewer.levelQuickDesc}
+                  </span>
+                </span>
+                {reviewLevel === level ? (
+                  <span className="session-flyout-check">
+                    <CheckGlyph />
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {panel === "experts" ? (
           <ExpertFlyout
@@ -686,6 +836,8 @@ export function ModelMenu({
 export function Composer({
   activeProjectId,
   approvalMode,
+  automaticReviewEnabled,
+  reviewerEnabled,
   attachBlocked,
   attachLimit,
   attachments,
@@ -694,6 +846,8 @@ export function Composer({
   landing = false,
   models,
   onApprovalMode,
+  onAutomaticReview,
+  onReviewLevel,
   onClearAttachments,
   onClearCommand,
   onCreateProject,
@@ -712,6 +866,7 @@ export function Composer({
   projectName,
   projects,
   providers = [],
+  reviewLevel,
   running,
   seed,
   seededCommand,
@@ -1084,8 +1239,15 @@ export function Composer({
           </button>
           {menu === "settings" ? (
             <SessionSettingsMenu
+              approvalMode={approvalMode}
+              automaticReviewEnabled={automaticReviewEnabled}
+              reviewerEnabled={reviewerEnabled}
               experts={experts.value?.filter((expert) => expert.enabled !== false) ?? []}
               expertsLoading={experts.loading}
+              onAutomaticReview={onAutomaticReview}
+              onReviewLevel={onReviewLevel}
+              reviewLevel={reviewLevel}
+              onApprovalMode={onApprovalMode}
               onClose={() => setMenu(undefined)}
               // The draft is carried into the setup dialog: a sentence already
               // written is the task the new design would start from.
