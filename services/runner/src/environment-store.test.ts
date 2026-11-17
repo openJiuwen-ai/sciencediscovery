@@ -16,10 +16,12 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 
+import { PathBudgetExceededError } from "./environment-paths.js";
 import {
   EnvironmentStore,
   executeEnvironmentCommand,
@@ -36,6 +38,7 @@ async function fixture(
   options: {
     beforeCommand?: (arguments_: string[]) => Promise<void> | void;
     listOutput?: "array" | "micromamba";
+    platform?: string;
     root?: string;
   } = {},
 ) {
@@ -120,6 +123,7 @@ async function fixture(
   const store = new EnvironmentStore({
     allowedChannels: ["conda-forge"],
     enabled: true,
+    ...(options.platform ? { platform: options.platform } : {}),
     provisionerPath,
     root: resolve(root, "envs"),
     runnerVersion: "test-runner",
@@ -200,6 +204,71 @@ test("scientific environment lifecycle advances immutable revisions only after s
   assert.ok(store.getRevision(installed.id), "deleting runtime retains past revision metadata");
   assert.deepEqual(await store.snapshotBytes(installed.id), snapshot);
   await assert.rejects(store.withRuntime(task.id, async () => undefined), /Unknown scientific environment/);
+});
+
+test("new task prefixes use compact directory names while public ids stay full", async (context) => {
+  const { store, root } = await fixture(context);
+  await store.initialize();
+  await store.setupManagedEnvironments();
+  const task = await store.createTask("compact-layout", "python");
+  assert.match(task.id, /^task-[a-f0-9-]+$/);
+  assert.match(task.currentRevisionId, /^rev-[a-f0-9-]+$/);
+
+  const runtime = store.resolveRuntime(task.currentRevisionId, "python");
+  assert.match(basename(dirname(runtime.prefixPath)), /^task-[a-f0-9]{12}$/);
+  assert.match(basename(runtime.prefixPath), /^rev-[a-f0-9]{12}$/);
+  const legacy = resolve(root, "envs", "revisions", task.id, task.currentRevisionId);
+  assert.ok(runtime.prefixPath.length < legacy.length,
+    `compact prefix ${runtime.prefixPath.length} should be shorter than full-id ${legacy.length}`);
+});
+
+test("persisted full-id prefixes are resolved and updated in place, never renamed", async (context) => {
+  const { store, root, executor, provisionerPath, commands } = await fixture(context);
+  await store.initialize();
+  await store.setupManagedEnvironments();
+  const task = await store.createTask("legacy-layout", "python");
+  const compact = store.resolveRuntime(task.currentRevisionId, "python").prefixPath;
+  const legacy = resolve(root, "envs", "revisions", task.id, task.currentRevisionId);
+  await mkdir(dirname(legacy), { recursive: true });
+  await rename(compact, legacy);
+  // The old layout never had the compact parent at all; remove the empty one
+  // our rename left behind so this reconstructs a real pre-upgrade directory.
+  await rm(dirname(compact), { recursive: true, force: true });
+
+  const reopened = new EnvironmentStore({
+    allowedChannels: ["conda-forge"], enabled: true, provisionerPath,
+    root: resolve(root, "envs"), runnerVersion: "test-runner",
+  }, executor);
+  await reopened.initialize();
+  assert.equal(reopened.resolveRuntime(task.currentRevisionId, "python").prefixPath, legacy,
+    "an installation created by the full-id layout keeps its prefix");
+
+  const installed = await reopened.install(task.id, ["newpkg=1"]);
+  const update = commands.findLast((command) => command[1] === "install" && command.includes("newpkg=1"));
+  assert.ok(update);
+  assert.equal(update[update.indexOf("--prefix") + 1], legacy, "in-place update targets the existing prefix");
+  assert.equal(reopened.resolveRuntime(installed.id, "python").prefixPath, legacy,
+    "a new audit revision still resolves the one physical prefix");
+  assert.equal(existsSync(legacy), true, "the environment was not relocated");
+
+  await reopened.deleteTask(task.id);
+  assert.equal(existsSync(legacy), false);
+  assert.equal(existsSync(resolve(root, "envs", "revisions", basename(dirname(compact)))), false,
+    "deleting an environment clears both possible directory layouts");
+});
+
+test("a too-deep custom data directory fails before any provisioning command", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `environment-store-deep-${"d".repeat(90)}`);
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const { store, commands } = await fixture(context, { platform: "win32", root });
+  await store.initialize();
+  await assert.rejects(store.setupManagedEnvironments(), (error: unknown) => {
+    assert.ok(error instanceof PathBudgetExceededError);
+    assert.match(error.message, /Environment prefix/);
+    assert.match(error.message, /Move the Runner data directory at least \d+ characters shallower/);
+    return true;
+  });
+  assert.equal(commands.length, 0, "the path budget is checked before micromamba runs");
 });
 
 test("scientific environments accept micromamba's package-list envelope", async (context) => {

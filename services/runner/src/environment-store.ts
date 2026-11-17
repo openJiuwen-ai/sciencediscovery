@@ -15,9 +15,9 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { access, chmod, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type {
@@ -42,8 +42,10 @@ import {
   PathBudgetExceededError,
   defaultPackageCacheRoot,
   describePathBudgetProblems,
+  environmentDirectoryName,
   inspectPathBudget,
   looksLikePathLengthFailure,
+  revisionDirectoryName,
   windowsLongPathsEnabled,
 } from "./environment-paths.js";
 // [windows-desktop] win-64 binary name (.exe), conda interpreter layout
@@ -682,7 +684,15 @@ export class EnvironmentStore {
     const id = `task-${randomUUID()}`;
     const createdAt = new Date().toISOString();
     const revisionId = `rev-${randomUUID()}`;
+    const environmentDirectory = environmentDirectoryName(id);
+    if (this.catalog.environments.some((candidate) => candidate.id !== id
+      && environmentDirectoryName(candidate.id) === environmentDirectory)) {
+      throw new Error("Environment directory name collision; retry creating the environment");
+    }
     const prefix = this.revisionPath(id, revisionId);
+    if (existsSync(resolve(prefix, ".."))) {
+      throw new Error(`Environment directory already exists: ${resolve(prefix, "..")}`);
+    }
     const previousCatalog = structuredClone(this.catalog);
     await mkdir(resolve(prefix, ".."), { recursive: true });
     try {
@@ -713,7 +723,7 @@ export class EnvironmentStore {
       return { ...environment };
     } catch (error) {
       this.catalog = previousCatalog;
-      await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
+      await this.removeEnvironmentPrefix(id);
       throw error;
     }
   }
@@ -732,7 +742,7 @@ export class EnvironmentStore {
     // Snapshots and available source artifacts remain audit-only records.
     try {
       await this.saveCatalog();
-      await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
+      await this.removeEnvironmentPrefix(id);
     } catch (error) {
       this.catalog = previousCatalog;
       throw error;
@@ -969,7 +979,7 @@ export class EnvironmentStore {
       await this.saveCatalog();
     } catch (error) {
       this.catalog = previousCatalog;
-      await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
+      await this.removeEnvironmentPrefix(id);
       throw await this.explainProvisioningFailure(error);
     }
   }
@@ -1155,8 +1165,10 @@ export class EnvironmentStore {
       // The deepest prefix any environment will use, not the one being set up:
       // `task-<uuid>` is 41 characters against `starter-python`'s 14, so a check
       // against the starter would pass a data directory that later overflows when
-      // a task environment is created (#1104 review).
-      revisionPrefix: this.revisionPath(`task-${"0".repeat(36)}`, `rev-${"0".repeat(36)}`),
+      // a task environment is created (#1104 review). The canonical compact
+      // layout is what a new task will use; a persisted full-id prefix is never
+      // renamed, so it cannot be made to fit by this check.
+      revisionPrefix: this.canonicalRevisionPrefix(`task-${"0".repeat(36)}`, `rev-${"0".repeat(36)}`),
       platform,
     });
     if (!problems.length) return;
@@ -1195,12 +1207,60 @@ export class EnvironmentStore {
     return new Error(`${diagnostic}\n\nOriginal output:\n${detail.slice(0, 1200)}`);
   }
 
+  /** Where a new prefix is created: compact names keep the default Windows
+   * data directory inside MAX_PATH. Public ids and the catalog format are
+   * unchanged. */
+  private canonicalRevisionPrefix(environmentId: string, revisionId: string): string {
+    return resolve(this.revisionsRoot, environmentDirectoryName(environmentId), revisionDirectoryName(revisionId));
+  }
+
+  /**
+   * Resolve the prefix an environment was actually created at.
+   *
+   * Old releases stored the full ids. Those directories are never renamed:
+   * conda records absolute paths in its metadata, so moving one invalidates
+   * it. The catalog stores no path, which leaves two addressable names to
+   * probe: the compact canonical one and the legacy full-id one. A revision
+   * the catalog already records falls back to the legacy name even when
+   * MAX_PATH makes neither directory addressable — the reported 283-character
+   * install is preserved rather than silently repointed at an empty prefix.
+   */
   private revisionPath(environmentId: string, revisionId: string): string {
-    if (!/^(?:starter-(?:python|r)|task-[a-f0-9-]+)$/.test(environmentId)
-      || !/^rev-[a-f0-9-]+$/.test(revisionId)) {
-      throw new Error("Environment metadata contains an unsafe identifier");
+    const canonical = this.canonicalRevisionPrefix(environmentId, revisionId);
+    if (existsSync(canonical)) return canonical;
+    // Task environment directories are distinct between the two layouts
+    // (`task-<12 hex>` vs `task-<uuid>`), so an addressable compact parent
+    // proves this environment was created here even if the revision directory
+    // is currently missing. Starter directories share their name, so this
+    // cannot distinguish them and the legacy probe below decides.
+    if (environmentId.startsWith("task-") && existsSync(dirname(canonical))) return canonical;
+    const legacy = resolve(this.revisionsRoot, environmentId, revisionId);
+    if (legacy === canonical) return canonical;
+    if (existsSync(legacy)) return legacy;
+    return this.catalog.revisions.some((revision) => revision.id === revisionId) ? legacy : canonical;
+  }
+
+  /** Both layouts a persisted environment may occupy. */
+  private environmentDirectories(environmentId: string): readonly [string, string] {
+    const canonical = resolve(this.revisionsRoot, environmentDirectoryName(environmentId));
+    const legacy = resolve(this.revisionsRoot, environmentId);
+    return canonical === legacy ? [canonical, canonical] : [canonical, legacy];
+  }
+
+  /**
+   * Remove an environment's physical tree without touching anything it did
+   * not create. A compact environment has no legacy directory; probing that
+   * full-id path on Windows can itself fail when it is over MAX_PATH, so the
+   * legacy tree is only walked when it is addressable or no compact tree
+   * exists (the pre-compact layout).
+   */
+  private async removeEnvironmentPrefix(environmentId: string): Promise<void> {
+    const [canonical, legacy] = this.environmentDirectories(environmentId);
+    const canonicalExists = existsSync(canonical);
+    for (const directory of new Set([canonical, legacy])) {
+      if (directory === legacy && canonicalExists && !existsSync(legacy)) continue;
+      await rm(directory, { force: true, recursive: true });
     }
-    return resolve(this.revisionsRoot, environmentId, revisionId);
   }
 
   private offlineArguments(): string[] {

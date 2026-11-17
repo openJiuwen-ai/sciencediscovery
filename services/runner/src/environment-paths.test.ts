@@ -3,16 +3,21 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { win32 } from "node:path";
 
 import {
   CACHE_MEMBER_TAIL_CHARS,
+  COMPACT_DIRECTORY_ID_CHARS,
   MAX_PATH_USABLE,
+  PREFIX_MEMBER_TAIL_CHARS,
   PathBudgetExceededError,
   channelDirectory,
   defaultPackageCacheRoot,
   describePathBudgetProblems,
+  environmentDirectoryName,
   inspectPathBudget,
   looksLikePathLengthFailure,
+  revisionDirectoryName,
 } from "./environment-paths.js";
 
 /** A cache root of exactly `length` characters, so the boundary is the only variable. */
@@ -32,6 +37,65 @@ test("the budget boundary is 259 usable characters, and 260 is over", () => {
   assert.equal(problems.length, 1);
   assert.equal(problems[0]!.area, "package-cache");
   assert.equal(problems[0]!.reach - problems[0]!.limit, 1);
+});
+
+test("the reported default data directory fits once revision directories are compact", () => {
+  // Observed in the product: this prefix was 154 characters and the deepest
+  // member 129, i.e. 283 and 24 over, so the managed Shell never became ready.
+  const dataDir = String.raw`C:\Users\33135\AppData\Local\ScienceDiscovery`;
+  const taskId = `task-${"0".repeat(36)}`;
+  const revisionId = `rev-${"0".repeat(36)}`;
+  const compact = win32.join(dataDir, "scientific-envs", "revisions",
+    environmentDirectoryName(taskId), revisionDirectoryName(revisionId));
+  const legacy = win32.join(dataDir, "scientific-envs", "revisions", taskId, revisionId);
+
+  assert.equal(legacy.length + PREFIX_MEMBER_TAIL_CHARS, 283, "the report's exact arithmetic");
+  assert.equal(compact.length, 106);
+  assert.ok(compact.length + PREFIX_MEMBER_TAIL_CHARS <= MAX_PATH_USABLE);
+  assert.deepEqual(inspectPathBudget({
+    cacheRoot: "C:\\ProgramData\\ScienceDiscovery\\pkgs", channels: ["conda-forge"],
+    platform: "win32", revisionPrefix: compact,
+  }), []);
+
+  // Also cover a longer profile directory name without assuming a global
+  // upper bound on custom Windows profile paths.
+  const longest = win32.join(`C:\\Users\\${"u".repeat(20)}\\AppData\\Local\\ScienceDiscovery`,
+    "scientific-envs", "revisions", environmentDirectoryName(taskId), revisionDirectoryName(revisionId));
+  assert.ok(longest.length + PREFIX_MEMBER_TAIL_CHARS <= MAX_PATH_USABLE,
+    `${longest.length} + ${PREFIX_MEMBER_TAIL_CHARS} under a 20-character username`);
+
+  assert.equal(environmentDirectoryName("starter-python"), "starter-python");
+  assert.equal(environmentDirectoryName("starter-r"), "starter-r");
+  assert.equal(environmentDirectoryName(taskId).length, "task-".length + COMPACT_DIRECTORY_ID_CHARS);
+  assert.equal(revisionDirectoryName(revisionId).length, "rev-".length + COMPACT_DIRECTORY_ID_CHARS);
+});
+
+test("compact names preserve short safe catalog ids and reject unsafe paths", () => {
+  assert.equal(environmentDirectoryName("task-abcd"), "task-abcd");
+  assert.equal(revisionDirectoryName("rev-abcd"), "rev-abcd");
+  assert.equal(environmentDirectoryName("task-ab-cd"), "task-ab-cd");
+  for (const id of ["task-../abcd", "task-abcd/ef", "task-abcd\\ef", "task-", "other-abcd"]) {
+    assert.throws(() => environmentDirectoryName(id), /unsafe identifier/);
+  }
+  for (const id of ["rev-../abcd", "rev-abcd/ef", "rev-abcd\\ef", "rev-", "other-abcd"]) {
+    assert.throws(() => revisionDirectoryName(id), /unsafe identifier/);
+  }
+});
+
+test("a too-deep custom data directory still fails the environment-prefix budget", () => {
+  // The compact layout buys room, it does not remove the guard: a custom root
+  // that leaves less than 129 characters below the prefix for the deepest
+  // package member is still refused before provisioning.
+  const deep = win32.join("C:\\" + "d".repeat(80), "scientific-envs", "revisions",
+    environmentDirectoryName(`task-${"1".repeat(36)}`), revisionDirectoryName(`rev-${"1".repeat(36)}`));
+  const problems = inspectPathBudget({
+    cacheRoot: "C:\\ProgramData\\ScienceDiscovery\\pkgs", channels: ["conda-forge"],
+    platform: "win32", revisionPrefix: deep,
+  });
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0]!.area, "environment-prefix");
+  assert.ok(problems[0]!.reach > MAX_PATH_USABLE);
+  assert.match(describePathBudgetProblems(problems, false), /Move the Runner data directory at least \d+ characters shallower/);
 });
 
 test("the shipped Windows default cache root fits the budget with room to spare", () => {
