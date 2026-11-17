@@ -28,8 +28,15 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
     projectModel: undefined as string | undefined,
   };
   const calls: string[] = [];
-  const client = { token: randomUUID(), request: async (path: string) => {
+  /** Creation and update bodies, so a case can read what actually went on the wire. */
+  const writes: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+  const sessions = new Map<string, { id: string; projectId: string; modelId: string; messages: unknown[] }>();
+  let counter = 0;
+  const client = { token: randomUUID(), request: async (path: string, init: RequestInit = {}) => {
     calls.push(path);
+    const method = init.method ?? "GET";
+    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+    if (method !== "GET") writes.push({ method, path, body });
     if (path === "/api/health") return { status: "ok" };
     if (path === "/api/models") return data.models;
     if (path === "/api/providers") return { providers: [], presets: [] };
@@ -37,9 +44,34 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
     if (path === "/api/projects/inbox/settings") return { effective: { modelId: data.projectModel ?? data.globalModel } };
     if (path === "/api/inbox") return { id: "inbox" };
     // Deliberately include history: it must never bypass an empty catalog gate.
-    if (path === "/api/projects") return [{ id: "old-project", name: "Existing history" }];
+    if (path === "/api/projects" && method === "GET") return [{ id: "old-project", name: "Existing history" }];
+    if (method === "POST" && path === "/api/projects") {
+      const firstSession = { id: "project-first", projectId: "new-project", modelId: "first", messages: [] };
+      sessions.set(firstSession.id, firstSession);
+      return { project: { id: "new-project", name: String(body?.name ?? "") }, firstSession };
+    }
+    if (method === "POST" && path === "/api/projects/inbox/sessions") {
+      counter += 1;
+      const overrides = (body?.settingsOverrides ?? {}) as Record<string, unknown>;
+      const created = { id: `created-${counter}`, projectId: "inbox", modelId: String(overrides.modelId ?? body?.modelId ?? "first"), messages: [] };
+      sessions.set(created.id, created);
+      return created;
+    }
+    const sessionMatch = /^\/api\/sessions\/([^/]+)(\/.*)?$/u.exec(path);
+    if (sessionMatch) {
+      const id = decodeURIComponent(sessionMatch[1]!);
+      const rest = sessionMatch[2] ?? "";
+      const current = sessions.get(id) ?? { id, projectId: "old-project", modelId: "first", messages: [] };
+      if (method === "PATCH" && rest === "") {
+        const next = { ...current, modelId: String(body?.modelId ?? current.modelId) };
+        sessions.set(id, next);
+        return next;
+      }
+      if (method === "GET" && rest === "") { sessions.set(id, current); return current; }
+      if (rest === "/runs" || rest === "/files" || rest === "/artifact-outputs" || rest === "/artifacts") return [];
+    }
     if (/^\/api\/projects\/[^/]+\/sessions\?state=active$/u.test(path)) return [];
-    assert.fail(`Unexpected request: ${path}`);
+    assert.fail(`Unexpected request: ${method} ${path}`);
   } } as unknown as ApiClient;
   let handle: ReturnType<typeof useWorkspace> | undefined;
   const rejectAuth = () => assert.fail("Unexpected auth failure");
@@ -53,7 +85,7 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
     }
   });
   await act(async () => { renderer = create(createElement(Harness)); });
-  return { data, calls, current: () => { assert.ok(handle); return handle; } };
+  return { data, calls, writes, current: () => { assert.ok(handle); return handle; } };
 }
 
 test("an empty model catalog requires setup without reading or exposing history", async t => {
@@ -94,4 +126,29 @@ test("losing the last model returns to mandatory setup and configuration unlocks
   await act(async () => { current().actions.finishSetup(); });
   assert.equal(current().boot, "ready");
   assert.equal(current().state.selectedModelId, "new");
+});
+
+/** Let a creation started by an action reach the fake server. */
+async function settle() {
+  for (let turn = 0; turn < 5; turn += 1) await act(async () => { await Promise.resolve(); });
+}
+
+test("a draft pick becomes the task model of the created conversation, not its review model", async t => {
+  const { writes, current } = await workspace(t);
+  await act(async () => { await current().actions.selectModel("second"); });
+  await act(async () => { current().actions.newSession(); });
+  await settle();
+  const created = writes.filter((w) => w.method === "POST" && w.path === "/api/projects/inbox/sessions").at(-1);
+  assert.ok(created, "the conversation was created");
+  assert.deepEqual(created.body, { settingsOverrides: { modelId: "second" } },
+    "only the task model follows the pick; the top-level shortcut would pin the review model too");
+});
+
+test("a new project's first conversation is switched to the same task model", async t => {
+  const { writes, current } = await workspace(t);
+  await act(async () => { await current().actions.selectModel("second"); });
+  await act(async () => { await current().actions.createProject("New project"); });
+  const update = writes.filter((w) => w.method === "PATCH" && w.path === "/api/sessions/project-first").at(-1);
+  assert.deepEqual(update?.body, { modelId: "second" },
+    "the project path changes the task model only, so both paths leave the review model alone");
 });
