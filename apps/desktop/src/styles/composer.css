@@ -421,3 +421,56 @@
    old position by reflex. */
 .send-button-icon.is-cooling { opacity: .55; cursor: default; }
 
+/* 权限模式, beside the settings that used to be its only door (#1204). The closed
+   control carries the shield and the mode's own word; 完全访问 is the one mode that
+   widens the session's reach, so it is the one drawn in the warning colour — the
+   same rule the flyout's row already follows. */
+.composer-permission {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px 0 7px;
+  border-radius: 14px;
+  color: #4d4d4d;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.composer-permission:hover:not(:disabled) {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.composer-permission svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.composer-permission.is-danger,
+.composer-permission.is-danger:hover:not(:disabled) {
+  color: #c2410c;
+  background: rgba(194, 65, 12, 0.08);
+}
+
+.composer-permission:disabled {
+  color: #c2c2c2;
+  cursor: default;
+}
+
+/* The popover is the same two-row choice the settings menu opens; only its frame
+   changes, because here it hangs off the composer's own dropdown box. */
+.composer-dropdown.is-permission {
+  width: 300px;
+}
+
+.composer-dropdown.is-permission .session-menu-flyout {
+  position: static;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}

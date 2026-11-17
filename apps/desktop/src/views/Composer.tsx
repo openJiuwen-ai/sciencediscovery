@@ -145,7 +145,7 @@ interface Props {
   uploading: boolean;
 }
 
-type Menu = "model" | "settings";
+type Menu = "model" | "permission" | "settings";
 
 function PlusGlyph() {
   return (
@@ -718,6 +718,7 @@ export function Composer({
   tag,
   uploading,
 }: Props) {
+  const fullAccess = approvalMode === "always_allow";
   const [text, setText] = useState(seededCommand?.text ?? "");
   /** The dialog's flags, kept apart from the sentence so the token cannot be
    *  edited into something the agent no longer understands. Seeded in the
@@ -1098,6 +1099,38 @@ export function Composer({
               running={running}
               selectedSpecialistId={selectedSpecialistId}
             />
+          ) : null}
+        </span>
+
+        {/* The active permission mode, beside the settings that used to be its only
+            door (#1204): the shield says which policy the next turn runs under, and
+            the label is the same word the settings row uses. */}
+        <span className="composer-menu-anchor is-permission">
+          <button
+            aria-expanded={menu === "permission"}
+            aria-label={fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
+            className={`composer-permission${fullAccess ? " is-danger" : ""}`}
+            disabled={running}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenu(menu === "permission" ? undefined : "permission");
+            }}
+            title={running ? TEXT.composer.permissionLocked : TEXT.composer.permissionMode}
+            type="button"
+          >
+            <ShieldGlyph alert={fullAccess} />
+            <span className="composer-permission-label">
+              {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
+            </span>
+          </button>
+          {menu === "permission" ? (
+            <div className="composer-dropdown is-permission" onPointerDown={(event) => event.stopPropagation()}>
+              <PermissionFlyout
+                fullAccess={fullAccess}
+                onApprovalMode={onApprovalMode}
+                onClose={() => setMenu(undefined)}
+              />
+            </div>
           ) : null}
         </span>
 

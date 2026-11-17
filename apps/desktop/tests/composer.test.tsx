@@ -42,6 +42,7 @@ function render(
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
     modelName?: string;
+    approvalMode?: "ask_for_dangerous" | "always_allow";
     selectedModelId?: string | null;
     unavailableModel?: boolean;
   } = {},
@@ -49,6 +50,7 @@ function render(
   return renderToStaticMarkup(
     <Composer
       activeProjectId={options.activeProjectId}
+      approvalMode={options.approvalMode}
       attachBlocked={options.blocked}
       attachLimit={options.limit}
       attachments={options.attachments ?? []}
@@ -516,4 +518,72 @@ test("a deleted model is shown as unavailable instead of selecting the first pro
   const markup = render(false, { selectedModelId: null, unavailableModel: true });
   assert.match(markup, /原模型已删除，请重新选择/u);
   assert.doesNotMatch(markup, /class="model-name">测试模型/u);
+});
+
+test("the permission selector follows the + and settings buttons and names the active mode", () => {
+  const markup = render();
+  const plus = markup.indexOf('class="composer-plus"');
+  const settings = markup.indexOf("composer-settings");
+  const selector = markup.indexOf("composer-permission");
+  assert.ok(plus >= 0 && settings > plus, "+ then settings are drawn first");
+  assert.ok(selector > settings, "the selector is the third control, not tucked into the menu");
+  assert.match(markup, /aria-label="请求批准"/u);
+  assert.match(markup, /composer-permission-label">请求批准</u);
+  assert.doesNotMatch(markup, /composer-permission is-danger/u, "the asking mode is not the warning colour");
+});
+
+test("full access is the one mode drawn in the warning colour", () => {
+  const markup = render(false, { approvalMode: "always_allow" });
+  assert.match(markup, /class="composer-permission is-danger"/u);
+  assert.match(markup, /composer-permission-label">完全访问</u);
+  assert.match(markup, /aria-label="完全访问"/u);
+});
+
+test("the selector opens the two scope explanations and reports the choice", async () => {
+  const chosen: string[] = [];
+  // Opening a composer menu registers a document-level dismissal listener; this
+  // suite mounts React without a DOM, so the one call it makes is stubbed.
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  let view;
+  await act(async () => {
+    view = create(
+      <Composer
+        approvalMode="always_allow"
+        attachments={[]}
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={(mode) => { chosen.push(mode); }}
+        onClearAttachments={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    );
+  });
+  try {
+    const trigger = view.root.findByProps({ "aria-label": "完全访问" });
+    await act(async () => {
+      (trigger.props.onClick as (event: { stopPropagation: () => void }) => void)({ stopPropagation() {} });
+    });
+    const opened = JSON.stringify(view.toJSON());
+    assert.match(opened, /编辑外部文件和使用互联网时始终询问/u);
+    assert.match(opened, /可不受限制地访问互联网和您电脑上的任何文件/u);
+    const asking = view.root.findByProps({ "aria-label": "请求批准" });
+    await act(async () => { (asking.props.onClick as () => void)(); });
+    assert.deepEqual(chosen, ["ask_for_dangerous"]);
+  } finally {
+    await act(async () => { view.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
 });
