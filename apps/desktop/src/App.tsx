@@ -68,6 +68,7 @@ import {
   writeStoredFlag,
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
+import { inheritedApprovalMode, rememberApprovalMode } from "./app/approval-mode-preference.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { ArtifactDialog } from "./views/ArtifactDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
@@ -131,6 +132,9 @@ export function App({ initialToken }: Props) {
   const [linkedArtifactId, setLinkedArtifactId] = useState<string | undefined>();
   /** The task sidebar folds away; the conversation's does too when the panel
    *  needs the room. */
+  // The permission mode new conversations inherit: the reader's last choice in this
+  // window, never persisted and never applied to a session that already exists (#1204).
+  const [lastApprovalMode, setLastApprovalMode] = useState(inheritedApprovalMode());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [workspaceOpen, setWorkspaceOpen] = useState(() =>
     readStoredFlag(localStorage, RIGHT_PANEL_STORAGE_KEY),
@@ -912,14 +916,21 @@ export function App({ initialToken }: Props) {
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
     activeProjectId: state.activeProjectId,
-    approvalMode: state.detail?.approvalMode,
+    approvalMode: state.detail?.approvalMode ?? lastApprovalMode,
     attachBlocked: canUpload ? undefined : TEXT.composer.attachArchived,
     attachLimit,
     attachments: state.attachments,
     client,
     jwBlocked: jwReady ? undefined : TEXT.composer.jwBlocked,
     models: state.models,
-    onApprovalMode: (mode) => void actions.setApprovalMode(mode),
+    onApprovalMode: (mode) => {
+    // The choice is remembered before it is applied: a new conversation started
+    // from this instance inherits it, and the selector on the landing page has
+    // nothing else to read it from.
+    rememberApprovalMode(mode);
+    setLastApprovalMode(mode);
+    if (state.detail) void actions.setApprovalMode(mode);
+  },
     onClearAttachments: actions.clearAttachments,
     onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
