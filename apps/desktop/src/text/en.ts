@@ -1343,6 +1343,7 @@ export const EN: Text = {
       send: "Start designing",
       cancel: "Cancel",
       blockedRunning: "This session is already running; wait for it to finish before starting another.",
+      blockedSearch: "This session already has a search running. Open it from its card in the conversation, or wait for it to finish before starting another.",
       blockedArchived: "An archived session cannot start a new run.",
     },
 

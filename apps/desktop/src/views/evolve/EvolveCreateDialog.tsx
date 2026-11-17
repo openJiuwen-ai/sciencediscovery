@@ -49,6 +49,10 @@ import { EvolveRuntimeDialog } from "./EvolveRuntimeDialog.js";
 
 
 export interface EvolveCreateDialogProps {
+  /** A search already owns this Session. The server starts one at a time, so
+   *  the form stays readable but cannot be sent; the card in the transcript is
+   *  how that search is reached. */
+  activeRun: boolean;
   archived: boolean;
   error?: string;
   /** The search a command already chose, carried through the setup detour so
@@ -79,6 +83,7 @@ export interface EvolveCreateDialogProps {
 const VARIANTS = ["puct", "openevolve"] as const;
 
 export function EvolveCreateDialog({
+  activeRun,
   archived,
   error,
   initialAlgorithm,
@@ -186,8 +191,9 @@ export function EvolveCreateDialog({
     if (ready) setDetails(false);
   }, [ready]);
   const blocked = archived ? TEXT.evolve.create.blockedArchived
-    : running ? TEXT.evolve.create.blockedRunning
-      : undefined;
+    : activeRun ? TEXT.evolve.create.blockedSearch
+      : running ? TEXT.evolve.create.blockedRunning
+        : undefined;
   const canSend = ready && blocked === undefined
     && goal.trim() !== ""
     && (!customScope || Boolean(direction?.editable.length));

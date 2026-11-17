@@ -229,19 +229,52 @@ test("a search started in this window opens its task tab by itself", async ({ pa
   await expect(page.locator("#evolve-panel-title")).toHaveText("让压缩比更高");
 });
 
-test("the settings row starts a new design even when the session already has a search", async ({ page }) => {
+/** The same search after it stopped spending: still in the Session's list, no
+ *  longer holding it. */
+function finishedRun(): EvolveFixture {
+  const fixture = liveRun();
+  return { ...fixture, run: { ...fixture.run, status: "succeeded" } };
+}
+
+test("the settings row starts a new design when the session's search has finished", async ({ page }) => {
+  await installMockApi(page, {
+    evolveRunsBySession: { "session-1": [finishedRun()] },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  // The settings row is the create dialog's entry, not a shortcut into the
+  // newest run: a finished search must not hide the way to design another.
+  await openEvolve(page);
+
+  const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".evolve-create-blocked")).toHaveCount(0);
+  // Usable, not merely visible: the task is accepted and the form can send.
+  await dialog.getByLabel("任务描述").fill("让压缩比更高");
+  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeEnabled();
+  await expect(page.locator(".evolve-detail")).toHaveCount(0);
+});
+
+test("the settings row still opens the create dialog while a search runs, and says why it cannot start", async ({ page }) => {
   await installMockApi(page, {
     evolveRunsBySession: { "session-1": [liveRun()] },
     sessions: [makeSession()],
   });
   await page.goto("/");
 
-  // The settings row is the create dialog's entry, not a shortcut into the
-  // newest run: an existing search must not hide the way to design another.
+  // The server starts one search per session, so a live one blocks the form
+  // rather than hiding it: the user still reaches the same dialog, and the
+  // reason names the card that leads back to the search that holds the turn.
   await openEvolve(page);
 
-  await expect(page.getByRole("dialog", { name: "新建程序演进实验" })).toBeVisible();
-  await expect(page.locator(".evolve-detail")).toHaveCount(0);
+  const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".evolve-create-blocked")).toHaveText(
+    "本会话已有正在运行的实验。请在对话中的卡片里打开它，或等它结束后再开始新的实验。",
+  );
+  await dialog.getByLabel("任务描述").fill("让压缩比更高");
+  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
 });
 
 test("the create dialog collects the task and hands the whole command to the composer", async ({ page }) => {
@@ -676,11 +709,13 @@ test("an automatic checkpoint is shown but asks for nothing, and the flow carrie
 
 test("a second no-confirm design is pushed although the first one started a search", async ({ page }) => {
   // The run list is per Session, so the first design's search is still in it,
-  // created after that design's own command. The second design's command is
-  // still only pending when its first turn ends — the transcript is written
-  // when the turn settles — so "does this design have a search" has to answer
-  // for the design being sent, not the one already in the transcript.
-  const first = liveRun();
+  // created after that design's own command. It is finished — a live one would
+  // hold the create dialog — and that is the point: the second design's
+  // command is still only pending when its first turn ends, because the
+  // transcript is written when the turn settles, so "does this design have a
+  // search" has to answer for the design being sent, not the one already in
+  // the transcript.
+  const first = finishedRun();
   const mock = await installMockApi(page, {
     assistantAnswer: "我又核对了一遍评测器。",
     evolveRunsBySession: {

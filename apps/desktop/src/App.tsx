@@ -1135,6 +1135,7 @@ export function App({ initialToken }: Props) {
 
       {evolveCreate === undefined ? null : (
         <EvolveCreateDialog
+          activeRun={evolve.runs.some((run) => isEvolveRunActive(run.status))}
           archived={state.detail?.archivedAt !== undefined}
           error={evolve.error}
           initialAlgorithm={evolveCreate.algorithm}
