@@ -14,7 +14,13 @@
 
 import { DownloadButton } from "../components/DownloadButton.js";
 import { MarkdownFile } from "../components/Markdown.js";
-import { SOURCE_LABELS } from "../labels.js";
+import {
+  DOMAIN_LABELS,
+  HARDWARE_LABELS,
+  SKILL_TYPE_LABELS,
+  SOURCE_LABELS,
+  SUBDOMAIN_LABELS,
+} from "../labels.js";
 
 import type { JSX } from "react";
 import type { Asset, Catalog, ConnectorAsset, SkillAsset, SpecialistAsset } from "../catalog/types.js";
@@ -56,22 +62,46 @@ function Links({ catalog, ids, label, onNavigate }: {
   );
 }
 
-export function SkillDetail({ asset, basePath, catalog, copy, onNavigate }: DetailProps): JSX.Element {
+export function SkillDetail({ asset, basePath, catalog, copy, language, onNavigate }: DetailProps): JSX.Element {
   const skill = asset as SkillAsset;
   const members = (skill.members ?? []).flatMap((id) => {
     const specialist = catalog.assets.find((candidate) => candidate.id === id && candidate.kind === "specialist");
     return specialist?.kind === "specialist" ? [specialist] : [];
   });
+  const domain = DOMAIN_LABELS[skill.category.domain]?.[language] ?? skill.category.domain;
+  const subdomain = SUBDOMAIN_LABELS[skill.category.subdomain]?.[language] ?? skill.category.subdomain;
+  const type = skill.type ? SKILL_TYPE_LABELS[skill.type]?.[language] ?? skill.type : null;
+  const hardware = skill.hardware ? HARDWARE_LABELS[skill.hardware]?.[language] ?? skill.hardware : null;
+  const snapshot = skill.source === "mindscience" ? catalog.sources.externalSkills : undefined;
   return (
     <article className="detail">
       <div className="detail-head">
         <div>
           <h1>{skill.name}</h1>
           <p className="muted">
-            {copy("version")} {skill.version ?? "—"}
+            {domain} · {subdomain}
+            {` · ${copy("version")} ${skill.version ?? "—"}`}
             {skill.author ? ` · ${skill.author}` : ""}
             {skill.download.size ? ` · ${(skill.download.size / 1024).toFixed(1)} KB` : ""}
           </p>
+          {type || hardware ? (
+            <p className="badges detail-badges">
+              {type ? <span className="badge">{type}</span> : null}
+              {hardware ? <span className="badge">{hardware}</span> : null}
+            </p>
+          ) : null}
+          {snapshot ? (
+            <p className="muted">
+              {copy("snapshot")} {snapshot.ref}@{snapshot.commit.slice(0, 8)} ·{" "}
+              <a
+                href={`https://gitcode.com/${snapshot.repo}/blob/${snapshot.ref}/MindScienceSkills/${skill.id}/SKILL.md`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                {copy("upstream")}
+              </a>
+            </p>
+          ) : null}
         </div>
         <DownloadButton basePath={basePath} label={copy("download")} url={skill.download.url} />
       </div>

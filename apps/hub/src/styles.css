@@ -274,6 +274,8 @@ button, input, select { font: inherit; color: inherit; }
 
 .actions { display: flex; gap: 8px; }
 
+.detail-badges { margin: 2px 0 4px; }
+
 .members { background: var(--surface-subtle); border-radius: var(--radius-m); margin-top: 20px; padding: 4px 18px 14px; }
 .members h2 { margin-top: 14px; }
 .member-list { list-style: none; margin: 0; padding: 0; }
