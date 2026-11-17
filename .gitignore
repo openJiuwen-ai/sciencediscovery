@@ -107,3 +107,6 @@ data-*/
 
 # frozen MindScienceSkills snapshot used by local hub builds
 /.hub-cache/
+
+# session packages are produced externally and published to OBS, never committed
+/hub-sessions/

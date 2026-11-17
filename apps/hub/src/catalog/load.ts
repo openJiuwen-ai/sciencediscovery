@@ -14,9 +14,16 @@
 
 import type { Catalog } from "./types.js";
 
-/** Absolute URL for a site-relative path such as `packages/x.zip`. */
+/**
+ * Absolute URL for a site-relative path such as `packages/x.zip`.
+ *
+ * Session packages live under a sibling prefix (`/sessions/`), not under the
+ * site base, so a URL that is already absolute or root-relative passes through.
+ */
 export function assetUrl(basePath: string, relative: string): string {
-  return `${basePath.replace(/\/+$/u, "")}/${relative.replace(/^\/+/u, "")}`;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(relative)) return relative;
+  if (relative.startsWith("/")) return relative;
+  return `${basePath.replace(/\/+$/u, "")}/${relative}`;
 }
 
 export async function loadCatalog(basePath: string): Promise<Catalog> {
