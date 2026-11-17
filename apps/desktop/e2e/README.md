@@ -36,14 +36,18 @@ are the shared `.e2e/browsers` set. Neither is committed.
 
 Run one file by appending its name, for example `boot.spec.ts`.
 
-## This suite is a local gate, not a CI one
+## This suite is part of the CI gate
 
-No workflow runs `apps/desktop/e2e`: neither the config nor its port (4175)
-appears under `.github` or `.ci`, and `pnpm test` only runs
-`apps/desktop/tests/*.test.ts{,x}`. A spec added here is evidence when someone
-runs it by hand, and nothing will notice a regression in it. Wire it into a
-layer (pinned to the same Chromium as `.e2e`) or say plainly, in the PR that
-adds a spec, that the evidence is local — do not describe it as a CI gate.
+`ci.yml`'s `e2e-desktop` job runs the whole suite on every non-draft PR, push
+and queue candidate, and `merge-gate` waits for it. It installs the pnpm
+workspace, materializes `.e2e` from the committed lockfile, and links
+`apps/desktop/e2e/node_modules` to that one Playwright install, so the layer
+runs exactly the Chromium the shared suite pins. Documentation-only changes
+skip it, like every other test layer.
+
+Because it is gated, a new `/api/**` call that `fixtures.ts` does not answer
+fails the spec that made it (`404 not mocked`) instead of passing quietly.
+Add the route to the fixture in the same PR.
 
 ## Specs
 
@@ -56,6 +60,7 @@ adds a spec, that the evidence is local — do not describe it as a CI gate.
 | `sessions.spec.ts` | rename and delete, both proved across a reload |
 | `settings.spec.ts` | default model and interface language surviving a reload |
 | `workspace.spec.ts` | file picker upload, and the health-reported size ceiling |
+| `reviewer.spec.ts` | the checkpoint card's five verdict colours, the Quick/Deep outcome matrix, why a skipped checkpoint produced nothing, the two Reviewer settings layers, and the artifact dialog's 审查 tab with a re-run |
 
 `failure-cards.spec.ts` uses the same per-page API isolation and shares only the
 step reporter with `test/helpers/journey-report.ts`. It requires no API server,

@@ -274,7 +274,10 @@ test("reply menu branches at the selected reply without its later conversation",
     await page.getByRole("button", { name: "回复菜单" }).first().click();
     await page.getByRole("menuitem", { name: "创建新分支聊天" }).click();
     const dialog = page.getByRole("dialog", { name: "创建新分支聊天" });
-    await expect(dialog.locator("blockquote")).toHaveText("中间回复");
+    // The dialog states the scope of a branch instead of echoing the reply:
+    // the selection already sits in the transcript behind it, and the full
+    // excerpt was removed as one of the trimmed surfaces.
+    await expect(dialog).toContainText("原会话保持不变");
     await dialog.getByRole("button", { name: "创建新分支聊天" }).click();
   });
   await test.step("2. Verify the prefix, writable composer and unchanged source", async () => {

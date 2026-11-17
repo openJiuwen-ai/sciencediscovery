@@ -28,6 +28,7 @@ import type { PendingMessage } from "../app/use-workspace.js";
 import type { ToolDetail } from "../app/tool-io.js";
 import type { ApiClient } from "../api/client.js";
 import type {
+  ArtifactReviewRun,
   ChatMessage,
   ComposerReference,
   PermissionDecision,
@@ -48,6 +49,7 @@ import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
 import { turnArtifactsByRun, turnLineage, type TurnArtifact } from "../app/turn-artifacts.js";
+import { ReviewCard } from "./reviewer/ReviewCard.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
@@ -83,6 +85,14 @@ interface Props {
    *  upload are drawn above the question they were sent with. */
   workspaceFiles: readonly WorkspaceFile[];
   pending?: PendingMessage;
+  /** Every review of this session's report-shaped versions. The card at a
+   *  checkpoint reads its own share of this list by `toolCallId`. */
+  reviews?: readonly ArtifactReviewRun[];
+  /** Tool calls whose review is queued or running right now. A checkpoint
+   *  with no reviews yet draws its running line only for one of these. */
+  reviewerActive?: ReadonlySet<string>;
+  /** Ask for the checkpoint behind a message to be reviewed again. */
+  onReview?: (messageId: string) => void;
   /** Every finished run of this session, each to be rendered in the place of
    *  the answer it wrote. */
   replays: readonly RunReplay[];
@@ -110,12 +120,10 @@ const EMPTY_CONFIGURATION: ReturnType<typeof useConfigurationRequests> = {
 /**
  * Notices the desktop transcript does not draw.
  *
- * `review_notice` and `reviewer_checkpoint` are the Reviewer Specialist's
- * internal record — a verdict on a version, written to the session so the
- * review can be audited. The desktop conversation is not where that record is
- * read from, and drawn as a status line it read as an answer to the question
- * above it. The messages stay in the transcript on the server side; only this
- * window stops rendering them.
+ * `review_notice` is the Reviewer Specialist's internal record — the read-only
+ * feedback the lead Agent gets on its next turn. Its content is written for a
+ * model, so the transcript does not print it. A `reviewer_checkpoint` is drawn
+ * too, but by `ReviewCard`, which is why it never reaches the notice row.
  */
 const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "reviewer_checkpoint"]);
 
@@ -197,8 +205,9 @@ function MessageRow({
   // started is anchored, and dropping it would send that run to the end of the
   // conversation instead of to the place it happened.
   if (message.kind === "wake_notice") return null;
-  // The review record is the Reviewer Specialist's own audit trail, not part of
-  // the conversation this window is reading.
+  // The review record is the Reviewer Specialist's own audit trail. A
+  // checkpoint never reaches here — the transcript draws `ReviewCard` for it
+  // above — so the second kind in the set is a guard for any other entry point.
   if (message.kind !== undefined && HIDDEN_NOTICE_KINDS.has(message.kind)) return null;
   if (message.kind && message.kind !== "message") return <NoticeRow message={message} />;
   if (message.role === "user") return <UserRow content={message.content} files={uploads} />;
@@ -284,6 +293,9 @@ export function Conversation({
   onReferenceClick,
   outputs,
   pending,
+  reviews = [],
+  reviewerActive,
+  onReview,
   replays,
   run,
   ideaCards,
@@ -366,6 +378,19 @@ export function Conversation({
 
   const messages = detail?.messages ?? [];
   const failures = coalesceTimeoutNotices(messages, replays, run);
+  /** A review records the tool call that asked for it, and the checkpoint
+   *  message carries the same id. That join is what puts each review under the
+   *  turn that produced its artifacts instead of at the end of the session. */
+  const reviewsByToolCall = useMemo(() => {
+    const byToolCall = new Map<string, ArtifactReviewRun[]>();
+    for (const review of reviews) {
+      if (review.toolCallId === undefined) continue;
+      const list = byToolCall.get(review.toolCallId) ?? [];
+      list.push(review);
+      byToolCall.set(review.toolCallId, list);
+    }
+    return byToolCall;
+  }, [reviews]);
   const { following, replacing, trailing } = placeReplays(failures.replays, messages);
   const visibleRun = failures.run;
   /** A chip opens the card for this session; the transcript is the session's
@@ -475,6 +500,23 @@ export function Conversation({
         {messages.map((message, index) => {
           if (failures.hiddenNoticeIds.has(message.id) || presentation.suppressedNoticeIds.has(message.id)
             || legacyPresentation.suppressedNoticeIds.has(message.id)) return null;
+          // The checkpoint is where the Reviewer's verdict belongs: the message
+          // is written when artifacts are submitted, so the card sits under the
+          // turn that produced them rather than after the whole conversation.
+          if (message.kind === "reviewer_checkpoint") {
+            const checkpoint = message.reviewerCheckpoint;
+            if (checkpoint === undefined) return null;
+            return (
+              <ReviewCard
+                checkpoint={checkpoint}
+                key={message.id}
+                messageId={message.id}
+                onReview={onReview}
+                reviews={reviewsByToolCall.get(checkpoint.toolCallId) ?? []}
+                running={reviewerActive?.has(checkpoint.toolCallId) ?? false}
+              />
+            );
+          }
           const configurationAtNotice = presentation.byNoticeId.get(message.id);
           const legacyAtNotice = legacyPresentation.byNoticeId.get(message.id);
           // The API's empty request anchor is represented by the pending card

@@ -120,6 +120,15 @@ globalThis.fetch = async (input, init = {}) => {
     result = sessionUsage(sessionId);
   }
   else if (method === "GET" && /^\/api\/sessions\/[^/]+\/configuration-requests$/u.test(path)) result = { items: [] };
+  else if (/^\/api\/sessions\/[^/]+\/(artifact-reviews|reviewer-audit-tasks)$/u.test(path)) result = [];
+  else if (path === "/api/reviewer-specialist/settings") result = { enabled: true, feedbackPolicy: "auto" };
+  else if (/^\/api\/sessions\/[^/]+\/reviewer-specialist\/settings$/u.test(path)) {
+    const session = data.sessions.find(candidate => path.includes(candidate.id));
+    result = {
+      automaticReviewEnabled: session?.reviewerAutomaticReviewEnabled ?? true,
+      level: session?.reviewerSpecialistLevel ?? DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+    };
+  } else if (method === "GET" && /^\/api\/sessions\/[^/]+\/configuration-requests$/u.test(path)) result = { items: [] };
   else if (/^\/api\/sessions\/[^/]+\/settings$/u.test(path)) result = settings(data.sessions.find(session => path.includes(session.id)));
   else if (/^\/api\/sessions\/[^/]+$/u.test(path)) result = { ...data.sessions.find(session => path.endsWith(session.id)), messages: [] };
   else {
