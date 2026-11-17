@@ -1094,6 +1094,34 @@ test("gateway retries one reasoning-only network interruption without replaying 
   } finally { await g.close(); }
 });
 
+test("gateway retries a partial tool-call stream before the call is committed", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const toolCall = { id: "call-1", name: "echo", args: { word: "a" } };
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onToolCallDelta?.({ index: 0, id: toolCall.id, name: toolCall.name, arguments: '{"word":"a"' });
+    if (calls === 1) throw new Error("terminated");
+    callbacks?.onToolCallDelta?.({ index: 0, arguments: "}" });
+    callbacks?.onWireDiagnostics?.({ ...EMPTY_WIRE, hasToolCalls: true, retryErrors: [], retries: 0 });
+    return answer({ assistantMessage: { role: "assistant", content: "" }, toolCalls: [toolCall] });
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(calls, 2);
+    assert.equal((body.match(/"tool_calls":/g) ?? []).length, 1, "the recovered tool call is committed once");
+    assert.match(body, /\[DONE\]/);
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network"]);
+  } finally { await g.close(); }
+});
+
 test("gateway replays a reasoning-only turn through two transient stream breaks", async (t) => {
   const lines: string[] = [];
   t.mock.method(console, "info", (line: string) => lines.push(String(line)));

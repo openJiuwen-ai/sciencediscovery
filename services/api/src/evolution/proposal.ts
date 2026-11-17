@@ -360,6 +360,10 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     return "there is no starting point. Point startingPointPath at a file in the workspace, "
       + "or write the starting point into startingPointText";
   }
+  if (proposal.mode !== "npu_job" && proposal.editableFields?.length) {
+    return "editableFields is only supported for npu_job JSON candidates; custom_script candidates are Python modules"
+      + " and must not use directed-search fields";
+  }
   if (proposal.expansions < proposal.workers * 4) {
     return `${proposal.workers} workers needs at least ${proposal.workers * 4} expansions, or `
       + "the first wave spends most of the budget forking only the root and the tree stays flat";
@@ -534,7 +538,8 @@ async function assembleGoal(
       derivedFrom: { draftRunId: "", statement: proposal.statement },
       hash: `sha256:agent-${proposal.mode}-${(scoringCas || startCas).slice(-12)}-${split.seed}`,
       schemaVersion: 1,
-      ...(proposal.editableFields?.length ? { direction: { editable: proposal.editableFields } } : {}),
+      ...(proposal.mode === "npu_job" && proposal.editableFields?.length
+        ? { direction: { editable: proposal.editableFields } } : {}),
       // A graded scorer rarely reaches 0.999, and at the default every rollout
       // asks for a proposal and the run reports below-threshold — which reads
       // as the reflector failing when nothing was ever counted as done. The

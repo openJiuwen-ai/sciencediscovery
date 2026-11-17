@@ -411,6 +411,17 @@ test("a refusal names what to change, because its reader is the designer", async
   }
 });
 
+test("directed fields are rejected for module-based custom scripts", async () => {
+  const { deps: d } = deps();
+  const result = await startProposedRun(proposal({
+    mode: "custom_script",
+    evaluatorSource: 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]',
+    editableFields: ["equation"],
+  }), d);
+
+  assert.match(result.refusedBecause ?? "", /only supported for npu_job/);
+});
+
 test("an evaluator too large to write inline can be pointed at, and its bytes are what runs", async () => {
   const source = 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n';
   const calls: Array<{ content?: string; path?: string }> = [];

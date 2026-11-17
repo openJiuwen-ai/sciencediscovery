@@ -91,8 +91,8 @@ test("Evolve binds the latest user scope to the scored baseline and refuses inco
   const runtime = platform.evolveRuntimeFactory({ sessionId: session.id, modelId: model.id, emit: async () => {} });
   assert.ok(runtime);
   const proposal: EvolveRunProposal = {
-    statement: "Tune policy", howScored: "Fixture score", mode: "custom_script",
-    startingPointPath: "ignored-missing-file.json", editableFields: ["fixed"],
+    statement: "Tune policy", howScored: "Fixture score", mode: "npu_job",
+    startingPointPath: "ignored-missing-file.json", editableFields: ["weight"],
     evaluatorSource: "# SCIENCE_AGENT_SHARDS and SCIENCE_AGENT_RESULT",
     split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: null },
     expansions: 8, workers: 1,

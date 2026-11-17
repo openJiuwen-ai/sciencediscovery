@@ -84,7 +84,8 @@ problem_seconds=20；candidate_timeout=120。
 algorithm=puct
 expansions=24
 workers=3
-thinking=disabled
+thinking=enabled
+thinking_effort=low
 search.cPuct=1.0
 priorExponent 省略
 split: gateShards=8, rolloutShards=4, testShards=2, seed=0
@@ -92,6 +93,11 @@ split: gateShards=8, rolloutShards=4, testShards=2, seed=0
 packages=["numpy","scipy"]
 temperature=0.7, max_tokens=12000, reply_attempts=4, staleness=guarded
 模型偏好 deepseek-v4-flash
+
+【运行边界】
+运行时和依赖已经由测试栈准备好。不要安装 pip、执行 get-pip.py、联网下载依赖，
+也不要自行构造 evaluator 或重复实现评分器。读取 evolve-design skill 后不要再调用
+run_shell/read_file/list_files；本提示已经给出完整参数，直接调用 create_evolve_run。
 
 【验收对照】
 记录：linear baseline digits≈1.58 → best digits=12、acc=1。你的 run 在 id_test 上报告同样指标。”`;
