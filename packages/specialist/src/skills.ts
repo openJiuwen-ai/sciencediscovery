@@ -353,6 +353,15 @@ export function validateGitSkillImportRequest(input: ImportSkillFromGitRequest):
   return { repositoryUrl, ...(ref ? { ref } : {}), ...(subdirectory ? { subdirectory } : {}) };
 }
 
+function normalizeGitCommit(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const commit = value.trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) {
+    throw validationError("Git commit must be the exact commit returned by repository inspection");
+  }
+  return commit;
+}
+
 export async function discoverGitSkillRoots(checkout: string, requestedSubdirectory?: string): Promise<string[]> {
   const discoveryRoot = requestedSubdirectory
     ? resolve(checkout, ...requestedSubdirectory.split("/"))
@@ -390,6 +399,18 @@ export async function discoverGitSkillRoots(checkout: string, requestedSubdirect
   }
   return roots.toSorted();
 }
+
+/** A shallow checkout of one Git repository, used by inspection, review and
+ *  import alike. Injectable so the import branches can be tested without a
+ *  network: the real transport refuses `file://` repositories on purpose. */
+export type GitSkillCheckout = (
+  importRoot: string,
+  input: InspectGitSkillRepositoryRequest,
+) => Promise<{
+  checkout: string;
+  commit: string;
+  normalized: ReturnType<typeof validateGitSkillImportRequest>;
+}>;
 
 async function checkoutGitSkillRepository(
   importRoot: string,
@@ -819,12 +840,14 @@ export class SkillCatalog {
   private managed = new Map<string, ManagedPackage>();
   private mutationQueue: Promise<void> = Promise.resolve();
   private reviewDrafts = new Map<string, StoredSkillReviewDraft>();
+  private readonly checkoutGit: GitSkillCheckout;
   private readonly repositoryRoot: string;
   private readonly root: string;
 
-  constructor(dataDir: string, repositoryRoot: string) {
+  constructor(dataDir: string, repositoryRoot: string, options: { checkoutGit?: GitSkillCheckout } = {}) {
     this.root = resolve(dataDir, "skills");
     this.repositoryRoot = resolve(repositoryRoot);
+    this.checkoutGit = options.checkoutGit ?? checkoutGitSkillRepository;
   }
 
   private get indexPath(): string {
@@ -1619,7 +1642,7 @@ export class SkillCatalog {
   async inspectGitRepository(input: InspectGitSkillRepositoryRequest): Promise<GitSkillRepositoryInspection> {
     this.assertLoaded();
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized } = await checkoutGitSkillRepository(importRoot, input);
+    const { checkout, commit, normalized } = await this.checkoutGit(importRoot, input);
     try {
       const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory);
       return {
@@ -1649,7 +1672,7 @@ export class SkillCatalog {
       throw validationError(`Select between 1 and ${GIT_SKILL_DISCOVERY_LIMIT} Git Skill packages`);
     }
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized } = await checkoutGitSkillRepository(importRoot, input);
+    const { checkout, commit, normalized } = await this.checkoutGit(importRoot, input);
     try {
       if (commit !== expectedCommit) {
         throw new SkillCatalogError(
@@ -1720,32 +1743,27 @@ export class SkillCatalog {
   async importFromGit(input: ImportSkillFromGitRequest): Promise<SkillDetail> {
     this.assertLoaded();
     const normalized = validateGitSkillImportRequest(input);
+    const requestedCommit = normalizeGitCommit(input.commit);
+    if (input.overwrite !== undefined && typeof input.overwrite !== "boolean") {
+      throw validationError("overwrite must be a boolean");
+    }
+    if (input.overwrite && input.expectedRevision === undefined) {
+      throw validationError("Overwriting an installed Skill requires expectedRevision");
+    }
+    if (input.expectedRevision !== undefined && (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 1)) {
+      throw validationError("expectedRevision must be a positive integer");
+    }
     const importRoot = resolve(this.root, ".imports");
-    const checkout = resolve(importRoot, randomUUID());
-    await mkdir(importRoot, { recursive: true });
+    const { checkout, commit, normalized: checked } = await this.checkoutGit(importRoot, normalized);
     try {
-      const arguments_ = [
-        "-c", "protocol.file.allow=never",
-        "clone",
-        "--depth=1",
-        "--filter=blob:limit=10m",
-        "--no-tags",
-        ...(normalized.ref ? ["--branch", normalized.ref] : []),
-        "--",
-        normalized.repositoryUrl,
-        checkout,
-      ];
-      try {
-        await execFileAsync("git", arguments_, {
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-          maxBuffer: 1024 * 1024,
-          timeout: 120_000,
-        });
-      } catch {
-        throw validationError("Git skill checkout failed; verify the repository, ref, and locally configured credentials");
+      if (requestedCommit && requestedCommit !== commit) {
+        throw new SkillCatalogError(
+          "SKILL_CONFLICT",
+          `Git ref moved after inspection (expected ${requestedCommit.slice(0, 12)}, found ${commit.slice(0, 12)}); scan again before importing`,
+        );
       }
-      const packageRoot = normalized.subdirectory
-        ? resolve(checkout, ...normalized.subdirectory.split("/"))
+      const packageRoot = checked.subdirectory
+        ? resolve(checkout, ...checked.subdirectory.split("/"))
         : checkout;
       const rootInfo = await lstat(packageRoot).catch(() => undefined);
       if (!rootInfo?.isDirectory() || rootInfo.isSymbolicLink()) {
@@ -1754,25 +1772,43 @@ export class SkillCatalog {
       const files = await readPackageDirectory(packageRoot, packageRoot, "", true);
       const loaded = validateSkillPackage(files);
       return await this.mutate(async () => {
-        if (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id)) {
+        if (this.builtIns.has(loaded.detail.id)) {
+          throw new SkillCatalogError("SKILL_READ_ONLY", `Built-in skill is read-only: ${loaded.detail.id}`);
+        }
+        const current = this.managed.get(loaded.detail.id);
+        if (current && !input.overwrite) {
           throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
         }
-        const { stdout } = await execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { timeout: 10_000 });
-        const committed = await this.commitManaged(loaded, 1, new Date().toISOString(), {
+        if (current && input.expectedRevision !== current.detail.currentRevision) {
+          throw new SkillCatalogError(
+            "SKILL_CONFLICT",
+            `Skill revision conflict: expected ${input.expectedRevision}, current ${current.detail.currentRevision}`,
+          );
+        }
+        // Re-importing identical bytes is a no-op rather than an empty version.
+        if (current && current.detail.hash === loaded.detail.hash) {
+          return structuredClone(current.detail);
+        }
+        const revision = current ? current.detail.currentRevision + 1 : 1;
+        // `commitManaged` keeps the detail it is given, so the revision has to
+        // be validated in here rather than patched onto the returned object.
+        const committed = await this.commitManaged(validateSkillPackage(files, { revision }), revision, new Date().toISOString(), {
           git: {
-            commit: stdout.trim(),
-            ...(normalized.ref ? { ref: normalized.ref } : {}),
-            repositoryUrl: normalized.repositoryUrl,
-            subdirectory: normalized.subdirectory ?? ".",
+            commit,
+            ...(checked.ref ? { ref: checked.ref } : {}),
+            repositoryUrl: checked.repositoryUrl,
+            subdirectory: checked.subdirectory ?? ".",
           },
           source: "git",
         });
-        this.index.managed[loaded.detail.id] = { currentRevision: 1 };
+        const previous = this.index.managed[loaded.detail.id];
+        this.index.managed[loaded.detail.id] = { currentRevision: revision };
         try {
           await this.saveIndex();
         } catch (error) {
-          delete this.index.managed[loaded.detail.id];
-          await rm(this.revisionRoot(loaded.detail.id, 1), { force: true, recursive: true });
+          if (previous) this.index.managed[loaded.detail.id] = previous;
+          else delete this.index.managed[loaded.detail.id];
+          await rm(this.revisionRoot(loaded.detail.id, revision), { force: true, recursive: true });
           throw error;
         }
         this.managed.set(loaded.detail.id, committed);

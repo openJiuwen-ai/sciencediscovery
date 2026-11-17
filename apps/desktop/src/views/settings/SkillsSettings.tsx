@@ -21,13 +21,17 @@ import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
 import { SettingsModal } from "./SettingsModal.js";
+import { SkillEditorDialog } from "./SkillEditorDialog.js";
 import { SkillForm } from "./SkillForm.js";
+import { SkillImportDialog } from "./SkillImportDialog.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
 interface Props {
   adding: boolean;
   client: ApiClient;
+  importing: boolean;
   onAddingChange: (next: boolean) => void;
+  onImportingChange: (next: boolean) => void;
 }
 
 interface SkillPage {
@@ -87,10 +91,11 @@ export function skillMeta(skill: SkillDescriptor): string {
  * ScienceDiscovery only installs or removes the skill package; the switch lives
  * in JiuwenSwarm.
  */
-export function SkillsSettings({ adding, client, onAddingChange }: Props) {
+export function SkillsSettings({ adding, client, importing, onAddingChange, onImportingChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [detail, setDetail] = useState<OpenDetail>();
+  const [editingId, setEditingId] = useState<string>();
   const [openId, setOpenId] = useState<string>();
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -117,6 +122,12 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     client,
     key: "skills:jiuwenswarm",
   });
+
+  /** The Skill being edited, resolved from the list so the modal's title has a
+   *  name; a reload that drops it closes the editor by failing to find it. */
+  const editingSkill = editingId === undefined
+    ? undefined
+    : loaded.value?.skills.find((skill) => skill.id === editingId);
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
@@ -183,16 +194,24 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     );
   };
 
-  /** Enable a new skill when JiuwenSwarm is available; native creation needs no import. */
-  const afterCreate = async (skill: SkillDetail) => {
-    onAddingChange(false);
+  /**
+   * Enable a skill that was just installed, when JiuwenSwarm is available —
+   * a new package is useless to a session until it is switched on.
+   *
+   * An *update* of a skill that was already installed is left alone: the user
+   * may have switched it off on purpose, and re-enabling it would undo that
+   * while replacing its files, which is not what they asked for.
+   */
+  const afterInstall = async (skill: SkillDetail) => {
     setBusy(true);
     setFailure(undefined);
     try {
-      if (loaded.value?.switchesAvailable) {
-        await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
-      } else if (!loaded.value?.native) {
-        setFailure(loaded.value?.switchError ?? TEXT.settings.saveFailed);
+      const page = loaded.value;
+      const wasInstalled = page?.skills.some((entry) => entry.id === skill.id) ?? false;
+      if (page?.switchesAvailable) {
+        if (!wasInstalled) await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
+      } else if (!page?.native && !wasInstalled) {
+        setFailure(page?.switchError ?? TEXT.settings.saveFailed);
       }
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
@@ -200,6 +219,12 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
       setBusy(false);
       loaded.reload();
     }
+  };
+
+  /** Enable a new skill when JiuwenSwarm is available; native creation needs no import. */
+  const afterCreate = async (skill: SkillDetail) => {
+    onAddingChange(false);
+    await afterInstall(skill);
   };
 
   return (
@@ -258,6 +283,15 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                         ) : null}
                       </button>
                       <div className="settings-card-actions">
+                        {skill.source === "managed" && !skill.readOnly ? (
+                          <button
+                            className="secondary-button skill-edit-button"
+                            onClick={() => setEditingId(skill.id)}
+                            type="button"
+                          >
+                            {TEXT.settings.skills.editor.edit}
+                          </button>
+                        ) : null}
                         <Switch
                           disabled={busy || !page.switchesAvailable}
                           label={TEXT.settings.skills.toggle(skill.name)}
@@ -305,6 +339,31 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
             client={client}
             onCancel={() => onAddingChange(false)}
             onSaved={(skill) => void afterCreate(skill)}
+          />
+        </SettingsModal>
+      ) : null}
+
+      {importing ? (
+        <SettingsModal
+          label={TEXT.settings.skills.importTitle}
+          onClose={() => onImportingChange(false)}
+          wide
+        >
+          <SkillImportDialog client={client} onImported={afterInstall} />
+        </SettingsModal>
+      ) : null}
+
+      {editingSkill ? (
+        <SettingsModal
+          editor
+          label={TEXT.settings.skills.editor.title(editingSkill.name)}
+          onClose={() => setEditingId(undefined)}
+        >
+          <SkillEditorDialog
+            client={client}
+            onClose={() => setEditingId(undefined)}
+            onSaved={() => loaded.reload()}
+            skillId={editingSkill.id}
           />
         </SettingsModal>
       ) : null}

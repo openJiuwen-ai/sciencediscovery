@@ -689,3 +689,104 @@ a.secondary-button {
 .ssh-config-entry:disabled { opacity: .6; }
 .ssh-config-entry strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 12px; }
 .ssh-config-entry small { color: var(--text-faint); font-size: 11px; }
+
+/* 技能's two header actions: 导入 writes nothing by itself, so it is the quiet
+   button and 添加 stays the one the pane leads with. */
+.settings-header-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+
+/* 技能 › 导入技能. Three sources behind one row of tabs: SKILL.md, a ZIP, and a
+   Git repository. The tabs are buttons rather than native tabs because the
+   panel has no fixed height and each source's form is drawn in place. */
+.skill-import { display: grid; gap: 14px; }
+.skill-import-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+}
+.skill-import-tab {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: calc(var(--radius-s) - 2px);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.skill-import-tab:hover:not(:disabled) { color: var(--text-strong); }
+.skill-import-tab.is-active {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(25, 25, 25, 0.1);
+  color: var(--text-strong);
+}
+.skill-import-tab:disabled { color: var(--text-faint); cursor: progress; }
+
+/* What inspection found in the repository. A row is a label around the
+   checkbox, so the whole line is the hit target. */
+.skill-candidates { display: grid; gap: 6px; }
+.skill-candidate {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  cursor: pointer;
+}
+.skill-candidate:hover { border-color: var(--border-strong); }
+.skill-candidate.is-disabled { background: var(--surface-subtle); cursor: default; }
+.skill-candidate > input { margin-top: 3px; }
+.skill-candidate-main { display: grid; gap: 3px; min-width: 0; }
+.skill-candidate-main strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-size: 12.5px;
+}
+.skill-candidate-main small { color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; }
+.skill-candidate-main small.is-error { color: var(--danger); }
+.skill-candidate-status {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.skill-candidate-status.is-new { background: var(--primary-tint); color: var(--primary-strong); }
+.skill-candidate-status.is-update { background: var(--warning-soft, var(--surface-subtle)); color: var(--warning-strong, #745612); }
+.skill-candidate-status.is-invalid { background: var(--danger-soft, var(--surface-subtle)); color: var(--danger); }
+
+/* 技能 › 编辑. A file rail beside one pane: which file is being edited is the
+   question the editor asks before anything else. */
+.settings-modal.is-editor { width: min(880px, calc(100vw - 64px)); }
+.skill-editor { display: flex; align-items: flex-start; gap: 20px; }
+.skill-editor-files {
+  display: grid;
+  flex: 0 0 190px;
+  gap: 3px;
+  align-content: start;
+  padding-right: 16px;
+  border-right: 1px solid var(--border);
+}
+.skill-editor-file {
+  padding: 6px 9px;
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: left;
+  word-break: break-all;
+}
+.skill-editor-file:hover { background: var(--surface-hover); color: var(--text-strong); }
+.skill-editor-file.is-active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
+.skill-editor-pane { display: grid; flex: 1; gap: 14px; min-width: 0; }
+.skill-editor-pane .settings-field { margin: 0; }
+.skill-editor-new-file { display: flex; gap: 8px; }
+.skill-editor-new-file .field-input { flex: 1; min-width: 0; }
+.field-textarea.is-tall { min-height: 240px; font-family: var(--font-mono); font-size: 12px; }
+/* The card's 编辑 sits beside the switch, so it is a small press rather than
+   the form-width button the modal's actions carry. */
+.settings-card-actions .secondary-button.skill-edit-button { padding: 5px 12px; font-size: 12px; }

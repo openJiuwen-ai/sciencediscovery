@@ -137,6 +137,9 @@ interface Props {
    *  the composer cannot clear it alone: the other mount would keep drawing it. */
   onClearCommand?: () => void;
   selectedModelId?: string;
+  /** Bumped by the shell when the skill catalog may have changed under this
+   *  composer — 设置 was just closed. See the palette's read below. */
+  skillsEpoch?: number;
   unavailableModel?: boolean;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
@@ -714,6 +717,7 @@ export function Composer({
   seed,
   seededCommand,
   selectedModelId,
+  skillsEpoch = 0,
   unavailableModel = false,
   selectedSpecialistId,
   tag,
@@ -766,7 +770,8 @@ export function Composer({
 
   /** The skills `/` can offer. Read once with the experts: both are small
    *  catalogs, and the palette has to have something to draw the moment the
-   *  slash is typed. */
+   *  slash is typed. `skillsEpoch` re-reads it after 设置 closes, where a skill
+   *  may have been imported or edited. */
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   useEffect(() => {
     if (client === undefined) return;
@@ -781,7 +786,7 @@ export function Composer({
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, skillsEpoch]);
 
   // The palette is derived from the draft rather than opened by a key: it is
   // showing exactly while the draft is one `/` command (see `slashQuery`), so

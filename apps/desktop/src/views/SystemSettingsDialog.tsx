@@ -97,6 +97,7 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [addingSkill, setAddingSkill] = useState(false);
+  const [importingSkill, setImportingSkill] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -109,6 +110,7 @@ export function SystemSettingsDialog({
   useEffect(() => {
     setAddingModel(false);
     setAddingSkill(false);
+    setImportingSkill(false);
   }, [group]);
 
   useEffect(() => {
@@ -145,7 +147,9 @@ export function SystemSettingsDialog({
           <SkillsSettings
             adding={addingSkill}
             client={client}
+            importing={importingSkill}
             onAddingChange={setAddingSkill}
+            onImportingChange={setImportingSkill}
           />
         );
       case "mcp":
@@ -258,9 +262,14 @@ export function SystemSettingsDialog({
                   {TEXT.settings.model.add}
                 </button>
               ) : group === "skills" ? (
-                <button className="pill-button is-dark" onClick={() => setAddingSkill(true)} type="button">
-                  {TEXT.settings.skills.add}
-                </button>
+                <div className="settings-header-actions">
+                  <button className="pill-button" onClick={() => setImportingSkill(true)} type="button">
+                    {TEXT.settings.skills.import}
+                  </button>
+                  <button className="pill-button is-dark" onClick={() => setAddingSkill(true)} type="button">
+                    {TEXT.settings.skills.add}
+                  </button>
+                </div>
               ) : null}
             </header>
 
