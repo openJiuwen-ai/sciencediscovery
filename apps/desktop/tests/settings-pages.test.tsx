@@ -79,11 +79,11 @@ const noConfirm = () => {};
 const loading = "正在读取…";
 
 describe("the settings tree", () => {
-  it("keeps the original desktop groups, plus 科学记忆, MCP, 专家, Idea Tree, 超时 and 导出记录", () => {
+  it("includes the desktop groups and migrated Runner, quota, search, proxy and Idea Tree pages", () => {
     assert.deepEqual(Object.values(TEXT.settings.system.categories), ["系统", "智能", "连接", "工作区"]);
     assert.deepEqual(
       Object.values(TEXT.settings.system.groups).map((group) => group.label),
-      ["通用", "科学记忆", "模型", "技能", "MCP 服务器", "专家", "网络", "远程", "超时", "导出记录", "Idea Tree"],
+      ["通用", "科学记忆", "模型", "技能", "MCP 服务器", "专家", "沙箱网络", "远程", "科学环境", "运行配额", "联网搜索", "网络代理", "超时", "导出记录", "Idea Tree"],
     );
   });
 });

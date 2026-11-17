@@ -475,3 +475,53 @@
 
   .settings-group-detail { padding: 28px 24px 40px; }
 }
+
+/* Environment, quota, search and proxy pages share the desktop row rhythm. */
+.settings-form-actions,
+.settings-list-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: 12px 0;
+}
+.settings-list-heading { justify-content: space-between; }
+.settings-list-heading h3 { margin: 0; font-size: 14px; }
+.settings-write-status { color: var(--text-secondary); font-size: 12px; }
+.settings-write-status:empty { display: none; }
+.settings-number { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+.settings-number .field-input.is-number { width: 112px; max-width: 100%; }
+.settings-advanced { margin: 20px 0; }
+.settings-advanced > summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.settings-advanced[open] > summary { margin-bottom: 12px; }
+.environment-setup-progress,
+.proxy-diagnostics { display: grid; gap: 12px; font-size: 13px; color: var(--text-secondary); }
+.environment-setup-progress > div,
+.proxy-diagnostics > div { display: grid; gap: 4px; }
+.environment-setup-progress > button { justify-self: start; }
+.environment-setup-progress p { margin: 0; }
+.environment-details { display: grid; gap: 12px; }
+.environment-package-list { margin: 0; line-height: 1.8; }
+.environment-details code,
+.environment-package-list,
+.proxy-diagnostics code { overflow-wrap: anywhere; word-break: break-word; }
+.settings-modal .settings-card-form > .settings-row.is-stack .row-control > *,
+.environment-details .settings-row.is-stack .row-control > * { width: 100%; min-width: 0; }
+.settings-group-detail .settings-row .row-control { min-width: 0; max-width: 100%; }
+.settings-group-detail .settings-row .row-control > select { max-width: 100%; }
+@media (max-width: 760px) {
+  .settings-group-detail .settings-row { flex-wrap: wrap; gap: 12px; }
+  .settings-group-detail .settings-row .row-control { flex-wrap: wrap; }
+  .row-inline-control { justify-content: flex-start; }
+}
+
+.settings-modal-head h2 { min-width: 0; overflow-wrap: anywhere; }
+.settings-modal-close { flex-shrink: 0; }
+.settings-group-detail .settings-row .row-title strong { overflow-wrap: anywhere; }

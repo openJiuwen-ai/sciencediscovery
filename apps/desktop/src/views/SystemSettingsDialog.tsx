@@ -23,6 +23,10 @@ import { GeneralSettings } from "./settings/GeneralSettings.js";
 import { ModelSettings } from "./settings/ModelSettings.js";
 import { NetworkSettings } from "./settings/NetworkSettings.js";
 import { RuntimeSettings } from "./settings/RuntimeSettings.js";
+import { EnvironmentSettings } from "./settings/EnvironmentSettings.js";
+import { QuotaSettings } from "./settings/QuotaSettings.js";
+import { WebSearchSettings } from "./settings/WebSearchSettings.js";
+import { ProxySettings } from "./settings/ProxySettings.js";
 import { SkillsSettings } from "./settings/SkillsSettings.js";
 import { McpServers } from "./settings/system/McpServers.js";
 import { MemorySettings } from "./settings/system/MemorySettings.js";
@@ -42,6 +46,10 @@ export type SettingsGroup =
   | "idea-tree"
   | "sandbox-network"
   | "remote"
+  | "environments"
+  | "quotas"
+  | "web"
+  | "proxies"
   | "timeouts"
   | "export-history";
 
@@ -52,9 +60,9 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // 科学记忆 is how the agent remembers what it read and made, so it sits with
   // the intelligence settings and after 专家, the last thing that is given to
   // the agent rather than the environment it runs in.
-  { groups: ["models", "skills", "mcp", "specialists", "idea-tree", "memory"], id: "intelligence" },
-  { groups: ["sandbox-network", "remote"], id: "connection" },
-  { groups: ["timeouts", "export-history"], id: "workspace" },
+  { groups: ["models", "skills", "mcp", "specialists", "idea-tree", "memory", "web"], id: "intelligence" },
+  { groups: ["sandbox-network", "proxies", "remote", "environments"], id: "connection" },
+  { groups: ["timeouts", "quotas", "export-history"], id: "workspace" },
 ];
 
 function categoryOf(group: SettingsGroup): CategoryId {
@@ -96,6 +104,7 @@ export function SystemSettingsDialog({
    *  pane keeps the width rather than reflowing around a zero column. */
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
+  const [environmentRunnerId, setEnvironmentRunnerId] = useState("local");
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -166,8 +175,17 @@ export function SystemSettingsDialog({
             client={client}
             onConfirm={actions.confirmAction}
             project={state.activeProject}
+            onManageEnvironment={(runnerId) => { setEnvironmentRunnerId(runnerId); onGroupChange("environments"); }}
           />
         );
+      case "environments":
+        return <EnvironmentSettings client={client} onConfirm={actions.confirmAction} initialRunnerId={environmentRunnerId} />;
+      case "quotas":
+        return <QuotaSettings client={client} onSaved={actions.applyQuotaSettings} />;
+      case "web":
+        return <WebSearchSettings client={client} onConfirm={actions.confirmAction} />;
+      case "proxies":
+        return <ProxySettings client={client} onConfirm={actions.confirmAction} />;
       case "timeouts":
         return <TimeoutSettings client={client} />;
       case "export-history":

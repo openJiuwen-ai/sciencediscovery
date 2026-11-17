@@ -444,3 +444,16 @@ test("a terminal event followed by a reader failure never reconnects a completed
     assert.equal(clock.size, 0);
   } finally { await view.close(); clock.restore(); }
 });
+
+test("saved quotas update upload preflight immediately, including unlimited", async () => {
+  const api = backend(); const view = await mount(api.client);
+  try {
+    const quota = { runnerMaxOutputBytes: 0, runnerMaxWorkspaceBytes: 0, uploadMaxRequestBytes: 0, uploadMaxFileBytes: 2048 };
+    const before = api.calls.length;
+    await act(async () => { view.handle.actions.applyQuotaSettings(quota); });
+    assert.equal(view.handle.state.uploadLimit, 2048);
+    await act(async () => { view.handle.actions.applyQuotaSettings({ ...quota, uploadMaxFileBytes: 0 }); });
+    assert.equal(view.handle.state.uploadLimit, 0);
+    assert.equal(api.calls.length, before, "a confirmed quota response should not need another request");
+  } finally { await view.close(); }
+});

@@ -85,6 +85,7 @@ interface Props {
   onConfirm: (request: ConfirmRequest) => void;
   /** Re-read the page after anything here changes it. */
   onReload: () => void;
+  onManageEnvironment?: (runnerId: string) => void;
 }
 
 /**
@@ -100,7 +101,7 @@ interface Props {
  * "keep what is stored", and the only evidence that something is stored is the
  * `已存密码` / `已存私钥` tag on the card.
  */
-export function RunnerSection({ client, hosts, onConfirm, onReload }: Props) {
+export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvironment }: Props) {
   const [busy, setBusy] = useState<string>();
   const [failure, setFailure] = useState<string>();
   const [adding, setAdding] = useState<AddKind>();
@@ -365,6 +366,10 @@ export function RunnerSection({ client, hosts, onConfirm, onReload }: Props) {
                   ))}
                 </div>
                 <div className="settings-card-actions">
+                  {onManageEnvironment ? <button className="secondary-button" type="button"
+                    disabled={live || busy === host.id} onClick={() => onManageEnvironment(host.id)}>
+                    {TEXT.settings.system.groups.environments.label}
+                  </button> : null}
                   {host.id === "local" ? null : (
                     <button
                       className="secondary-button"

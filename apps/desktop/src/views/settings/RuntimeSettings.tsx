@@ -31,6 +31,7 @@ interface Props {
    *  render its current value, and looking the id up in `GET /api/projects`
    *  would miss the inbox — the Project standalone Sessions live in. */
   project?: Project;
+  onManageEnvironment?: (runnerId: string) => void;
 }
 
 interface RuntimePage {
@@ -54,7 +55,7 @@ interface RuntimePage {
  * the catalog: this page reads it and hands it down, so a machine registered
  * above reaches the allowlist below in the same reload.
  */
-export function RuntimeSettings({ client, onConfirm, project }: Props) {
+export function RuntimeSettings({ client, onConfirm, project, onManageEnvironment }: Props) {
   const loaded = useLoaded<RuntimePage>(async () => {
     const runners = await listRunners(client);
     // The local entry is left out once, here: it always exists, needs no
@@ -68,7 +69,7 @@ export function RuntimeSettings({ client, onConfirm, project }: Props) {
       <Group>
         <LoadGate loaded={loaded}>
           {(page) => (
-            <RunnerSection client={client} hosts={page.remote} onConfirm={onConfirm} onReload={loaded.reload} />
+            <RunnerSection client={client} hosts={page.remote} onConfirm={onConfirm} onReload={loaded.reload} onManageEnvironment={onManageEnvironment} />
           )}
         </LoadGate>
       </Group>
