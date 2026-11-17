@@ -169,7 +169,7 @@ function SlidersGlyph() {
 type SettingsPanel = "experts" | "permission";
 
 /** The shield that marks permission, and its warning form for 完全访问. */
-function ShieldGlyph({ alert = false, plain = false }: { alert?: boolean; plain?: boolean }) {
+function ShieldGlyph({ alert = false }: { alert?: boolean }) {
   return (
     <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="18">
       <path d="M12 3.4 5.2 6.4v5.1c0 4.2 2.8 7.1 6.8 8.7 4-1.6 6.8-4.5 6.8-8.7V6.4z" />
@@ -178,7 +178,7 @@ function ShieldGlyph({ alert = false, plain = false }: { alert?: boolean; plain?
           <path d="M12 8.7v3.4" />
           <path d="M12 15.6h.01" />
         </>
-      ) : plain ? null : (
+      ) : (
         <path d="m8.8 12.15 2.15 2.15 4.3-4.45" />
       )}
     </svg>
@@ -388,8 +388,7 @@ export function SessionSettingsMenu({
                 <ShieldGlyph />
               </span>
               <span className="session-menu-value-text">
-                {approvalMode === undefined ? TEXT.composer.permissionFollowSettings
-              : fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
+                {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
               </span>
               <ChevronRightGlyph />
             </span>
@@ -720,10 +719,11 @@ export function Composer({
   tag,
   uploading,
 }: Props) {
-  const fullAccess = approvalMode === "always_allow";
-  // Nothing chosen yet and no session detail: the service will apply the project or
-  // global default, so the control must not claim it is asking (#1206 review).
-  const modeUnset = approvalMode === undefined;
+  // The shell resolves a mode for every surface (the session's, the reader's last
+  // choice, or the project/global default); asking is only the last fallback, so
+  // there is no third "follow settings" state (#1204 owner decision).
+  const mode = approvalMode ?? "ask_for_dangerous";
+  const fullAccess = mode === "always_allow";
   const [text, setText] = useState(seededCommand?.text ?? "");
   /** The dialog's flags, kept apart from the sentence so the token cannot be
    *  edited into something the agent no longer understands. Seeded in the
@@ -1113,9 +1113,8 @@ export function Composer({
         <span className="composer-menu-anchor is-permission">
           <button
             aria-expanded={menu === "permission"}
-            aria-label={modeUnset ? TEXT.composer.permissionFollowSettings
-              : fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
-            className={`composer-permission${fullAccess ? " is-danger" : ""}${modeUnset ? " is-unset" : ""}`}
+            aria-label={fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
+            className={`composer-permission${fullAccess ? " is-danger" : ""}`}
             disabled={running}
             onClick={(event) => {
               event.stopPropagation();
@@ -1124,16 +1123,15 @@ export function Composer({
             title={running ? TEXT.composer.permissionLocked : TEXT.composer.permissionMode}
             type="button"
           >
-            <ShieldGlyph alert={fullAccess} plain={modeUnset} />
+            <ShieldGlyph alert={fullAccess} />
             <span className="composer-permission-label">
-              {modeUnset ? TEXT.composer.permissionFollowSettings
-                : fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
+              {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
             </span>
           </button>
           {menu === "permission" ? (
             <div className="composer-dropdown is-permission" onPointerDown={(event) => event.stopPropagation()}>
               <PermissionFlyout
-                mode={approvalMode}
+                mode={mode}
                 onApprovalMode={onApprovalMode}
                 onClose={() => setMenu(undefined)}
               />
