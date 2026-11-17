@@ -53,26 +53,26 @@ test("a restore is charged only the copies it still has to write", () => {
   assert.equal(size.unpackedBytes, 1000 * MIB);
   assert.equal(size.largestObjectBytes, 700 * MIB);
   const need = researchPackageRestoreRequirement(size);
-  // The unpacked upload is already on disk; the snapshot objects and the CAS blobs remain.
-  assert.equal(need.diskBytes, 2000 * MIB + 1_000_000);
+  // The unpacked upload is on disk; snapshot objects, CAS blobs and workspace files remain.
+  assert.equal(need.diskBytes, 3000 * MIB + 1_000_000);
   assert.equal(need.memoryBytes, 700 * MIB + 256 * MIB, "one object at a time, plus headroom");
 });
 
 test("the unpack budget and the post-parse check agree on the same free disk", () => {
   // The example from the review: 12 GiB free, a 3.8 GiB package.
-  const free = 12 * 1024 * MIB;
+  const free = 16 * 1024 * MIB;
   const unpacked = Math.floor(3.8 * 1024 * MIB);
   const budget = researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB);
   assert.ok(budget >= unpacked, "the parse is allowed to write the objects");
-  // After the parse those bytes are on disk; only the two remaining copies are checked.
+  // After the parse those bytes are on disk; the three remaining copies are checked.
   const after = CAPACITY(free - unpacked);
   assert.doesNotThrow(() => assertResearchPackageRestoreCapacity(after, {
     unpackedBytes: unpacked, largestObjectBytes: unpacked, recordsBytes: 1024,
   }), "a package the budget allowed must not be refused once it is on disk");
 
-  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 8 * 1024 * MIB), 8 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 2 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 3));
+  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 8 * 1024 * MIB), 7.5 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 1.5 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 4));
   assert.equal(researchPackageUnpackBudget(CAPACITY(Infinity), 8 * 1024 * MIB), 8 * 1024 * MIB);
 });
 

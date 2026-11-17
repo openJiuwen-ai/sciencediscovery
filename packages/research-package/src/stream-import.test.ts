@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -130,5 +130,46 @@ test("a streamed import stops at the measured budget and reports it as a disk re
         assert.equal(error.message, "Research package exceeds the free disk budget");
         return true;
       });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an import completes when the archive carries zeros past its terminator", { timeout: 60_000 }, async () => {
+  // The parser stops at the terminator while the decompressor still has data: without
+  // draining it the producer parks at the high-water mark and the import never returns
+  // (#1211 F6).
+  const directory = await mkdtemp(join(tmpdir(), "streamed-import-"));
+  try {
+    const { packageBytes } = fixture();
+    const raw = gunzipSync(Buffer.from(packageBytes));
+    const withTail = gzipSync(Buffer.concat([raw, Buffer.alloc(20 * 1024 * 1024)]), { level: 6 });
+    const streamed = await importResearchPackageStreamed(pieces(withTail, 1024 * 1024), { objectDirectory: join(directory, "objects") });
+    assert.equal(streamed.objects.size, 2);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an import refuses non-zero data after the terminator", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "streamed-import-"));
+  try {
+    const { packageBytes } = fixture();
+    const raw = gunzipSync(Buffer.from(packageBytes));
+    const withTail = gzipSync(Buffer.concat([raw, Buffer.from("not part of the package")]), { level: 6 });
+    await assert.rejects(
+      () => importResearchPackageStreamed(pieces(withTail, 64), { objectDirectory: join(directory, "objects") }),
+      /data after its end/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a write error rejects the import instead of terminating the process", async () => {
+  // The object writer had no 'error' listener: EEXIST/EFBIG was an unhandled event that
+  // killed the API process before the import could reject (#1211 F3).
+  const directory = await mkdtemp(join(tmpdir(), "streamed-import-"));
+  try {
+    const { packageBytes, objects } = fixture();
+    const objectDirectory = join(directory, "objects");
+    await mkdir(objectDirectory, { recursive: true });
+    await writeFile(join(objectDirectory, sha256(objects[0]!)), "already here");
+    await assert.rejects(
+      () => importResearchPackageStreamed(pieces(packageBytes, 64), { objectDirectory }),
+      /EEXIST|exist/i);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

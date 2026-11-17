@@ -621,6 +621,22 @@ class ChunkQueue {
     return out;
   }
 
+  /** Yield the rest of the stream, waking the producer as it goes. */
+  async *drain(): AsyncGenerator<Buffer> {
+    for (;;) {
+      if (this.failure) throw this.failure;
+      if (this.queued === 0) {
+        if (this.ended) return;
+        await this.stalled();
+        continue;
+      }
+      const head = this.chunks.shift()!;
+      this.queued -= head.length;
+      this.released();
+      yield head;
+    }
+  }
+
   /** Consume exactly `size` bytes in whatever pieces have arrived. */
   async stream(size: number, write: (chunk: Buffer) => Promise<void> | void): Promise<void> {
     let remaining = size;
@@ -712,12 +728,23 @@ export async function importResearchPackageStreamed(
         if (!isHash(digest)) throw new Error("Invalid research package object entry");
         const digesting = createHash("sha256");
         const file = createWriteStream(resolve(options.objectDirectory, digest), { flags: "wx" });
+        // An open/flush error has no other listener: without this the 'error' event is
+        // unhandled and terminates the process instead of failing the import (#1211 F3).
+        const failed = new Promise<never>((_, reject) => file.on("error", reject));
         let written = 0;
-        await queue.stream(size, async (chunk) => {
-          digesting.update(chunk); written += chunk.length;
-          if (!file.write(chunk)) await once(file, "drain");
-        });
-        await new Promise<void>((done, fail) => { file.end((error?: Error | null) => error ? fail(error) : done()); });
+        try {
+          await Promise.race([
+            queue.stream(size, async (chunk) => {
+              digesting.update(chunk); written += chunk.length;
+              if (!file.write(chunk)) await once(file, "drain");
+            }),
+            failed,
+          ]);
+          await new Promise<void>((done, failWrite) => { file.end((error?: Error | null) => error ? failWrite(error) : done()); });
+        } catch (error) {
+          file.destroy();
+          throw error;
+        }
         if (written !== size || digesting.digest("hex") !== digest) throw new Error(`Package checksum mismatch: ${path}`);
         objectPaths.push(digest); objectSizes.set(digest, size);
       } else {
@@ -728,6 +755,12 @@ export async function importResearchPackageStreamed(
       }
       const padding = (TAR_BLOCK - (size % TAR_BLOCK)) % TAR_BLOCK;
       if (padding) await queue.read(padding);
+    }
+    // The parser stopped at the terminator; the decompressor is still producing. Keep
+    // draining (that wakes the parked sink) so the pipeline can finish, and treat any
+    // non-zero byte after the end as data the archive declared it did not carry (#1211 F6).
+    for await (const chunk of queue.drain()) {
+      if (chunk.some((byte) => byte !== 0)) throw new Error("Research package carries data after its end");
     }
     await conveying;
 
