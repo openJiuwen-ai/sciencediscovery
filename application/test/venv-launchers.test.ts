@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import {
-  bundledRuntimeDlls, copyVenvRuntimeDlls, isUvTrampoline, replaceVenvTrampolines, replaceVenvSymlinks,
+  bundledRuntimeDlls, copyVenvRuntimeDlls, greenletRuntimeProblem, greenletVersionAtLeast,
+  isUvTrampoline, MIN_SELF_CONTAINED_GREENLET_VERSION, replaceVenvTrampolines, replaceVenvSymlinks,
 } from "../scripts/lib/venv-launchers.mjs";
 
 // The marker text every uv trampoline binary carries (see the real one:
@@ -195,6 +196,67 @@ test("copyVenvRuntimeDlls installs DLLs beside the launcher, idempotently, and r
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("greenletVersionAtLeast accepts the static-runtime release and rejects the dynamic ones", () => {
+  assert.equal(MIN_SELF_CONTAINED_GREENLET_VERSION, "3.5.5");
+  assert.equal(greenletVersionAtLeast("3.5.5"), true);
+  assert.equal(greenletVersionAtLeast("3.5.5.post1"), true);
+  assert.equal(greenletVersionAtLeast("3.6.0"), true);
+  assert.equal(greenletVersionAtLeast("4.0"), false, "must be a full x.y.z release");
+  assert.equal(greenletVersionAtLeast("3.5.4"), false);
+  assert.equal(greenletVersionAtLeast("3.3.1"), false);
+  assert.equal(greenletVersionAtLeast("3.5.5rc1"), false, "a pre-release is not the fixed release");
+  assert.equal(greenletVersionAtLeast("not-a-version"), false);
+});
+
+test("greenletRuntimeProblem inspects the shipped _greenlet extension, not the build machine", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sd-greenlet-"));
+  try {
+    const sitePackages = join(dir, "Lib", "site-packages");
+    const packageDir = join(sitePackages, "greenlet");
+    mkdirSync(packageDir, { recursive: true });
+    const extension = join(packageDir, "_greenlet.cp312-win_amd64.pyd");
+
+    writeFileSync(extension, Buffer.concat([
+      Buffer.from("MZ\x90\x00"),
+      Buffer.from("MSVCP140.dll\x00", "latin1"),
+    ]));
+    assert.match(await greenletRuntimeProblem(sitePackages), /MSVCP140\.dll/);
+    assert.match(await greenletRuntimeProblem(sitePackages), /greenlet>=3\.5\.5/);
+
+    writeFileSync(extension, Buffer.from("MZ msvcp140.DLL\x00", "latin1"));
+    assert.match(await greenletRuntimeProblem(sitePackages), /MSVCP140\.dll/,
+      "Windows DLL names are case insensitive");
+
+    writeFileSync(extension, Buffer.from("MZ static C++ runtime"));
+    assert.equal(await greenletRuntimeProblem(sitePackages), null);
+
+    rmSync(extension);
+    assert.match(await greenletRuntimeProblem(sitePackages), /native extension .* is missing/);
+
+    rmSync(packageDir, { recursive: true, force: true });
+    assert.match(await greenletRuntimeProblem(sitePackages), /not installed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the jw patch set and assemble gate keep greenlet self-contained", async () => {
+  const patch = await readFile(new URL(
+    "../../jiuwen_swarm/patches/workswarm0.2.6/0021-greenlet-static-runtime.patch", import.meta.url), "utf8");
+  assert.match(patch, /^\+    "greenlet>=3\.5\.5,<4",$/m);
+  assert.match(patch, /^\+    "greenlet>=3\.5\.5",$/m);
+  assert.match(patch, /^\+version = "3\.5\.5"$/m, "the lock entry must match the raised floor");
+  assert.match(patch, /^\+    \{ name = "greenlet", specifier = ">=3\.5\.5,<4" \},$/m,
+    "the lock's recorded project specifier must match pyproject, or uv sync rewrites it");
+
+  const assemble = await readFile(new URL("../scripts/assemble-backend.mjs", import.meta.url), "utf8");
+  assert.match(assemble, /from greenlet import greenlet as _greenlet; _greenlet\(lambda: None\)\.switch\(\)/,
+    "the payload smoke must load the native _greenlet extension");
+  assert.match(assemble, /greenletVersionAtLeast/, "the 3.5.5 floor must gate the payload");
+  assert.match(assemble, /greenletRuntimeProblem/, "the shipped .pyd DLL reference must gate the payload");
+  assert.match(assemble, /MSVCP140\.dll/, "the failure must name the redistributable dependency");
 });
 
 test("copyVenvRuntimeDlls returns 0 when the bundle ships no runtime DLLs", async () => {

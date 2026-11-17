@@ -32,7 +32,10 @@ import { copyFile, cp, mkdir, readdir, readFile, realpath, rm, stat, writeFile }
 import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyVenvRuntimeDlls, replaceVenvSymlinks, pythonNamesFor, relocatablePythonTree } from "./lib/venv-launchers.mjs";
+import {
+  copyVenvRuntimeDlls, greenletRuntimeProblem, greenletVersionAtLeast,
+  replaceVenvSymlinks, pythonNamesFor, relocatablePythonTree,
+} from "./lib/venv-launchers.mjs";
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
 import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
@@ -1017,7 +1020,12 @@ const smokeRuns = [
   {
     label: "jiuwenswarm venv",
     python: jwVenvPython,
-    code: "import jiuwenswarm.common.config, jiuwenswarm.gateway.app_gateway, jiuwenswarm.server.app_agentserver",
+    // greenlet's native extension is loaded here, not merely its Python
+    // package: this is the import that fails on a clean Windows machine when
+    // the wheel still links MSVCP140.dll. The version/PE gates below catch
+    // what this import cannot on a build machine that has the redistributable.
+    code: "import jiuwenswarm.common.config, jiuwenswarm.gateway.app_gateway, jiuwenswarm.server.app_agentserver; "
+      + "import greenlet; from greenlet import greenlet as _greenlet; _greenlet(lambda: None).switch()",
   },
   {
     // The sd-services venv ships with PLACEHOLDERED editable .pth files
@@ -1038,6 +1046,35 @@ for (const { label, python, code, extraEnv } of smokeRuns) {
   } catch (error) {
     fail(`payload self-check FAILED (${label}): ${error.message}`);
   }
+}
+
+// A1c greenlet C++ runtime gate (Windows). The import above is masked by the
+// build machine's VC++ x64 redistributable, which is exactly how 3.5.0 shipped:
+// its wheel loads only where MSVCP140.dll happens to exist. The changelog fixed
+// this in 3.5.5 by restoring the static C++ runtime, so require that floor and
+// inspect the shipped extension for the DLL name instead of trusting the
+// local machine. Use the fixed wheel rather than copying a system DLL from
+// the build machine into the payload.
+if (dialect.hasTrampolines) {
+  let greenletVersion;
+  try {
+    greenletVersion = execFileSync(jwVenvPython, ["-c", "import greenlet; print(greenlet.__version__)"], {
+      env: compileEnv, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1024 * 1024,
+    }).trim();
+  } catch (error) {
+    fail(`payload greenlet check FAILED: cannot import greenlet in the jw venv: ${error.message}`);
+  }
+  if (!greenletVersionAtLeast(greenletVersion)) {
+    fail(`payload greenlet check FAILED: ${greenletVersion} is below 3.5.5. `
+      + "Windows wheels 3.3.1..3.5.4 dynamically link MSVCP140.dll (VC++ x64 redistributable) and fail on clean machines. "
+      + "Re-run scripts/jiuwenswarm.mjs setup (or bash scripts/jiuwenswarm.sh setup) with the greenlet>=3.5.5 patch, then rebuild.");
+  }
+  const greenletProblem = await greenletRuntimeProblem(
+    join(jwPayload, ".venv", ...dialect.sitePackages(PYTHON_MINOR).split(/[\\/]/)));
+  if (greenletProblem) fail(`payload greenlet check FAILED: ${greenletProblem}`);
+  say(`greenlet ${greenletVersion} is self-contained (native _greenlet import, no MSVCP140.dll dependency)`);
+} else {
+  say("skipped greenlet MSVCP140 gate (win32-only; the native import smoke still ran)");
 }
 
 // A1b runtime-path probe. The two import checks above prove module-scope imports
