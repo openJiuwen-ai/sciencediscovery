@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { IncomingMessage } from "node:http";
+import { open, rm } from "node:fs/promises";
 
 import { SKILL_LIMITS } from "@sciencediscovery/specialist";
 
@@ -25,17 +26,44 @@ export async function readBytes(request: IncomingMessage, maxBytes: number, labe
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > maxBytes) {
-      // The client shows localized copy keyed on the code; a raw byte count is an
-      // internal number that leaked into the dialog and reads as gibberish there.
-      const error = new Error(`${label} exceeds its size limit`) as NodeJS.ErrnoException & { limitLabel?: string };
-      error.code = "PAYLOAD_TOO_LARGE";
-      error.limitLabel = label;
-      throw error;
-    }
+    if (total > maxBytes) throw payloadTooLarge(label);
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function payloadTooLarge(label: string): Error {
+  // The client shows localized copy keyed on the code; a raw byte count is an
+  // internal number that leaked into the dialog and reads as gibberish there.
+  const error = new Error(`${label} exceeds its size limit`) as NodeJS.ErrnoException & { limitLabel?: string };
+  error.code = "PAYLOAD_TOO_LARGE";
+  error.limitLabel = label;
+  return error;
+}
+
+/**
+ * Stream a request body to a file instead of a buffer.
+ *
+ * A research package can be far larger than the process should hold, so the upload
+ * lands on disk while it arrives and the caller parses it from there (#1152 stage 2).
+ */
+export async function readBytesToFile(request: IncomingMessage, maxBytes: number, label: string, path: string): Promise<{ bytes: number }> {
+  const handle = await open(path, "wx");
+  let total = 0;
+  try {
+    for await (const chunk of request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.length;
+      if (total > maxBytes) throw payloadTooLarge(label);
+      await handle.write(buffer);
+    }
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await rm(path, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  return { bytes: total };
 }
 
 export async function readJson<T>(request: IncomingMessage): Promise<T> {

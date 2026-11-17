@@ -1,12 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { open, stat } from "node:fs/promises";
-import { Readable, Transform } from "node:stream";
+import { once } from "node:events";
+import { createReadStream, createWriteStream, readFileSync } from "node:fs";
+import { mkdir, open, stat } from "node:fs/promises";
+import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Writable } from "node:stream";
 import { createGunzip, createGzip, gunzipSync, gzip, gzipSync } from "node:zlib";
+import { join, resolve } from "node:path";
 import { jsonBytes, jsonByteLength, parseJsonBytes } from "./json.js";
 export { jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes } from "./json.js";
 
@@ -17,6 +18,10 @@ const MAX_ENTRIES = 10_000;
 const MAX_FILE_BYTES = 32 * 1024 * 1024 * 1024;
 const MIB = 1024 * 1024;
 const TAR_BLOCK = 512;
+/** The largest size an 11-digit octal tar field can hold: 8 GiB - 1. */
+const TAR_MAX_ENTRY_BYTES = 8 * 1024 * MIB - 1;
+/** Bound for the entries that are read whole during a streamed import. */
+const MAX_METADATA_BYTES = 64 * MIB;
 
 /**
  * One cap for every side of a research package: the uncompressed tar on export,
@@ -26,17 +31,17 @@ const TAR_BLOCK = 512;
  * literals (512 MiB export, 256 MiB upload) let the app produce a package its own
  * importer refuses, which is the round-trip defect this replaces.
  */
-export const RESEARCH_PACKAGE_DEFAULT_MAX_BYTES = 512 * MIB;
+export const RESEARCH_PACKAGE_DEFAULT_MAX_BYTES = 5 * 1024 * MIB;
 /**
  * Ceiling for every override, environment or per-request.
  *
- * It is derived from this pipeline's own cost, not from what a disk can hold: peak RSS
- * is about 3x the payload (payload + tar + gzip), so 1 GiB already means ~3 GiB of
- * resident memory against the API's 3072 MiB heap budget. Stage 2's streaming pipeline
- * is what makes a 5 GiB default safe; a clamp that allowed it here would turn a clean
- * refusal into an OOM, which is the failure this bound exists to prevent.
+ * The streaming exporter holds one object plus its chunks, not the payload, so the cap
+ * no longer has to describe resident memory: what bounds it is the tar header's own
+ * size field, which `writeOctal` fills with eleven octal digits. `8 GiB - 1` is the
+ * largest value that field can hold, and a package cannot exceed the sum of its
+ * entries, so keeping the cap under it keeps every header representable.
  */
-export const RESEARCH_PACKAGE_MAX_MAX_BYTES = 1024 * MIB;
+export const RESEARCH_PACKAGE_MAX_MAX_BYTES = 8 * 1024 * MIB - 1;
 export const RESEARCH_PACKAGE_MIN_MAX_BYTES = 64 * MIB;
 export const RESEARCH_PACKAGE_MAX_BYTES_ENV = "SCIENCE_AGENT_RESEARCH_PACKAGE_MAX_BYTES";
 
@@ -51,6 +56,9 @@ export const RESEARCH_PACKAGE_MAX_BYTES_ENV = "SCIENCE_AGENT_RESEARCH_PACKAGE_MA
 export function researchPackageUploadBytes(maxBytes: number): number {
   return Math.ceil(maxBytes * 1.05) + 1024 * 1024;
 }
+
+/** Stable code: the API answers it with 507 and the disk message, not a 500. */
+export const RESEARCH_PACKAGE_UNPACK_BUDGET_CODE = "RESEARCH_PACKAGE_INSUFFICIENT_DISK";
 
 /** The one message both sides use when a package is over the cap. */
 export const RESEARCH_PACKAGE_TOO_LARGE_MESSAGE = "Research package exceeds the archive size limit";
@@ -100,7 +108,13 @@ export interface PackageObject { path: string; bytes: Uint8Array; kind?: Package
  * writing the archive. A file source satisfies that naturally; a one-shot stream
  * does not, which is why the type asks for a factory rather than an iterable.
  */
-export interface PackageObjectStream { path: string; sizeBytes: number; open: () => AsyncIterable<Uint8Array>; }
+export interface PackageObjectStream { path: string; sizeBytes?: number; open: () => AsyncIterable<Uint8Array>; }
+
+/** Bytes an object contributes to a size estimate: resident bytes, else the caller's hint. */
+function objectSize(object: PackageObject | PackageObjectStream): number {
+  if ("bytes" in object && object.bytes) return object.bytes.byteLength;
+  return "sizeBytes" in object ? object.sizeBytes ?? 0 : 0;
+}
 export interface PackageSource { projectId: string; sessionIds?: readonly string[]; title: string; }
 export interface PackageInventoryEntry {
   path: string; sizeBytes: number; checksum: string; kind: "manifest" | "records" | "object" | "readme";
@@ -124,7 +138,7 @@ export interface PackageManifest {
 }
 export interface ExportInput {
   packageKind?: ResearchPackageKind; producerVersion?: string; source: PackageSource;
-  records: unknown; objects?: readonly PackageObject[]; omissions?: readonly string[]; readme?: string;
+  records: unknown; objects?: readonly (PackageObject | PackageObjectStream)[]; omissions?: readonly string[]; readme?: string;
   createdAt?: string;
   exportProfile?: ResearchPackageExportProfile;
 }
@@ -180,6 +194,11 @@ function writeOctal(buffer: Buffer, offset: number, length: number, value: numbe
 
 function tarHeader(path: string, size: number): Uint8Array {
   if (Buffer.byteLength(path) > 100) throw new Error(`Package path is too long: ${path}`);
+  // Eleven octal digits plus a terminator: 8 GiB - 1 is the largest size this header
+  // can express. The cap keeps a whole package under it, so reaching this means a
+  // single entry outgrew the archive bound rather than a tar limitation to work around.
+  if (!Number.isSafeInteger(size) || size < 0 || size > TAR_MAX_ENTRY_BYTES)
+    throw new Error(`Package entry is too large for a tar header: ${path}`);
   const header = Buffer.alloc(TAR_BLOCK);
   header.write(path, 0, "utf8");
   writeOctal(header, 100, 8, 0o644); writeOctal(header, 108, 8, 0); writeOctal(header, 116, 8, 0);
@@ -299,6 +318,9 @@ function prepareResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_
   const objects = [...(input.objects ?? [])]; const objectEntries: TarEntry[] = []; const inventory: PackageInventoryEntry[] = [];
   const seen = new Set<string>(); let totalBytes = 0;
   for (const object of objects) {
+    // This path builds the archive in memory, so an object without bytes cannot be
+    // written here: a streaming source is only usable by `writeResearchPackage`.
+    if (!("bytes" in object) || !object.bytes) throw new Error("A synchronous export cannot stream package objects");
     const checksum = sha256(object.bytes); const path = `objects/${checksum}`;
     if (object.path !== path && object.path !== checksum) throw new Error("Package object path must be its SHA-256 address");
     if (seen.has(path)) {
@@ -341,7 +363,7 @@ export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: Re
   const inventory: PackageInventoryEntry[] = [{ path: "records.json", sizeBytes: recordsBytes, checksum: HASH_PLACEHOLDER, kind: "records" }];
   const sizes: number[] = [recordsBytes, readmeBytes];
   for (const object of objects) {
-    const size = objectSizes?.get(object.path) ?? object.bytes.byteLength;
+    const size = objectSizes?.get(object.path) ?? objectSize(object);
     inventory.push({ path: `objects/${HASH_PLACEHOLDER}`, sizeBytes: size, checksum: HASH_PLACEHOLDER, kind: "object" });
     sizes.push(size);
   }
@@ -436,7 +458,9 @@ export async function writeResearchPackage(
       for await (const chunk of object.open()) { hash.update(chunk); hashed += chunk.byteLength; }
       checksum = hash.digest("hex");
       size = hashed;
-      if (object.sizeBytes !== hashed) throw new Error("Package object size changed while hashing");
+      // The hint is optional and never trusted: the hash pass is the size that goes
+      // into the manifest, so a caller that only knows the address still works.
+      if (object.sizeBytes !== undefined && object.sizeBytes !== hashed) throw new Error("Package object size changed while hashing");
       open = object.open;
     }
     const path = `objects/${checksum}`;
@@ -535,6 +559,214 @@ export function createResearchPackageProvider(): ResearchPackageProvider {
   return { format: RESEARCH_PACKAGE_FORMAT, extension: RESEARCH_PACKAGE_EXTENSION, export: createResearchPackage, inspect: inspectResearchPackage, importReadOnly: importResearchPackage };
 }
 
+/**
+ * A package's objects unpacked to a directory: it behaves like the in-memory map, but
+ * `get` reads one object at a time, so an import never holds all of them.
+ */
+export interface PackageObjectDirectory extends ReadonlyMap<string, Uint8Array> {}
+
+export interface StreamedImportedPackage {
+  manifest: PackageManifest; records: unknown; readme: Uint8Array;
+  objects: PackageObjectDirectory; receipt: ImportReceipt;
+}
+
+/** Buffered chunks with the reads a tar parser needs, including a streaming copy. */
+class ChunkQueue {
+  private chunks: Buffer[] = [];
+  private queued = 0;
+  private ended = false;
+  private failure?: Error;
+  private wake: Array<() => void> = [];
+  private spaceWaiters: Array<() => void> = [];
+  /** Above this the producer waits, so a fast decompressor cannot outrun the parser. */
+  private readonly highWater = 8 * 1024 * 1024;
+  private readonly lowWater = 4 * 1024 * 1024;
+
+  push(chunk: Buffer): void { this.chunks.push(chunk); this.queued += chunk.length; this.signal(); }
+  fail(error: Error): void { this.failure = error; this.ended = true; this.signal(); }
+  end(): void { this.ended = true; this.signal(); }
+  private signal(): void { const waiting = this.wake; this.wake = []; for (const resume of waiting) resume(); }
+  private stalled(): Promise<void> { return new Promise<void>((resume) => this.wake.push(resume)); }
+
+  /** Backpressure for the decompressor: resolves once the parser has caught up. */
+  async offer(chunk: Buffer): Promise<void> {
+    this.push(chunk);
+    if (this.queued <= this.highWater) return;
+    await new Promise<void>((resume) => this.spaceWaiters.push(resume));
+  }
+
+  private released(): void {
+    if (this.queued > this.lowWater || !this.spaceWaiters.length) return;
+    const waiting = this.spaceWaiters;
+    this.spaceWaiters = [];
+    for (const resume of waiting) resume();
+  }
+
+  async read(size: number): Promise<Buffer> {
+    // Drain incrementally: waiting for `size` bytes before consuming any of them would
+    // deadlock an entry larger than the high-water mark, because the producer that owes
+    // the rest is parked by `offer` until this loop calls `released()` (#1200 review 2).
+    const out = Buffer.allocUnsafe(size); let offset = 0;
+    while (offset < size) {
+      while (this.queued === 0 && !this.ended) await this.stalled();
+      if (this.failure) throw this.failure;
+      if (this.queued === 0) throw new Error("Invalid .sdresearch archive: it ends before its entries do");
+      const head = this.chunks[0]!;
+      const take = Math.min(head.length, size - offset);
+      head.copy(out, offset, 0, take); offset += take;
+      if (take === head.length) this.chunks.shift(); else this.chunks[0] = head.subarray(take);
+      this.queued -= take;
+      this.released();
+    }
+    return out;
+  }
+
+  /** Consume exactly `size` bytes in whatever pieces have arrived. */
+  async stream(size: number, write: (chunk: Buffer) => Promise<void> | void): Promise<void> {
+    let remaining = size;
+    while (remaining > 0) {
+      while (this.queued === 0 && !this.ended) await this.stalled();
+      if (this.failure) throw this.failure;
+      if (this.queued === 0) throw new Error("Invalid .sdresearch archive: it ends before its entries do");
+      const head = this.chunks[0]!;
+      const take = Math.min(head.length, remaining);
+      const piece = head.subarray(0, take);
+      if (take === head.length) this.chunks.shift(); else this.chunks[0] = head.subarray(take);
+      this.queued -= take; remaining -= take;
+      await write(piece);
+      this.released();
+    }
+  }
+}
+
+class DirectoryObjects implements PackageObjectDirectory {
+  constructor(private readonly directory: string, private readonly paths: readonly string[]) {}
+  get size(): number { return this.paths.length; }
+  has(path: string): boolean { return this.paths.includes(path); }
+  get(path: string): Uint8Array { return readFileSync(join(this.directory, path)); }
+  private *generate(): Generator<[string, Uint8Array]> { for (const path of this.paths) yield [path, this.get(path)]; }
+  private *generateValues(): Generator<Uint8Array> { for (const path of this.paths) yield this.get(path); }
+  values(): MapIterator<Uint8Array> { return this.generateValues() as unknown as MapIterator<Uint8Array>; }
+  keys(): MapIterator<string> { return this.paths.values() as unknown as MapIterator<string>; }
+  entries(): MapIterator<[string, Uint8Array]> { return this.generate() as unknown as MapIterator<[string, Uint8Array]>; }
+  [Symbol.iterator](): MapIterator<[string, Uint8Array]> { return this.entries(); }
+  forEach(callback: (value: Uint8Array, key: string, map: ReadonlyMap<string, Uint8Array>) => void, thisArg?: unknown): void {
+    for (const [path, bytes] of this.generate()) callback.call(thisArg, bytes, path, this);
+  }
+}
+
+/**
+ * Import a package straight from its compressed bytes.
+ *
+ * The archive is decompressed as it arrives and each object is written to
+ * `objectDirectory/<checksum>` while being hashed, so neither the compressed package
+ * nor the inflated tar is ever resident — only the manifest, records and readme are.
+ * Stage 2 of #1152 exists for packages whose payload cannot fit in memory.
+ */
+export async function importResearchPackageStreamed(
+  source: AsyncIterable<Uint8Array>,
+  options: { objectDirectory: string; maxBytes?: number; signal?: AbortSignal },
+): Promise<StreamedImportedPackage> {
+  const maxBytes = options.maxBytes ?? RESEARCH_PACKAGE_MAX_MAX_BYTES;
+  await mkdir(options.objectDirectory, { recursive: true });
+  const queue = new ChunkQueue();
+  const compressed = createHash("sha256");
+  const meter = new Transform({ transform(chunk: Buffer, _encoding, done) { compressed.update(chunk); done(null, chunk); } });
+  const sink = new Writable({
+    write(chunk: Buffer, _encoding, done) { queue.offer(chunk).then(() => done(), (error: Error) => done(error)); },
+    final(done) { queue.end(); done(); },
+  });
+  const conveying = pipeline(Readable.from(source), meter, createGunzip(), sink);
+  conveying.catch((error: Error) => queue.fail(error));
+  try {
+    const files = new Map<string, Uint8Array>();
+    const objectPaths: string[] = [];
+    const objectSizes = new Map<string, number>();
+    let total = 0;
+    for (;;) {
+      options.signal?.throwIfAborted();
+      const header = await queue.read(TAR_BLOCK);
+      if (header.every((byte) => byte === 0)) break;
+      const path = new TextDecoder().decode(header.slice(0, 100)).replace(/\0.*$/, "");
+      const size = readOctal(header, 124, 12); const type = header[156];
+      if (!path || path.startsWith("/") || path.split("/").includes("..")) throw new Error("Unsafe research package path");
+      if (type !== 0 && type !== 0x30) throw new Error("Research package contains a non-regular file");
+      if (!Number.isSafeInteger(size) || size < 0 || size > TAR_MAX_ENTRY_BYTES) throw new Error("Invalid research package entry size");
+      if (files.has(path) || objectPaths.some((digest) => `objects/${digest}` === path)) throw new Error(`Duplicate research package entry: ${path}`);
+      total += size;
+      // A bound tighter than the absolute ceiling can only be a caller's measured budget
+      // (free disk), so it gets its own code: the API answers that with a disk refusal
+      // instead of a 500, while an overrun of the ceiling stays a client-input error.
+      if (total > maxBytes && maxBytes < RESEARCH_PACKAGE_MAX_MAX_BYTES) {
+        // Carry what the package has needed so far, not the budget it broke: the budget is
+        // free disk / 3, and quoting it back would tell the user they have more room than
+        // the package needs (#1200 review 5). Parsing stopped early, so it is a lower bound.
+        const error = new Error("Research package exceeds the free disk budget") as Error & { code?: string; unpackedBytes?: number };
+        error.code = RESEARCH_PACKAGE_UNPACK_BUDGET_CODE;
+        error.unpackedBytes = total;
+        throw error;
+      }
+      if (total > maxBytes || files.size + objectPaths.length >= MAX_ENTRIES) throw new Error("Research package exceeds its limits");
+      if (path.startsWith("objects/")) {
+        const digest = path.slice("objects/".length);
+        if (!isHash(digest)) throw new Error("Invalid research package object entry");
+        const digesting = createHash("sha256");
+        const file = createWriteStream(resolve(options.objectDirectory, digest), { flags: "wx" });
+        let written = 0;
+        await queue.stream(size, async (chunk) => {
+          digesting.update(chunk); written += chunk.length;
+          if (!file.write(chunk)) await once(file, "drain");
+        });
+        await new Promise<void>((done, fail) => { file.end((error?: Error | null) => error ? fail(error) : done()); });
+        if (written !== size || digesting.digest("hex") !== digest) throw new Error(`Package checksum mismatch: ${path}`);
+        objectPaths.push(digest); objectSizes.set(digest, size);
+      } else {
+        // Manifest, records and readme are read whole, so they get their own small bound
+        // instead of the package cap: one 5 GiB "metadata" entry must not be attempted.
+        if (size > MAX_METADATA_BYTES) throw new Error("Research package metadata entry is too large");
+        files.set(path, Buffer.from(await queue.read(size)));
+      }
+      const padding = (TAR_BLOCK - (size % TAR_BLOCK)) % TAR_BLOCK;
+      if (padding) await queue.read(padding);
+    }
+    await conveying;
+
+    const manifestBytes = files.get("manifest.json"), recordsBytes = files.get("records.json"), readme = files.get("README.md");
+    if (!manifestBytes || !recordsBytes || !readme) throw new Error("Research package is missing its manifest or records");
+    const manifest = parseManifest(manifestBytes);
+    for (const entry of manifest.inventory) {
+      if (entry.kind === "object") {
+        const digest = entry.path.slice("objects/".length);
+        if (!objectSizes.has(digest)) throw new Error(`Package inventory entry is missing: ${entry.path}`);
+        if (objectSizes.get(digest) !== entry.sizeBytes) throw new Error(`Package checksum mismatch: ${entry.path}`);
+        continue;
+      }
+      const bytes = files.get(entry.path);
+      if (!bytes || bytes.byteLength !== entry.sizeBytes || sha256(bytes) !== entry.checksum) throw new Error(`Package checksum mismatch: ${entry.path}`);
+    }
+    // Reject in both directions, like the in-memory import: an object or a metadata file
+    // the manifest does not list is a package the two paths would otherwise disagree on.
+    const expectedObjects = new Set(manifest.inventory.filter((entry) => entry.kind === "object").map((entry) => entry.path.slice("objects/".length)));
+    for (const digest of objectPaths) if (!expectedObjects.has(digest)) throw new Error(`File is not listed in the package inventory: objects/${digest}`);
+    const expectedFiles = new Set(manifest.inventory.filter((entry) => entry.kind !== "object").map((entry) => entry.path));
+    for (const path of files.keys()) {
+      if (path === "manifest.json") continue;
+      if (!expectedFiles.has(path)) throw new Error(`File is not listed in the package inventory: ${path}`);
+    }
+    let records: unknown; try { records = parseJsonBytes(recordsBytes); } catch { throw new Error("Invalid research package records JSON"); }
+    const packageChecksum = compressed.digest("hex");
+    return { manifest, records, readme, objects: new DirectoryObjects(options.objectDirectory, objectPaths),
+      receipt: { packageChecksum, sourcePackageChecksum: packageChecksum, importedObjectCount: objectPaths.length,
+        importedRecordBytes: recordsBytes.byteLength, omissions: [...manifest.omissions],
+        createdAt: new Date().toISOString(), ...(manifest.exportProfile ? { exportProfile: manifest.exportProfile } : {}) } };
+  } catch (error) {
+    sink.destroy();
+    await conveying.catch(() => undefined);
+    queue.fail(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
+}
+
 export { canonical, sha256 };
 
 /** Uncompressed estimate: never compress an archive solely to display a size. */
@@ -547,5 +779,5 @@ export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: R
   const manifestEstimate = jsonByteLength({ source: input.source, omissions: input.omissions, exportProfile: input.exportProfile })
     + 1024 + (input.objects?.length ?? 0) * 256;
   return padded(recordBytes) + padded(readmeBytes) + padded(manifestEstimate)
-    + (input.objects ?? []).reduce((sum, object) => sum + padded(objectSizes?.get(object.path) ?? object.bytes.byteLength), 0) + TAR_BLOCK * 2;
+    + (input.objects ?? []).reduce((sum, object) => sum + padded(objectSizes?.get(object.path) ?? objectSize(object)), 0) + TAR_BLOCK * 2;
 }
