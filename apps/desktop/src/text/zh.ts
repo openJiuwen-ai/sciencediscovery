@@ -1545,6 +1545,36 @@ export const ZH = {
     },
   },
 
+  ideaTree: {
+    heading: "Idea Tree 研究",
+    empty: "这个会话还没有 Idea Tree 研究。",
+    unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回来查看。",
+    objective: "研究目标",
+    status: {
+      running: "进行中",
+      pausing: "正在暂停",
+      paused: "已暂停",
+      interrupted: "已中断",
+      completed: "已完成",
+      ended: "已结束",
+    },
+    phase: {
+      preflight_research: "准备研究",
+      building_tree: "构建假设树",
+      executing_leaf: "执行叶子",
+      aggregating_score: "汇总评分",
+      propagating_insight: "传播洞见",
+    },
+    round: (round: number) => `第 ${round} 轮`,
+    batch: (done: number, total: number) => `本轮 ${done}/${total}`,
+    tokens: (tokens: number) => `${tokens} tokens`,
+    tokensUnknown: "token 用量未上报",
+    reason: (reason: string) => reason,
+    pause: "暂停",
+    resume: "继续",
+    end: "结束",
+    open: "打开任务面板",
+  },
   runFailure: {
     title: "运行失败",
     titles: {

@@ -1495,6 +1495,36 @@ export const EN: Text = {
     },
   },
 
+  ideaTree: {
+    heading: "Idea Tree research",
+    empty: "This session has no Idea Tree research yet.",
+    unavailable: "The Idea Tree service is not ready: start the Evolve service and come back.",
+    objective: "Objective",
+    status: {
+      running: "Running",
+      pausing: "Pausing",
+      paused: "Paused",
+      interrupted: "Interrupted",
+      completed: "Completed",
+      ended: "Ended",
+    },
+    phase: {
+      preflight_research: "Preparing",
+      building_tree: "Building the tree",
+      executing_leaf: "Executing a leaf",
+      aggregating_score: "Aggregating scores",
+      propagating_insight: "Propagating insight",
+    },
+    round: (round: number) => `Round ${round}`,
+    batch: (done: number, total: number) => `${done}/${total} this round`,
+    tokens: (tokens: number) => `${tokens} tokens`,
+    tokensUnknown: "Token usage not reported",
+    reason: (reason: string) => reason,
+    pause: "Pause",
+    resume: "Continue",
+    end: "End",
+    open: "Open the task panel",
+  },
   runFailure: {
     title: "Run failed",
     titles: {
