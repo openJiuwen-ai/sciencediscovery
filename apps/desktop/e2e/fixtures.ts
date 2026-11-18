@@ -1131,12 +1131,27 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           reviewLevel: "quick",
           sessionId: requestReview[1],
           status: "queued",
-          toolCallId: "call-manual",
+          // The coordinator's own identity for a manual run: the checkpoint
+          // message id it was given, not the task id.
+          toolCallId: `manual-review:${messageId ?? ""}`,
         };
         // The queue answers 202 with the task still queued; the review it
         // produces arrives on a later read, so the next listing carries a
         // finished record and the dialog's poll settles.
         state.reviewer.tasks = [...state.reviewer.tasks, { ...task, finishedAt: UPDATED_AT, status: "completed" }];
+        // The coordinator writes the checkpoint message the request named, so
+        // the transcript the app reads back carries a card under that id.
+        const session = state.sessions.find((entry) => entry.id === requestReview[1]);
+        if (session && messageId !== undefined) {
+          session.messages = [...(session.messages ?? []), {
+            content: "",
+            createdAt: UPDATED_AT,
+            id: messageId,
+            kind: "reviewer_checkpoint",
+            reviewerCheckpoint: { status: "completed", toolCallId: task.toolCallId },
+            role: "assistant",
+          }];
+        }
         return json(route, 202, { task });
       }
 

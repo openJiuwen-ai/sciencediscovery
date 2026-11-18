@@ -77,9 +77,17 @@ interface Props {
   /** The system-wide Reviewer switch. `false` means the session's own switch
    *  has no effect, and the menu says why instead of pretending it works. */
   reviewerEnabled?: boolean;
+  /** The Reviewer has a run queued or in flight for this session. The row
+   *  then offers 停止审查 instead of 立即审查: one control, one state. */
+  reviewerRunning?: boolean;
   reviewLevel?: ReviewerSpecialistLevel;
   onAutomaticReview?: (enabled: boolean) => void;
   onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
+  /** Review the session's current artifacts now, without waiting for a new
+   *  version. Independent of 自动审阅: that decides whether a run happens by
+   *  itself, this one asks for it explicitly. */
+  onRunReview?: () => void;
+  onStopReview?: () => void;
   /** The Project the next conversation would go into, for the landing strip's
    *  picker to mark. Undefined until the boot knows which Projects exist. */
   activeProjectId?: string;
@@ -187,6 +195,22 @@ function ReviewGlyph() {
     <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="18">
       <path d="M7 4.5h10a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 17 20.5H7A1.5 1.5 0 0 1 5.5 19V6A1.5 1.5 0 0 1 7 4.5z" />
       <path d="m9 12.6 2.2 2.2L15 10.6" />
+    </svg>
+  );
+}
+
+/** A triangle while a run can be started, a square while it can be stopped. */
+function RunGlyph({ stop = false }: { stop?: boolean }) {
+  if (stop) {
+    return (
+      <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="18">
+        <rect height="11" rx="1.8" width="11" x="6.5" y="6.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="18">
+      <path d="M8 5.6 18 12 8 18.4z" />
     </svg>
   );
 }
@@ -350,6 +374,7 @@ export function SessionSettingsMenu({
   approvalMode,
   automaticReviewEnabled,
   reviewerEnabled,
+  reviewerRunning = false,
   experts,
   expertsLoading,
   onApprovalMode,
@@ -357,7 +382,9 @@ export function SessionSettingsMenu({
   onClose,
   onEvolve,
   onReviewLevel,
+  onRunReview,
   onSelectSpecialist,
+  onStopReview,
   reviewLevel,
   running,
   selectedSpecialistId,
@@ -367,8 +394,11 @@ export function SessionSettingsMenu({
   automaticReviewEnabled?: boolean;
   /** Absent while the system-wide switch has not been read. */
   reviewerEnabled?: boolean;
+  reviewerRunning?: boolean;
   onAutomaticReview?: (enabled: boolean) => void;
   onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
+  onRunReview?: () => void;
+  onStopReview?: () => void;
   reviewLevel?: ReviewerSpecialistLevel;
   /** The experts a session can be bound to, already read by the composer.
    *  Held there rather than here so reopening the menu does not blank the row
@@ -480,6 +510,25 @@ export function SessionSettingsMenu({
               <ChevronRightGlyph />
             </span>
           </button>
+          {/* Not gated on 自动审阅: that switch decides whether a review happens
+              by itself, while this row is the reader asking for one now. The
+              label carries the state, so the same row starts and stops. Like
+              程序演进实验, an action with nowhere to go is not drawn at all. */}
+          {onRunReview === undefined ? null : (
+            <button
+              className="session-menu-row"
+              disabled={reviewerEnabled === false}
+              onClick={() => (reviewerRunning ? onStopReview?.() : onRunReview())}
+              type="button"
+            >
+              <span className="session-menu-icon">
+                <RunGlyph stop={reviewerRunning} />
+              </span>
+              <span className="session-menu-label">
+                {reviewerRunning ? TEXT.reviewer.stopRun : TEXT.reviewer.runNow}
+              </span>
+            </button>
+          )}
           <div className="session-menu-divider" />
           <button
             aria-describedby="session-experts-hint"
@@ -802,6 +851,9 @@ export function Composer({
   approvalMode,
   automaticReviewEnabled,
   reviewerEnabled,
+  reviewerRunning,
+  onRunReview,
+  onStopReview,
   attachBlocked,
   attachLimit,
   attachments,
@@ -1215,9 +1267,12 @@ export function Composer({
               approvalMode={approvalMode}
               automaticReviewEnabled={automaticReviewEnabled}
               reviewerEnabled={reviewerEnabled}
+              reviewerRunning={reviewerRunning}
               experts={experts}
               onAutomaticReview={onAutomaticReview}
               onReviewLevel={onReviewLevel}
+              onRunReview={onRunReview}
+              onStopReview={onStopReview}
               reviewLevel={reviewLevel}
               expertsLoading={expertsLoading}
               onApprovalMode={onApprovalMode}

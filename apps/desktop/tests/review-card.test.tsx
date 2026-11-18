@@ -22,10 +22,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ArtifactReviewRun, ChatMessage } from "../src/api/types.js";
 import { TEXT } from "../src/text.js";
-import { ReviewCard } from "../src/views/reviewer/ReviewCard.js";
+import { ReviewArtifactBody, ReviewCard } from "../src/views/reviewer/ReviewCard.js";
 import {
   checkpointSummary,
   checkpointTone,
+  declaredGap,
+  mixedOutcomeCounts,
   reviewRowCount,
   reviewRows,
   reviewSummary,
@@ -133,6 +135,21 @@ describe("a review's verdict", () => {
     assert.equal(reviewSummary(flagged), TEXT.reviewer.summaryFindings(1));
   });
 
+  it("does not call it a pass when the review itself says a check was not run", () => {
+    const gapped = review({ notChecked: [{ check: "claim_support", reason: "no source text" }] });
+    assert.equal(declaredGap(gapped), true);
+    // Nothing was raised, and delivery was confirmed: green would tell the
+    // reader the whole claim was examined, which the card's own gap row denies.
+    assert.equal(unverifiedDelivery(gapped), false);
+    assert.equal(reviewTone(gapped), "warn");
+    assert.equal(reviewSummary(gapped), TEXT.reviewer.summaryPartial(1));
+  });
+
+  it("stays green when every check it names actually ran", () => {
+    assert.equal(declaredGap(review()), false);
+    assert.equal(reviewTone(review()), "pass");
+  });
+
   it("keeps a failed review amber: an error is not a verdict on the artifact", () => {
     const broken = review({ status: "failed" });
     assert.equal(reviewTone(broken), "warn");
@@ -214,6 +231,37 @@ describe("a review's rows", () => {
   });
 });
 
+describe("the hint behind a label", () => {
+  it("explains each row's category, so a one-word label is readable", () => {
+    const rows = reviewRows(review());
+    for (const row of rows) assert.ok(row.labelTip.length > 0, `no hint for ${row.label}`);
+    const structure = rows.find((row) => row.label === TEXT.reviewer.checkNames.structure);
+    assert.equal(structure?.labelTip, TEXT.reviewer.labelTips.structure);
+  });
+
+  it("explains a finding the card has no category for", () => {
+    const generic = review({
+      findings: [{
+        code: "SOMETHING_NEW",
+        evidenceRefs: [],
+        id: "finding-x",
+        message: "unclassified",
+        severity: "warning",
+        status: "open",
+      }],
+    });
+    assert.equal(reviewRows(generic)[0]?.labelTip, TEXT.reviewer.labelTips.other);
+  });
+
+  it("draws the explanation as a hover title, on the label and on the level pill", () => {
+    const markup = renderToStaticMarkup(
+      <ReviewArtifactBody review={review()} showName={false} />,
+    );
+    assert.ok(markup.includes(`title="${TEXT.reviewer.labelTips.structure}"`));
+    assert.ok(markup.includes(`title="${TEXT.reviewer.levelTip("quick")}"`));
+  });
+});
+
 describe("a checkpoint's card", () => {
   it("reports the worst artifact, not the average", () => {
     const flagged = review({
@@ -249,6 +297,107 @@ describe("a checkpoint's card", () => {
   it("says a failed checkpoint failed when nothing was reviewed", () => {
     const markup = card([], "failed");
     assert.ok(markup.includes(TEXT.reviewer.summaryFailed));
+  });
+
+  it("counts the artifacts that passed behind one that needs attention", () => {
+    const flagged = review({
+      findings: [{
+        code: "CITATION_UNCITED_CLAIM",
+        evidenceRefs: [],
+        id: "finding-1",
+        message: "§2 has no citation",
+        severity: "warning",
+        status: "open",
+      }],
+      id: "review-2",
+    });
+    assert.equal(mixedOutcomeCounts([review(), flagged]), TEXT.reviewer.outcomeCounts(1, 1));
+    // Agreement is already said once, by the verdict; numbers would repeat it.
+    assert.equal(mixedOutcomeCounts([review()]), undefined);
+    assert.equal(mixedOutcomeCounts([review(), review({ id: "review-3" })]), undefined);
+
+    const markup = card([review(), flagged]);
+    assert.ok(markup.includes(TEXT.reviewer.outcomeCounts(1, 1)));
+    assert.ok(!card([review(), review({ id: "review-3" })]).includes(TEXT.reviewer.outcomeCounts(2, 0)));
+  });
+
+  it("names the phase and counts the queue while a run is in flight", () => {
+    const markup = renderToStaticMarkup(
+      <ReviewCard
+        checkpoint={checkpoint({
+          progress: {
+            artifactLogicalName: "report.md",
+            completed: 2,
+            failed: 1,
+            phase: "citation",
+            queued: 3,
+            total: 8,
+          },
+          status: "running",
+        })}
+        messageId="message-1"
+        reviews={[]}
+        running
+      />,
+    );
+    // The phase is what separates a long Deep review from a stuck one.
+    assert.ok(markup.includes(TEXT.reviewer.phase.citation));
+    assert.ok(!markup.includes(TEXT.reviewer.running));
+    // Failed counts as done: the bar is how much is left, not how much worked.
+    assert.ok(markup.includes(TEXT.reviewer.progress(3, 8)));
+    assert.ok(markup.includes(TEXT.reviewer.queued(3)));
+    assert.ok(markup.includes('style="width:38%"'));
+  });
+
+  it("counts artifacts when the checks have not started counting", () => {
+    // What a Quick run reports: the check counters stay at zero while the
+    // artifact counter is the one that moves.
+    const markup = renderToStaticMarkup(
+      <ReviewCard
+        checkpoint={checkpoint({
+          progress: {
+            artifactCompleted: 10,
+            artifactLogicalName: "work/sensitivity_summary.md",
+            artifactTotal: 11,
+            completed: 0,
+            failed: 0,
+            phase: "quick",
+            queued: 0,
+            total: 0,
+          },
+          status: "running",
+        })}
+        messageId="message-1"
+        reviews={[]}
+        running
+      />,
+    );
+    assert.ok(markup.includes(TEXT.reviewer.progress(10, 11)));
+    assert.ok(markup.includes('style="width:91%"'));
+    assert.ok(!markup.includes(TEXT.reviewer.progress(0, 0)));
+  });
+
+  it("draws no bar when the coordinator has not said how much there is", () => {
+    const markup = renderToStaticMarkup(
+      <ReviewCard
+        checkpoint={checkpoint({
+          progress: {
+            artifactLogicalName: "report.md",
+            completed: 0,
+            failed: 0,
+            queued: 0,
+            total: 0,
+          },
+          status: "running",
+        })}
+        messageId="message-1"
+        reviews={[]}
+        running
+      />,
+    );
+    assert.ok(!markup.includes("review-progress-track"));
+    // No phase and no total: the generic line is the honest one.
+    assert.ok(markup.includes(TEXT.reviewer.running));
   });
 
   it("draws a running line, with progress, while nothing exists yet", () => {

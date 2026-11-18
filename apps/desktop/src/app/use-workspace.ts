@@ -65,6 +65,7 @@ import {
 } from "../api/sessions.js";
 import { decidePermissionRequest, listPermissionRequests } from "../api/permissions.js";
 import {
+  cancelReview,
   getReviewerSettings,
   getSessionReviewerSettings,
   listArtifactReviews,
@@ -76,6 +77,7 @@ import { listRunEvents, streamMessage, subscribeRunEvents, type RunEventHandler 
 import type {
   ApprovalMode,
   ArtifactReviewRun,
+  ChatMessage,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
@@ -273,6 +275,11 @@ export interface WorkspaceActions {
   /** Ask for the artifacts behind one checkpoint message to be reviewed
    *  again. The review itself lands later, through the queue. */
   reviewCheckpoint: (messageId: string) => Promise<void>;
+  /** Review the open session's current artifacts now, without waiting for a
+   *  new version to arrive. */
+  runReview: () => Promise<void>;
+  /** Ask the coordinator to stop whatever it is running for this session. */
+  stopReview: () => Promise<void>;
   selectModel: (modelId: string) => Promise<void>;
   send: (content: string) => Promise<void>;
   /** Set how the open session handles approvals. The server accepts this on its
@@ -440,6 +447,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const modelSelectionEpoch = useRef(0);
   const modelSelectionQueue = useRef(Promise.resolve());
   const runningRef = useRef(false);
+  /** Checkpoint messages this window drew for a manual review, until the
+   *  coordinator's own copy of one has been read back. */
+  const optimisticCheckpoints = useRef(new Set<string>());
   const abortRef = useRef<AbortController | undefined>(undefined);
   const runRef = useRef<RunStreamState>(emptyRunStream());
   /** Rebuilt runs, per Session. A finished run's events never change, and
@@ -1890,6 +1900,81 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     [client, refreshReviewer, report, toast],
   );
 
+  /**
+   * Review the session's current artifacts without waiting for a new version.
+   *
+   * The route takes the id of the checkpoint message it will append, so this
+   * mints one — and draws that message itself. Without it the click would be a
+   * toast and nothing else: the review runs in the coordinator, nothing pushes
+   * a new transcript at this window, and the verdict's place in the
+   * conversation would appear only after reopening the session.
+   */
+  const runReview = useCallback(
+    async () => {
+      const target = sessionRef.current;
+      if (!target) return;
+      const messageId = crypto.randomUUID();
+      // The tool call id is the coordinator's own for a manual run, so the
+      // reviews it produces join this message rather than a second card.
+      const checkpoint: ChatMessage = {
+        content: "",
+        createdAt: new Date().toISOString(),
+        id: messageId,
+        kind: "reviewer_checkpoint",
+        reviewerCheckpoint: { status: "running", toolCallId: `manual-review:${messageId}` },
+        role: "assistant",
+      };
+      try {
+        const { task } = await requestReview(client, target, messageId);
+        // The user may have opened another Session while the request was in
+        // flight; the review still runs, and that Session's own read finds it.
+        if (sessionRef.current !== target) return;
+        // Task and card are written together: the task is what makes the
+        // card's running line true, and the poll it starts is what carries
+        // the card to a verdict.
+        setReviewerTasks((current) => [...current.filter((row) => row.id !== task.id), task]);
+        optimisticCheckpoints.current.add(messageId);
+        setDetail((current) => {
+          if (current?.id !== target) return current;
+          const next = { ...current, messages: [...current.messages, checkpoint] };
+          rememberBounded(detailsBySession.current, target, next);
+          return next;
+        });
+        // A confirmation, not a failure: the toast's default tone is the one
+        // failures use, and it would put an alert icon on a working request.
+        toast(TEXT.reviewer.runStarted, "info");
+      } catch (reason) {
+        report(reason);
+      }
+    },
+    [client, report, toast],
+  );
+
+  /**
+   * Stop whatever the coordinator is running for this session.
+   *
+   * The toast reports the request, not the outcome: the run may have finished
+   * on its own between the click and the cancel, and the queue read back below
+   * is what says which of the two happened.
+   */
+  const stopReview = useCallback(
+    async () => {
+      const target = sessionRef.current;
+      if (!target) return;
+      try {
+        await cancelReview(client, target);
+        toast(TEXT.reviewer.runStopped, "info");
+      } catch (reason) {
+        report(reason);
+      } finally {
+        // Read even after a refusal: a 409 usually means the run ended on its
+        // own, and the row must show that rather than keep offering a stop.
+        void refreshReviewer(target);
+      }
+    },
+    [client, refreshReviewer, report, toast],
+  );
+
   /** True while the coordinator still owes this session a review. */
   const reviewerBusy = reviewerTasks.some(
     (task) => task.status === "queued" || task.status === "running",
@@ -1916,6 +2001,39 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       window.clearInterval(timer);
     };
   }, [refreshReviewer, reviewerBusy, sessionId]);
+
+  /**
+   * Swap the card this window drew for the coordinator's own once the run ends.
+   *
+   * The card written by `runReview` says "running" and nothing more; the
+   * server's copy of it carries the phase, the progress, and — for a run that
+   * produced no review — whether it failed or was skipped. While the queue is
+   * empty is the only moment the two can differ, so the transcript is read
+   * once then.
+   */
+  useEffect(() => {
+    const target = sessionId;
+    if (target === undefined || reviewerBusy || optimisticCheckpoints.current.size === 0) return;
+    // A turn in flight owns the transcript; its settle reads the Session again
+    // and brings the server's copy with it.
+    if (runningRef.current) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const fresh = await getSession(client, target);
+        if (!alive || sessionRef.current !== target || runningRef.current) return;
+        rememberBounded(detailsBySession.current, target, fresh);
+        setDetail(fresh);
+        optimisticCheckpoints.current.clear();
+      } catch {
+        // The card stays as this window drew it; nothing here is worth a
+        // toast, and reopening the Session reads the server's copy.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [client, reviewerBusy, sessionId]);
 
   /**
    * Bind an expert to the open session, or unbind it.
@@ -2345,6 +2463,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       refreshSessions: async () => { await refreshSessionLists(); },
       removeAttachment,
       reviewCheckpoint,
+      runReview,
       retryAttachment,
       retryBoot,
       selectArtifactVersion,
@@ -2359,6 +2478,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       setReviewLevel,
       startDraft,
       stop,
+      stopReview,
       toast,
       uploadFiles,
     }),
@@ -2382,6 +2502,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       removeAttachment,
       report,
       reviewCheckpoint,
+      runReview,
       retryAttachment,
       retryBoot,
       selectArtifactVersion,
@@ -2396,6 +2517,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       setReviewLevel,
       startDraft,
       stop,
+      stopReview,
       toast,
       uploadFiles,
     ],

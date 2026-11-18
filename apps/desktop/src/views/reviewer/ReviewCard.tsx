@@ -20,6 +20,7 @@ import {
   checkpointSummary,
   checkpointTone,
   citationOnlyReview,
+  mixedOutcomeCounts,
   reviewRowCount,
   reviewRows,
   reviewSummary,
@@ -63,34 +64,62 @@ export function ReviewCard({
   // it to a transparent status line, and so does this.
   if (pending) {
     const progress = checkpoint.progress;
+    // A Deep review spends most of its time after the quick checks, waiting
+    // for one source at a time. The phase is the only thing that separates
+    // "working" from "stuck"; finished-over-total is the only thing that says
+    // how much of it is left.
+    const phase = progress?.phase === undefined ? undefined : TEXT.reviewer.phase[progress.phase];
+    // A Quick run counts artifacts and leaves the check counters at zero, so the
+    // progress has to come from whichever counter is actually moving.
+    const checksTotal = progress?.total ?? 0;
+    const counted = progress !== undefined && checksTotal > 0
+      ? { done: progress.completed + progress.failed, total: checksTotal }
+      : { done: progress?.artifactCompleted ?? 0, total: progress?.artifactTotal ?? 0 };
+    const queued = progress?.queued ?? 0;
     return (
       <div aria-live="polite" className="review-running" data-testid="review-card-running" role="status">
-        <span className="review-mark is-pending">
-          <ShieldGlyph />
-        </span>
-        <span className="review-title">{TEXT.reviewer.title}</span>
-        <span className="review-sep">·</span>
-        <span className="review-summary">{TEXT.reviewer.running}</span>
-        {progress === undefined ? null : (
-          <>
-            <span className="review-sep">·</span>
-            <span className="review-progress">
-              {progress.artifactLogicalName}
-              {progress.total > 0 ? ` ${TEXT.reviewer.progress(progress.completed, progress.total)}` : ""}
-            </span>
-          </>
-        )}
-        <span aria-hidden="true" className="review-dots">
-          <i />
-          <i />
-          <i />
-        </span>
+        <div className="review-running-line">
+          <span className="review-mark is-pending">
+            <ShieldGlyph />
+          </span>
+          <span className="review-title">{TEXT.reviewer.title}</span>
+          <span className="review-sep">·</span>
+          <span className="review-summary">{phase ?? TEXT.reviewer.running}</span>
+          {progress === undefined ? null : (
+            <>
+              <span className="review-sep">·</span>
+              <span className="review-progress">
+                {progress.artifactLogicalName}
+                {counted.total > 0 ? ` ${TEXT.reviewer.progress(counted.done, counted.total)}` : ""}
+              </span>
+            </>
+          )}
+          {queued > 0 ? (
+            <>
+              <span className="review-sep">·</span>
+              <span className="review-progress">{TEXT.reviewer.queued(queued)}</span>
+            </>
+          ) : null}
+          <span aria-hidden="true" className="review-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+        </div>
+        {/* The counts above say the same thing; the bar is the same progress
+            read at a glance. It is hidden from assistive tech for that reason. */}
+        {counted.total > 0 ? (
+          <div aria-hidden="true" className="review-progress-track">
+            <i style={{ width: `${Math.round((counted.done / counted.total) * 100)}%` }} />
+          </div>
+        ) : null}
       </div>
     );
   }
 
   const tone = checkpointTone(reviews, checkpoint.status);
   const count = reviewRowCount(reviews);
+  const outcomes = mixedOutcomeCounts(reviews);
 
   return (
     <div className={`review-card is-${tone}`} data-testid="review-card">
@@ -106,6 +135,14 @@ export function ReviewCard({
         <span className="review-title">{TEXT.reviewer.title}</span>
         <span className="review-sep">·</span>
         <span className="review-summary">{checkpointSummary(reviews, checkpoint.status)}</span>
+        {/* The summary reports the worst artifact; when they disagree, the
+            clean ones would otherwise be invisible until expansion. */}
+        {outcomes === undefined ? null : (
+          <>
+            <span className="review-sep">·</span>
+            <span className="review-count">{outcomes}</span>
+          </>
+        )}
         {count > 0 ? (
           <>
             <span className="review-sep">·</span>
@@ -205,14 +242,19 @@ export function ReviewArtifactBody({
       <div className="review-items">
         {rows.map((row) => (
           <article className={`review-item is-${row.tone}`} key={row.id}>
-            <div className="review-item-label">{row.label}</div>
+            <div className="review-item-label" title={row.labelTip}>{row.label}</div>
             <div className="review-item-head">
               <span className="review-badge">{row.badge}</span>
               <span className="review-item-title">{row.title}</span>
             </div>
             {row.body ? <p className="review-item-body">{row.body}</p> : null}
             <div className="review-item-foot">
-              <span className="review-pill">{TEXT.reviewer.levelPill(review.reviewLevel ?? "quick")}</span>
+              <span
+                className="review-pill"
+                title={TEXT.reviewer.levelTip(review.reviewLevel ?? "quick")}
+              >
+                {TEXT.reviewer.levelPill(review.reviewLevel ?? "quick")}
+              </span>
             </div>
           </article>
         ))}
