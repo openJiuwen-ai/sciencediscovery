@@ -405,9 +405,8 @@ export const EN: Text = {
       other: "General finding: not tied to one check, recorded during the review.",
       gaps: "Not checked: this review did not run this check, and the reason is below. Not checked is not a pass.",
       source: "Source verification: compares one claim with the source text and answers supported, partly supported, contradicted or inconclusive.",
-      citationTask: "Citation task: looks up the work behind a citation identifier; this shows its progress and result.",
     } as Record<"structure" | "citation" | "computation" | "completeness" | "semantics"
-      | "other" | "gaps" | "source" | "citationTask", string>,
+      | "other" | "gaps" | "source", string>,
     checkPass: (name: string) => `${name} passed`,
     passBody: "Nothing was found wrong with this check.",
     finding: "Issue",
@@ -415,7 +414,6 @@ export const EN: Text = {
     badgePass: "Pass",
     deepSemantic: "Semantics",
     source: "Source",
-    citationTask: "Citation task",
     gaps: "Not checked",
     gapChecks: {
       claim_support: "Claim support",
@@ -460,12 +458,6 @@ export const EN: Text = {
       PARTIALLY_SUPPORTED: "Partly supported",
       CONTRADICTED: "Contradicted",
       INCONCLUSIVE: "Inconclusive",
-    } as Record<string, string>,
-    taskStatus: {
-      completed: "Done",
-      failed: "Failed",
-      inconclusive: "Inconclusive",
-      reused: "Reused",
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `${count} queued`,

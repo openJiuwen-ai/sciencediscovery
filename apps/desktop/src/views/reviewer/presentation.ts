@@ -276,18 +276,12 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     });
   }
 
-  for (const task of review.citationTasks ?? []) {
-    if (task.status === "completed" || task.status === "reused") continue;
-    rows.push({
-      id: `${review.id}:citation:${task.key}`,
-      tone: task.status === "failed" ? "fail" : "warn",
-      label: TEXT.reviewer.citationTask,
-      labelTip: labelTipFor("citationTask"),
-      title: `${task.label} · ${TEXT.reviewer.taskStatus[task.status] ?? task.status}`,
-      body: task.message,
-      badge: TEXT.reviewer.taskStatus[task.status] ?? task.status,
-    });
-  }
+  // A citation lookup that reached no conclusion is not drawn as a row of its
+  // own. The web card keeps these in the review record and prints only what the
+  // reader can act on; a row saying "无结论" beside a citation-format pass reads
+  // as the card contradicting itself. What the review could not do is still
+  // said once, as the `notChecked` gap below (`claim_support` stays there until
+  // a lookup actually completed).
 
   // The passing checks last. A category that raised a finding already has its
   // row above, and repeating it as a pass would contradict the finding.
