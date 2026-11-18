@@ -28,6 +28,8 @@ const MAX_SKILL_BYTES = 512 * 1024;
 
 export interface CollectedSkill {
   asset: SkillAsset;
+  /** Every file in the skill directory, keyed by its path inside the archive. */
+  files: Map<string, Uint8Array>;
   markdown: string;
   zip: Uint8Array;
 }
@@ -48,10 +50,13 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-async function walk(root: string, relative = ""): Promise<SkillResource[]> {
+/** A file on disk, before the exporter decides where it will be served. */
+type WalkedFile = Omit<SkillResource, "url">;
+
+async function walk(root: string, relative = ""): Promise<WalkedFile[]> {
   const directory = path.join(root, relative);
   const entries = await readdir(directory, { withFileTypes: true });
-  const files: SkillResource[] = [];
+  const files: WalkedFile[] = [];
   for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
     const next = relative ? `${relative}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
@@ -88,11 +93,11 @@ export async function collectBuiltinSkills(input: SkillInput): Promise<Collected
     const frontmatter = parsed.frontmatter;
 
     const files = await walk(dir);
-    const archive: Record<string, Uint8Array> = {};
-    for (const file of files) archive[file.path] = await readFile(path.join(dir, file.path));
+    const contents = new Map<string, Uint8Array>();
+    for (const file of files) contents.set(file.path, await readFile(path.join(dir, file.path)));
     // A fixed mtime keeps rebuilds byte-identical, so the published sha256 only
     // changes when the skill itself changes.
-    const zip = zipSync(archive, { level: 6, mtime: new Date("1980-01-01T00:00:00Z") });
+    const zip = zipSync(Object.fromEntries(contents), { level: 6, mtime: new Date("1980-01-01T00:00:00Z") });
 
     const metadata = frontmatter.metadata;
     const metadataVersion = metadata && typeof metadata === "object" && !Array.isArray(metadata)
@@ -120,13 +125,17 @@ export async function collectBuiltinSkills(input: SkillInput): Promise<Collected
       members,
       name: asString(frontmatter.name) ?? id,
       readme: `skills/${id}.md`,
-      resources: files.filter((file) => file.path !== "SKILL.md"),
+      // Served under the skill's own directory so the site can preview a file
+      // in place instead of unpacking the archive in the browser.
+      resources: files
+        .filter((file) => file.path !== "SKILL.md")
+        .map((file) => ({ ...file, url: `skills/${id}/${file.path}` })),
       source: "builtin",
       tags: [],
       type: null,
       version,
     };
-    collected.push({ asset, markdown: parsed.instructions, zip });
+    collected.push({ asset, files: contents, markdown: parsed.instructions, zip });
   }
   return collected;
 }

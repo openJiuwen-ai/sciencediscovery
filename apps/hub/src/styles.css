@@ -576,28 +576,67 @@ button, input, select { color: inherit; font: inherit; }
 
 .info-list a { color: var(--primary-strong); }
 
-.file-list { list-style: none; margin: 0; padding: 0; }
-
-.file-row {
-  align-items: center;
+/* A file list beside its selected file's text, the way the reference shows
+   Files: the list carries the names and sizes, the pane does the reading. */
+.browser {
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   display: grid;
-  gap: 12px;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  margin-bottom: 8px;
-  padding: 11px 14px;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 360px;
+  overflow: hidden;
 }
 
-.file-row svg { color: #8a90a2; }
+.file-list { border-right: 1px solid var(--border); list-style: none; margin: 0; max-height: 520px; overflow: auto; padding: 8px; }
 
-.file-name { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.file-item {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
 
-.file-size { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.file-item:hover { background: var(--surface-subtle); }
 
-.file-view { color: var(--primary-strong); font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+.file-item[aria-current="true"] { background: var(--primary-soft); color: var(--primary-strong); }
 
-.file-view:hover { text-decoration: underline; }
+.file-item svg { color: #8a90a2; flex: none; }
+
+.file-item[aria-current="true"] svg { color: var(--primary); }
+
+/* The file name is what a person scans for, so it gets the row and the
+   directory sits under it. Both are single long tokens: each truncates inside
+   the 300px list instead of pushing the size column out, and the row's title
+   carries the full path. */
+.file-text { flex: 1; min-width: 0; }
+
+.file-name { display: flex; font-family: var(--font-mono); font-size: 12px; min-width: 0; white-space: nowrap; }
+
+/* The stem gives way first; `.py` or `.json` stays readable to the end. */
+.file-stem { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.file-ext { flex: none; }
+
+.file-dir { color: var(--muted); display: block; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.file-item[aria-current="true"] .file-dir { color: var(--primary-strong); opacity: .7; }
+
+.file-size { color: var(--muted); flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; }
+
+.file-item[aria-current="true"] .file-size { color: var(--primary-strong); }
+
+.file-preview { background: var(--surface-subtle); max-height: 520px; min-width: 0; overflow: auto; padding: 18px 20px; }
+
+.file-preview pre { background: none; border: 0; margin: 0; padding: 0; }
+
+.file-preview .markdown { max-width: none; }
 
 .archive-note { color: var(--muted); font-size: 12.5px; margin: 12px 0 0; }
 
@@ -734,6 +773,10 @@ pre {
   /* A JSON line is long; wrapping keeps it readable without a sideways scroll. */
   .detail pre { overflow-wrap: anywhere; white-space: pre-wrap; }
   .info-list div { grid-template-columns: 70px minmax(0, 1fr); }
+  /* The two panes would leave ~120 px for the text on a phone. */
+  .browser { grid-template-columns: minmax(0, 1fr); }
+  .file-list { border-bottom: 1px solid var(--border); border-right: 0; max-height: 220px; }
+  .file-preview { max-height: 420px; }
 }
 
 @media (max-width: 560px) {
