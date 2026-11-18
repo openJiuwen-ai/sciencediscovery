@@ -166,7 +166,7 @@ test("a confirmed delivery is green, and its checks are one press away", async (
   await expect(rows.nth(0).locator(".review-item-title")).toHaveText("交付完整");
   await expect(rows.nth(1).locator(".review-item-title")).toHaveText("结构检查通过");
   await expect(rows.nth(2).locator(".review-item-title")).toHaveText("引用检查通过");
-  await expect(rows.nth(0).locator(".review-pill")).toHaveText("快速 · 本地检查");
+  await expect(rows.nth(0).locator(".review-pill")).toHaveText("快速");
   // Its own section names the file: the card's header reports the worst
   // artifact, so the file in hand has no other place to say which it is.
   await expect(card.locator(".review-artifact-name")).toHaveText("report.md");
