@@ -228,7 +228,7 @@ test("proxy defaults preserve bypass settings and Swarm has no misleading Web pr
   } finally { await close(view); }
 });
 
-test("proxy editing leaves credentials untouched and deletion failures stay visible", async () => {
+test("proxy editing shows the saved URL, preserves unchanged credentials and displays deletion failures", async () => {
   const settings = proxy(); let confirmation: ConfirmRequest | undefined;
   const client = new Client(call => {
     if (call.method === "DELETE") throw new Error("PROXY_RESOURCE_IN_USE");
@@ -242,7 +242,9 @@ test("proxy editing leaves credentials untouched and deletion failures stay visi
   try {
     assert.ok(settings.servers[1]?.url); assert.ok(!markup(view).includes(settings.servers[1].url));
     await act(async () => { const edits = view.root.findAllByType("button").filter(node => node.children.includes(TEXT.settings.system.migrated.common.edit)); assert.ok(edits[1]); handler(edits[1], "onClick"); });
-    assert.equal(view.root.findByProps({ "aria-label": TEXT.settings.system.proxies.url }).props.value, "");
+    const urlInput = view.root.findByProps({ "aria-label": TEXT.settings.system.proxies.url });
+    assert.equal(urlInput.props.value, settings.servers[1].url);
+    assert.equal(urlInput.props.type, "text");
     await act(async () => { const form = view.root.findAllByType("form").at(-1); assert.ok(form); handler(form, "onSubmit", { preventDefault() {} }); });
     assert.deepEqual(writes(client)[0]?.body, { name: "Custom", kind: "custom_url" });
     await act(async () => { handler(view.root.findByProps({ "aria-label": `Custom · ${TEXT.settings.system.migrated.common.remove}` }), "onClick"); });

@@ -23,7 +23,7 @@ import { useLoaded } from "../../app/use-loaded.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
 import { TEXT } from "../../text.js";
 import { SettingsModal } from "./SettingsModal.js";
-import { Group, LoadGate, Row, Select, Tag } from "./rows.js";
+import { Group, LoadGate, Row, Select } from "./rows.js";
 import { useSettingsWrite, WriteStatus } from "./setting-controls.js";
 
 function kindLabel(kind: ProxyServer["kind"]) {
@@ -90,17 +90,6 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
         </Row>
         <ProxyBypass key={settings.noProxy ?? ""} value={settings.noProxy ?? ""} disabled={disabled}
           onSave={async noProxy => { await run(() => updateProxySettings(client, { defaultPolicy: settings.defaultPolicy, noProxy })); }} />
-        {selected?.kind === "environment" ? <Row title={extra.diagnostics} tone="stack">
-          <div className="proxy-diagnostics"><Tag>{selected.environment?.status ? text[({ configured: "environmentConfigured", invalid: "environmentInvalid", unconfigured: "environmentUnconfigured" } as const)[selected.environment.status]] : text.environmentUnconfigured}</Tag>
-            {selected.environment?.reason ? <p>{selected.environment.reason}</p> : null}
-            {selected.environment?.variables.map((variable, index) => <div key={index}>
-              <strong>{variable.names.join(" / ")}</strong>
-              {variable.effectiveName ? <small>{text.environmentSource(variable.effectiveName)}</small> : null}
-              {variable.effectiveValue ? <code>{variable.effectiveValue}</code> : null}
-              {variable.reason ? <small>{variable.reason}</small> : null}
-            </div>)}
-          </div>
-        </Row> : null}
       </Group>
       <Group heading={text.serversHeading}>
         <div className="settings-form-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({})}>{text.add}</button></div>
@@ -144,19 +133,18 @@ function ProxyForm({ server, disabled, write, onSave, onClose }: {
   const common = TEXT.settings.system.migrated.common;
   const [name, setName] = useState(server?.name ?? "");
   const [kind, setKind] = useState<ProxyServer["kind"]>(server?.kind ?? "custom_url");
-  // Existing URLs may contain credentials. Keep them out of the editable draft.
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(server?.url ?? "");
   const kinds: ProxyServer["kind"][] = ["custom_url", "environment", "system"];
   const requiresUrl = kind === "custom_url" && (!server || server.kind !== "custom_url");
   return <SettingsModal label={server ? `${common.edit} · ${server.name}` : text.add} onClose={onClose}>
     <form className="settings-card-form" onSubmit={event => {
       event.preventDefault(); if (!name.trim() || (requiresUrl && !url.trim())) return;
-      void onSave({ name: name.trim(), kind, ...(kind === "custom_url" && url.trim() ? { url: url.trim() } : {}) });
+      void onSave({ name: name.trim(), kind, ...(kind === "custom_url" && url.trim() && url.trim() !== server?.url ? { url: url.trim() } : {}) });
     }}>
       <Row title={text.name} tone="stack"><input className="field-input" aria-label={text.name} value={name} required maxLength={200} disabled={disabled} onChange={event => setName(event.target.value)} /></Row>
       <Row title={text.kind}><Select label={text.kind} disabled={disabled} value={kind} options={kinds.map(value => ({ value, label: kindLabel(value) }))}
         onChange={value => { const found = kinds.find(item => item === value); if (found) setKind(found); }} /></Row>
-      {kind === "custom_url" ? <Row title={text.url} hint={text.urlHint} tone="stack"><input className="field-input" type="password" autoComplete="new-password"
+      {kind === "custom_url" ? <Row title={text.url} hint={text.urlHint} tone="stack"><input className="field-input" type="text" autoComplete="off" spellCheck={false}
         aria-label={text.url} value={url} required={requiresUrl} placeholder={server?.hasUrl ? text.urlStored : text.urlHint}
         disabled={disabled} onChange={event => setUrl(event.target.value)} /></Row> : null}
       <WriteStatus state={write} /><div className="settings-form-actions">
