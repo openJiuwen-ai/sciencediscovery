@@ -172,7 +172,7 @@ export function ReviewCard({
               key={review.id}
               onRerun={onReview === undefined ? undefined : () => onReview(messageId)}
               review={review}
-              showName={reviews.length > 1}
+              showName
             />
           ))}
         </div>
@@ -205,10 +205,19 @@ export function ReviewArtifactBody({
   );
 
   return (
-    <section className="review-artifact" data-testid="review-artifact">
+    <section
+      className={`review-artifact${showName ? " is-framed" : ""} is-${tone}`}
+      data-testid="review-artifact"
+    >
+      {/* The name is the only thing that says which file this verdict answers
+          for: the card's own header reports the worst of several, so a passing
+          file behind a failing one would have no name anywhere. The web card
+          titles every artifact section, one artifact or five, and so does this. */}
       {showName ? (
         <div className="review-artifact-head">
-          <span className="review-artifact-name">{review.artifactLogicalName}</span>
+          <span className="review-artifact-name" title={review.artifactLogicalName}>
+            {review.artifactLogicalName}
+          </span>
           <span className={`review-artifact-verdict is-${tone}`}>{reviewSummary(review)}</span>
         </div>
       ) : null}

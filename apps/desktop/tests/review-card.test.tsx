@@ -319,6 +319,16 @@ describe("a checkpoint's card", () => {
     assert.ok(markup.includes(TEXT.reviewer.summaryFailed));
   });
 
+  it("titles each artifact section with the file it answers for", () => {
+    // The card's own header reports the worst of several artifacts, so without
+    // a heading the name of the file in hand has nowhere else to appear. One
+    // artifact gets one too — the web card titles a lone artifact as well.
+    const markup = renderToStaticMarkup(<ReviewArtifactBody review={review()} showName />);
+    assert.ok(markup.includes("report.md"));
+    assert.ok(markup.includes("review-artifact is-framed is-pass"));
+    assert.ok(markup.includes("review-artifact-verdict is-pass"));
+  });
+
   it("counts the artifacts that passed behind one that needs attention", () => {
     const flagged = review({
       findings: [{

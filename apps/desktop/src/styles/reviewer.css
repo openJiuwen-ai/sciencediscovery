@@ -178,31 +178,57 @@
   gap: 8px;
 }
 
+/* One artifact is one section of the expanded card. Several of them have to be
+   visibly separate, so the section is framed and the artifact name is its
+   heading rather than a 12px label wedged between two groups of claim cards,
+   which is where the name was lost. The rail carries the same tone as the
+   verdict, so the file that needs attention is findable before reading a word
+   — the web card outlines each artifact the same way. */
+.review-artifact.is-framed {
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted-light);
+  border-radius: var(--radius-s);
+}
+
+.review-artifact.is-framed.is-pass { border-left-color: var(--success); }
+.review-artifact.is-framed.is-warn { border-left-color: var(--insight); }
+.review-artifact.is-framed.is-fail { border-left-color: var(--danger); }
+
 .review-artifact-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 0 2px;
-  font-size: 12px;
+  padding: 1px 4px;
 }
 
 .review-artifact-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .review-artifact-verdict {
   flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
-.review-artifact-verdict.is-pass { color: var(--success); }
-.review-artifact-verdict.is-warn { color: var(--insight-strong); }
-.review-artifact-verdict.is-fail { color: var(--danger); }
+.review-artifact-verdict.is-pass { background: var(--success-soft); color: var(--success); }
+.review-artifact-verdict.is-warn { background: var(--insight-soft); color: var(--insight-strong); }
+.review-artifact-verdict.is-fail { background: var(--danger-soft); color: var(--danger); }
 
 .review-banner {
   display: flex;
