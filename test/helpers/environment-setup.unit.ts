@@ -224,7 +224,7 @@ test("an identical conda error is not repeated in the BLOCKED reason", () => {
 test("a transcript longer than the bound is truncated with a marker", () => {
   const longError = "x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT + 50);
   const reason = formatEnvironmentSetupBlockedReason({ ...failed, error: longError });
-  const marker = "… (transcript truncated; see the Runner log for the rest)";
+  const marker = "… (transcript truncated)";
   assert.ok(reason.endsWith(marker));
   assert.ok(reason.includes("x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT)));
   assert.ok(!reason.includes("x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT + 1)));

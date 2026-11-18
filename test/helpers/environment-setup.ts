@@ -42,7 +42,7 @@ export function formatEnvironmentSetupBlockedReason(setup: EnvironmentSetup): st
   const bounded = (transcript: string): string => (
     transcript.length <= ENVIRONMENT_SETUP_ERROR_LIMIT
       ? transcript
-      : `${transcript.slice(0, ENVIRONMENT_SETUP_ERROR_LIMIT)}… (transcript truncated; see the Runner log for the rest)`
+      : `${transcript.slice(0, ENVIRONMENT_SETUP_ERROR_LIMIT)}… (transcript truncated)`
   );
   const parts = [base];
   const error = setup.error?.trim() ?? "";
