@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import React from "react";
 
 import { TEXT } from "../src/text.js";
-import { ResearchPackage, copyStatusLine } from "../src/views/ResearchPackage.js";
+import { ResearchPackage, copyStatusLine, taskErrorMessage } from "../src/views/ResearchPackage.js";
 import { act, create } from "./support/dom-renderer.js";
 
 const t = TEXT.researchPackage;
@@ -249,3 +249,91 @@ test("the complete export asks the preview and the export body for the trajector
   });
 });
 
+
+test("unticking a workspace file moves the selection's own size line", async (context) => {
+  // The card shows the whole profile, the line under it shows the selection; the
+  // review asked for a case that can tell them apart (#1235 review 2, F8).
+  const previewFor = (paths: string[]): PreviewBody => ({
+    estimatedBytes: paths.length === 0 ? 300 * 1024 : 100 * 1024,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  });
+  const inner = client();
+  const perSelection = {
+    ...inner,
+    request: async (target: string, init?: unknown) => {
+      if (target.includes("/preview")) {
+        const query = new URLSearchParams(target.slice(target.indexOf("?") + 1));
+        return previewFor(query.getAll("filePath"));
+      }
+      return (inner.request as (path: string, init?: unknown) => Promise<unknown>)(target, init);
+    },
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: perSelection as never,
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    const before = rendered(view);
+    assert.ok(before.includes(t.estimateUncompressed), "the number is labelled as an uncompressed estimate");
+    assert.ok(before.includes("300.0 KB"), "the whole-selection estimate is shown");
+
+    const grid = view.root.findAllByProps({ className: "research-file-grid" })[0]!;
+    const box = grid.findAllByProps({ type: "checkbox" })[0]!;
+    await act(async () => {
+      (box.props.onChange as (event: unknown) => void)({ target: { checked: false } });
+      await Promise.resolve();
+    });
+    const settled = rendered(view);
+    assert.ok(settled.includes("100.0 KB"), "the line follows the new selection, not the profile card");
+    assert.ok(settled.includes(t.estimateUncompressed), "the label keeps its qualifier");
+  });
+});
+
+test("reopening the export dialog starts a fresh pending budget", async (context) => {
+  // A stalled preview used to greet the reopened dialog as already exhausted
+  // (#1235 review 2, F11).
+  const pendingClient = {
+    request: async (target: string) => {
+      if (target.startsWith("/api/sessions/")) return { id: "s1", messages: [], title: "Session" };
+      if (target.includes("/preview")) {
+        const error = new Error("still computing") as Error & { code?: string };
+        error.code = "EXPORT_PREVIEW_PENDING";
+        throw error;
+      }
+      return {};
+    },
+  } as never;
+  function Harness() {
+    const [request, setRequest] = React.useState<unknown>({ kind: "export", projectId: "p1", sessionId: "s1" });
+    return React.createElement(React.Fragment, null,
+      React.createElement(ResearchPackage, { ...props, client: pendingClient, request: request as never }),
+      React.createElement("button", {
+        id: "reopen",
+        onClick: () => setRequest({ kind: "export", projectId: "p1", sessionId: "s1" }),
+        type: "button",
+      }, "reopen"));
+  }
+  await withView(context, React.createElement(Harness), async (view) => {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await act(async () => { context.mock.timers.tick(1_500); await Promise.resolve(); });
+    }
+    assert.ok(rendered(view).includes(t.pendingLong), "the first open runs out its budget");
+
+    const reopen = view.root.findAllByProps({ id: "reopen" })[0]!;
+    await act(async () => { (reopen.props.onClick as () => void)(); await Promise.resolve(); });
+    assert.equal(rendered(view).includes(t.pendingLong), false, "the reopened dialog waits afresh");
+  });
+});
+
+test("a localized poll answer reaches the alert instead of the details block", () => {
+  // The poll settles a deleted task and the retry limit with these sentences; they
+  // used to fall through to the generic failure and appear as technical detail
+  // (#1235 review 2, F9).
+  assert.equal(taskErrorMessage(t.exportMissing), t.exportMissing);
+  assert.equal(taskErrorMessage(t.exportPollingFailed), t.exportPollingFailed);
+  assert.equal(taskErrorMessage("Export task not found"), t.taskMissing);
+  assert.equal(taskErrorMessage("socket hang up"), undefined,
+    "an unrecognized server text stays in the details block");
+});

@@ -22,7 +22,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ExportHistoryRow } from "../src/app/export-bridge.js";
 import { TEXT } from "../src/text.js";
-import { ExportHistoryList, exportSavedAt, exportSize } from "../src/views/ExportHistoryList.js";
+import { formatBytes } from "../src/app/format-bytes.js";
+import { ExportHistoryList, exportSavedAt } from "../src/views/ExportHistoryList.js";
 
 import { act, create } from "./support/dom-renderer.js";
 
@@ -89,10 +90,14 @@ test("both actions reach their callbacks with the row they belong to", async () 
 });
 
 test("size and time format the way the row claims", () => {
-  assert.equal(exportSize(0), "0 B");
-  assert.equal(exportSize(1_024), "1.0 KB");
-  assert.equal(exportSize(1024 * 1024 * 3.5), "3.5 MB");
-  assert.equal(exportSize(512), "512 B");
+  assert.equal(formatBytes(0), "0 B");
+  assert.equal(formatBytes(1_024), "1.0 KB");
+  assert.equal(formatBytes(1024 * 1024 * 3.5), "3.5 MB");
+  assert.equal(formatBytes(512), "512 B");
+  // A level must not print its own base: the unit comes from the number that
+  // will be printed, so one byte under a base moves up a level (F3).
+  assert.equal(formatBytes(1_048_575), "1.0 MB");
+  assert.equal(formatBytes(1_073_741_823), "1.0 GB");
   assert.match(exportSavedAt("2026-11-16T01:00:00.000Z", "en-US"), /2026/);
   assert.equal(exportSavedAt("not a date", "en-US"), "not a date");
 });

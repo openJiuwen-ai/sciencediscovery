@@ -11,22 +11,10 @@
  * row whose file is gone says so and can only be removed.
  */
 
+import { formatBytes } from "../app/format-bytes.js";
 import type { ExportHistoryRow } from "../app/export-bridge.js";
 import { TEXT } from "../text.js";
 import "../styles/export-history.css";
-
-/** Human size for a package: bytes under 1 KB, then KB/MB with one decimal. */
-export function exportSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(1)} ${units[unit]}`;
-}
 
 /** Local time for a saved export, or the raw stamp when it cannot be parsed. */
 export function exportSavedAt(savedAt: string, locale: string): string {
@@ -61,7 +49,7 @@ export function ExportHistoryList({
           <span className="export-history-main">
             <span className="export-history-name" title={row.filename}>{row.filename}</span>
             <span className="export-history-meta">
-              <span>{exportSize(row.bytes)}</span>
+              <span>{formatBytes(row.bytes)}</span>
               <span aria-hidden="true">·</span>
               <span>{exportSavedAt(row.savedAt, locale)}</span>
               {row.sessionTitle ? <><span aria-hidden="true">·</span><span className="export-history-session" title={row.sessionTitle}>{row.sessionTitle}</span></> : null}
