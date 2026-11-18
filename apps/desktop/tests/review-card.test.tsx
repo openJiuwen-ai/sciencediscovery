@@ -207,6 +207,26 @@ describe("a review's rows", () => {
     assert.ok(rows[0]?.body?.includes("output/predictions.npy"));
   });
 
+  it("leaves a citation lookup that reached no conclusion out of the card", () => {
+    // The web card keeps these in the record: a row saying "无结论" under a
+    // citation-format pass reads as the card contradicting itself. What the
+    // review could not do is said once, as the gap it declared.
+    const unreachable = review({
+      citationTasks: [{
+        attempts: 1,
+        findings: [],
+        key: "doi:10.1001/jamaoncol.2023.6944",
+        label: "DOI: 10.1001/jamaoncol.2023.6944",
+        message: "No governed literature search returned a usable source record.",
+        status: "inconclusive",
+      }],
+      notChecked: [{ check: "claim_support", reason: "No source was read to confirm the claims." }],
+    });
+    const rows = reviewRows(unreachable);
+    assert.equal(rows.some((row) => row.label === "引文任务"), false);
+    assert.ok(rows.some((row) => row.id === "review-1:gap:0"));
+  });
+
   it("names an unperformed check instead of silently passing it", () => {
     const gapped = review({ notChecked: [{ check: "claim_support", reason: "no source text" }] });
     const row = reviewRows(gapped).find((candidate) => candidate.id === "review-1:gap:0");
