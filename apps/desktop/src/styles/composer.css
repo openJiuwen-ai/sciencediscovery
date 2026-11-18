@@ -455,6 +455,23 @@
   background: rgba(194, 65, 12, 0.08);
 }
 
+/* The narrow composer footer cannot hold four labelled controls: at 390 px the
+   permission word alone is wider than the model pill, and the send button is
+   pushed outside the footer — the desktop-configuration journey measures that
+   every control stays inside it. Below this width the selector keeps its shield
+   and drops the word; the flyout still names both modes, and title/aria-label
+   carry it for assistive tech. */
+@media (max-width: 640px) {
+  .composer-permission {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+  }
+
+  .composer-permission-label { display: none; }
+}
+
 .composer-permission:disabled {
   color: #c2c2c2;
   cursor: default;
