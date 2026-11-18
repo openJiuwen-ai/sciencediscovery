@@ -13,29 +13,18 @@
 // limitations under the License.
 
 /**
- * 设置 — Idea Tree.
+ * The Idea Tree settings fields, controlled.
  *
- * Renders `GET /api/settings/idea-tree` and writes it back with the same shape.
+ * They are not a page in 设置: like a search's options, they are chosen when the research
+ * is launched, so the same fields render inside the launch dialog behind its 设置 switch.
  * Every field below exists in `IdeaTreeSettingsDetails`; the rounds / candidates /
- * assessor-weight fields the engine retired are neither shown nor sent, because the
- * store rejects them and a pane typed from the old wording could not compile against
- * the live contract.
- *
- * Two behaviours this page owes the user rather than itself:
- * a 503 means the Evolve sidecar is not ready, which is an actionable prerequisite
- * (start it, then retry) and not an empty form; and a field the server did not return
- * is shown as absent instead of being invented as 0.
+ * assessor-weight fields the engine retired are neither shown nor sent.
  */
 
-import { useEffect, useState } from "react";
-import type { IdeaTreeSettingsDetails, IdeaTreeThinkingRole, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
+import type { IdeaTreeSettingsDetails, IdeaTreeThinkingRole } from "@sciencediscovery/schema";
 import { IDEA_TREE_THINKING_ROLES } from "@sciencediscovery/schema";
-import type { ApiClient } from "../../api/client.js";
-import { ApiRequestError } from "../../api/client.js";
-import { getIdeaTreeSettings, updateIdeaTreeSettings } from "../../api/settings.js";
-import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
-import { Group, LoadGate, Row, Select } from "./rows.js";
+import { Group, Row, Select } from "../settings/rows.js";
 
 const t = TEXT.settings.system.ideaTree;
 
@@ -58,185 +47,71 @@ const EFFORTS = [FOLLOW_MODEL, "low", "medium", "high", "xhigh", "max"].map((val
   value,
 }));
 
-/** A number typed into the form; empty means "the server's default", which is `null`
- *  for `maxTokens` and "omit the field" for the others. */
+/** A typed number; empty means "the server's default" (`null` for `maxTokens`). */
 function readNumber(raw: string): number | undefined {
   if (raw.trim() === "") return undefined;
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export function IdeaTreeSettings({ client }: { client: ApiClient }) {
-  const loaded = useLoaded<IdeaTreeSettingsDetails>(async () => {
-    try {
-      return await getIdeaTreeSettings(client);
-    } catch (reason: unknown) {
-      // A 503 is the sidecar, not this form: say what to do instead of rendering an
-      // empty page the user would read as "no settings to configure".
-      if (reason instanceof ApiRequestError && reason.status === 503) throw new Error(t.unavailable);
-      throw reason;
-    }
-  });
-  const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
-  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
-  const [failure, setFailure] = useState<string>();
+const numberValue = (value: number | null | undefined) => (value === null || value === undefined ? "" : String(value));
 
-  useEffect(() => {
-    if (loaded.value) setDraft(loaded.value);
-  }, [loaded.value]);
-
-  const patch = (next: Partial<IdeaTreeSettingsDetails>) => {
-    setDraft((current) => (current ? { ...current, ...next } : current));
-    setStatus("idle");
-  };
-
-  const save = async () => {
-    if (!draft) return;
-    setStatus("saving");
-    setFailure(undefined);
-    const body: UpdateIdeaTreeSettingsRequest = {
-      templateId: draft.templateId,
-      explorationIntensity: draft.explorationIntensity,
-      scoreDirection: draft.scoreDirection,
-      maxDepth: draft.maxDepth,
-      maxNodes: draft.maxNodes,
-      ...(draft.maxTokensPerCall === undefined ? {} : { maxTokensPerCall: draft.maxTokensPerCall }),
-      // `null` is the API's "no per-research cap"; an empty box means exactly that.
-      maxTokens: draft.maxTokens ?? null,
-      ...(draft.designSystemPrompt === undefined ? {} : { designSystemPrompt: draft.designSystemPrompt }),
-      ...(draft.aggregatorSystemPrompt === undefined ? {} : { aggregatorSystemPrompt: draft.aggregatorSystemPrompt }),
-      ...(draft.propagateInsightSystemPrompt === undefined ? {} : { propagateInsightSystemPrompt: draft.propagateInsightSystemPrompt }),
-      ...(draft.roleThinkingEfforts === undefined ? {} : { roleThinkingEfforts: draft.roleThinkingEfforts }),
-    };
-    try {
-      const saved = await updateIdeaTreeSettings(client, body);
-      setDraft(saved);
-      setStatus("saved");
-      loaded.reload();
-    } catch (reason: unknown) {
-      setStatus("failed");
-      setFailure(reason instanceof ApiRequestError && reason.status === 503 ? t.unavailable : reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-
-  const number = (value: number | null | undefined) => (value === null || value === undefined ? "" : String(value));
-  const effortFor = (role: IdeaTreeThinkingRole): string => draft?.roleThinkingEfforts?.[role] ?? FOLLOW_MODEL;
-
+export function IdeaTreeSettingsFields({ value, onChange }: { value: IdeaTreeSettingsDetails; onChange: (next: IdeaTreeSettingsDetails) => void }) {
+  const patch = (next: Partial<IdeaTreeSettingsDetails>) => onChange({ ...value, ...next });
+  const effortFor = (role: IdeaTreeThinkingRole): string => value.roleThinkingEfforts?.[role] ?? FOLLOW_MODEL;
   return (
-    <LoadGate loaded={loaded}>
-      {() => (draft ? (
-        <>
-          <Group heading={t.scopeHeading}>
-            <Row hint={t.templateHint} title={t.template}>
-              <Select
-                label={t.template}
-                onChange={(value) => patch({ templateId: value as IdeaTreeSettingsDetails["templateId"] })}
-                options={TEMPLATES}
-                value={draft.templateId}
-              />
-            </Row>
-            <Row hint={t.intensityHint} title={t.intensity}>
-              <Select
-                label={t.intensity}
-                onChange={(value) => patch({ explorationIntensity: value as IdeaTreeSettingsDetails["explorationIntensity"] })}
-                options={INTENSITIES}
-                value={draft.explorationIntensity}
-              />
-            </Row>
-            <Row hint={t.directionHint} title={t.direction}>
-              <Select
-                label={t.direction}
-                onChange={(value) => patch({ scoreDirection: value as IdeaTreeSettingsDetails["scoreDirection"] })}
-                options={DIRECTIONS}
-                value={draft.scoreDirection}
-              />
-            </Row>
-            <Row hint={t.maxDepthHint} title={t.maxDepth}>
-              <input
-                aria-label={t.maxDepth}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxDepth: value }); }}
-                type="number"
-                value={number(draft.maxDepth)}
-              />
-            </Row>
-            <Row hint={t.maxNodesHint} title={t.maxNodes}>
-              <input
-                aria-label={t.maxNodes}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxNodes: value }); }}
-                type="number"
-                value={number(draft.maxNodes)}
-              />
-            </Row>
-            <Row hint={t.tokensHint} title={t.tokens}>
-              <input
-                aria-label={t.tokens}
-                className="field-input"
-                min={0}
-                onChange={(event) => patch({ maxTokens: readNumber(event.target.value) ?? null })}
-                placeholder={t.noCap}
-                type="number"
-                value={number(draft.maxTokens)}
-              />
-            </Row>
-            <Row hint={t.tokensPerCallHint} title={t.tokensPerCall}>
-              <input
-                aria-label={t.tokensPerCall}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxTokensPerCall: value }); }}
-                type="number"
-                value={number(draft.maxTokensPerCall)}
-              />
-            </Row>
-          </Group>
-          <Group heading={t.promptsHeading}>
-            {([
-              ["designSystemPrompt", t.designPrompt, draft.designSystemPrompt],
-              ["aggregatorSystemPrompt", t.aggregatorPrompt, draft.aggregatorSystemPrompt],
-              ["propagateInsightSystemPrompt", t.propagatePrompt, draft.propagateInsightSystemPrompt],
-            ] as const).map(([key, label, value]) => (
-              <Row hint={t.promptHint} key={key} title={label} tone="stack">
-                <textarea
-                  aria-label={label}
-                  className="field-input settings-textarea"
-                  onChange={(event) => patch({ [key]: event.target.value } as Partial<IdeaTreeSettingsDetails>)}
-                  placeholder={t.promptPlaceholder}
-                  rows={3}
-                  value={value ?? ""}
-                />
-              </Row>
-            ))}
-          </Group>
-          <Group heading={t.thinkingHeading}>
-            {IDEA_TREE_THINKING_ROLES.map((role) => (
-              <Row hint={t.thinkingHint} key={role} title={t.roles[role]}>
-                <Select
-                  label={t.roles[role]}
-                  onChange={(value) => {
-                    const next = { ...(draft.roleThinkingEfforts ?? {}) };
-                    if (value === FOLLOW_MODEL) delete next[role];
-                    else next[role] = value as NonNullable<IdeaTreeSettingsDetails["roleThinkingEfforts"]>[IdeaTreeThinkingRole];
-                    patch({ roleThinkingEfforts: next });
-                  }}
-                  options={EFFORTS}
-                  value={effortFor(role)}
-                />
-              </Row>
-            ))}
-          </Group>
-          <div className="settings-actions">
-            <button className="primary-button" disabled={status === "saving"} onClick={() => void save()} type="button">
-              {status === "saving" ? t.saving : t.save}
-            </button>
-            {status === "saved" ? <small role="status">{t.saved}</small> : null}
-            {status === "failed" ? <small role="alert">{failure ?? t.failed}</small> : null}
-          </div>
-        </>
-      ) : null)}
-    </LoadGate>
+    <>
+      <Group heading={t.scopeHeading}>
+        <Row hint={t.templateHint} title={t.template}>
+          <Select label={t.template} onChange={(next) => patch({ templateId: next as IdeaTreeSettingsDetails["templateId"] })} options={TEMPLATES} value={value.templateId} />
+        </Row>
+        <Row hint={t.intensityHint} title={t.intensity}>
+          <Select label={t.intensity} onChange={(next) => patch({ explorationIntensity: next as IdeaTreeSettingsDetails["explorationIntensity"] })} options={INTENSITIES} value={value.explorationIntensity} />
+        </Row>
+        <Row hint={t.directionHint} title={t.direction}>
+          <Select label={t.direction} onChange={(next) => patch({ scoreDirection: next as IdeaTreeSettingsDetails["scoreDirection"] })} options={DIRECTIONS} value={value.scoreDirection} />
+        </Row>
+        <Row hint={t.maxDepthHint} title={t.maxDepth}>
+          <input aria-label={t.maxDepth} className="field-input" min={1} onChange={(event) => { const next = readNumber(event.target.value); if (next !== undefined) patch({ maxDepth: next }); }} type="number" value={numberValue(value.maxDepth)} />
+        </Row>
+        <Row hint={t.maxNodesHint} title={t.maxNodes}>
+          <input aria-label={t.maxNodes} className="field-input" min={1} onChange={(event) => { const next = readNumber(event.target.value); if (next !== undefined) patch({ maxNodes: next }); }} type="number" value={numberValue(value.maxNodes)} />
+        </Row>
+        <Row hint={t.tokensHint} title={t.tokens}>
+          <input aria-label={t.tokens} className="field-input" min={0} onChange={(event) => patch({ maxTokens: readNumber(event.target.value) ?? null })} placeholder={t.noCap} type="number" value={numberValue(value.maxTokens)} />
+        </Row>
+        <Row hint={t.tokensPerCallHint} title={t.tokensPerCall}>
+          <input aria-label={t.tokensPerCall} className="field-input" min={1} onChange={(event) => { const next = readNumber(event.target.value); if (next !== undefined) patch({ maxTokensPerCall: next }); }} type="number" value={numberValue(value.maxTokensPerCall)} />
+        </Row>
+      </Group>
+      <Group heading={t.promptsHeading}>
+        {([
+          ["designSystemPrompt", t.designPrompt, value.designSystemPrompt],
+          ["aggregatorSystemPrompt", t.aggregatorPrompt, value.aggregatorSystemPrompt],
+          ["propagateInsightSystemPrompt", t.propagatePrompt, value.propagateInsightSystemPrompt],
+        ] as const).map(([key, label, current]) => (
+          <Row hint={t.promptHint} key={key} title={label} tone="stack">
+            <textarea aria-label={label} className="field-input settings-textarea" onChange={(event) => patch({ [key]: event.target.value } as Partial<IdeaTreeSettingsDetails>)} placeholder={t.promptPlaceholder} rows={3} value={current ?? ""} />
+          </Row>
+        ))}
+      </Group>
+      <Group heading={t.thinkingHeading}>
+        {IDEA_TREE_THINKING_ROLES.map((role) => (
+          <Row hint={t.thinkingHint} key={role} title={t.roles[role]}>
+            <Select
+              label={t.roles[role]}
+              onChange={(next) => {
+                const efforts = { ...(value.roleThinkingEfforts ?? {}) };
+                if (next === FOLLOW_MODEL) delete efforts[role];
+                else efforts[role] = next as NonNullable<IdeaTreeSettingsDetails["roleThinkingEfforts"]>[IdeaTreeThinkingRole];
+                patch({ roleThinkingEfforts: efforts });
+              }}
+              options={EFFORTS}
+              value={effortFor(role)}
+            />
+          </Row>
+        ))}
+      </Group>
+    </>
   );
 }

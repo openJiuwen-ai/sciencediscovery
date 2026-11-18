@@ -13,24 +13,33 @@
 // limitations under the License.
 
 /**
- * The session's Idea Tree research, as a card in the conversation.
+ * The session's Idea Tree research, as a card at the foot of the transcript.
  *
- * It shows what the engine reported and nothing more: a token count the engine has not
- * reported stays "not reported" instead of becoming 0, and a phase the UI does not know
- * is printed as the raw engine phase rather than mapped onto something that sounds
- * successful. The controls are the ones the research's own status allows; a completed or
- * ended research keeps its card so a reopened session shows the persisted state without
- * starting anything.
+ * Same shape as an Evolve search card, because a running research is the same kind of
+ * thing: something the conversation produced that keeps running after the turn that
+ * started it. The whole card is the way into the task panel — a card this size with one
+ * clickable word in it would make the rest decorative — and it carries no "open the
+ * panel" control, exactly like the search card.
+ *
+ * It shows what the engine reported and nothing more: an unreported token count is not
+ * shown as 0, and a phase the UI does not know is printed verbatim.
  */
 
 import type { IdeaResearchState, IdeaResearchView } from "@sciencediscovery/schema";
 import { TEXT } from "../../text.js";
-import "../../styles/idea-tree.css";
+import { EvolveTreeGlyph } from "../evolve/glyphs.js";
 
 const t = TEXT.ideaTree;
 
+/** Title of the card: the objective's first line, folded to one short sentence. */
+export function ideaCardTitle(objective: string): string {
+  const line = objective.replace(/\s+/g, " ").trim();
+  if (!line) return t.heading;
+  return Array.from(line).slice(0, 28).join("");
+}
+
 /** The engine's phase names are a closed set; an unknown one is shown verbatim. */
-function phaseLabel(phase: string): string {
+export function ideaPhaseLabel(phase: string): string {
   return (t.phase as Record<string, string | undefined>)[phase] ?? phase;
 }
 
@@ -38,60 +47,64 @@ export function ideaStatusLabel(status: IdeaResearchState["status"]): string {
   return (t.status as Record<string, string | undefined>)[status] ?? status;
 }
 
-/** Which controls a status allows. Nothing here starts a research: only the agent
- *  command and the create operation do, and the card never creates one. */
-export function ideaControls(status: IdeaResearchState["status"]): { pause: boolean; resume: boolean; end: boolean } {
-  return {
-    pause: status === "running",
-    resume: status === "paused" || status === "interrupted",
-    end: status === "running" || status === "pausing" || status === "paused" || status === "interrupted",
-  };
+/** The tone suffix the stylesheet colours the state chip by, mirroring the search card. */
+export function ideaStatusTone(status: IdeaResearchState["status"]): string {
+  switch (status) {
+    case "running":
+    case "pausing":
+      return "live";
+    case "completed":
+      return "good";
+    case "interrupted":
+      return "warn";
+    case "ended":
+      return "quiet";
+    default:
+      return "quiet";
+  }
 }
 
-interface Props {
-  view: IdeaResearchView;
-  busy?: boolean;
-  onOpen?: () => void;
-  onPause?: () => void;
-  onResume?: () => void;
-  onEnd?: () => void;
+export function isIdeaResearchActive(status: IdeaResearchState["status"]): boolean {
+  return status === "running" || status === "pausing";
 }
 
-export function IdeaResearchCard({ view, busy = false, onOpen, onPause, onResume, onEnd }: Props) {
+/** The spin the state chip turns while a research is live: eight rays, so it reads as a
+ *  turning spark rather than as a letter of the text beside it (same mark as Evolve's). */
+function BurstGlyph() {
+  return (
+    <svg fill="none" height="12" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" viewBox="0 0 12 12" width="12">
+      <path d="M6 1.2v9.6M1.2 6h9.6M2.6 2.6l6.8 6.8M9.4 2.6l-6.8 6.8" />
+    </svg>
+  );
+}
+
+export function IdeaResearchCard({ onOpen, view }: { onOpen: (researchId: string) => void; view: IdeaResearchView }) {
   const research = view.research;
-  const controls = ideaControls(research.status);
+  const active = isIdeaResearchActive(research.status);
   const batchTotal = research.batch.length;
   return (
-    <section className={`idea-research-card is-${research.status}`} aria-label={t.heading}>
-      <header>
-        <span className="eyebrow">{t.heading}</span>
-        <strong>{ideaStatusLabel(research.status)}</strong>
-      </header>
-      <p className="idea-research-objective">
-        <span>{t.objective}</span>
-        {research.objective}
-      </p>
-      <div className="idea-research-progress">
-        <span>{phaseLabel(research.phase)}</span>
-        <span>{t.round(research.round)}</span>
-        {batchTotal > 0 ? <span>{t.batch(research.batchCompleted, batchTotal)}</span> : null}
-        <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
-      </div>
-      {research.reason ? <p className="idea-research-reason">{t.reason(research.reason)}</p> : null}
-      <footer>
-        {onOpen ? (
-          <button className="secondary-button" onClick={onOpen} type="button">{t.open}</button>
-        ) : null}
-        {controls.pause && onPause ? (
-          <button className="secondary-button" disabled={busy} onClick={onPause} type="button">{t.pause}</button>
-        ) : null}
-        {controls.resume && onResume ? (
-          <button className="secondary-button" disabled={busy} onClick={onResume} type="button">{t.resume}</button>
-        ) : null}
-        {controls.end && onEnd ? (
-          <button className="secondary-button" disabled={busy} onClick={onEnd} type="button">{t.end}</button>
-        ) : null}
-      </footer>
-    </section>
+    <button
+      className={`evolve-run-card idea-run-card is-${research.status}`}
+      onClick={() => onOpen(research.id)}
+      title={[research.objective, ideaStatusLabel(research.status)].join(" · ")}
+      type="button"
+    >
+      <span aria-hidden="true" className="evolve-run-mark">
+        <EvolveTreeGlyph size={16} />
+      </span>
+      <span className="evolve-run-text">
+        <span className="evolve-run-title">{ideaCardTitle(research.objective)}</span>
+        <span className="evolve-run-meta">
+          <span>{ideaPhaseLabel(research.phase)}</span>
+          <span>{t.round(research.round)}</span>
+          {batchTotal > 0 ? <span>{t.batch(research.batchCompleted, batchTotal)}</span> : null}
+          <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
+        </span>
+      </span>
+      <span className={`evolve-run-state is-${ideaStatusTone(research.status)}`}>
+        {active ? <span aria-hidden="true" className="evolve-run-spin"><BurstGlyph /></span> : null}
+        {active ? TEXT.evolve.working : ideaStatusLabel(research.status)}
+      </span>
+    </button>
   );
 }

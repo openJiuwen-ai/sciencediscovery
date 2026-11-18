@@ -29,7 +29,6 @@ import { MemorySettings } from "./settings/system/MemorySettings.js";
 import { SpecialistsSettings } from "./settings/system/Specialists.js";
 import { TimeoutSettings } from "./settings/system/Timeouts.js";
 import { ExportHistorySettings } from "./settings/system/ExportHistory.js";
-import { IdeaTreeSettings } from "./settings/IdeaTreeSettings.js";
 
 /** The original desktop nav, extended with MCP, 专家, 科学记忆 and 超时. */
 export type SettingsGroup =
@@ -39,7 +38,6 @@ export type SettingsGroup =
   | "skills"
   | "mcp"
   | "specialists"
-  | "idea-tree"
   | "sandbox-network"
   | "remote"
   | "timeouts"
@@ -52,7 +50,7 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // 科学记忆 is how the agent remembers what it read and made, so it sits with
   // the intelligence settings and after 专家, the last thing that is given to
   // the agent rather than the environment it runs in.
-  { groups: ["models", "skills", "mcp", "specialists", "idea-tree", "memory"], id: "intelligence" },
+  { groups: ["models", "skills", "mcp", "specialists", "memory"], id: "intelligence" },
   { groups: ["sandbox-network", "remote"], id: "connection" },
   { groups: ["timeouts", "export-history"], id: "workspace" },
 ];
@@ -158,8 +156,6 @@ export function SystemSettingsDialog({
         );
       case "specialists":
         return <SpecialistsSettings client={client} onConfirm={actions.confirmAction} />;
-      case "idea-tree":
-        return <IdeaTreeSettings client={client} />;
       case "sandbox-network":
         return (
           <NetworkSettings

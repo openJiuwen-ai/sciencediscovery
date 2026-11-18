@@ -908,7 +908,6 @@ export const EN: Text = {
         remote: { label: "Remote", description: "Remote Runners and the machines a project may use" },
         timeouts: { label: "Timeouts", description: "Wall-clock limits and unlimited mode" },
         "export-history": { label: "Export history", description: "Study packages saved on this machine" },
-        "idea-tree": { label: "Idea Tree", description: "Research scope and per-stage thinking effort" },
       },
       global: {
         modelHeading: "Default model",
@@ -1524,6 +1523,19 @@ export const EN: Text = {
     resume: "Continue",
     end: "End",
     open: "Open the task panel",
+    create: {
+      title: "Start an Idea Tree research",
+      hint: "It runs in the background; open its card to see the tree, the nodes and the controls.",
+      taskLabel: "Research task",
+      taskPlaceholder: "One sentence on the question and its acceptance bounds",
+      settingsToggle: "Settings",
+      settingsHint: "Off uses the stored defaults.",
+      start: "Start research",
+      starting: "Starting…",
+      cancel: "Cancel",
+      failed: "Starting failed.",
+      unavailable: "The Idea Tree service is not ready: start the Evolve service and retry.",
+    },
     detail: {
       title: "Node detail",
       tree: "Hypothesis tree",
