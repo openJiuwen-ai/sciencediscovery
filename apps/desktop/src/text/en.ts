@@ -34,7 +34,7 @@ export const EN: Text = {
   },
   researchPackage: {
     continueUnavailable: "This imported record is not fully restored and cannot be continued. Check the import omissions, restore missing services and import again.", sourceUnavailable: "The conversation or its project no longer exists. Refresh the session list and try again.",
-    projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.", necessaryContents: "Conversation · Current files and artifacts · Dependencies", completeContents: "Conversation · File and artifact versions · Research history",
+    projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.",
     newOptions: "New conversation options", projectImport: (name: string) => `Import conversation into ${name}`, messageMenu: "Reply menu", sessionScope: "Export the whole conversation and its research materials, beyond the visible chat text.", packageContents: "Conversation, workspace files, artifacts and related research evidence.",
     title: "Research package", import: "Import conversation", export: "Export conversation", continue: "Continue chatting", branch: "Create branch chat", source: "Return to source",
     readOnly: "Imported evidence · Read-only. Create an independent copy to continue with the retained materials.", copying: "Copying research in the background…", failed: "Operation failed",
