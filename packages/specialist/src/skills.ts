@@ -417,6 +417,9 @@ export type GitSkillCheckout = (
   checkout: string;
   commit: string;
   normalized: ReturnType<typeof validateGitSkillImportRequest>;
+  /** Only `SKILL.md` files were checked out; a package's resources are fetched
+   *  by `expandGitSparseCheckout` when something needs to read them. */
+  partial?: boolean;
 }>;
 
 type NormalizedGitImport = ReturnType<typeof validateGitSkillImportRequest>;
@@ -427,6 +430,56 @@ function gitCheckoutKey(normalized: NormalizedGitImport): string {
   return `${normalized.repositoryUrl}\u0000${normalized.ref ?? ""}`;
 }
 
+/** Every `SKILL.md` at any depth. Discovery only needs these files, and a
+ *  repository whose packages carry hundreds of megabytes of data is scanned
+ *  in seconds when the data stays on the server. */
+const GIT_SPARSE_SKILL_MARKDOWN = "**/SKILL.md";
+
+async function runGit(arguments_: string[], timeout = GIT_CHECKOUT_TIMEOUT_MS): Promise<{ stdout: string }> {
+  const { stdout } = await execFileAsync("git", arguments_, {
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    maxBuffer: 1024 * 1024,
+    timeout,
+  });
+  return { stdout };
+}
+
+async function cloneGitRepository(
+  normalized: NormalizedGitImport,
+  checkout: string,
+  partial: boolean,
+): Promise<void> {
+  const branch = normalized.ref ? ["--branch", normalized.ref] : [];
+  if (!partial) {
+    await runGit([
+      "-c", "protocol.file.allow=never",
+      "clone", "--depth=1", "--filter=blob:limit=10m", "--no-tags", ...branch,
+      "--", normalized.repositoryUrl, checkout,
+    ]);
+    return;
+  }
+  await runGit([
+    "-c", "protocol.file.allow=never",
+    "clone", "--depth=1", "--filter=blob:none", "--no-checkout", "--no-tags", "--single-branch",
+    ...branch, "--", normalized.repositoryUrl, checkout,
+  ]);
+  await runGit(["-C", checkout, "sparse-checkout", "set", "--no-cone", GIT_SPARSE_SKILL_MARKDOWN]);
+  await runGit(["-C", checkout, "checkout"]);
+}
+
+/** Fetch the files under `roots` that a partial checkout left on the server.
+ *  The caller only passes a checkout the transport marked partial, so these
+ *  files really are missing; a failed fetch is an error, not an empty package. */
+async function expandGitSparseCheckout(checkout: string, roots: readonly string[]): Promise<void> {
+  const { stdout } = await runGit(["-C", checkout, "sparse-checkout", "list"], 30_000);
+  const current = stdout.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("-"));
+  const wanted = roots.map((root) => (root === "." ? "/*" : `/${root}`));
+  const missing = wanted.filter((pattern) => !current.includes(pattern));
+  if (!missing.length) return;
+  await runGit(["-C", checkout, "sparse-checkout", "set", "--no-cone", ...current, ...missing]);
+  await runGit(["-C", checkout, "checkout"]);
+}
+
 async function checkoutGitSkillRepository(
   importRoot: string,
   input: InspectGitSkillRepositoryRequest,
@@ -434,32 +487,25 @@ async function checkoutGitSkillRepository(
   checkout: string;
   commit: string;
   normalized: ReturnType<typeof validateGitSkillImportRequest>;
+  partial: boolean;
 }> {
   const normalized = validateGitSkillImportRequest(input);
   const checkout = resolve(importRoot, randomUUID());
   await mkdir(importRoot, { recursive: true });
-  const arguments_ = [
-    "-c", "protocol.file.allow=never",
-    "clone",
-    "--depth=1",
-    "--filter=blob:limit=10m",
-    "--no-tags",
-    ...(normalized.ref ? ["--branch", normalized.ref] : []),
-    "--",
-    normalized.repositoryUrl,
-    checkout,
-  ];
   try {
-    await execFileAsync("git", arguments_, {
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      maxBuffer: 1024 * 1024,
-      timeout: GIT_CHECKOUT_TIMEOUT_MS,
-    });
-    const { stdout } = await execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], {
-      maxBuffer: 64 * 1024,
-      timeout: 10_000,
-    });
-    return { checkout, commit: stdout.trim().toLowerCase(), normalized };
+    let partial = true;
+    try {
+      await cloneGitRepository(normalized, checkout, true);
+    } catch (error) {
+      await rm(checkout, { force: true, recursive: true });
+      // A server that does not support partial clones is the reason this is a
+      // retry rather than a failure; a timeout is not paid twice.
+      if ((error as { killed?: boolean } | undefined)?.killed === true) throw error;
+      partial = false;
+      await cloneGitRepository(normalized, checkout, false);
+    }
+    const { stdout } = await runGit(["-C", checkout, "rev-parse", "HEAD"], 10_000);
+    return { checkout, commit: stdout.trim().toLowerCase(), normalized, partial };
   } catch (error) {
     await rm(checkout, { force: true, recursive: true });
     // A clone that is cut off at the timeout is the one failure a user cannot
@@ -878,7 +924,13 @@ export class SkillCatalog {
     expiresAt: number;
     key: string;
     normalized: NormalizedGitImport;
+    partial: boolean;
   };
+
+  /** Expansions rewrite one shared sparse-pattern list, so they run one at a
+   *  time; two imports reading the same checkout must not lose each other's
+   *  paths, which would install a package without its resources. */
+  private sparseCheckoutQueue: Promise<void> = Promise.resolve();
 
   constructor(dataDir: string, repositoryRoot: string, options: { checkoutGit?: GitSkillCheckout } = {}) {
     this.root = resolve(dataDir, "skills");
@@ -1629,17 +1681,29 @@ export class SkillCatalog {
 
   private async inspectGitCheckout(
     checkout: string,
-    subdirectory?: string,
+    subdirectory: string | undefined,
+    partial: boolean,
   ): Promise<Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }>> {
     const roots = await discoverGitSkillRoots(checkout, subdirectory);
     const results: Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }> = [];
     for (const root of roots) {
       try {
         const packageRoot = root === "." ? checkout : resolve(checkout, ...root.split("/"));
-        const files = await readPackageDirectory(packageRoot, packageRoot, "", true);
-        const loaded = validateSkillPackage(files);
-        const current = this.managed.get(loaded.detail.id);
+        let files = await readPackageDirectory(packageRoot, packageRoot, "", true);
+        let loaded = validateSkillPackage(files);
         const builtIn = this.builtIns.get(loaded.detail.id);
+        const current = this.managed.get(loaded.detail.id);
+        // A partial checkout holds the SKILL.md files only: enough to name a
+        // package and describe it, not enough to answer "unchanged or update".
+        // That question belongs to the few packages that are already installed,
+        // so those are the only ones whose resources are fetched here.
+        let complete = !partial;
+        if (partial && !builtIn && current) {
+          await this.expandCheckout(checkout, [root]);
+          files = await readPackageDirectory(packageRoot, packageRoot, "", true);
+          loaded = validateSkillPackage(files);
+          complete = true;
+        }
         const status: GitSkillImportCandidate["status"] = builtIn
           ? "invalid"
           : !current
@@ -1656,7 +1720,7 @@ export class SkillCatalog {
               ...loaded.detail.diagnostics.map((diagnostic) => diagnostic.message),
             ],
             name: loaded.detail.name,
-            packageHash: loaded.detail.hash,
+            ...(complete ? { packageHash: loaded.detail.hash } : {}),
             status,
             subdirectory: root,
           },
@@ -1675,9 +1739,21 @@ export class SkillCatalog {
     return results;
   }
 
+  private async expandCheckout(checkout: string, roots: readonly string[]): Promise<void> {
+    const run = this.sparseCheckoutQueue.then(
+      () => expandGitSparseCheckout(checkout, roots),
+      () => expandGitSparseCheckout(checkout, roots),
+    );
+    this.sparseCheckoutQueue = run.catch(() => undefined);
+    await run;
+  }
+
   /** A checkout an inspection left behind, when this request is about the same
    *  repository at the commit that inspection saw. Anything else is a clone. */
-  private retainedCheckoutFor(normalized: NormalizedGitImport, commit?: string): string | undefined {
+  private retainedCheckoutFor(
+    normalized: NormalizedGitImport,
+    commit?: string,
+  ): { checkout: string; partial: boolean } | undefined {
     const retained = this.retainedGitCheckout;
     if (!retained) return undefined;
     if (retained.expiresAt < Date.now()) {
@@ -1691,7 +1767,7 @@ export class SkillCatalog {
     // An import without a commit means "whatever the ref points at now", which
     // a remembered checkout cannot answer.
     if (commit === undefined || commit !== retained.commit) return undefined;
-    return retained.checkout;
+    return { checkout: retained.checkout, partial: retained.partial };
   }
 
   /** Keep this checkout for the imports that follow, replacing the last one. */
@@ -1699,6 +1775,7 @@ export class SkillCatalog {
     checkout: string,
     commit: string,
     normalized: NormalizedGitImport,
+    partial: boolean,
   ): Promise<void> {
     const previous = this.retainedGitCheckout;
     this.retainedGitCheckout = {
@@ -1707,6 +1784,7 @@ export class SkillCatalog {
       expiresAt: Date.now() + GIT_CHECKOUT_RETENTION_MS,
       key: gitCheckoutKey(normalized),
       normalized,
+      partial,
     };
     if (previous && previous.checkout !== checkout) {
       await rm(previous.checkout, { force: true, recursive: true }).catch(() => undefined);
@@ -1716,11 +1794,11 @@ export class SkillCatalog {
   async inspectGitRepository(input: InspectGitSkillRepositoryRequest): Promise<GitSkillRepositoryInspection> {
     this.assertLoaded();
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized } = await this.checkoutGit(importRoot, input);
+    const { checkout, commit, normalized, partial } = await this.checkoutGit(importRoot, input);
     let retained = false;
     try {
-      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory);
-      await this.retainCheckout(checkout, commit, normalized);
+      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial === true);
+      await this.retainCheckout(checkout, commit, normalized, partial === true);
       retained = true;
       return {
         candidates: inspected.map(({ candidate }) => candidate),
@@ -1751,9 +1829,11 @@ export class SkillCatalog {
     const importRoot = resolve(this.root, ".imports");
     const requested = validateGitSkillImportRequest(input);
     const reused = this.retainedCheckoutFor(requested, expectedCommit);
-    const { checkout, commit, normalized } = reused === undefined
-      ? await this.checkoutGit(importRoot, input)
-      : { checkout: reused, commit: expectedCommit!, normalized: requested };
+    const fetched = reused === undefined ? await this.checkoutGit(importRoot, input) : undefined;
+    const checkout = fetched?.checkout ?? reused!.checkout;
+    const commit = fetched?.commit ?? expectedCommit!;
+    const normalized = requested;
+    const partial = fetched ? fetched.partial === true : reused!.partial;
     try {
       if (commit !== expectedCommit) {
         throw new SkillCatalogError(
@@ -1761,7 +1841,10 @@ export class SkillCatalog {
           `Git ref moved after inspection (expected ${expectedCommit.slice(0, 12)}, found ${commit.slice(0, 12)}); scan again before importing`,
         );
       }
-      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory);
+      // The scan kept only SKILL.md files; the packages being reviewed need
+      // their resources before they can be read as packages.
+      if (partial) await this.expandCheckout(checkout, subdirectories);
+      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial);
       const byPath = new Map(inspected.map((entry) => [entry.candidate.subdirectory, entry]));
       const selected = subdirectories.map((subdirectory) => {
         const entry = byPath.get(subdirectory);
@@ -1836,9 +1919,11 @@ export class SkillCatalog {
     }
     const importRoot = resolve(this.root, ".imports");
     const reused = this.retainedCheckoutFor(normalized, requestedCommit);
-    const { checkout, commit, normalized: checked } = reused === undefined
-      ? await this.checkoutGit(importRoot, normalized)
-      : { checkout: reused, commit: requestedCommit!, normalized };
+    const fetched = reused === undefined ? await this.checkoutGit(importRoot, normalized) : undefined;
+    const checkout = fetched?.checkout ?? reused!.checkout;
+    const commit = fetched?.commit ?? requestedCommit!;
+    const checked = normalized;
+    const partial = fetched ? fetched.partial === true : reused!.partial;
     try {
       if (requestedCommit && requestedCommit !== commit) {
         throw new SkillCatalogError(
@@ -1846,6 +1931,8 @@ export class SkillCatalog {
           `Git ref moved after inspection (expected ${requestedCommit.slice(0, 12)}, found ${commit.slice(0, 12)}); scan again before importing`,
         );
       }
+      // A partial checkout left this package's resources on the server.
+      if (partial) await this.expandCheckout(checkout, [checked.subdirectory ?? "."]);
       const packageRoot = checked.subdirectory
         ? resolve(checkout, ...checked.subdirectory.split("/"))
         : checkout;

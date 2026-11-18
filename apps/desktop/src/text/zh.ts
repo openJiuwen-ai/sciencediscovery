@@ -757,7 +757,7 @@ export const ZH = {
         subdirectoryPlaceholder: "可选，例如 skills/my-skill",
         inspect: "检查",
         inspecting: "正在检查…",
-        inspectHint: "正在克隆仓库并扫描技能包；仓库较大时可能需要一到两分钟。",
+        inspectHint: "正在克隆仓库并读取所有 SKILL.md；通常只需几秒，网络较慢时会更久。",
         cancelInspect: "取消",
         inspectFailed: "无法检查这个仓库。",
         commit: (commit: string) => `commit ${commit.slice(0, 12)}`,
