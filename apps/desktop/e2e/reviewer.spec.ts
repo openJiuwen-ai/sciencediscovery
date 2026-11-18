@@ -315,8 +315,11 @@ test("the session's automatic review and level are written and survive a reload"
   await expect(automatic).toHaveAttribute("aria-checked", "true");
   await automatic.click();
   await expect(automatic).toHaveAttribute("aria-checked", "false");
-  // With automatic review off there is no level to choose.
-  await expect(menu.getByRole("button", { name: "审查档位" })).toBeDisabled();
+  // Automatic review off does not make the level idle: 立即审查 reads it too,
+  // so the row stays open and says why it still matters.
+  await expect(menu.getByRole("button", { name: "审查档位" })).toBeEnabled();
+  await expect(menu.getByRole("button", { name: "审查档位" }))
+    .toHaveAttribute("title", "自动审阅已关闭；立即审查仍会使用这个档位。");
   await expect
     .poll(() => mock.state.reviewer.sessionSettings[SESSION]?.automaticReviewEnabled)
     .toBe(false);
@@ -339,9 +342,18 @@ test("会话设置 asks for a review now, and automatic review being off does no
   await page.getByRole("button", { name: "会话设置" }).click();
   const menu = page.locator(".session-menu");
   // 自动审阅 decides whether a review happens by itself; this row is the
-  // reader asking for one, so the switch being off leaves it enabled.
-  await expect(menu.getByRole("button", { name: "审查档位" })).toBeDisabled();
-  const run = menu.getByRole("button", { name: "立即审查" });
+  // reader asking for one, so the switch being off leaves it enabled — and so
+  // does the level row, because a manual run still reads the level.
+  await expect(menu.getByRole("button", { name: "审查档位" })).toBeEnabled();
+  // Ask for Deep before asking for a review: the coordinator takes the level
+  // from the Session, so the task it queues has to say deep.
+  await menu.getByRole("button", { name: "审查档位" }).click();
+  await page.locator(".session-flyout-row", { hasText: "深度" }).click();
+  await expect.poll(() => mock.state.reviewer.sessionSettings[SESSION]?.level).toBe("deep");
+
+  // The flyout closes the menu; the action row is one press away again.
+  await page.getByRole("button", { name: "会话设置" }).click();
+  const run = page.locator(".session-menu").getByRole("button", { name: "立即审查" });
   await expect(run).toBeEnabled();
 
   await run.click();
@@ -349,8 +361,9 @@ test("会话设置 asks for a review now, and automatic review being off does no
   // The request names a fresh message id: the coordinator appends the
   // checkpoint under that id, so a re-used one would overwrite an older card.
   await expect.poll(() => mock.state.reviewer.tasks.length).toBe(1);
-  const queued = mock.state.reviewer.tasks[0] as { checkpointMessageId?: string; origin?: string };
+  const queued = mock.state.reviewer.tasks[0] as { checkpointMessageId?: string; origin?: string; reviewLevel?: string };
   expect(queued.origin).toBe("manual");
+  expect(queued.reviewLevel).toBe("deep");
   expect(queued.checkpointMessageId).toMatch(/^[0-9a-f-]{36}$/u);
 
   // The click leaves a card where the review happened rather than only a

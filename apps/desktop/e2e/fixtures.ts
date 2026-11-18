@@ -1173,7 +1173,8 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           id: `task-manual-${state.reviewer.tasks.length + 1}`,
           inputFingerprint: "manual",
           origin: "manual",
-          reviewLevel: "quick",
+          // The coordinator reads the Session's level for a manual run too.
+          reviewLevel: state.reviewer.sessionSettings[requestReview[1]!]?.level ?? "quick",
           sessionId: requestReview[1],
           status: "queued",
           // The coordinator's own identity for a manual run: the checkpoint
