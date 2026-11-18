@@ -33,6 +33,36 @@ for (const state of ["allowed", "blocked"] as const) test(`network tool forwards
   assert.equal(result.details, decision); assert.match(JSON.stringify(result.content), /No code executes here/);
 });
 
+test("network purpose validation is returned as retryable tool guidance", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw Error("unused"); },
+    sandboxNetwork: { request: async () => { throw new Error("Network purpose must be 1–100 characters"); } },
+  });
+  const result = await tools.find(t => t.name === "request_sandbox_network")!.execute("request", {
+    hosts: ["eutils.ncbi.nlm.nih.gov:443"], purpose: "too long",
+  });
+  assert.equal(result.isError, true);
+  const details = result.details as { error: { code: string; retryable: boolean; message: string } };
+  assert.equal(details.error.code, "INVALID_TOOL_ARGUMENTS");
+  assert.equal(details.error.retryable, true);
+  assert.match(details.error.message, /1 to 100 characters/);
+});
+
+test("a stale sandbox authorization returns guidance instead of an opaque shell failure", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw Error("unused"); },
+    executeShell: async () => { throw new Error("Unknown, consumed or foreign sandbox network authorization"); },
+  });
+  const result = await tools.find(t => t.name === "run_shell")!.execute("shell", {
+    command: "python -c 'print(1)'", network_authorization_id: "old-token",
+  });
+  assert.equal(result.isError, true);
+  const details = result.details as { error: { code: string; retryable: boolean; message: string } };
+  assert.equal(details.error.code, "INVALID_TOOL_ARGUMENTS");
+  assert.equal(details.error.retryable, true);
+  assert.match(details.error.message, /Discard the old network_authorization_id/);
+});
+
 for (const managed of [true, false]) for (const token of [undefined, "token"]) test(`shell preserves optional network token shape (managed=${managed}, token=${token})`, async () => {
   const permission = { state: "allowed" as const, hosts: ["pypi.org:443"], authorizationId: "retry", instruction: "Inspect files before retry" };
   const terminal = { exitCode: 0, networkDeniedHosts: ["pypi.org:443"], networkPermission: permission,

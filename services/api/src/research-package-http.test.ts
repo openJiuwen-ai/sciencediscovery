@@ -54,13 +54,28 @@ async function fixture(context: TestContext, graphAvailable = false, sampleSessi
     workspaceUpload: { maxFileBytes: 1_000_000, maxRequestBytes: 10_000_000, maxWorkspaceBytes: 10_737_418_240 },
     memoryGraph: { url: `http://127.0.0.1:${(graph.address() as AddressInfo).port}`, internalToken: "test" }, evolve: { url: "http://127.0.0.1:1", internalToken: "test" },
   };
-  let server = createApiServer(config, { mcpTransport: offlineMcpTransport });
+  let server = createApiServer(config, {
+    mcpTransport: offlineMcpTransport,
+    // These tests exercise HTTP/package semantics. Use an ample synthetic capacity
+    // so a small CI runner cannot turn the over-cap acknowledgement case into a
+    // 507 before the request reaches the behavior under test.
+    measureResearchPackageCapacity: async () => ({
+      freeDiskBytes: Number.POSITIVE_INFINITY,
+      freeMemoryBytes: Number.POSITIVE_INFINITY,
+    }),
+  });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   context.after(async () => { await closeApiServer(server); await new Promise<void>((done) => graph.close(() => done())); await rm(root, { force: true, recursive: true }); });
   let origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const restart = async () => {
     await closeApiServer(server);
-    server = createApiServer(config, { mcpTransport: offlineMcpTransport });
+    server = createApiServer(config, {
+      mcpTransport: offlineMcpTransport,
+      measureResearchPackageCapacity: async () => ({
+        freeDiskBytes: Number.POSITIVE_INFINITY,
+        freeMemoryBytes: Number.POSITIVE_INFINITY,
+      }),
+    });
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   };
