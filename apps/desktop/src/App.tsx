@@ -58,6 +58,7 @@ import {
   splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
+import { isIdeaTreeCommand, ideaTreeCommandTask } from "./idea/command.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
@@ -88,6 +89,7 @@ import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
 import { IdeaResearchCard } from "./views/idea/IdeaResearchCard.js";
+import { IdeaTreeCreateDialog } from "./views/idea/IdeaTreeCreateDialog.js";
 import { IdeaResearchPanel } from "./views/idea/IdeaResearchPanel.js";
 import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
 import { SetupWizard } from "./views/SetupWizard.js";
@@ -189,6 +191,8 @@ export function App({ initialToken }: Props) {
   const idea = useIdeaResearches(client, state.sessionId);
   /** Which research the task panel shows, by id. */
   const [ideaResearchId, setIdeaResearchId] = useState<string>();
+  /** `/idea-tree <task>` opens the launch dialog rather than sending the text. */
+  const [ideaCreate, setIdeaCreate] = useState<{ task?: string }>();
   const refreshEvolve = evolve.refresh;
   /** Which search the panel is showing, by id. Storing the id rather than the
    *  record keeps the panel reading the same list the run cards do, so a status
@@ -682,6 +686,11 @@ export function App({ initialToken }: Props) {
       });
       return;
     }
+    if (isIdeaTreeCommand(content)) {
+      // A command is a task, not a message: its settings are chosen first.
+      setIdeaCreate({ task: ideaTreeCommandTask(content) || undefined });
+      return;
+    }
     void actions.send(content);
   };
 
@@ -854,6 +863,9 @@ export function App({ initialToken }: Props) {
 
   /** Open a run in the panel from its card in the transcript: the card should
    *  not have to open the panel first. */
+  /** The research the 任务 tab shows, when its card was the way in. */
+  const ideaResearch = idea.views.find((view) => view.research.id === ideaResearchId);
+
   const showEvolveRun = (id: string) => {
     setEvolveRunId(id);
     setPanelGroup("task");
@@ -1058,7 +1070,12 @@ export function App({ initialToken }: Props) {
                   {idea.views.map((view) => (
                     <IdeaResearchCard
                       key={view.research.id}
-                      onOpen={() => setIdeaResearchId(view.research.id)}
+                      onOpen={(researchId) => {
+                        // Same path as a search card: the panel's task tab, opened.
+                        setIdeaResearchId(researchId);
+                        setPanelGroup("task");
+                        setWorkspaceOpen(true);
+                      }}
                       view={view}
                     />
                   ))}
@@ -1092,18 +1109,14 @@ export function App({ initialToken }: Props) {
             </>
           )}
           <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />
-          {ideaResearchId && state.sessionId ? (
-            <div
-              className="idea-panel-backdrop"
-              onMouseDown={(event) => { if (event.target === event.currentTarget) setIdeaResearchId(undefined); }}
-            >
-              <IdeaResearchPanel
-                client={client}
-                onClose={() => setIdeaResearchId(undefined)}
-                researchId={ideaResearchId}
-                sessionId={state.sessionId}
-              />
-            </div>
+          {ideaCreate && state.sessionId ? (
+            <IdeaTreeCreateDialog
+              client={client}
+              onClose={() => setIdeaCreate(undefined)}
+              onStarted={() => { idea.reload(); setPanelGroup("task"); setWorkspaceOpen(true); }}
+              sessionId={state.sessionId}
+              task={ideaCreate.task}
+            />
           ) : null}
         </main>
 
@@ -1122,13 +1135,21 @@ export function App({ initialToken }: Props) {
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
           subagentStale={subagentStale}
-          task={evolveRun === undefined ? undefined : <EvolveDetail
+          task={ideaResearch === undefined ? (evolveRun === undefined ? undefined : <EvolveDetail
             client={client}
             key={evolveRun.id}
             onError={(message) => actions.toast(message, "error")}
             onRunChanged={() => void refreshEvolve()}
             run={evolveRun}
-          />}
+          />) : (
+            <IdeaResearchPanel
+              client={client}
+              key={ideaResearch.research.id}
+              onClose={() => setIdeaResearchId(undefined)}
+              researchId={ideaResearch.research.id}
+              sessionId={state.sessionId!}
+            />
+          )}
           tabs={state.tabs}
           tool={openTool}
         />

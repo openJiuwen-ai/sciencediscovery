@@ -932,7 +932,6 @@ export const ZH = {
         remote: { label: "远程", description: "远端 Runner 与项目可用机器" },
         timeouts: { label: "超时", description: "墙钟限制与不限模式" },
         "export-history": { label: "导出记录", description: "本机保存过的研究包" },
-        "idea-tree": { label: "Idea Tree", description: "假设树的研究范围与阶段思考强度" },
       },
       global: {
         modelHeading: "主模型",
@@ -1574,6 +1573,19 @@ export const ZH = {
     resume: "继续",
     end: "结束",
     open: "打开任务面板",
+    create: {
+      title: "启动 Idea Tree 研究",
+      hint: "研究在后台自行推进；卡出现后点开即可看树、节点与控制。",
+      taskLabel: "研究任务",
+      taskPlaceholder: "一句话说明课题与验收边界",
+      settingsToggle: "设置",
+      settingsHint: "关闭时使用已保存的默认值。",
+      start: "开始研究",
+      starting: "正在启动…",
+      cancel: "取消",
+      failed: "启动失败。",
+      unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回来重试。",
+    },
     detail: {
       title: "节点详情",
       tree: "假设树",
