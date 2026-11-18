@@ -53,6 +53,13 @@ import { casHashes, versionRefs, remapRunEvent, remapRunStreamId, remapReference
 type Ports = Pick<ReturnType<typeof createPlatformServices>, "store" | "memoryGraphClient" | "memoryGraphEnabled" | "provenanceRecorder" | "evolutionStore" | "evolveCandidates">;
 type PreviewSizing = {
   objectSizes: Map<string, number>; additionalRecordBytes: number;
+  /**
+   * Sizes of objects the writer will add but whose address the preview cannot know
+   * without reading the payload — a workspace file the exporter copies and hashes
+   * while it writes. They are counted as objects, not as record bytes, so the
+   * estimate keeps matching the archive the same selection produces (#1216 review 4).
+   */
+  unpinnedObjectBytes: number[];
   hashes: Set<string>; refs: Map<string, ObjectRef>;
   jsonSizes: WeakMap<object, number>; casVisited: WeakSet<object>; refsVisited: WeakSet<object>;
   /**
@@ -390,6 +397,16 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       shells: sessions.map((session) => store.shellExecutions.revisionSnapshot(session.id)), environments: store.listEnvironmentRevisions(),
       memory: [memoryGraphEnabled(), memoryGraphClient.snapshotRevision(sessions.map((session) => session.id))] });
   };
+  // A corrupt copy is not a missing one. The export reports absent objects as
+  // omissions so a package is still produced, but an object that is present and does
+  // not hash to its address means this installation's evidence is damaged — silently
+  // dropping it would hand back a package that looks complete (#1216 review 4).
+  const isIntegrityFailure = (error: unknown) => error instanceof Error && error.message === "CAS integrity failure";
+  // Reported as a conflict, not a server fault: the request is well formed, the stored
+  // evidence under it is not, and the client should say so instead of retrying blindly.
+  const integrityRefusal = () => new SessionStoreHttpError(
+    "证据包中有对象与其地址不符（CAS integrity failure），导出已中止；请修复存储后重试。", 409);
+
   const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal, options: { streamObjects?: boolean } = {}): Promise<ExportInput> => {
     signal.throwIfAborted();
     const previewObjectSizes = preview?.objectSizes;
@@ -415,9 +432,11 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       if (objects.has(hash)) return hash;
       // A lazy source has no read to fail in: check the address now, or the miss would
       // surface inside the writer and fail the whole export instead of becoming an
-      // omission like the resident path (#1211 F7).
+      // omission like the resident path (#1211 F7). The probe is presence only — the
+      // writer streams these bytes anyway, so reading them here would put the largest
+      // object of the export in memory for an answer nothing uses (#1216 F1).
       try {
-        if (!(await provenanceRecorder.cas.has(hash))) throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
+        if (!(await provenanceRecorder.cas.exists(hash))) throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
       } catch {
         signal.throwIfAborted();
         omissions.push(`cas:${hash}:unavailable source object`);
@@ -575,11 +594,20 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         const provenance = store.getWorkspaceFileProvenance(session.id, file.path);
         if (provenance) workspaceProvenance.push(provenance);
         // A size preview needs metadata, not every workspace payload or its checksum.
-        // Unknown hashes get a preview-only identity. For a real export the payload bytes
-        // are read after the retained files are known, so a deselected file is never read.
-        const objectPath = previewObjectSizes
-          ? addPreviewObject(provenance?.currentRevision.contentHash ?? sha256(Buffer.from(JSON.stringify([session.id, file.path, file.modifiedAt, file.size]))), file.size, "evidence")
-          : "";
+        // When the file has a provenance revision the address is already known, so the
+        // preview can name the object the writer will emit. A file with no revision has
+        // no address yet — the exporter hashes it as it copies — so it contributes its
+        // size without inventing an identity: a preview that names an address no export
+        // can write counts an entry the archive never carries (#1216 review 4).
+        const revision = provenance?.currentRevision;
+        const known = revision?.contentHash;
+        let objectPath = "";
+        if (previewObjectSizes) {
+          if (known) {
+            addPreviewObject(known, file.size, "evidence");
+            objectPath = known;
+          } else preview!.unpinnedObjectBytes.push(file.size);
+        }
         workspace.push({ ...file, objectPath });
       }
       const validations = {
@@ -611,6 +639,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           // no objectPath rather than pointing at an address the package will not carry.
           if (artifactPath) artifactObjectPaths.set(version.id, artifactPath);
         } catch (error) {
+          if (isIntegrityFailure(error)) throw integrityRefusal();
           omissions.push(`artifact:${version.id}:${error instanceof Error ? error.message : "unreadable"}`);
         }
       }
@@ -739,6 +768,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
               : await addObject(await readFile(absolute), "evidence");
             retained.push(file);
           } catch (error) {
+            if (isIntegrityFailure(error)) throw integrityRefusal();
             omissions.push(`workspace:${record.session.id}:${file.path}:${error instanceof Error ? error.message : "unreadable"}`);
           }
         }
@@ -779,7 +809,11 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         } else if (streamObjects) await addObjectSource(hash, "log");
         else await addObject(await provenanceRecorder.cas.read(hash), "log");
       }
-      catch { signal.throwIfAborted(); omissions.push(`cas:${hash}:unavailable source object`); }
+      catch (error) {
+        if (isIntegrityFailure(error)) throw integrityRefusal();
+        signal.throwIfAborted();
+        omissions.push(`cas:${hash}:unavailable source object`);
+      }
     }
     const versions = new VersionStore(store.dataDir);
     const versionObjects = new Map<string, ReturnType<typeof versionRefs>[number]>();
@@ -809,7 +843,11 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         if (ref.mediaType.includes("json")) {
           try { pending.push(...versionRefs(JSON.parse(bytes.toString("utf8")))); } catch { /* Opaque evidence remains byte-exact. */ }
         }
-      } catch { signal.throwIfAborted(); omissions.push(`version:${key}:unavailable source object`); }
+      } catch (error) {
+        if (isIntegrityFailure(error)) throw integrityRefusal();
+        signal.throwIfAborted();
+        omissions.push(`version:${key}:unavailable source object`);
+      }
     }
     return {
       source: { projectId, title: project.name, sessionIds: sessions.map((item) => item.id) },
@@ -852,7 +890,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       // dropped the listing for every profile after it. A standalone preview gets a
       // throwaway map, which is the same behaviour as before the sharing existed.
       const workspaceListings = (scope ?? new Map()) as PreviewWorkspaceListings;
-      const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, hashes: new Set(), refs: new Map(),
+      const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, unpinnedObjectBytes: [], hashes: new Set(), refs: new Map(),
         jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(),
         trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined,
         workspaceListings };
@@ -864,13 +902,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       }
       const selectedPaths = new Set(records.sessions?.find((record) => record.session.id === sessionId)?.workspace?.map((file) => file.path));
       return {
-        revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes), estimateKind: "uncompressed" as const,
+        revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes, preview.unpinnedObjectBytes), estimateKind: "uncompressed" as const,
         // The cap and the exact tar size the export would be refused on. Both are
         // additive: a client that ignores them keeps the old behaviour, and a client
         // that uses them gates on the quantity the exporter itself checks rather than
         // on the approximation above (they differ by a few percent either way).
         maxBytes: RESEARCH_PACKAGE_MAX_BYTES,
-        archiveBytes: researchPackageArchiveBytes(input, preview.objectSizes, preview.additionalRecordBytes),
+        archiveBytes: researchPackageArchiveBytes(input, preview.objectSizes, preview.additionalRecordBytes, preview.unpinnedObjectBytes),
         files: sessionId ? (await (preview.workspaceListings
           ? previewWorkspaceListing(preview.workspaceListings, store, sessionId)
           : listWorkspaceFiles(store, sessionId, true))).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],

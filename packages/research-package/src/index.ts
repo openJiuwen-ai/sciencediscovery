@@ -356,7 +356,7 @@ function prepareResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_
  * pads the manifest approximately and can differ by a few percent either way.
  */
 export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>,
-  additionalRecordBytes = 0): number {
+  additionalRecordBytes = 0, unpinnedObjectBytes: readonly number[] = []): number {
   const objects = [...(input.objects ?? [])];
   const recordsBytes = jsonByteLength(input.records) + additionalRecordBytes;
   const readmeBytes = Buffer.byteLength(input.readme ?? DEFAULT_README);
@@ -364,6 +364,13 @@ export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: Re
   const sizes: number[] = [recordsBytes, readmeBytes];
   for (const object of objects) {
     const size = objectSizes?.get(object.path) ?? objectSize(object);
+    inventory.push({ path: `objects/${HASH_PLACEHOLDER}`, sizeBytes: size, checksum: HASH_PLACEHOLDER, kind: "object" });
+    sizes.push(size);
+  }
+  // Objects whose address the caller cannot name yet still occupy one inventory entry
+  // and one payload each; the manifest keeps a fixed-width path for them, so leaving
+  // them out of the count would under-report the archive the writer produces.
+  for (const size of unpinnedObjectBytes) {
     inventory.push({ path: `objects/${HASH_PLACEHOLDER}`, sizeBytes: size, checksum: HASH_PLACEHOLDER, kind: "object" });
     sizes.push(size);
   }
@@ -802,15 +809,25 @@ export async function importResearchPackageStreamed(
 
 export { canonical, sha256 };
 
-/** Uncompressed estimate: never compress an archive solely to display a size. */
-export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>, additionalRecordBytes = 0): number {
+/**
+ * Uncompressed estimate: never compress an archive solely to display a size.
+ *
+ * `unpinnedObjectBytes` covers objects the writer will add whose address a caller
+ * cannot name without reading them — a preview of a workspace file the exporter
+ * hashes while it copies. They are counted exactly like an object entry, because
+ * that is what they become, rather than being folded into the record bytes.
+ */
+export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>,
+  additionalRecordBytes = 0, unpinnedObjectBytes: readonly number[] = []): number {
   if (!Number.isSafeInteger(additionalRecordBytes) || additionalRecordBytes < 0) throw new Error("Invalid additional record size");
   const padded = (size: number) => TAR_BLOCK + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
   const recordBytes = jsonByteLength(input.records) + additionalRecordBytes;
   const readmeBytes = Buffer.byteLength(input.readme ?? "# ScienceDiscovery Research Package\n\nThis package contains immutable research evidence. Package bytes are not executed during import.\n");
+  const objectCount = (input.objects?.length ?? 0) + unpinnedObjectBytes.length;
   // Inventory and manifest metadata are small compared with evidence payloads.
   const manifestEstimate = jsonByteLength({ source: input.source, omissions: input.omissions, exportProfile: input.exportProfile })
-    + 1024 + (input.objects?.length ?? 0) * 256;
+    + 1024 + objectCount * 256;
   return padded(recordBytes) + padded(readmeBytes) + padded(manifestEstimate)
-    + (input.objects ?? []).reduce((sum, object) => sum + padded(objectSizes?.get(object.path) ?? objectSize(object)), 0) + TAR_BLOCK * 2;
+    + (input.objects ?? []).reduce((sum, object) => sum + padded(objectSizes?.get(object.path) ?? objectSize(object)), 0)
+    + unpinnedObjectBytes.reduce((sum, size) => sum + padded(size), 0) + TAR_BLOCK * 2;
 }

@@ -70,6 +70,33 @@ test("a corrupted object is absent for has() and verify(), and read() still reje
   });
 });
 
+test("exists() answers presence without reading the payload, in every layout has() walks", async () => {
+  // #1216 F1: the inventory probe must not buffer the object it is about to stream.
+  await withStore(async (store, root) => {
+    const stored = await store.put("an object the writer will stream");
+    assert.equal(await store.exists(stored.hash), true);
+
+    // A corrupt-only object is present for this probe: integrity is the writer's job,
+    // and `stream()` refuses it loudly instead of the probe silently dropping it.
+    const blob = resolve(root, "versioning", "agent-state", "blobs", "sha256", stored.hash);
+    await writeFile(blob, "not the bytes that hash to this address");
+    assert.equal(await store.exists(stored.hash), true, "a corrupt copy is still a present object");
+    assert.equal(await store.has(stored.hash), false, "has() still refuses to vouch for it");
+    await assert.rejects(store.stream(stored.hash).next(), /CAS integrity failure/);
+
+    // The legacy layout is a candidate too, so a hash stored only there is present.
+    const legacyBytes = Buffer.from("legacy evidence");
+    const legacyHash = sha256(legacyBytes);
+    const legacy = resolve(root, "cas", "sha256", legacyHash.slice(0, 2), legacyHash);
+    await mkdir(resolve(root, "cas", "sha256", legacyHash.slice(0, 2)), { recursive: true });
+    await writeFile(legacy, legacyBytes);
+    assert.equal(await store.exists(legacyHash), true);
+    assert.deepEqual(await store.read(legacyHash), legacyBytes);
+
+    assert.equal(await store.exists(sha256("never stored")), false);
+  });
+});
+
 test("invalid hashes are rejected and missing objects do not verify", async () => {
   await withStore(async (store) => {
     await assert.rejects(store.read("../escape"), /Invalid CAS hash/);

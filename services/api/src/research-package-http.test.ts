@@ -4,7 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -127,6 +127,53 @@ test("incremental previews match exported evidence and profile sizes", async (co
     // here would mean the dialog refuses work the server would happily do.
     assert.ok(preview.archiveBytes! <= preview.maxBytes!, query);
   }
+});
+
+test("an absent object is an omission while a corrupt one fails the export", async (context) => {
+  // #1216 review 4 pins both halves of the probe's contract: presence is decided
+  // without reading the payload, so an object that is gone is reported as an omission
+  // and the package is still produced, while a copy that is present and does not hash
+  // to its address fails the export instead of being dropped as if it were missing.
+  const { rawRequest, request, project, root } = await fixture(context, true);
+  const target = await project();
+  await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(researchTrajectoryFixture().bytes),
+  });
+  const base = `/api/projects/${target.id}/research-package?sessionId=${target.firstSession.id}&level=complete`;
+  const baseline = importResearchPackage(new Uint8Array(await (await request(base)).arrayBuffer()));
+  // Every file whose name carries the address: the store keeps the object under more
+  // than one layout (blob pool, legacy sha256 tree, version objects) and `read()`
+  // falls through to the next copy, so removing one would leave it readable.
+  const stored = async (hash: string) => {
+    const listed = await readdir(root, { recursive: true });
+    return listed.filter((entry): entry is string => typeof entry === "string" && entry.includes(hash)).map((entry) => resolve(root, entry));
+  };
+  // An artifact payload lives only in the CAS (a workspace payload is re-read from the
+  // workspace file and re-added with the same address, so deleting its blob proves
+  // nothing). Take the address the records name for an artifact version.
+  const artifactRecords = (baseline.records as { artifacts?: Array<{ versions?: Array<{ objectPath?: string }> }> }).artifacts ?? [];
+  const candidates = artifactRecords.flatMap((artifact) => (artifact.versions ?? []).map((version) => version.objectPath)).filter((path): path is string => Boolean(path));
+  assert.ok(candidates.length, "the fixture exports at least one artifact payload from the CAS");
+  let victim: { hash: string; layouts: string[] } | undefined;
+  for (const hash of candidates) {
+    const layouts = await stored(hash);
+    if (layouts.length) { victim = { hash, layouts }; break; }
+  }
+  assert.ok(victim, "at least one carried artifact object lives in the CAS");
+
+  // Every copy has to go: `read()` falls through to the next layout, so removing one
+  // would leave the object readable and the omission would be a false pass.
+  for (const layout of victim.layouts) await rm(layout, { force: true });
+  const missing = importResearchPackage(new Uint8Array(await (await request(base)).arrayBuffer()));
+  assert.ok(missing.manifest.omissions.some((item) => item.includes("CAS object not found") || item.includes(`cas:${victim.hash}:unavailable source object`)),
+    `the absent object is named, not silently dropped: ${JSON.stringify(missing.manifest.omissions)}`);
+
+  await writeFile(victim.layouts[0]!, "bytes that do not hash to this address");
+  // The archive is written into the response as it packs, so a corrupt object aborts
+  // the download instead of delivering a package with the object quietly dropped. The
+  // store-level half of this contract — present for the probe, refused by `stream()`
+  // with the integrity error — is pinned in packages/cas/src/index.test.ts.
+  await assert.rejects(rawRequest(base), TypeError, "a corrupt-only object must not produce a package");
 });
 
 test("pending export previews return HTTP 409 for single and default profiles", async (context) => {

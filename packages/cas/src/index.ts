@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { open, readFile } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { CasObjectRef } from "@sciencediscovery/schema";
@@ -29,6 +29,8 @@ export * from "./workspace-copy.js";
 export interface ContentStore {
   hash(content: string | Buffer): string;
   has(hash: string): Promise<boolean>;
+  /** Presence only: no payload read, so the caller can decide before streaming. */
+  exists(hash: string): Promise<boolean>;
   put(content: string | Buffer): Promise<CasObjectRef>;
   putFile(path: string): Promise<CasObjectRef>;
   read(hash: string): Promise<Buffer>;
@@ -88,6 +90,34 @@ export class CasStore implements ContentStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as Error).message === "CAS integrity failure") return false;
       throw error;
     }
+  }
+
+  /**
+   * Whether the object has a file in any layout, without reading its payload.
+   *
+   * `has()` answers through `read()`, so it buffers the whole object and verifies
+   * it. A caller that only needs to know the object is there — the package
+   * inventory, which then streams the same bytes into the archive — would pay the
+   * largest allocation of the export for an answer it throws away (#1216 F1).
+   *
+   * The layouts are the ones `read()` walks, so a copy in the other pool or in the
+   * legacy tree is still present. Integrity is deliberately not part of the answer:
+   * `stream()` verifies every candidate before the first byte leaves the store, so
+   * an object whose copies are all corrupt reads as present here and then fails the
+   * write loudly instead of being dropped as missing.
+   */
+  async exists(hash: string): Promise<boolean> {
+    for (const path of this.readPaths(hash)) {
+      try {
+        await stat(path);
+        return true;
+      } catch (error) {
+        // Only a missing copy falls through to the next layout; any other
+        // filesystem failure is this store's problem, not the object's.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return false;
   }
 
   async verify(hash: string): Promise<boolean> {
