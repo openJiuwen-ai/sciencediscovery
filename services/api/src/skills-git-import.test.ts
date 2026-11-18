@@ -160,6 +160,69 @@ test("a scan lists a repository with more than a hundred packages", async () => 
   }
 });
 
+test("an inspection pages a repository larger than one response", async () => {
+  const dataDir = await temporaryDataDir();
+  const commit = "9".repeat(40);
+  const count = 520;
+  const repositoryUrl = "https://example.com/skills.git";
+  let clones = 0;
+  const checkout: GitSkillCheckout = async (importRoot, input) => {
+    clones += 1;
+    const root = resolve(importRoot, `fake-${Math.random().toString(36).slice(2)}`);
+    for (let index = 0; index < count; index += 1) {
+      const name = `skill-${String(index).padStart(3, "0")}`;
+      await mkdir(resolve(root, "skills", name), { recursive: true });
+      await writeFile(resolve(root, "skills", name, "SKILL.md"), markdown(name));
+    }
+    return { checkout: root, commit, normalized: validateGitSkillImportRequest(input) };
+  };
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, { checkoutGit: checkout });
+    await catalog.load();
+    const first = await catalog.inspectGitRepository({ repositoryUrl });
+    assert.equal(first.candidates.length, 500);
+    assert.equal(first.total, count);
+    assert.equal(first.nextCursor, first.candidates.at(-1)?.subdirectory);
+
+    // Reading on names the commit the first page saw: the second page is the
+    // same tree, served from the checkout the first page left behind.
+    const second = await catalog.inspectGitRepository({
+      commit: first.commit,
+      cursor: first.nextCursor,
+      repositoryUrl,
+    });
+    assert.equal(clones, 1, "the second page reused the first page's checkout");
+    assert.equal(second.candidates.length, count - 500);
+    assert.equal(second.total, count);
+    assert.equal(second.nextCursor, undefined);
+
+    // The two pages meet without a gap, an overlap, or a reordering.
+    const seen = [...first.candidates, ...second.candidates].map((row) => row.subdirectory);
+    assert.equal(seen.length, count);
+    assert.equal(new Set(seen).size, count);
+    assert.deepEqual(seen, [...seen].sort());
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("a page after the first needs the commit it was read at", async () => {
+  const dataDir = await temporaryDataDir();
+  const commit = "8".repeat(40);
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, {
+      checkoutGit: fakeGitCheckout({ commit }),
+    });
+    await catalog.load();
+    await assert.rejects(
+      catalog.inspectGitRepository({ cursor: "skills/git-skill", repositoryUrl: "https://example.com/skills.git" }),
+      /requires the commit/,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("a partial checkout keeps resources on the server until a package needs them", async () => {
   const dataDir = await temporaryDataDir();
   const source = resolve(dataDir, "source");

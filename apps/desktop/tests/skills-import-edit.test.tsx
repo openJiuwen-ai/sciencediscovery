@@ -22,7 +22,7 @@ import type {
   SkillDetail,
 } from "../src/api/types.js";
 import { SkillEditorView } from "../src/views/settings/SkillEditorView.js";
-import { GIT_CANDIDATE_PAGE_SIZE, SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
+import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
 import { SkillUploadView } from "../src/views/settings/SkillUploadView.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
@@ -160,8 +160,6 @@ test("a Git inspection pins the commit and never overwrites without the revision
     const checkboxes = view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
     assert.deepEqual(checkboxes.map((node) => node.props.disabled), [false, false, false, true]);
     assert.deepEqual(checkboxes.map((node) => node.props.checked), [true, true, true, false]);
-    // Three rows are one page, so there is nothing to turn.
-    assert.ok(!JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.page(1, 1)));
 
     await act(async () => {
       buttonWithText(view, TEXT.settings.skills.git.importSelected(2)).props.onClick();
@@ -185,58 +183,73 @@ test("a Git inspection pins the commit and never overwrites without the revision
   } finally { await act(async () => { view.unmount(); }); }
 });
 
-test("a long candidate list is paged, and ticks survive the page turn", async () => {
+const gitRows = (from: number, to: number) => Array.from({ length: to - from }, (_, offset) => ({
+  description: `Skill ${from + offset}`,
+  diagnostics: [],
+  name: `skill-${from + offset}`,
+  status: "new" as const,
+  subdirectory: `skills/skill-${from + offset}`,
+}));
+
+/** A repository whose inspection answers in two pages. */
+function twoPageInspection(): { commit: string; stub: StubClient; url: string } {
   const commit = "0123456789abcdef0123456789abcdef01234567";
-  const count = GIT_CANDIDATE_PAGE_SIZE * 2 + 5;
-  const inspection: GitSkillRepositoryInspection = {
-    commit,
-    repositoryUrl: "https://example.invalid/org/skills.git",
-    candidates: Array.from({ length: count }, (_, index) => ({
-      description: `Skill ${index}`,
-      diagnostics: [],
-      name: `skill-${index}`,
-      status: "new" as const,
-      subdirectory: `skills/skill-${index}`,
-    })),
-  };
-  const stub = new StubClient().reply(inspection);
+  const url = "https://example.invalid/org/skills.git";
+  const stub = new StubClient()
+    .reply({ candidates: gitRows(0, 3), commit, nextCursor: "skills/skill-2", repositoryUrl: url, total: 7 })
+    .reply({ candidates: gitRows(3, 7), commit, repositoryUrl: url, total: 7 });
+  return { commit, stub, url };
+}
+
+test("a repository larger than one page reads the rest on request", async () => {
+  const { commit, stub, url } = twoPageInspection();
   const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
   try {
-    const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
-    assert.ok(url);
-    await act(async () => { url.props.onChange({ target: { value: inspection.repositoryUrl } }); });
+    const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: url } }); });
     await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
 
-    // One page plus the select-all control.
+    // The header names the repository, the list shows the page it got.
     const checkboxes = () => view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
-    assert.equal(checkboxes().length, GIT_CANDIDATE_PAGE_SIZE + 1);
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.page(1, 3)));
-    assert.equal(buttonWithText(view, TEXT.settings.skills.git.previousPage).props.disabled, true);
-    assert.equal(buttonWithText(view, TEXT.settings.skills.git.nextPage).props.disabled, false);
+    const rendered = () => JSON.stringify(view.toJSON());
+    assert.ok(rendered().includes(TEXT.settings.skills.git.found(7)));
+    assert.ok(rendered().includes(TEXT.settings.skills.git.loaded(3, 7)));
+    assert.equal(checkboxes().length, 4);
+    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(3)));
 
-    // Select-all and the import count mean the repository, not the page: the
-    // count does not drop when the second page shows different rows.
-    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(count)));
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.nextPage).props.onClick(); });
-    assert.equal(checkboxes().length, GIT_CANDIDATE_PAGE_SIZE + 1);
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.page(2, 3)));
-    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(count)));
-    assert.deepEqual(
-      checkboxes().map((node) => node.props.checked),
-      Array.from({ length: GIT_CANDIDATE_PAGE_SIZE + 1 }, () => true),
-    );
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
 
-    // Clearing and selecting all from page 2 still reaches the other pages.
+    // The next page is read at the same commit, from where the last one
+    // ended; the rows already read stay on screen.
+    assert.deepEqual(json(stub.calls[1]!), { commit, cursor: "skills/skill-2", repositoryUrl: url });
+    assert.equal(checkboxes().length, 8);
+    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(7)));
+    assert.ok(!rendered().includes(TEXT.settings.skills.git.loadMore));
+    // Every row was ticked before the second page arrived, so the new ones
+    // joined the selection.
+    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(7)));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("loading more does not re-tick what the user unticked", async () => {
+  const { stub, url } = twoPageInspection();
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
+  try {
+    const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: url } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+
+    const checkboxes = () => view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
     await act(async () => { checkboxes()[0]!.props.onChange(); });
     assert.equal(buttonWithText(view, TEXT.settings.skills.git.importSelected(0)).props.disabled, true);
-    await act(async () => { checkboxes()[0]!.props.onChange(); });
-    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(count)));
 
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.nextPage).props.onClick(); });
-    assert.equal(checkboxes().length, count - GIT_CANDIDATE_PAGE_SIZE * 2 + 1);
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.page(3, 3)));
-    assert.equal(buttonWithText(view, TEXT.settings.skills.git.nextPage).props.disabled, true);
-    assert.equal(buttonWithText(view, TEXT.settings.skills.git.previousPage).props.disabled, false);
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
+
+    assert.equal(checkboxes().length, 8);
+    assert.equal(buttonWithText(view, TEXT.settings.skills.git.importSelected(0)).props.disabled, true);
+    assert.deepEqual(checkboxes().map((node) => node.props.checked), Array.from({ length: 8 }, () => false));
   } finally { await act(async () => { view.unmount(); }); }
 });
 

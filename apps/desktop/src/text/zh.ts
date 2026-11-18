@@ -769,11 +769,11 @@ export const ZH = {
         found: (count: number) => `找到 ${count} 个技能包`,
         selectAll: "全选",
         importSelected: (count: number) => `导入选中的 ${count} 项`,
-        /** 翻页只改变显示哪一页；全选与「导入选中」始终按整个仓库计数，
-         *  所以勾选不会因为翻页而丢失。 */
-        page: (page: number, pages: number) => `第 ${page} / ${pages} 页`,
-        previousPage: "上一页",
-        nextPage: "下一页",
+        /** 一次检查只返回一页；仓库里还有更多时，这个按钮接着读下一页，
+         *  已经读到的条目和勾选都保留。 */
+        loadMore: "加载更多",
+        loadingMore: "正在加载…",
+        loaded: (loaded: number, total: number) => `已加载 ${loaded} / 共 ${total} 个`,
         empty: "这个仓库里没有找到技能包。",
       },
       editor: {

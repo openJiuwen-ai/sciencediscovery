@@ -265,6 +265,18 @@ export interface ImportSkillFromGitRequest {
 }
 
 export interface InspectGitSkillRepositoryRequest {
+  /**
+   * The commit a previous inspection returned. Required with `cursor`, so the
+   * next page is read from the same tree instead of whatever the ref points
+   * at now.
+   */
+  commit?: string;
+  /**
+   * Where the previous page ended: pass back the `nextCursor` it returned.
+   * Discovery walks the whole checkout on every page, so a page costs the
+   * `SKILL.md` files it returns, not the ones before it.
+   */
+  cursor?: string;
   ref?: string;
   repositoryUrl: string;
   /** Restrict discovery to a package root or marketplace subtree when it is already known. */
@@ -282,10 +294,19 @@ export interface GitSkillImportCandidate {
 }
 
 export interface GitSkillRepositoryInspection {
+  /** One page of the packages the repository carries, in subdirectory order. */
   candidates: GitSkillImportCandidate[];
   commit: string;
+  /**
+   * Where the next page starts. Absent when this page is the last one. Pass
+   * it back with `commit` (and the same repository, ref and subdirectory) to
+   * read on.
+   */
+  nextCursor?: string;
   ref?: string;
   repositoryUrl: string;
+  /** How many packages the repository carries, across every page. */
+  total?: number;
 }
 
 export interface CreateGitSkillReviewDraftsRequest {
