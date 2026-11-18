@@ -57,6 +57,7 @@ export function ExportHistoryList({
     <ul className="export-history">
       {rows.map((row) => (
         <li className={row.exists ? "export-history-row" : "export-history-row is-missing"} key={row.id}>
+          <span aria-hidden="true" className="export-history-glyph"><svg fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="16"><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h4" /></svg></span>
           <span className="export-history-main">
             <span className="export-history-name" title={row.filename}>{row.filename}</span>
             <span className="export-history-meta">
