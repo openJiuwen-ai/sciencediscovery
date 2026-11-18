@@ -13,7 +13,7 @@ import { TEXT } from "../src/text.js";
 const t = TEXT.ideaTree;
 
 const graph: IdeaTreeGraph = {
-  edges: [{ from: "root", to: "leaf" }],
+  edges: [{ ordinal: 0, source: "root", target: "leaf", type: "child" }],
   nodes: [
     { activeExecutionId: null, artifactRefs: [], attemptCount: 1, childrenIds: ["leaf"], completedResultHandle: null, createdAt: "2026-11-01T00:00:00Z", depth: 0, hypothesis: "旧版根节点", id: "root", insight: null, lastExecutionId: null, parentId: null, priority: 1, pruneReason: null, result: null, score: null, searchStatus: "active", status: "done", updatedAt: "2026-11-01T00:00:00Z", kind: "direction", stages: {} },
     { activeExecutionId: null, artifactRefs: [], attemptCount: 1, childrenIds: [], completedResultHandle: null, createdAt: "2026-11-01T00:00:00Z", depth: 1, hypothesis: "旧版叶子", id: "leaf", insight: null, lastExecutionId: null, parentId: "root", priority: 2, pruneReason: null, result: null, score: 0.3, searchStatus: "pruned", status: "done", updatedAt: "2026-11-01T00:00:00Z", kind: "candidate", stages: {} },

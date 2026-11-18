@@ -39,6 +39,9 @@ export interface IdeaResearchListState {
   loading: boolean;
   unavailable: boolean;
   error?: string;
+  /** How many list reads have completed, oldest first. An id can only be new
+   *  relative to a read that finished after the command that asked for it. */
+  loads: number;
   reload: () => void;
 }
 
@@ -47,6 +50,7 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
   const [loading, setLoading] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [error, setError] = useState<string>();
+  const [loads, setLoads] = useState(0);
   const [tick, setTick] = useState(0);
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
 
@@ -61,6 +65,7 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
         const next = await listIdeaResearches(client, sessionId);
         if (!active) return;
         setViews(next);
+        setLoads((count) => count + 1);
         setUnavailable(false);
         setError(undefined);
       } catch (reason: unknown) {
@@ -85,5 +90,5 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
     return () => clearInterval(timer);
   }, [anyLive, sessionId]);
 
-  return { views, loading, unavailable, ...(error ? { error } : {}), reload };
+  return { views, loading, unavailable, ...(error ? { error } : {}), loads, reload };
 }
