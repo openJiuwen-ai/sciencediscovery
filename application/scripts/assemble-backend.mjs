@@ -36,6 +36,9 @@ import {
   copyVenvRuntimeDlls, greenletRuntimeProblem, greenletVersionAtLeast,
   replaceVenvSymlinks, pythonNamesFor, relocatablePythonTree,
 } from "./lib/venv-launchers.mjs";
+import {
+  DISTRIBUTION_SNAPSHOT_PROGRAM, parseDistributionSnapshot, venvPreflightProblem,
+} from "./lib/venv-lock-consistency.mjs";
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
 import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
@@ -222,6 +225,39 @@ async function newestMtime(dir, exclude) {
   }
   say("stale-dist gate passed (services/packages/apps)");
 }
+
+// ---------------------------------------------------------------------------
+// 1c. Venv / patch-set dependency preflight (issue #1218). `jiuwenswarm.mjs
+// setup` provisions the jw venv with `uv sync` against the *patched* uv.lock,
+// but a dependency-carrying swarm patch (0018, 0019, 0021, …) rewrites that
+// lock without touching an existing venv. The end-of-run greenlet gate below
+// does notice, yet only after the whole payload has been written (observed:
+// 759 s). Comparing the two here — before `out` is recreated, so before a byte
+// is written — turns that into a seconds-long refusal; the end gate stays as
+// the second line of defence for a venv that changes mid-run.
+{
+  const jwSrcDir = join(data, "jiuwenswarm", "src");
+  const patchedLock = join(jwSrcDir, "uv.lock");
+  const devVenvPython = join(jwSrcDir, ".venv", dialect.venvBin, dialect.venvPythonName);
+  if (existsSync(patchedLock) && existsSync(devVenvPython)) {
+    let installed;
+    try {
+      installed = parseDistributionSnapshot(execFileSync(devVenvPython,
+        ["-c", DISTRIBUTION_SNAPSHOT_PROGRAM], {
+          encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
+        }));
+    } catch (error) {
+      fail(`jw venv preflight FAILED: cannot list the installed distributions in ${devVenvPython}: ${error.message}. `
+        + "Re-run node scripts/jiuwenswarm.mjs setup (or bash scripts/jiuwenswarm.sh setup), then rebuild.");
+    }
+    const problem = venvPreflightProblem(readFileSync(patchedLock, "utf8"), installed);
+    if (problem) fail(problem);
+    say("jw venv matches the swarm patch set's uv.lock");
+  } else {
+    say("jw venv preflight skipped (no patched uv.lock or venv yet; setup provisions both)");
+  }
+}
+
 
 // Fresh staging: a stale partial tree (e.g. an interrupted earlier run) must
 // never leak into the payload.
