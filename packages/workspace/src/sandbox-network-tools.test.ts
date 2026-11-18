@@ -42,9 +42,10 @@ test("network purpose validation is returned as retryable tool guidance", async 
     hosts: ["eutils.ncbi.nlm.nih.gov:443"], purpose: "too long",
   });
   assert.equal(result.isError, true);
-  assert.equal(result.details?.error?.code, "INVALID_TOOL_ARGUMENTS");
-  assert.equal(result.details?.error?.retryable, true);
-  assert.match(result.details?.error?.message ?? "", /1 to 100 characters/);
+  const details = result.details as { error: { code: string; retryable: boolean; message: string } };
+  assert.equal(details.error.code, "INVALID_TOOL_ARGUMENTS");
+  assert.equal(details.error.retryable, true);
+  assert.match(details.error.message, /1 to 100 characters/);
 });
 
 test("a stale sandbox authorization returns guidance instead of an opaque shell failure", async () => {
@@ -56,9 +57,10 @@ test("a stale sandbox authorization returns guidance instead of an opaque shell 
     command: "python -c 'print(1)'", network_authorization_id: "old-token",
   });
   assert.equal(result.isError, true);
-  assert.equal(result.details?.error?.code, "INVALID_TOOL_ARGUMENTS");
-  assert.equal(result.details?.error?.retryable, true);
-  assert.match(result.details?.error?.message ?? "", /Discard the old network_authorization_id/);
+  const details = result.details as { error: { code: string; retryable: boolean; message: string } };
+  assert.equal(details.error.code, "INVALID_TOOL_ARGUMENTS");
+  assert.equal(details.error.retryable, true);
+  assert.match(details.error.message, /Discard the old network_authorization_id/);
 });
 
 for (const managed of [true, false]) for (const token of [undefined, "token"]) test(`shell preserves optional network token shape (managed=${managed}, token=${token})`, async () => {
