@@ -252,7 +252,9 @@ button, input, select { color: inherit; font: inherit; }
 
 /* --- list layout ----------------------------------------------------------- */
 
-.content { flex: 1; margin: 0 auto; max-width: 1360px; padding: 28px 32px 64px; width: 100%; }
+/* The reference runs its page at 1600, so a wide screen gets a wide reading
+   column instead of a strip of empty margin on either side. */
+.content { flex: 1; margin: 0 auto; max-width: 1600px; padding: 28px 32px 64px; width: 100%; }
 
 .layout { align-items: start; display: grid; gap: 24px; grid-template-columns: 256px minmax(0, 1fr); }
 
@@ -473,7 +475,7 @@ button, input, select { color: inherit; font: inherit; }
 
 /* --- detail ---------------------------------------------------------------- */
 
-.detail-wrap { margin: 0 auto; max-width: 1080px; }
+.detail-wrap { margin: 0 auto; max-width: 1536px; }
 
 .detail {
   background: var(--surface);
