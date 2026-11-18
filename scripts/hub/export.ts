@@ -125,6 +125,7 @@ export async function exportHub(options: ExportOptions = {}): Promise<ExportResu
   for (const { asset } of skills) {
     claim(asset.download.url, asset.id);
     claim(asset.readme, asset.id);
+    for (const resource of asset.resources) claim(resource.url, asset.id);
   }
   for (const { asset } of external?.assets ?? []) {
     claim(asset.download.url, asset.id);
@@ -136,7 +137,7 @@ export async function exportHub(options: ExportOptions = {}): Promise<ExportResu
   }
   for (const { asset } of connectors) claim(asset.download.url, asset.id);
 
-  for (const { asset, markdown, zip } of skills) {
+  for (const { asset, files, markdown, zip } of skills) {
     // Team frontmatter names specialists the way a person would; the catalog
     // links by id, so resolve here and fail rather than publish a name the
     // site cannot follow.
@@ -156,6 +157,11 @@ export async function exportHub(options: ExportOptions = {}): Promise<ExportResu
     asset.related = { specialists: relatedSpecialists, skills: relatedSkills };
     await writeFileAt(outDir, asset.readme, `${markdown}\n`);
     await writeFileAt(outDir, asset.download.url, zip);
+    for (const resource of asset.resources) {
+      const bytes = files.get(resource.path);
+      if (!bytes) throw new Error(`skills/${asset.id} lost ${resource.path} after reading it`);
+      await writeFileAt(outDir, resource.url, bytes);
+    }
   }
   for (const { asset, markdown, zip } of external?.assets ?? []) {
     await writeFileAt(outDir, asset.readme, `${markdown}\n`);
