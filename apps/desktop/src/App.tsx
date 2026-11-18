@@ -36,6 +36,7 @@ import type {
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
+import { useIdeaResearches } from "./app/use-idea-researches.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
 import { followSubagent } from "./app/follow-subagent.js";
@@ -86,6 +87,8 @@ import { MemoryCardDialog } from "./views/MemoryCardDialog.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
+import { IdeaResearchCard } from "./views/idea/IdeaResearchCard.js";
+import { IdeaResearchPanel } from "./views/idea/IdeaResearchPanel.js";
 import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
 import { SetupWizard } from "./views/SetupWizard.js";
 import {
@@ -181,6 +184,11 @@ export function App({ initialToken }: Props) {
    *  than inside the panel: the searches must stay reachable while the panel is
    *  closed. */
   const evolve = useEvolve(client, state.sessionId);
+  /** The session's Idea Tree researches. Read at this level for the same reason
+   *  as the searches: a card stays reachable while the task panel is closed. */
+  const idea = useIdeaResearches(client, state.sessionId);
+  /** Which research the task panel shows, by id. */
+  const [ideaResearchId, setIdeaResearchId] = useState<string>();
   const refreshEvolve = evolve.refresh;
   /** Which search the panel is showing, by id. Storing the id rather than the
    *  record keeps the panel reading the same list the run cards do, so a status
@@ -1043,6 +1051,19 @@ export function App({ initialToken }: Props) {
                   the ending that already happened, and a new answer that
                   happens to stream a card of the same step must not wear that
                   ending's badge for a frame. */}
+              {/* One card per research; the panel is where the tree and the
+                  controls live, so the card itself only opens it. */}
+              {idea.views.length ? (
+                <div className="idea-cards">
+                  {idea.views.map((view) => (
+                    <IdeaResearchCard
+                      key={view.research.id}
+                      onOpen={() => setIdeaResearchId(view.research.id)}
+                      view={view}
+                    />
+                  ))}
+                </div>
+              ) : null}
               <CheckpointRefusedProvider value={state.running ? undefined : autoContinue.refusedStep}>
                 <Conversation
                   onOpenConfigurationSettings={openSettings}
@@ -1071,6 +1092,19 @@ export function App({ initialToken }: Props) {
             </>
           )}
           <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />
+          {ideaResearchId && state.sessionId ? (
+            <div
+              className="idea-panel-backdrop"
+              onMouseDown={(event) => { if (event.target === event.currentTarget) setIdeaResearchId(undefined); }}
+            >
+              <IdeaResearchPanel
+                client={client}
+                onClose={() => setIdeaResearchId(undefined)}
+                researchId={ideaResearchId}
+                sessionId={state.sessionId}
+              />
+            </div>
+          ) : null}
         </main>
 
         <WorkspacePanel
