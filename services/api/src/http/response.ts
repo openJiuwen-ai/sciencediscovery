@@ -21,18 +21,20 @@ export function send(
   statusCode: number,
   contentType: string,
   body: string | Buffer,
+  extraHeaders: Record<string, string> = {},
 ): void {
   response.writeHead(statusCode, {
     "cache-control": "no-store",
     "content-length": Buffer.byteLength(body),
     "content-type": contentType,
     "x-content-type-options": "nosniff",
+    ...extraHeaders,
   });
   response.end(body);
 }
 
-export function sendJson(response: ServerResponse, statusCode: number, value: unknown): void {
-  send(response, statusCode, "application/json; charset=utf-8", `${JSON.stringify(value)}\n`);
+export function sendJson(response: ServerResponse, statusCode: number, value: unknown, extraHeaders: Record<string, string> = {}): void {
+  send(response, statusCode, "application/json; charset=utf-8", `${JSON.stringify(value)}\n`, extraHeaders);
 }
 
 export function sendError(

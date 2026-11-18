@@ -69,7 +69,7 @@ does not start Lead silently.
 Idea Tree currently uses the session's OpenAI-compatible model through the API's model
 proxy. When the API or model is unavailable, research is saved as interrupted and can
 resume only after those services are available again. Model output must be JSON, with at
-most one correction for each formatting error. Network timeouts are not retried
+most one correction for each formatting error. A transient model rate limit (HTTP 429) is retried once with bounded backoff: the provider's Retry-After delay is honored when the proxy forwards it (capped at 60 seconds), otherwise a short fixed backoff is used. A 429 that reports exhausted quota is not retried, and repeated 429s interrupt the research with a clear reason. Pause or cancel interrupts a backoff wait. Network timeouts are not retried
 automatically. Model requests use the proxy's roughly 20-minute limit.
 
 An optional total-token budget relies on usage reported by the provider. Before a

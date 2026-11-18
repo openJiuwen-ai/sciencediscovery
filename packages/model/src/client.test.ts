@@ -214,6 +214,22 @@ test("model wire diagnostics classify retried attempts and preserve failed-reque
   });
 });
 
+test("a 429 carries the provider's retry delay on the thrown error", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(429, { "content-type": "application/json", "retry-after": "2" });
+    response.end('{"error":{"message":"too many requests"}}');
+  }, async (baseUrl) => {
+    const failure = await streamModelTurn({ baseUrl, model: "alias-4", proxy: { mode: "direct" } },
+      "s", [], [], { ...policy, maxRetries: 0 }, AbortSignal.timeout(5_000)).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 429);
+    // The sidecar owns the retry for this path, so the delay is carried on
+    // the error instead of being spent here (issue #1232).
+    assert.equal(failure.retryAfterMs, 2_000);
+  });
+});
+
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 
 // A reasoning model can spend the whole budget thinking and answer nothing. The
