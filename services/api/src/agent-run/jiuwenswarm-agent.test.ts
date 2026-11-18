@@ -18,7 +18,7 @@ import type { AddressInfo } from "node:net";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import { setTimeout as delay } from "node:timers/promises";
-import type { streamModelTurn } from "@sciencediscovery/model";
+import type { ModelUsage, streamModelTurn } from "@sciencediscovery/model";
 
 import type { AgentEvent } from "@sciencediscovery/orchestration";
 import { Type } from "typebox";
@@ -308,23 +308,38 @@ test("plugin-contributed tools (update_plan) are offered to the adapter and run 
   }
 });
 
-test("reported token usage becomes model_usage events and one summed usage event at the end", async () => {
-  const adapter = await fakeAdapter((_request, response) => {
+test("gateway usage is recorded once and SDK defaults cannot replace missing provider reasoning", async () => {
+  const usages: ModelUsage[] = [
+    { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null, reasoningTokens: 71 },
+    { inputTokens: 31, outputTokens: 7, totalTokens: 38, cacheReadTokens: 10, cacheWriteTokens: null },
+  ];
+  const adapter = await fakeAdapter(async ({ body }, response) => {
     response.writeHead(200);
-    response.write(line({ event: { type: "model.usage", usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null }, reasoningTokens: 71 } }));
-    response.write(line({ event: { type: "model.usage", usage: { inputTokens: 31, outputTokens: 7, totalTokens: 38, cacheReadTokens: 10, cacheWriteTokens: null } } }));
+    for (const usage of usages) {
+      const result = await fetch(`${body.model.baseUrl}/chat/completions`, {
+        method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` }, body: JSON.stringify({ messages: [] }),
+      });
+      assert.equal(result.status, 200); await result.text();
+      response.write(line({ event: { type: "model.usage", usage, reasoningTokens: 0 } }));
+    }
+    response.write(line({ event: { type: "model.usage", usage: usages[0], reasoningTokens: 0 } }));
     response.end(line({ done: { finalText: "" } }));
   });
   try {
-    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
+    let call = 0;
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, modelStreamer: async () => ({
+      assistantMessage: { role: "assistant", content: "ok" }, toolCalls: [], usage: usages[call++],
+    }) })(options());
     const events = collect(agent);
     await agent.execute("go");
-    assert.deepEqual(events.map((event) => event.type), ["model_usage", "model_usage", "usage"]);
-    assert.deepEqual(events[0], {
+    const accounting = events.filter(event => event.type === "model_usage" || event.type === "usage");
+    assert.deepEqual(accounting.map(event => event.type), ["model_usage", "model_usage", "usage"]);
+    assert.deepEqual(accounting[0], {
       type: "model_usage", usageReported: true,
       usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null, reasoningTokens: 71 },
     });
-    const summary = (events[2] as { usage: unknown }).usage;
+    assert.deepEqual(accounting[1], { type: "model_usage", usageReported: true, usage: { ...usages[1], reasoningTokens: null } });
+    const summary = accounting[2]?.type === "usage" ? accounting[2].usage : undefined;
     assert.deepEqual(summary, { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 731, outputTokens: 87, reasoningTokens: 71, totalTokens: 818 });
     // The same key order the native agent's summary has: it is serialised into subagent results.
     assert.deepEqual(Object.keys(summary as object), ["inputTokens", "outputTokens", "reasoningTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"]);
@@ -343,6 +358,62 @@ test("a run that reported no usage emits no usage summary", async () => {
   } finally {
     await adapter.close();
   }
+});
+
+test("main and child gateways keep provider reasoning isolated, preserve true zero, and ignore SDK-filled zeros", async () => {
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    const result = await fetch(`${body.model.baseUrl}/chat/completions`, {
+      method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` },
+      body: JSON.stringify({ stream: true, messages: [] }),
+    });
+    assert.equal(result.status, 200); await result.text();
+    response.write(line({ event: { type: "model.usage", usage: { inputTokens: 1000, outputTokens: 1000, totalTokens: 2000 }, reasoningTokens: 0 } }));
+    response.end(line({ done: { finalText: "ok" } }));
+  });
+  try {
+    const factory = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, modelStreamer: async endpoint => ({
+      assistantMessage: { role: "assistant", content: "ok" }, toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15,
+        reasoningTokens: endpoint.model === "main" ? 4 : endpoint.model === "child-zero" ? 0 : null },
+    }) });
+    const create = (model: string) => {
+      const config = options().config;
+      const agent = factory(options({ config: { ...config, model } }));
+      return { agent, events: collect(agent) };
+    };
+    const main = create("main"), childZero = create("child-zero"), childUnknown = create("child-unknown");
+    await Promise.all([main.agent.execute("main task"), childZero.agent.execute("child task"), childUnknown.agent.execute("child task")]);
+    for (const [run, expected] of [[main, 4], [childZero, 0], [childUnknown, null]] as const) {
+      const calls = run.events.filter(event => event.type === "model_usage");
+      const totals = run.events.filter(event => event.type === "usage");
+      assert.equal(calls.length, 1); assert.equal(totals.length, 1);
+      assert.equal(calls[0]?.usage?.reasoningTokens, expected);
+      assert.equal(totals[0]?.usage.reasoningTokens, expected);
+      assert.equal(totals[0]?.usage.totalTokens, 15, "SDK repeats and reasoning do not increase the provider total");
+    }
+  } finally { await adapter.close(); }
+});
+
+test("an unreported gateway call remains unknown even if the SDK sends fabricated zero usage", async () => {
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    const result = await fetch(`${body.model.baseUrl}/chat/completions`, {
+      method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` }, body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal(result.status, 200); await result.text();
+    response.write(line({ event: { type: "model.usage", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, reasoningTokens: 0 } }));
+    response.end(line({ done: { finalText: "ok" } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, modelStreamer: async () => ({
+      assistantMessage: { role: "assistant", content: "ok" }, toolCalls: [],
+    }) })(options());
+    const events = collect(agent);
+    await agent.execute("go");
+    assert.deepEqual(events.filter(event => event.type === "model_usage"), [{ type: "model_usage", usageReported: false }]);
+    assert.equal(events.some(event => event.type === "usage"), false);
+  } finally { await adapter.close(); }
 });
 
 test("a tool call from the adapter runs the real tool here and is reported as tool events", async () => {

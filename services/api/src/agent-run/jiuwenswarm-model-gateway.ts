@@ -28,6 +28,7 @@ import {
   type ModelClientPolicy,
   type ModelEndpoint,
   type ModelTurn,
+  type ModelUsage,
   type ModelWireDiagnostics,
   type ModelWireErrorClass,
   type WireToolSpec,
@@ -158,6 +159,7 @@ function usageOf(turn: ModelTurn) {
   return {
     prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens, total_tokens: usage.totalTokens,
     ...(usage.cacheReadTokens ? { prompt_tokens_details: { cached_tokens: usage.cacheReadTokens } } : {}),
+    ...(usage.reasoningTokens == null ? {} : { completion_tokens_details: { reasoning_tokens: usage.reasoningTokens } }),
   };
 }
 
@@ -241,6 +243,8 @@ export const MODEL_RESPONSE_ID_HEADER = "x-sciencediscovery-response-id";
 /** Run control is independent of optional, best-effort trajectory logging. */
 export interface ModelGatewayLifecycle {
   progress(): void;
+  /** Original provider usage, before Swarm can replace unreported fields with zero. Task calls only. */
+  onUsage?(usage: ModelUsage | undefined): void;
   /** Synchronous admission, before sending a task model request upstream. */
   beforeTurn?(): void;
   /**
@@ -498,6 +502,7 @@ export async function startModelGateway(
       trace("upstream_dispatched", true);
     };
     const record = async (turn: ModelTurn) => {
+      if (!auxiliary) lifecycle?.onUsage?.(turn.usage);
       if (observed) await observe("completion", () => observed.completed(turn, history, call));
     };
     const streamTurn = async (
