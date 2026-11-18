@@ -59,6 +59,7 @@ import {
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
 import { isIdeaTreeCommand } from "./idea/command.js";
+import { stepAwaitingIdea } from "./idea/awaiting.js";
 import { taskTabKept } from "./idea/task-tab.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
@@ -218,8 +219,10 @@ export function App({ initialToken }: Props) {
   const seenRunIds = useRef<Set<string>>(new Set());
   /** The same for the session's researches, kept apart from the runs: an Idea
    *  Tree research is created by the agent, so it can only be recognised after
-   *  the fact. */
-  const seenIdeaIds = useRef<Set<string>>(new Set());
+   *  the fact. `awaitingIdeaFrom` records how many list reads had finished when
+   *  the command left, which is what makes the first read after it a baseline
+   *  rather than news — a read that started earlier can still land later. */
+  const awaitingIdeaFrom = useRef<{ loads: number; baseline?: ReadonlySet<string> } | undefined>(undefined);
   /** The instant the command was sent; a run older than it was already there. */
   const awaitingSince = useRef(0);
   /** The create dialog, open with a typed goal when the command was diverted
@@ -252,9 +255,9 @@ export function App({ initialToken }: Props) {
     setLegacyOpen(false);
     setAwaitingRun(false);
     setAwaitingIdea(false);
+    awaitingIdeaFrom.current = undefined;
     setSeededCommand(undefined);
     seenRunIds.current = new Set();
-    seenIdeaIds.current = new Set();
   }, [state.sessionId]);
 
   // The list is not polled until a research is live, and the agent creates this
@@ -275,23 +278,26 @@ export function App({ initialToken }: Props) {
     return () => window.clearInterval(timer);
   }, [awaitingIdea, idea.reload]);
 
-  // Open a research this window asked for. The agent creates it during the run,
-  // so it appears in the list a little later; everything the list already held is
-  // recorded as seen, which is also what keeps a reopened session from opening
-  // anything by itself.
+  // Open a research this window asked for. The first list read that finishes
+  // after the command is the state the session was already in — a read that
+  // started earlier can still land later — so only an id that appears in a later
+  // read is the research the agent just created. A reopened session ends up with
+  // no wait at all, and nothing opens by itself.
   useEffect(() => {
-    const fresh = awaitingIdea
-      ? idea.views.find((view) => !seenIdeaIds.current.has(view.research.id))
-      : undefined;
-    for (const view of idea.views) seenIdeaIds.current.add(view.research.id);
-    if (fresh === undefined) return;
+    if (!awaitingIdea) return;
+    const wait = awaitingIdeaFrom.current;
+    if (wait === undefined || idea.loads <= wait.loads) return;
+    const step = stepAwaitingIdea(wait.baseline, idea.views.map((view) => view.research.id));
+    wait.baseline = step.baseline;
+    if (step.fresh === undefined) return;
     setAwaitingIdea(false);
-    setIdeaResearchId(fresh.research.id);
+    awaitingIdeaFrom.current = undefined;
+    setIdeaResearchId(step.fresh);
     setEvolveRunId(undefined);
     setLegacyOpen(false);
     setPanelGroup("task");
     setWorkspaceOpen(true);
-  }, [awaitingIdea, idea.views]);
+  }, [awaitingIdea, idea.loads, idea.views]);
 
   // A start is only visible once the list is re-read, and the list poll is
   // idle until something is active. Looking every few seconds until the new
@@ -749,8 +755,14 @@ export function App({ initialToken }: Props) {
     if (isIdeaTreeCommand(content)) {
       // The command stays a message: the agent runs its preparation and calls
       // `create_idea_research`, because the evidence it gathers cannot be
-      // produced here. Remembering that one was asked for is what lets the card
-      // open itself once the research exists.
+      // produced here. Remembering that one was asked for — plus the ids the
+      // session already had, when a read has finished — is what lets the panel
+      // open on the research that request creates rather than on one that was
+      // already there. Without a finished read there is no baseline to compare
+      // against, so the first read after the command takes that role instead.
+      awaitingIdeaFrom.current = idea.loads > 0
+        ? { loads: idea.loads, baseline: new Set(idea.views.map((view) => view.research.id)) }
+        : { loads: idea.loads };
       setAwaitingIdea(true);
     }
     void actions.send(content);
@@ -1145,8 +1157,10 @@ export function App({ initialToken }: Props) {
               {/* The research list is the way in, so a list that could not be
                   read is said here: an empty column would otherwise read as
                   "nothing was ever started" when the sidecar is simply down. */}
-              {idea.unavailable || idea.error ? (
-                <p className="idea-notice" role="alert">{idea.unavailable ? TEXT.ideaTree.unavailable : idea.error}</p>
+              {idea.unavailable || idea.error || legacy.error ? (
+                <p className="idea-notice" role="alert">
+                  {idea.unavailable ? TEXT.ideaTree.unavailable : idea.error ?? legacy.error}
+                </p>
               ) : null}
               {legacy.graph ? (
                 <LegacyIdeaCard

@@ -142,6 +142,25 @@ test("a dropped stream refetches and reconnects instead of keeping a stale frame
   panel.unmount();
 });
 
+test("a stream that keeps failing leaves 重试 rather than a dead error", async () => {
+  const calls: string[] = [];
+  const api = {
+    request: async (path: string) => { calls.push(path); return view("running"); },
+    fetchStream: async () => { throw new Error("stream dropped"); },
+  } as unknown as ApiClient;
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  assert.match(JSON.stringify(panel.toJSON()), /stream dropped/);
+  const retry = panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.retry))[0]!;
+  assert.ok(retry, "the error is not the last word");
+  const before = calls.length;
+  await act(async () => { retry.props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.ok(calls.length > before, "重试 reads the research again");
+  panel.unmount();
+});
+
 test("a 503 clears once a later read works", async () => {
   let fail = true;
   const api = {

@@ -40,7 +40,7 @@ function isUnavailable(reason: unknown): boolean {
 }
 
 /** How many consecutive reconnect attempts a dropped stream gets before the panel
- *  stops trying and leaves the error on screen with a manual action. */
+ *  stops retrying by itself and leaves the error on screen with 重试. */
 const MAX_RECONNECTS = 4;
 
 const LIVE = ["running", "pausing"];
@@ -58,6 +58,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   /** 结束 is irreversible, so it asks first; the tree the research already grew
    *  stays, but the research cannot be resumed. */
   const [confirmEnd, setConfirmEnd] = useState(false);
+  /** Bumped when the reader asks for another attempt after the reconnects ran out;
+   *  it re-runs the stream effect. */
+  const [resubscribe, setResubscribe] = useState(0);
   /** The selected node by id, not by value: a stream frame replaces the whole view, so
    *  holding the old object would show a node that no longer matches the tree. */
   const [selectedId, setSelectedId] = useState<string>();
@@ -112,7 +115,7 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
       controller.abort();
       if (timer !== undefined) globalThis.clearTimeout(timer);
     };
-  }, [client, researchId, sessionId, status, load]);
+  }, [client, researchId, sessionId, status, load, resubscribe]);
 
   const control = async (operation: "pause" | "continue" | "end") => {
     setBusy(true);
@@ -163,7 +166,16 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
         <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
       </div>
       {research.reason ? <p className="idea-panel-reason">{t.reason(research.reason)}</p> : null}
-      {error ? <p className="idea-panel-error" role="alert">{error}</p> : null}
+      {error ? (
+        <div className="idea-panel-error" role="alert">
+          <span>{error}</span>
+          <button
+            className="secondary-button"
+            onClick={() => { setError(undefined); setResubscribe((count) => count + 1); void load(); }}
+            type="button"
+          >{t.retry}</button>
+        </div>
+      ) : null}
       <div className="idea-panel-body">
         <IdeaTreeView graph={view.graph} onSelect={(node) => setSelectedId(node.id)} selectedId={selectedId} />
         {selectedNode ? <IdeaNodeDetail node={selectedNode} /> : null}

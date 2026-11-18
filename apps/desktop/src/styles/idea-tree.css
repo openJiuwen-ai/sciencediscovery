@@ -117,6 +117,13 @@
   color: var(--text-secondary);
 }
 
+.idea-panel-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .idea-panel-loading {
   margin: 0;
   padding: 10px 12px;
