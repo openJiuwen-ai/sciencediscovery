@@ -96,8 +96,6 @@ export function SystemSettingsDialog({
    *  pane keeps the width rather than reflowing around a zero column. */
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
-  const [addingSkill, setAddingSkill] = useState(false);
-  const [importingSkill, setImportingSkill] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -109,8 +107,6 @@ export function SystemSettingsDialog({
   // state lives in the pane and unmounts here.
   useEffect(() => {
     setAddingModel(false);
-    setAddingSkill(false);
-    setImportingSkill(false);
   }, [group]);
 
   useEffect(() => {
@@ -143,15 +139,7 @@ export function SystemSettingsDialog({
           />
         );
       case "skills":
-        return (
-          <SkillsSettings
-            adding={addingSkill}
-            client={client}
-            importing={importingSkill}
-            onAddingChange={setAddingSkill}
-            onImportingChange={setImportingSkill}
-          />
-        );
+        return <SkillsSettings client={client} />;
       case "mcp":
         return (
           <McpServers
@@ -252,28 +240,26 @@ export function SystemSettingsDialog({
             </div>
           )}
           <div className="settings-group-detail" key={group}>
-            <header className="settings-detail-header">
-              <div>
-                <h3>{meta.label}</h3>
-                <p>{meta.description}</p>
-              </div>
-              {group === "models" ? (
-                <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
-                  {TEXT.settings.model.add}
-                </button>
-              ) : group === "skills" ? (
-                <div className="settings-header-actions">
-                  <button className="pill-button" onClick={() => setImportingSkill(true)} type="button">
-                    {TEXT.settings.skills.import}
-                  </button>
-                  <button className="pill-button is-dark" onClick={() => setAddingSkill(true)} type="button">
-                    {TEXT.settings.skills.add}
-                  </button>
-                </div>
-              ) : null}
-            </header>
+            {/* 技能 draws its own title row: 添加技能 swaps the page under it,
+                so the header has to name the page the pane is showing rather
+                than the group whose list it started on. */}
+            {group === "skills" ? pane : (
+              <>
+                <header className="settings-detail-header">
+                  <div>
+                    <h3>{meta.label}</h3>
+                    <p>{meta.description}</p>
+                  </div>
+                  {group === "models" ? (
+                    <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
+                      {TEXT.settings.model.add}
+                    </button>
+                  ) : null}
+                </header>
 
-            {pane}
+                {pane}
+              </>
+            )}
           </div>
         </div>
       </section>

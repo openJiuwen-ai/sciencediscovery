@@ -35,24 +35,34 @@ Object.defineProperty(globalThis, "document", { configurable: true, writable: tr
   addEventListener() {}, removeEventListener() {},
 } });
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
-const noChange = () => {};
 const text = (view: ReactTestRenderer) => JSON.stringify(view.toJSON());
 
 async function mount(client: ApiClient): Promise<ReactTestRenderer> {
   let view: ReactTestRenderer | undefined;
-  await act(async () => {
-    view = create(
-      <SkillsSettings
-        adding
-        client={client}
-        importing={false}
-        onAddingChange={noChange}
-        onImportingChange={noChange}
-      />,
-    );
-  });
+  await act(async () => { view = create(<SkillsSettings client={client} />); });
   assert.ok(view);
   return view;
+}
+
+/**
+ * The authoring form is a page of 技能 now, so the tests that drive its
+ * `onSaved` reach it the way a user does: 添加技能, then 从零开始写.
+ */
+async function openAuthoringForm(view: ReactTestRenderer): Promise<void> {
+  await act(async () => {
+    const trigger = view.root.findAllByType("button")
+      .find((node) => node.props.className?.includes?.("skill-add-trigger"));
+    assert.ok(trigger, "the list has no 添加技能");
+    trigger.props.onClick();
+  });
+  await act(async () => {
+    const item = view.root.findAllByType("button").find((node) => node
+      .findAllByType("strong")
+      .some((label) => label.children.includes(TEXT.settings.skills.addMenu.scratch)));
+    assert.ok(item, "添加技能 does not offer 从零开始写");
+    item.props.onClick();
+  });
+  assert.ok(view.root.findByType(SkillForm), "从零开始写 did not open the authoring form");
 }
 
 for (const backend of ["native", "unavailable"] as const) {
@@ -80,6 +90,7 @@ for (const backend of ["native", "unavailable"] as const) {
       stub.reply([skill]);
       if (backend === "native") stub.reply({ backend: "native", skills: [] });
       else stub.fail(new Error("skill adapter unavailable"));
+      await openAuthoringForm(view);
       await act(async () => {
         const onSaved = view.root.findByType(SkillForm).props.onSaved;
         assert.ok(typeof onSaved === "function");
@@ -108,6 +119,7 @@ test("a failed first enable stays visible even when the refreshed catalog is emp
   const view = await mount(stub.asClient());
   try {
     stub.fail(new Error("first enable refused")).reply([]).reply({ backend: "jiuwenswarm", skills: [] });
+    await openAuthoringForm(view);
     await act(async () => {
       const onSaved = view.root.findByType(SkillForm).props.onSaved;
       assert.ok(typeof onSaved === "function");

@@ -21,10 +21,8 @@ import { TEXT } from "../../text.js";
 
 interface Props {
   client: ApiClient;
-  /** Called when 取消, × or the scrim closes the form. */
-  onCancel: () => void;
   /** Called after the server has installed the package, with what it installed;
-   *  the list reloads behind the modal, so the caller closes it here. */
+   *  the caller leaves the form and reloads the list. */
   onSaved: (skill: SkillDetail) => void;
 }
 
@@ -69,14 +67,17 @@ function bodyOf(draft: Draft): CreateSkillPackageRequest {
 }
 
 /**
- * The form behind 技能's 新增技能.
+ * The form behind 添加技能 › 从零开始写.
  *
  * The API takes authored fields rather than Markdown: `createPackage` writes
  * SKILL.md from them and installs revision 1. Optional frontmatter is kept in
  * the same form so a skill can declare a license or version without a second
  * round of editing.
+ *
+ * There is no 取消 beside 创建: the page's back control is the way out, and a
+ * second way out that would discard a draft is a choice nobody asked for.
  */
-export function SkillForm({ client, onCancel, onSaved }: Props) {
+export function SkillForm({ client, onSaved }: Props) {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
@@ -189,9 +190,6 @@ export function SkillForm({ client, onCancel, onSaved }: Props) {
         </label>
         {failure ? <small className="row-note is-error">{failure}</small> : null}
         <div className="settings-card-actions">
-          <button className="secondary-button" disabled={busy} onClick={onCancel} type="button">
-            {TEXT.settings.cancel}
-          </button>
           <button
             className="primary-button"
             disabled={busy || !ready}

@@ -108,14 +108,14 @@ describe("a settings pane's remembered answer", () => {
     writeSettingsCache(client, "skills:jiuwenswarm", skillsPage([skill("draft-review", "draft-review")], ["draft-review"]));
 
     const visited = renderToStaticMarkup(
-      <SkillsSettings adding={false} client={client} onAddingChange={noop} />,
+      <SkillsSettings client={client} />,
     );
     assert.ok(visited.includes("draft-review"), "the remembered Skills are not on screen");
     assert.ok(!visited.includes(TEXT.settings.loading), "the loading frame is still drawn over remembered Skills");
 
     const fresh = new StubClient().asClient();
     const other = renderToStaticMarkup(
-      <SkillsSettings adding={false} client={fresh} onAddingChange={noop} />,
+      <SkillsSettings client={fresh} />,
     );
     assert.ok(other.includes(TEXT.settings.loading), "a client that never visited starts at the loading frame");
     assert.ok(!other.includes("draft-review"), "another client's remembered Skills leaked into this one");

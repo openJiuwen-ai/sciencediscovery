@@ -39,9 +39,6 @@ interface Props {
   /** Forms with stacked choices (the specialist form) need more room than the
    *  model form's five fields. */
   wide?: boolean;
-  /** The Skill editor keeps a file rail beside its pane, which needs more than
-   *  a form's width. */
-  editor?: boolean;
 }
 
 /**
@@ -53,7 +50,7 @@ interface Props {
  * key here first is what keeps only the modal from closing. Between two
  * settings modals the stack above decides which one is on top.
  */
-export function SettingsModal({ children, editor = false, label, onClose, wide = false }: Props) {
+export function SettingsModal({ children, label, onClose, wide = false }: Props) {
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback
   // through a ref and registers once.
@@ -90,7 +87,7 @@ export function SettingsModal({ children, editor = false, label, onClose, wide =
       <div
         aria-label={label}
         aria-modal="true"
-        className={`settings-modal${wide ? " is-wide" : ""}${editor ? " is-editor" : ""}`}
+        className={`settings-modal${wide ? " is-wide" : ""}`}
         onPointerDown={(event) => event.stopPropagation()}
         role="dialog"
       >

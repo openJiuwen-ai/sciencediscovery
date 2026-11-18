@@ -20,19 +20,31 @@ import type { JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/t
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
-import { SettingsModal } from "./SettingsModal.js";
-import { SkillEditorDialog } from "./SkillEditorDialog.js";
+import { SkillAddMenu } from "./SkillAddMenu.js";
+import { SkillEditorView } from "./SkillEditorView.js";
 import { SkillForm } from "./SkillForm.js";
-import { SkillImportDialog } from "./SkillImportDialog.js";
+import { SkillGitImportView } from "./SkillGitImportView.js";
+import { SkillUploadView } from "./SkillUploadView.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
 interface Props {
-  adding: boolean;
   client: ApiClient;
-  importing: boolean;
-  onAddingChange: (next: boolean) => void;
-  onImportingChange: (next: boolean) => void;
 }
+
+/**
+ * Which page of 技能 is showing.
+ *
+ * Adding and editing used to be modal forms over the list. A Skill is a small
+ * document with files, though, and a modal put the list one layer away from
+ * the thing the user was comparing it with; the pane now swaps instead, and
+ * the header's back control is the only way out of any page below `list`.
+ */
+type SkillView =
+  | { kind: "list" }
+  | { kind: "create" }
+  | { kind: "upload" }
+  | { kind: "git" }
+  | { id: string; kind: "edit"; name: string };
 
 interface SkillPage {
   switchesAvailable: boolean;
@@ -83,6 +95,24 @@ export function skillMeta(skill: SkillDescriptor): string {
   ].join(" · ");
 }
 
+/** The title and one-line description of a page below the list. Read through
+ *  TEXT at render time so a language change renames the page it is showing. */
+function subviewCopy(view: Exclude<SkillView, { kind: "list" }>): { description: string; title: string } {
+  switch (view.kind) {
+    case "create":
+      return TEXT.settings.skills.createView;
+    case "upload":
+      return TEXT.settings.skills.uploadView;
+    case "git":
+      return TEXT.settings.skills.git;
+    case "edit":
+      return {
+        description: TEXT.settings.skills.editor.hint,
+        title: TEXT.settings.skills.editor.title(view.name),
+      };
+  }
+}
+
 /**
  * 设置 › 技能.
  *
@@ -90,13 +120,17 @@ export function skillMeta(skill: SkillDescriptor): string {
  * authority for whether a skill is available, and it applies to every project.
  * ScienceDiscovery only installs or removes the skill package; the switch lives
  * in JiuwenSwarm.
+ *
+ * The pane draws its own header because 添加技能 changes what is below it: the
+ * title row travels with the page it names, so a sub-page never sits under a
+ * header that still says the list is open.
  */
-export function SkillsSettings({ adding, client, importing, onAddingChange, onImportingChange }: Props) {
+export function SkillsSettings({ client }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [detail, setDetail] = useState<OpenDetail>();
-  const [editingId, setEditingId] = useState<string>();
   const [openId, setOpenId] = useState<string>();
+  const [view, setView] = useState<SkillView>({ kind: "list" });
 
   const loaded = useLoaded<SkillPage>(async () => {
     const [catalog, state] = await Promise.allSettled([
@@ -122,12 +156,6 @@ export function SkillsSettings({ adding, client, importing, onAddingChange, onIm
     client,
     key: "skills:jiuwenswarm",
   });
-
-  /** The Skill being edited, resolved from the list so the modal's title has a
-   *  name; a reload that drops it closes the editor by failing to find it. */
-  const editingSkill = editingId === undefined
-    ? undefined
-    : loaded.value?.skills.find((skill) => skill.id === editingId);
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
@@ -223,12 +251,58 @@ export function SkillsSettings({ adding, client, importing, onAddingChange, onIm
 
   /** Enable a new skill when JiuwenSwarm is available; native creation needs no import. */
   const afterCreate = async (skill: SkillDetail) => {
-    onAddingChange(false);
+    // A created package is a list item from now on, and the list is where the
+    // user would go to look at it, so the form does not linger.
+    setView({ kind: "list" });
     await afterInstall(skill);
   };
 
+  const installed = loaded.value
+    ? loaded.value.skills.length + loaded.value.jiuwenSwarmSkills.length
+    : undefined;
+  const copy = view.kind === "list" ? undefined : subviewCopy(view);
+  const back = () => setView({ kind: "list" });
+
+  const header = copy === undefined ? (
+    <header className="settings-detail-header">
+      <div>
+        <h3>
+          {TEXT.settings.system.groups.skills.label}
+          {installed === undefined ? null : (
+            <span className="skill-installed-count">
+              {TEXT.settings.skills.installedCount(installed)}
+            </span>
+          )}
+        </h3>
+        <p>{TEXT.settings.system.groups.skills.description}</p>
+      </div>
+      <SkillAddMenu onChoose={(choice) => setView({ kind: choice })} />
+    </header>
+  ) : (
+    <header className="settings-detail-header skill-subview-head">
+      <div className="skill-subview-title">
+        <button
+          aria-label={TEXT.settings.skills.backToList}
+          className="skill-back"
+          onClick={back}
+          type="button"
+        >
+          <svg fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="15">
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+        </button>
+        <div className="skill-subview-copy">
+          <h3>{copy.title}</h3>
+          <p>{copy.description}</p>
+        </div>
+      </div>
+    </header>
+  );
+
   return (
     <>
+      {header}
+      {view.kind === "list" ? (
       <Group>
         <p className="row-note">{TEXT.settings.skills.scope}</p>
         {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
@@ -286,7 +360,7 @@ export function SkillsSettings({ adding, client, importing, onAddingChange, onIm
                         {skill.source === "managed" && !skill.readOnly ? (
                           <button
                             className="secondary-button skill-edit-button"
-                            onClick={() => setEditingId(skill.id)}
+                            onClick={() => setView({ id: skill.id, kind: "edit", name: skill.name })}
                             type="button"
                           >
                             {TEXT.settings.skills.editor.edit}
@@ -332,40 +406,32 @@ export function SkillsSettings({ adding, client, importing, onAddingChange, onIm
           }}
         </LoadGate>
       </Group>
-
-      {adding ? (
-        <SettingsModal label={TEXT.settings.skills.add} onClose={() => onAddingChange(false)} wide>
-          <SkillForm
-            client={client}
-            onCancel={() => onAddingChange(false)}
-            onSaved={(skill) => void afterCreate(skill)}
-          />
-        </SettingsModal>
       ) : null}
 
-      {importing ? (
-        <SettingsModal
-          label={TEXT.settings.skills.importTitle}
-          onClose={() => onImportingChange(false)}
-          wide
-        >
-          <SkillImportDialog client={client} onImported={afterInstall} />
-        </SettingsModal>
+      {view.kind === "create" ? (
+        <div className="skill-create">
+          <SkillForm client={client} onSaved={(skill) => void afterCreate(skill)} />
+        </div>
       ) : null}
 
-      {editingSkill ? (
-        <SettingsModal
-          editor
-          label={TEXT.settings.skills.editor.title(editingSkill.name)}
-          onClose={() => setEditingId(undefined)}
-        >
-          <SkillEditorDialog
-            client={client}
-            onClose={() => setEditingId(undefined)}
-            onSaved={() => loaded.reload()}
-            skillId={editingSkill.id}
-          />
-        </SettingsModal>
+      {view.kind === "upload" ? (
+        <SkillUploadView
+          client={client}
+          onImported={afterInstall}
+          onWriteInstead={() => setView({ kind: "create" })}
+        />
+      ) : null}
+
+      {view.kind === "git" ? (
+        <SkillGitImportView client={client} onImported={afterInstall} />
+      ) : null}
+
+      {view.kind === "edit" ? (
+        <SkillEditorView
+          client={client}
+          onSaved={() => loaded.reload()}
+          skillId={view.id}
+        />
       ) : null}
     </>
   );

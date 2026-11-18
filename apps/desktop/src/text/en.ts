@@ -655,7 +655,25 @@ export const EN: Text = {
       on: "On",
       scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
       toggle: (name: string) => `Enable or disable "${name}"`,
-      add: "Add skill",
+      installedCount: (count: number) => `${count} installed`,
+      /** The one press that adds a Skill, and the three ways to do it. The
+       *  hint is the second line of each entry: the three labels are short
+       *  enough to look alike, and what differs is where the package comes
+       *  from. */
+      addMenu: {
+        label: "Add skill",
+        scratch: "Write from scratch",
+        scratchHint: "Start a new skill and write its instructions",
+        upload: "Upload skills",
+        uploadHint: "Choose a SKILL.md or a ZIP package",
+        git: "Import from GitHub",
+        gitHint: "Inspect a repository and import its packages",
+      },
+      backToList: "Back to skills",
+      createView: {
+        title: "Write from scratch",
+        description: "The name becomes the skill ID. The new package can be edited from the list afterwards.",
+      },
       create: "Create",
       name: "Name",
       namePlaceholder: "For example, literature-review",
@@ -684,17 +702,17 @@ export const EN: Text = {
       instructionsHeading: "Instructions",
       instructionsLoading: "Reading the instructions…",
       instructionsFailed: "The instructions could not be read.",
-      import: "Import skill",
-      importTitle: "Import skill",
-      importTabs: {
-        file: "SKILL.md",
-        zip: "ZIP package",
-        git: "Git",
+      uploadView: {
+        title: "Upload skills",
+        description: "Add a SKILL.md or a package from this computer to ScienceDiscovery.",
+        dropTitle: "Drag a file here, or click to choose",
+        dropHint:
+          "One SKILL.md, or a .zip / .skill package that contains one. A ZIP brings its scripts and references with it.",
+        reading: "Reading…",
+        remove: "Remove",
+        fileSize: (kilobytes: number) => `${kilobytes} KB`,
+        writeInstead: "Write from scratch instead",
       },
-      importFileHint: "Choose one SKILL.md. Files beside it are not included; import a ZIP for scripts and references.",
-      importZipHint: "Choose a ZIP package that contains SKILL.md. Scripts and references are imported with it.",
-      importChoose: "Choose file",
-      importNoFile: "No file chosen",
       importAction: "Import",
       importBusy: "Importing…",
       importFailed: "The import failed.",
@@ -702,6 +720,9 @@ export const EN: Text = {
       importPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
       importedCount: (count: number) => `Imported ${count} skills.`,
       git: {
+        title: "Import from GitHub",
+        description:
+          "Inspect a repository first, then pick the packages to install. An import is pinned to the commit you saw.",
         url: "Repository URL",
         urlPlaceholder: "https://github.com/org/repo.git",
         ref: "Ref",
@@ -717,12 +738,15 @@ export const EN: Text = {
         unchanged: "Unchanged",
         invalid: "Unavailable",
         selectHint: "Choose the packages to import. Unchanged and unavailable packages cannot be imported.",
+        found: (count: number) => count === 1 ? "Found 1 package" : `Found ${count} packages`,
+        selectAll: "Select all",
         importSelected: (count: number) => `Import ${count} selected`,
         empty: "No Skill package was found in this repository.",
       },
       editor: {
         edit: "Edit",
         title: (name: string) => `Edit ${name}`,
+        hint: "Change the fields and files; a save applies to new sessions.",
         files: "Files",
         skillFile: "SKILL.md",
         newFile: "New file",
