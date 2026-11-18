@@ -47,7 +47,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   const [error, setError] = useState<string>();
   const [unavailable, setUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<IdeaTreeNode>();
+  /** The selected node by id, not by value: a stream frame replaces the whole view, so
+   *  holding the old object would show a node that no longer matches the tree. */
+  const [selectedId, setSelectedId] = useState<string>();
   const live = useRef<AbortController | undefined>(undefined);
 
   const load = useCallback(async () => {
@@ -93,6 +95,8 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   if (unavailable) return <p className="idea-panel-unavailable" role="alert">{t.unavailable}</p>;
   if (!view) return <p className="idea-panel-loading">{error ?? TEXT.settings.loading}</p>;
   const research = view.research;
+  // Re-read the node from the view that is on screen: a frame may have replaced it.
+  const selectedNode = selectedId === undefined ? undefined : view.graph.nodes.find((node) => node.id === selectedId);
   return (
     <section className="idea-panel" aria-label={t.heading}>
       <header className="idea-panel-header">
@@ -112,8 +116,8 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
       {research.reason ? <p className="idea-panel-reason">{t.reason(research.reason)}</p> : null}
       {error ? <p className="idea-panel-error" role="alert">{error}</p> : null}
       <div className="idea-panel-body">
-        <IdeaTreeView graph={view.graph} onSelect={setSelected} selectedId={selected?.id} />
-        {selected ? <IdeaNodeDetail node={selected} /> : null}
+        <IdeaTreeView graph={view.graph} onSelect={(node) => setSelectedId(node.id)} selectedId={selectedId} />
+        {selectedNode ? <IdeaNodeDetail node={selectedNode} /> : null}
       </div>
       <footer className="idea-panel-actions">
         {research.status === "running" ? <button className="secondary-button" disabled={busy} onClick={() => void control("pause")} type="button">{t.pause}</button> : null}
