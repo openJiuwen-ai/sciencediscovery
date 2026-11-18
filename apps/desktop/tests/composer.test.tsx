@@ -232,6 +232,32 @@ test("会话设置 can ask for a review now, and the same row stops one under wa
   }
 });
 
+test("审查档位 stays open while automatic review is off, because 立即审查 reads it", () => {
+  const menu = (reviewerEnabled: boolean) => renderToStaticMarkup(
+    <SessionSettingsMenu
+      automaticReviewEnabled={false}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      reviewerEnabled={reviewerEnabled}
+      reviewLevel="quick"
+      running={false}
+    />,
+  );
+  // The markup of the whole row, up to the label: a `disabled` attribute there
+  // is what takes the choice away.
+  const levelRow = (markup: string) => {
+    const label = markup.indexOf(">审查档位<");
+    return markup.slice(markup.lastIndexOf("<button", label), label);
+  };
+
+  // Automatic review off: the row still chooses what a manual run will do.
+  const available = menu(true);
+  assert.doesNotMatch(levelRow(available), /disabled/u);
+  assert.match(available, /title="自动审阅已关闭；立即审查仍会使用这个档位。"/u);
+  // The master switch off: nothing can run at all, so the row says so.
+  assert.match(levelRow(menu(false)), /disabled=""/u);
+});
+
 test("a permission option says on screen what it allows", () => {
   const markup = renderToStaticMarkup(
     <PermissionFlyout mode="ask_for_dangerous" onApprovalMode={() => {}} onClose={() => {}} />,

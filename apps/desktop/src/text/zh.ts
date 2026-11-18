@@ -295,9 +295,10 @@ export const ZH = {
   reviewer: {
     title: "审查",
     settings: "自动审阅",
-    settingsHint: "产物生成后自动检查结构、引用格式与交付完整性。",
     unavailable: "系统设置中的审查专家已关闭，此会话的自动审阅不会生效。",
     level: "审查档位",
+    /** 显示在档位行上：自动审阅关着时它并没有失效，立即审查仍会用它。 */
+    levelManualHint: "自动审阅已关闭；立即审查仍会使用这个档位。",
     levelQuickDesc: "确定性检查：结构、引用格式、交付完整性。",
     levelDeepDesc: "在快速检查之上，逐条核对来源与计算证据。",
     running: "正在审查…",

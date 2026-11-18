@@ -529,13 +529,16 @@ export function SessionSettingsMenu({
           {reviewerEnabled === false ? (
             <p className="session-menu-note" role="status">{TEXT.reviewer.unavailable}</p>
           ) : null}
+          {/* Not gated on 自动审阅 either: the coordinator reads this level for
+              a manual run as well, so turning automatic review off must not
+              take away the only way to choose what 立即审查 will do. */}
           <button
             aria-expanded={panel === "reviewer"}
             aria-haspopup="true"
             className={`session-menu-row${panel === "reviewer" ? " is-open" : ""}`}
-            disabled={automaticReviewEnabled === false}
+            disabled={reviewerEnabled === false}
             onClick={() => toggle("reviewer")}
-            title={automaticReviewEnabled === false ? TEXT.reviewer.settingsHint : undefined}
+            title={automaticReviewEnabled === false ? TEXT.reviewer.levelManualHint : undefined}
             type="button"
           >
             <span className="session-menu-icon">
