@@ -46,8 +46,8 @@ test("an inspect unpacks one copy where a restore adds three", () => {
   assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB) < unpacked,
     "the restore budget must stay conservative");
   // Inspect: the upload plus the one copy it unpacks, so it fits (#1216 review 3).
-  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB, 2) >= unpacked,
-    "an inspect writes two copies: the unpacked tree and what it reads it with");
+  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB, 1) >= unpacked,
+    "an inspect writes one more copy, so the unpacked tree plus that one is free / 2");
 });
 
 test("the upload check only stages the compressed file", () => {
@@ -83,20 +83,26 @@ test("a restore is charged only the copies it still has to write", () => {
 });
 
 test("the unpack budget and the post-parse check agree on the same free disk", () => {
-  // The example from the review: 12 GiB free, a 3.8 GiB package.
   const free = 16 * 1024 * MIB;
-  const unpacked = Math.floor(3.8 * 1024 * MIB);
   const budget = researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB);
-  assert.ok(budget >= unpacked, "the parse is allowed to write the objects");
-  // After the parse those bytes are on disk; the three remaining copies are checked.
+  // Sit ON the bound: the tree the budget admits is the largest one the parse will
+  // write, so the restore that follows it must not refuse what the budget allowed.
+  // It clears by construction, up to the record size the budget cannot know yet.
+  const unpacked = budget;
   const after = CAPACITY(free - unpacked);
-  assert.doesNotThrow(() => assertResearchPackageRestoreCapacity(after, {
-    unpackedBytes: unpacked, largestObjectBytes: unpacked, recordsBytes: 1024,
-  }), "a package the budget allowed must not be refused once it is on disk");
+  const need = researchPackageRestoreRequirement({ unpackedBytes: unpacked, largestObjectBytes: unpacked, recordsBytes: 1024 });
+  assert.ok(need.diskBytes <= after.freeDiskBytes + 1024,
+    `the budget must leave the restore within one record of fitting: needs ${need.diskBytes}, has ${after.freeDiskBytes}`);
+  // Exactly on the bound the restore is satisfiable: the tree took free / 4, the
+  // three remaining copies need the other three quarters.
+  assert.doesNotThrow(() => assertResearchPackageRestoreCapacity(CAPACITY(free - unpacked), {
+    unpackedBytes: unpacked, largestObjectBytes: unpacked, recordsBytes: 0,
+  }), "the budget boundary is where the two checks meet");
 
-  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 48 * 1024 * MIB), 10 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 2 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 3));
+  // A restore writes three more copies, so the unpacked tree gets free / 4.
+  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 48 * 1024 * MIB), 7.5 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 1.5 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 4));
   assert.equal(researchPackageUnpackBudget(CAPACITY(Infinity), 8 * 1024 * MIB), 8 * 1024 * MIB);
 });
 
@@ -134,11 +140,11 @@ test("the unpack budget counts the copies a route writes, so inspect and restore
   // argument from being deleted later without a red test (#1216 review 3, #1024).
   const capacity = { freeDiskBytes: 6_000, freeMemoryBytes: Number.POSITIVE_INFINITY };
   const ceiling = 1_000_000;
-  assert.equal(researchPackageUnpackBudget(capacity, ceiling, 2), 3_000, "inspect: free / 2");
-  assert.equal(researchPackageUnpackBudget(capacity, ceiling), 2_000, "restore keeps the default free / 3");
-  assert.notEqual(researchPackageUnpackBudget(capacity, ceiling, 2), researchPackageUnpackBudget(capacity, ceiling));
+  assert.equal(researchPackageUnpackBudget(capacity, ceiling, 1), 3_000, "inspect: free / 2");
+  assert.equal(researchPackageUnpackBudget(capacity, ceiling), 1_500, "restore: free / 4");
+  assert.notEqual(researchPackageUnpackBudget(capacity, ceiling, 1), researchPackageUnpackBudget(capacity, ceiling));
   // A ceiling still wins, and an infinite volume is never bounded.
-  assert.equal(researchPackageUnpackBudget(capacity, 500, 2), 500);
-  assert.equal(researchPackageUnpackBudget({ freeDiskBytes: Number.POSITIVE_INFINITY, freeMemoryBytes: 0 }, ceiling, 2), ceiling);
+  assert.equal(researchPackageUnpackBudget(capacity, 500, 1), 500);
+  assert.equal(researchPackageUnpackBudget({ freeDiskBytes: Number.POSITIVE_INFINITY, freeMemoryBytes: 0 }, ceiling, 1), ceiling);
 });
 

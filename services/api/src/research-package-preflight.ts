@@ -126,23 +126,28 @@ export function assertResearchPackageRestoreCapacity(capacity: PackageCapacity, 
 }
 
 /**
- * The unpacked budget the free disk can hold, given how many copies the route writes.
+ * The unpacked budget the free disk can hold, given the copies the route still writes.
  *
- * The divisor is `copies` itself, so the default three is `free / 3`: a restore writes
- * the unpacked tree, the snapshot's object directory and one CAS blob per object, and
- * this check has always divided by three (#1211 F5).
+ * `copies` counts what the route writes *after* the parse has already put the unpacked
+ * tree on disk, so the divisor is `copies + 1`. A restore writes three more — the
+ * snapshot's object directory, one CAS blob per object and the workspace files, which
+ * `researchPackageRestoreRequirement` charges as `unpacked * 3` — so its default is
+ * `free / 4`. Dividing by three admitted a tree of up to `free / 3`, expanded it, and
+ * then failed the post-parse check that needs `3 x unpacked`; the refusal has to come
+ * before the write, which is why the divisor follows the requirement (#1216 review 3).
  *
- * An inspect unpacks one copy and writes nothing else, but it still needs room for the
- * tree plus the reader's own metadata, so it passes `copies: 2` and gets `free / 2`;
- * sharing the restore's divisor refused an inspect whose objects fit (#1216 review 3).
- * Passing `1` would be `free / 1`, which is no bound at all.
+ * An inspect unpacks one copy and writes one more while it reads it, so it passes
+ * `copies: 1` and gets `free / 2`; sharing the restore's divisor refused an inspect
+ * whose objects fit.
  *
  * The bound has to reach the parser itself: checking only after the unpacking finishes
  * would let a highly compressible archive fill the disk before the check runs.
  */
 export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number, copies = 3): number {
   if (!Number.isFinite(capacity.freeDiskBytes)) return ceiling;
-  const parts = Math.max(1, Math.floor(copies));
+  // `copies` is what the route still writes after the parse has unpacked the tree, so
+  // the divisor is that plus the unpacked copy itself.
+  const parts = Math.max(1, Math.floor(copies) + 1);
   return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / parts)));
 }
 
