@@ -489,7 +489,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {estimating ? <p className="research-package-notice">{t.recalculating}</p> : null}
           {estimating && !preview ? <p className="research-package-status" role="status"><span aria-hidden="true" className="spinner" />{t.previewRetrying}</p> : null}
           {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => { pendingTries.current = 0; setPreviewStalled(false); setEstimating(true); setPreviewNonce(value => value + 1); }} type="button">{t.retryPreview}</button></div> : null}
-          <p className="research-package-selected-size">{preview ? <>{t.estimate} <b>{formatBytes(preview.estimatedBytes)}</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
+          <p className="research-package-selected-size">{preview ? <>{t.estimateUncompressed} <b>{formatBytes(preview.estimatedBytes)}</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
           {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
           {blockedByLimit ? <div role="alert" className="research-package-limit">
             <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
