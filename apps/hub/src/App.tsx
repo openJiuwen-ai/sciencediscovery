@@ -15,7 +15,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { loadCatalog } from "./catalog/load.js";
-import { useCopy, useLanguage } from "./i18n.js";
+import { BackIcon, BrandMark, GlobeIcon, SearchIcon } from "./components/icons.js";
+import { counted, useCopy, useLanguage } from "./i18n.js";
 import { TABS, useRoute } from "./router.js";
 import { ConnectorDetail, SessionDetail, SkillDetail, SpecialistDetail } from "./views/Detail.js";
 import { ListView } from "./views/ListView.js";
@@ -41,6 +42,7 @@ function assetsFor(catalog: Catalog, tab: Tab): Asset[] {
 
 export function App(): JSX.Element {
   const [state, setState] = useState<State>({ status: "loading" });
+  const [hintVisible, setHintVisible] = useState(true);
   const { language, toggle } = useLanguage();
   const copy = useCopy(language);
   const { route, setRoute } = useRoute(BASE_PATH);
@@ -107,10 +109,13 @@ export function App(): JSX.Element {
 
     if (route.id) {
       return (
-        <>
-          <button className="back" onClick={() => goTo(route.tab)} type="button">← {copy("back")}</button>
+        <div className="detail-wrap">
+          <button className="back" onClick={() => goTo(route.tab)} type="button">
+            <BackIcon size={16} />
+            {copy("back")}
+          </button>
           {renderDetail(catalog, route, copy)}
-        </>
+        </div>
       );
     }
     if (route.tab === "sessions" && list.length === 0) return <p className="empty">{copy("sessionsEmpty")}</p>;
@@ -130,33 +135,78 @@ export function App(): JSX.Element {
         onFilter={(changes) => updateFilters(route.tab, changes)}
         onOpen={(asset) => openAsset(route.tab, asset.id)}
         route={route}
+        title={copy(route.tab)}
         total={list.length}
       />
     );
   }
 
+  const summary = counts
+    ? ([
+      [counts.skills, copy("skills")],
+      [counts.specialists, copy("specialists")],
+      [counts.connectors, copy("connectors")],
+      [counts.sessions, copy("sessions")],
+    ] as [number, string][]).map(([value, label]) => {
+      const [number, ...words] = counted(value, label, language).split(" ");
+      return <span key={label}><b>{number}</b> {words.join(" ")}</span>;
+    })
+    : null;
+
   return (
     <div className="app">
       <header className="top">
         <button className="brand" onClick={() => goTo("skills")} type="button">
-          ScienceDiscovery <span>Hub</span>
+          <BrandMark size={30} />
+          <span className="brand-name">ScienceDiscovery <b>Hub</b></span>
         </button>
-        <nav className="tabs">
-          {TABS.map((tab) => (
-            <button
-              aria-current={route.tab === tab ? "page" : undefined}
-              className="tab"
-              key={tab}
-              onClick={() => goTo(tab)}
-              type="button"
-            >
-              {copy(tab)}
-              {counts ? <span className="tab-count">{counts[tab]}</span> : null}
-            </button>
-          ))}
-        </nav>
-        <button className="lang" onClick={toggle} type="button">{language === "zh" ? "EN" : "中文"}</button>
+        <div className="top-actions">
+          <button aria-label={language === "zh" ? "切换到英文" : "Switch to Chinese"} className="lang" onClick={toggle} type="button">
+            <GlobeIcon size={16} />
+            {language === "zh" ? "中文" : "EN"}
+          </button>
+        </div>
       </header>
+
+      {route.id ? null : (
+        <section className="hero">
+          <div className="hero-inner">
+            <h1>ScienceDiscovery <span>Hub</span></h1>
+            {summary ? <p className="hero-sub">{summary}</p> : null}
+            <nav aria-label={copy("categories")} className="segmented">
+              {TABS.map((tab) => (
+                <button
+                  aria-current={route.tab === tab ? "page" : undefined}
+                  className="segment"
+                  key={tab}
+                  onClick={() => goTo(tab)}
+                  type="button"
+                >
+                  {copy(tab)}
+                  {counts ? <span className="segment-count">{counts[tab]}</span> : null}
+                </button>
+              ))}
+            </nav>
+            <div className="hero-search">
+              <SearchIcon className="hero-search-icon" size={18} />
+              <input
+                aria-label={copy("search")}
+                onChange={(event) => updateFilters(route.tab, { q: event.target.value || null })}
+                placeholder={copy("search")}
+                type="search"
+                value={route.params.get("q") ?? ""}
+              />
+            </div>
+            {hintVisible && route.tab === "sessions" ? (
+              <div className="hint">
+                <span>{copy("hint")}</span>
+                <button aria-label={copy("dismiss")} className="hint-close" onClick={() => setHintVisible(false)} type="button">×</button>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      )}
+
       <main className="content">{renderBody()}</main>
     </div>
   );

@@ -28,6 +28,7 @@ const COPY = {
   connectors: { en: "Connectors", zh: "连接器" },
   contents: { en: "Contents", zh: "内容统计" },
   description: { en: "Description", zh: "描述" },
+  dismiss: { en: "Dismiss", zh: "关闭" },
   download: { en: "Download", zh: "下载" },
   downloadJson: { en: "Download JSON", zh: "下载 JSON" },
   downloadMarkdown: { en: "Download Markdown", zh: "下载 Markdown" },
@@ -40,6 +41,10 @@ const COPY = {
   filters: { en: "Filters", zh: "筛选" },
   governance: { en: "Governance", zh: "治理信息" },
   hardware: { en: "Hardware", zh: "硬件" },
+  hint: {
+    en: "Session packages come from real runs: a session's messages, artifacts, files and scientific memory, packed into one .sdresearch file.",
+    zh: "会话包来自真实运行：一次会话的消息、产物、文件与科学记忆，打包为一个 .sdresearch 文件。",
+  },
   instructions: { en: "Prompt", zh: "Prompt" },
   loading: { en: "Loading…", zh: "加载中…" },
   members: { en: "Team members", zh: "团队成员" },
@@ -73,6 +78,14 @@ const COPY = {
 } as const;
 
 export type CopyKey = keyof typeof COPY;
+
+/** `1 skill` / `3 skills`: English needs the singular, Chinese counts do not. */
+export function counted(count: number, label: string, language: Language): string {
+  const base = label.toLowerCase();
+  if (language !== "en") return `${count} ${base}`;
+  const singular = base.endsWith("s") ? base.slice(0, -1) : base;
+  return `${count} ${count === 1 ? singular : base}`;
+}
 
 export function initialLanguage(): Language {
   const stored = globalThis.localStorage?.getItem(STORAGE_KEY);
