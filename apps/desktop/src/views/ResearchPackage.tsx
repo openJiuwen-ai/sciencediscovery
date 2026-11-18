@@ -274,7 +274,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setTrajectory(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
     // Every open starts a fresh bounded wait: a stalled preview from the previous
     // open must not greet the user as already exhausted (#1235 review 2, F11).
     pendingTries.current = 0; pendingScope.current = ""; setPreviewStalled(false);
