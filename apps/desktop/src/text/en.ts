@@ -168,9 +168,11 @@ export const EN: Text = {
   reviewer: {
     title: "Review",
     settings: "Auto-review",
-    settingsHint: "Check structure, citation format and delivery completeness whenever an artifact is produced.",
     unavailable: "Reviewer Specialist is off in Settings, so automatic review will not run for this session.",
     level: "Review level",
+    /** Shown on the level row when automatic review is off: the level is not
+     *  idle, a manual run still reads it. */
+    levelManualHint: "Automatic review is off; Review now will still use this level.",
     levelQuickDesc: "Deterministic checks: structure, citation format, delivery completeness.",
     levelDeepDesc: "Adds source-by-source and computation evidence checks on top of Quick.",
     running: "Reviewing…",
