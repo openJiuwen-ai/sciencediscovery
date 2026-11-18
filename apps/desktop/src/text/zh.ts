@@ -44,7 +44,6 @@ export const ZH = {
   exportHistory: {
     title: "导出记录",
     description: "本机保存过的研究包，可从这里找回",
-    heading: "已保存的研究包",
     empty: "还没有保存过研究包。",
     noMatch: "没有符合筛选条件的研究包。",
     unavailable: "导出记录只在桌面应用内可用。",
