@@ -49,6 +49,15 @@ test("venvLockSkew reports the stale installed version, not the pin", () => {
   assert.equal(venvLockSkew(LOCK, installed).length, 1);
 });
 
+test("names are compared across the hyphen/underscore/dot spellings in play", () => {
+  // importlib.metadata reports `pydantic_core`; uv.lock writes `pydantic-core`.
+  const lock = '[[package]]\nname = "pydantic-core"\nversion = "2.46.3"\n';
+  const snapshot = parseDistributionSnapshot(JSON.stringify({ pydantic_core: "1.0.0" }));
+  assert.deepEqual(venvLockSkew(lock, snapshot), [{ installed: "1.0.0", locked: "2.46.3", name: "pydantic-core" }]);
+  // A matching version under the other spelling is not a skew.
+  assert.equal(venvLockSkew(lock, parseDistributionSnapshot(JSON.stringify({ "Pydantic-Core": "2.46.3" }))).length, 0);
+});
+
 test("a venv that matches the patch set produces no refusal", () => {
   const installed = parseDistributionSnapshot(JSON.stringify({ greenlet: "3.5.5", openjiuwen: "0.2.6" }));
   assert.equal(venvPreflightProblem(LOCK, installed), null);
