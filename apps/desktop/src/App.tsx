@@ -36,6 +36,7 @@ import type {
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
+import { canExportSession } from "./app/session-export.js";
 import { useIdeaResearches } from "./app/use-idea-researches.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
@@ -1113,7 +1114,7 @@ export function App({ initialToken }: Props) {
           <Sidebar
             actions={actions}
             onExportSession={session => {
-              if (session.projectId !== state.inboxProject?.id && !state.projects.some(project => project.id === session.projectId)) { actions.toast(TEXT.researchPackage.sourceUnavailable, "error"); return; }
+              if (!canExportSession(session, state.projects, state.inboxProject?.id)) { actions.toast(TEXT.researchPackage.sourceUnavailable, "error"); return; }
               setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId });
             }}
             onImportSession={() => setPackageRequest({ kind: "import", projectId: state.inboxProject?.id })}
@@ -1136,7 +1137,7 @@ export function App({ initialToken }: Props) {
               // Same guard as the sidebar's row menu: a session whose project is gone
               // cannot be exported, and the click has to say so rather than fail later.
               const target = state.detail!;
-              if (target.projectId !== state.inboxProject?.id && !state.projects.some(project => project.id === target.projectId)) {
+              if (!canExportSession(target, state.projects, state.inboxProject?.id)) {
                 actions.toast(TEXT.researchPackage.sourceUnavailable, "error");
                 return;
               }

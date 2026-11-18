@@ -74,14 +74,20 @@ export function copyStatusLine(copy: CopyOperation | undefined, t: typeof TEXT.r
  * named here keeps the server's wording, but only inside the details block: the
  * alert line must not be raw English in a Chinese dialog.
  */
-function taskErrorMessage(error?: string): string | undefined {
+export function taskErrorMessage(error?: string): string | undefined {
   if (!error) return undefined;
   const t = TEXT.researchPackage;
+  const trimmed = error.trim();
   if (/exceeds the archive size limit/i.test(error)) return t.packageTooLarge;
-  if (/^(Export task not found|Completed export not found)$/i.test(error.trim())) return t.taskMissing;
+  if (/^(Export task not found|Completed export not found)$/i.test(trimmed)) return t.taskMissing;
   if (/导出文件已过期|export (file )?(has )?expired/i.test(error)) return t.taskExpired;
   if (/服务重启时导出尚未完成/i.test(error)) return t.taskRestarted;
-  return undefined;
+  // The poll settles its own terminal answers with sentences from these same
+  // dictionaries (a deleted task, the retry limit). Those are already the copy
+  // the user must read, so they pass through instead of collapsing into 操作失败
+  // with the real sentence demoted to 技术细节 (#1235 review 2, F9).
+  return [t.exportMissing, t.exportPollingFailed, t.taskMissing, t.taskExpired, t.taskRestarted, t.failed, t.legacyUnavailable]
+    .includes(trimmed) ? trimmed : undefined;
 }
 
 export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
@@ -134,7 +140,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const busyRef = useRef(false);
   const exportsRef = useRef<ExportRecord[]>([]);
   const savedRef = useRef<HTMLDivElement>(null);
-  const flashTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const flashTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const flashSeq = useRef(0);
 
   const patchExport = useCallback((id: string, patch: Partial<ExportRecord>) => {
@@ -144,11 +150,21 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const pushFlash = useCallback((tone: ExportFlash["tone"], message: string, savedToken?: string) => {
     const id = (flashSeq.current += 1);
     setFlashQueue(current => [...current.slice(-3), { id, tone, message, savedToken }]);
-    const timer = setTimeout(() => setFlashQueue(current => current.filter(flash => flash.id !== id)), tone === "error" ? 8000 : 5000);
-    flashTimers.current.push(timer);
+    const timer = setTimeout(() => {
+      flashTimers.current.delete(id);
+      setFlashQueue(current => current.filter(flash => flash.id !== id));
+    }, tone === "error" ? 8000 : 5000);
+    flashTimers.current.set(id, timer);
   }, []);
-  useEffect(() => () => { flashTimers.current.forEach(clearTimeout); }, []);
-  const dismissFlash = useCallback((id: number) => setFlashQueue(current => current.filter(flash => flash.id !== id)), []);
+  // A toast timer must not fire after the view is gone or the toast was dismissed
+  // (#1235 review 2, F15).
+  useEffect(() => () => { for (const timer of flashTimers.current.values()) clearTimeout(timer); flashTimers.current.clear(); }, []);
+  const dismissFlash = useCallback((id: number) => {
+    const timer = flashTimers.current.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    flashTimers.current.delete(id);
+    setFlashQueue(current => current.filter(flash => flash.id !== id));
+  }, []);
 
   useEffect(() => { exportsRef.current = exports; }, [exports]);
 
@@ -259,6 +275,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
     setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
+    // Every open starts a fresh bounded wait: a stalled preview from the previous
+    // open must not greet the user as already exhausted (#1235 review 2, F11).
+    pendingTries.current = 0; pendingScope.current = ""; setPreviewStalled(false);
     if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
@@ -298,9 +317,6 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
-    // Ticking a workspace file must not blank the dialog: the list stays mounted
-    // and the size line says it is recalculating. A level or option change does
-    // reset, because that is when the list itself changes (#1057).
     // Ticking a workspace file must not blank the dialog: the list stays mounted and
     // only the size line says it is recalculating (#1057). The pending budget is
     // keyed on the whole selection, so a changed file set starts it over without
@@ -310,7 +326,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       previewScope.current = scope;
       setPreview(undefined);
     }
-    const selection = `${scope}|${files?.join(",") ?? ""}`;
+    const selection = `${detail.id}|${scope}|${files?.join(",") ?? ""}`;
     if (pendingScope.current !== selection) {
       pendingScope.current = selection;
       pendingTries.current = 0;
@@ -499,7 +515,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           </div> : null}
           {overLimitAcknowledged ? <p role="status" className="research-package-notice">{t.overLimitConfirmed}</p> : null}
           {preview ? <details className="research-files-block" open>
-            <summary>{t.files}（{preview.files.length}）</summary>
+            <summary>{t.filesWithCount(preview.files.length)}</summary>
             <label className="research-select-all"><input type="checkbox" checked={allFilesSelected} onChange={event => setFiles(event.target.checked ? preview.files.map(row => row.path) : [])} />{t.selectAll}</label>
             <div className="research-file-grid">{preview.files.map(item => <label key={item.path} title={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} /><span>{item.path}</span></label>)}</div>
           </details> : null}
