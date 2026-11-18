@@ -201,6 +201,12 @@ export const EN: Text = {
     configurationRefreshFailed: "Configuration requests could not refresh. The displayed state may be out of date; retry before confirming.",
     retryConfiguration: "Retry",
     copyAnswer: "Copy answer",
+    usage: {
+      label: "Usage", heading: "Usage this turn", models: "Models", input: "Input", output: "Output",
+      cacheRead: "Cache read", cacheWrite: "Cache write", reasoning: "Reasoning",
+      unreported: "Not reported", incomplete: "Includes reported usage only; actual usage may be higher.",
+      loading: "Loading usage…", failed: "Could not load usage.", retry: "Retry",
+    },
     copied: "Copied",
     notices: {
       timeout_notice: "Timeout",

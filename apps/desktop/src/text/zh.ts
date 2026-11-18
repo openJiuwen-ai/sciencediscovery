@@ -204,6 +204,12 @@ export const ZH = {
     configurationRefreshFailed: "配置请求未能刷新。已显示的状态可能已过时，请重试后再确认。",
     retryConfiguration: "重试",
     copyAnswer: "复制回答",
+    usage: {
+      label: "用量", heading: "本轮用量", models: "模型", input: "输入", output: "输出",
+      cacheRead: "缓存读取", cacheWrite: "缓存写入", reasoning: "推理",
+      unreported: "未上报", incomplete: "仅包含已上报用量，实际用量可能更高。",
+      loading: "正在读取用量…", failed: "用量读取失败。", retry: "重试",
+    },
     copied: "已复制",
     /** The system-notice kinds the transcript can carry. */
     notices: {

@@ -33,6 +33,7 @@ declare module "react-test-renderer" {
   export interface ReactTestRenderer {
     root: ReactTestInstance;
     toJSON(): unknown;
+    update(element: ReactElement): void;
     unmount(): void;
   }
 

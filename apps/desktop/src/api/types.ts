@@ -100,6 +100,8 @@ export type {
   ModelUsageAnalyticsFilters,
   ModelUsageAnalyticsSummary,
   ModelUsageReporting,
+  ModelUsageBucket,
+  SessionUsageSummary,
   NpuDeviceStatus,
   NpuInventory,
   NpuRunnerSelectionsResponse,
