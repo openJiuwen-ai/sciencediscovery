@@ -202,7 +202,7 @@ test("the exporter folds external skills into the catalog and its categories", a
     assert.ok(biology);
     assert.equal(biology.count, 2 + external.filter((asset) => asset.category.domain === "biology").length);
     const categoryTotal = catalog.categories.skill.reduce((total, node) => total + node.count, 0);
-    assert.equal(categoryTotal, catalog.assets.filter((asset) => asset.kind === "skill" || asset.kind === "team-skill").length);
+    assert.equal(categoryTotal, catalog.assets.filter((asset) => asset.kind === "skill").length);
 
     const abalign = external.find((asset) => asset.id === "biology/bioinformatics/abalign")!;
     const readme = await readFile(path.join(outDir, abalign.readme), "utf8");

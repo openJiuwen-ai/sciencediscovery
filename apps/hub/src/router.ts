@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export const TABS = ["skills", "specialists", "connectors", "sessions"] as const;
+export const TABS = ["skills", "teams", "specialists", "connectors", "sessions"] as const;
 
 export type Tab = (typeof TABS)[number];
 

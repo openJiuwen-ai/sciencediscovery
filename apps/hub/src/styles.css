@@ -158,7 +158,9 @@ button, input, select { color: inherit; font: inherit; }
   background: #eceafd;
   border-radius: 14px;
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 4px;
+  justify-content: center;
   max-width: 100%;
   padding: 5px;
 }
@@ -404,8 +406,6 @@ button, input, select { color: inherit; font: inherit; }
 
 .card-meta { color: var(--muted); display: flex; flex-wrap: wrap; font-size: 12.5px; gap: 8px; margin: 3px 0 0; }
 
-.card-kind { background: var(--accent-soft); border-radius: var(--radius-pill); color: var(--accent-strong); padding: 0 8px; }
-
 .version {
   background: var(--surface-subtle);
   border: 1px solid var(--border);
@@ -586,7 +586,7 @@ pre {
   .hero { padding: 36px 16px 26px; }
   .hero h1 { font-size: 30px; }
   .hero-inner { gap: 16px; }
-  .segmented { overflow-x: auto; width: 100%; }
+  .segmented { width: 100%; }
   .segment { padding: 9px 13px; }
   .content { padding: 20px 16px 48px; }
   .layout { grid-template-columns: minmax(0, 1fr); }
@@ -641,9 +641,7 @@ pre {
   .detail pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 }
 
-/* Below a phablet the four tabs do not fit one row; wrapping beats hiding one. */
 @media (max-width: 560px) {
-  .segmented { flex-wrap: wrap; justify-content: center; overflow: visible; }
   .segment { font-size: 13px; padding: 8px 11px; }
   .hero-search input { padding: 12px 18px 12px 42px; }
 }
