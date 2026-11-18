@@ -107,17 +107,19 @@ export function RunnerEnvironmentPane({ client, runnerId, onConfirm }: {
         onCreate={async body => { if (await run(() => api.create(body), true)) setCreating(false); }} /> : null}
       {selected ? <SettingsModal wide label={selected.name} onClose={() => setSelectedId(undefined)}>
         <div className="environment-details">
-          <Row title={text.revision} tone="stack"><code>{selected.currentRevisionId}</code></Row>
-          <Row title={text.packages} tone="stack"><p className="environment-package-list">{revisions.find(item => item.id === selected.currentRevisionId)?.packages.join(" · ") || text.noSnapshot}</p></Row>
+          <div className="environment-details-header">
+            <div className="environment-version"><strong>{text.revision}</strong><code>{selected.currentRevisionId}</code></div>
+            {selected.kind === "task" ? <button className="danger-button" type="button" disabled={disabled}
+              onClick={() => onConfirm({ title: text.deleteTitle, body: text.deleteBody, eyebrow: selected.name, accept: common.remove,
+                onAccept: async () => { if (await run(() => api.remove(selected.id))) setSelectedId(undefined); } })}>{common.remove}</button> : null}
+          </div>
           {selected.error ? <p className="row-note is-error" role="alert">{selected.error}</p> : null}
-          {selected.kind === "task" ? <>
+          {selected.kind === "task" ?
             <InstallPackages key={selected.id} environment={selected} disabled={disabled}
               onInstall={async (manager, packages) => run(() => api.install(selected.id, { manager, packages }))} />
-            <div className="settings-form-actions"><button className="danger-button" type="button" disabled={disabled}
-              onClick={() => onConfirm({ title: text.deleteTitle, body: text.deleteBody, eyebrow: selected.name, accept: common.remove,
-                onAccept: async () => { if (await run(() => api.remove(selected.id))) setSelectedId(undefined); } })}>{common.remove}</button></div>
-          </> : <p className="settings-note">{text.base}</p>}
+          : <p className="settings-note">{text.base}</p>}
           <WriteStatus state={write} />
+          <Row title={text.installedPackages} hint={text.installedPackagesHint} tone="stack"><p className="environment-package-list">{revisions.find(item => item.id === selected.currentRevisionId)?.packages.join(" · ") || text.noSnapshot}</p></Row>
         </div>
       </SettingsModal> : null}
     </Group>;
@@ -157,8 +159,10 @@ function InstallPackages({ environment, disabled, onInstall }: {
   }}>
     <Row title={text.manager}><Select label={text.manager} disabled={disabled} value={manager}
       options={managers.map(value => ({ value, label: value }))} onChange={value => { const found = managers.find(item => item === value); if (found) setManager(found); }} /></Row>
-    <Row title={text.packages} hint={text.packagesHint} tone="stack"><textarea className="field-textarea is-code" rows={3} aria-label={`${environment.name} · ${text.packages}`}
-      disabled={disabled} value={packages} onChange={event => setPackages(event.target.value)} /></Row>
-    <div className="settings-form-actions"><button className="secondary-button" type="submit" disabled={disabled || !packages.trim()}>{text.install}</button></div>
+    <Row title={text.packages} hint={text.packagesHint} tone="stack"><div>
+      <textarea className="field-textarea is-code" rows={3} aria-label={`${environment.name} · ${text.packages}`}
+        disabled={disabled} value={packages} onChange={event => setPackages(event.target.value)} />
+      <div className="settings-form-actions"><button className="secondary-button" type="submit" disabled={disabled || !packages.trim()}>{text.install}</button></div>
+    </div></Row>
   </form>;
 }
