@@ -1058,6 +1058,7 @@ export const EN: Text = {
         general: { label: "General", description: "Interface language and preferences for this device" },
         memory: { label: "Scientific memory", description: "The memory service behind evidence and artifacts" },
         models: { label: "Models", description: "Profiles and provider credentials" },
+        usage: { label: "Model usage", description: "Model tokens recorded by the connected service" },
         skills: { label: "Skills", description: "Create, import, edit, enable, or disable skills" },
         mcp: { label: "MCP servers", description: "Manage built-in and custom MCP services and choose the tool sources sessions use by default" },
         specialists: { label: "Specialists", description: "Reusable instructions and tool bundles" },
@@ -1274,6 +1275,13 @@ export const EN: Text = {
         deleteTitle: (name: string) => `Delete the proxy “${name}”?`,
         deleteBody: (name: string) =>
           `Modules using “${name}” fall back to the global default. Connections already open are unaffected.`,
+      },
+      usage: {
+        range: "Usage period", today: "Today", week: "Last 7 days", month: "Last 30 days", all: "All time",
+        refresh: "Refresh", refreshing: "Refreshing…", total: "Total tokens", input: "Input tokens", output: "Output tokens",
+        totalColumn: "Total", inputColumn: "Input", outputColumn: "Output", model: "Model", byModel: "Usage by model (tokens)",
+        unreported: "Not reported", incomplete: "Only reported usage is included. Actual usage may be higher.",
+        empty: "No model usage recorded for this period.", updated: "Updated",
       },
       migrated: {
         common: {

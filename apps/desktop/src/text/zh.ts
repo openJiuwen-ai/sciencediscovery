@@ -1079,6 +1079,7 @@ export const ZH = {
         general: { label: "通用", description: "界面语言与这台设备上的偏好" },
         memory: { label: "科学记忆", description: "证据与产物的记忆服务" },
         models: { label: "模型", description: "模型档案与服务商凭据" },
+        usage: { label: "模型用量", description: "当前服务记录的模型 Token 用量" },
         skills: { label: "技能", description: "创建、导入、编辑、启用或停用技能" },
         mcp: { label: "MCP 服务器", description: "管理内置与自定义 MCP 服务，选择会话默认使用的工具来源" },
         specialists: { label: "专家", description: "可复用的指令与工具组合" },
@@ -1292,6 +1293,13 @@ export const ZH = {
         systemNote: "环境变量条目读取进程的 HTTP(S)、ALL_PROXY 与 NO_PROXY；系统条目解析桌面环境的代理设置。",
         deleteTitle: (name: string) => `删除代理「${name}」？`,
         deleteBody: (name: string) => `删除「${name}」后使用它的模块会退回全局默认，已经建立的连接不受影响。`,
+      },
+      usage: {
+        range: "统计时间范围", today: "今日", week: "近 7 天", month: "近 30 天", all: "全部",
+        refresh: "刷新", refreshing: "刷新中…", total: "总 Token", input: "输入 Token", output: "输出 Token",
+        totalColumn: "总量", inputColumn: "输入", outputColumn: "输出", model: "模型", byModel: "按模型统计（Token）",
+        unreported: "未上报", incomplete: "仅包含已上报用量，实际用量可能更高。",
+        empty: "所选时间范围内暂无模型用量记录。", updated: "更新时间",
       },
       migrated: {
         common: {

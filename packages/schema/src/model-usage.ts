@@ -270,6 +270,14 @@ export interface ModelUsageExchangeRate {
   stale: boolean;
 }
 
+/** Counts of records that actually reported each field; zero tokens can still be reported. */
+export interface ModelUsageReporting {
+  invocationCount: number;
+  reportedInputCount: number;
+  reportedOutputCount: number;
+  reportedTotalCount: number;
+}
+
 export interface DailyModelUsageSummary {
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -282,6 +290,8 @@ export interface DailyModelUsageSummary {
   modelProfileName: string;
   outputTokens: number;
   totalTokens: number;
+  /** Absent on older servers. */
+  reporting?: ModelUsageReporting;
 }
 
 export interface ModelUsageAnalyticsFilters {
@@ -299,6 +309,8 @@ export interface ModelUsageAnalyticsOverview {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Absent on older servers. */
+  reporting?: ModelUsageReporting;
 }
 
 export interface ModelUsageAnalyticsSummary {

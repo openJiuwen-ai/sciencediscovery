@@ -27,6 +27,7 @@ import type {
   ModelUsageExchangeRate,
   ModelInvocationUsage,
   ModelUsageBucket,
+  ModelUsageReporting,
   ResolvedModelPricing,
   SessionUsageSummary,
 } from "@sciencediscovery/schema";
@@ -411,6 +412,18 @@ export function estimateInvocationCost(
     : undefined;
 }
 
+function emptyReporting(): ModelUsageReporting {
+  return { invocationCount: 0, reportedInputCount: 0, reportedOutputCount: 0, reportedTotalCount: 0 };
+}
+
+function addReporting(reporting: ModelUsageReporting, usage: ModelInvocationUsage): void {
+  reporting.invocationCount += 1;
+  if (usage.usageStatus !== "reported") return;
+  if (typeof usage.inputTokens === "number") reporting.reportedInputCount += 1;
+  if (typeof usage.outputTokens === "number") reporting.reportedOutputCount += 1;
+  if (typeof usage.totalTokens === "number") reporting.reportedTotalCount += 1;
+}
+
 export function summarizeModelUsageAnalytics(
   records: ModelInvocationUsage[],
   context: ModelUsageAnalyticsContext,
@@ -422,7 +435,7 @@ export function summarizeModelUsageAnalytics(
     .filter((usage) => matchesFilters(usage, filters, context, formatter))
     .toSorted((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));
   const overviewCosts = new Map<ModelUsageCost["currency"], number>();
-  const daily = new Map<string, DailyModelUsageSummary & { costs: Map<ModelUsageCost["currency"], number> }>();
+  const daily = new Map<string, DailyModelUsageSummary & { costs: Map<ModelUsageCost["currency"], number>; reporting: ModelUsageReporting }>();
   const overview = {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
@@ -430,6 +443,7 @@ export function summarizeModelUsageAnalytics(
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
+    reporting: emptyReporting(),
   };
 
   for (const usage of normalized) {
@@ -439,6 +453,7 @@ export function summarizeModelUsageAnalytics(
       context.protocolByModelProfileId?.get(usage.modelProfileId),
     );
     addCost(overviewCosts, cost);
+    addReporting(overview.reporting, usage);
     if (usage.usageStatus === "reported") {
       overview.inputTokens += usage.inputTokens ?? 0;
       overview.outputTokens += usage.outputTokens ?? 0;
@@ -463,10 +478,12 @@ export function summarizeModelUsageAnalytics(
         modelProfileName: usage.modelProfileName,
         outputTokens: 0,
         totalTokens: 0,
+        reporting: emptyReporting(),
       };
       daily.set(key, row);
     }
     addCost(row.costs, cost);
+    addReporting(row.reporting, usage);
     if (usage.usageStatus === "reported") {
       row.inputTokens += usage.inputTokens ?? 0;
       row.outputTokens += usage.outputTokens ?? 0;
