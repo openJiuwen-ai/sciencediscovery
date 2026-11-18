@@ -20,8 +20,12 @@ def api(tmp_path):
     return call
 
 def create(api, key="create", **overrides):
-    return api("create", dict(executor=EXECUTOR, idempotencyKey=key, maxDepth=2, maxNodes=20,
-        maxSearchRounds=3, objective="Catalyst", rootHypothesis="Explore catalysts", **overrides))
+    # A keyword may not be repeated between the literals and **overrides, so the
+    # defaults go in first and the caller's values replace them.
+    payload = dict(executor=EXECUTOR, idempotencyKey=key, maxDepth=2, maxNodes=20,
+        maxSearchRounds=3, objective="Catalyst", rootHypothesis="Explore catalysts")
+    payload.update(overrides)
+    return api("create", payload)
 
 def mutate(api, tree, op, **params):
     result = api(op, dict(treeId=tree["treeId"], expectedRevision=tree["revision"], idempotencyKey=f'{op}-{tree["revision"]}', **params))
