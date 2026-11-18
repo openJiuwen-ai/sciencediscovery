@@ -4419,7 +4419,7 @@ export class SessionStore {
   async createProject(
     name: string,
     input: RuntimeSettingsOverrides = {},
-    remoteRunnerHostIds: string[] = [],
+    remoteRunnerHostIds?: string[],
     runnerIds?: string[],
     description?: string,
   ): Promise<Project> {
@@ -4466,7 +4466,7 @@ export class SessionStore {
         .filter((project) => project.kind === INBOX_PROJECT_KIND)
         .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
       if (existing) return existing;
-      const project = this.buildProject(INBOX_PROJECT_NAME, {}, [], undefined, undefined, INBOX_PROJECT_KIND);
+      const project = this.buildProject(INBOX_PROJECT_NAME, {}, undefined, undefined, undefined, INBOX_PROJECT_KIND);
       // Pushed inside the write, so a failed save cannot leave a Project that
       // every later call returns but the next process start has never heard of.
       await this.saveCatalog(() => this.catalog.projects.push(project));
@@ -4488,14 +4488,18 @@ export class SessionStore {
   private buildProject(
     name: string,
     input: RuntimeSettingsOverrides,
-    remoteRunnerHostIds: string[],
+    remoteRunnerHostIds: string[] | undefined,
     runnerIds?: string[],
     description?: string,
     kind?: Project["kind"],
   ): Project {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
-    const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
-    const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
+    const legacyHosts = runnerIds === undefined && remoteRunnerHostIds !== undefined
+      ? this.validateProjectRemoteRunnerHosts(remoteRunnerHostIds) : undefined;
+    // Omission follows the live catalog; an explicitly supplied empty legacy list keeps local only.
+    const allowedRunners = runnerIds !== undefined ? this.validateRunnerIds(runnerIds)
+      : legacyHosts?.length === 0 ? ["local"] : undefined;
+    const allowedHosts = allowedRunners?.filter(id => id !== "local") ?? legacyHosts ?? [];
     const trimmedDescription = normalizeProjectDescription(description);
     return {
       createdAt: new Date().toISOString(),
@@ -4542,7 +4546,7 @@ export class SessionStore {
       project.remoteRunnerHostIds = ids.filter((id) => id !== "local");
     } else if (changes.remoteRunnerHostIds !== undefined) {
       const ids = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
-      delete project.runnerIds;
+      project.runnerIds = ["local", ...ids];
       project.remoteRunnerHostIds = ids;
     }
   }
@@ -4567,10 +4571,14 @@ export class SessionStore {
     return selected;
   }
 
+  private registeredRunnerIds(): string[] {
+    return ["local", ...this.catalog.remoteHosts.map(host => host.id)];
+  }
+
   effectiveRunnerIds(sessionId: string): string[] {
     const session = this.getSession(sessionId);
     const project = session && this.getProject(session.projectId);
-    return project && session ? effectiveRunnerIds(project, session) : [];
+    return project && session ? effectiveRunnerIds(project, session, this.registeredRunnerIds()) : [];
   }
 
   /** Selection discovery deliberately avoids the credential-decrypting host description API. */
@@ -4585,8 +4593,8 @@ export class SessionStore {
     const session = this.assertSessionWritable(sessionId);
     const project = this.getProject(session.projectId)!;
     const inherited = session.runnerIds === undefined && session.remoteRunnerHostIds === undefined;
-    return { projectRunnerIds: effectiveRunnerIds(project).sort(), selectionMode: inherited ? "inherit" as const : "selected" as const,
-      runnerIds: inherited ? [] : effectiveRunnerIds(project, session).sort(), effectiveRunnerIds: effectiveRunnerIds(project, session).sort() };
+    return { projectRunnerIds: effectiveRunnerIds(project, undefined, this.registeredRunnerIds()).sort(), selectionMode: inherited ? "inherit" as const : "selected" as const,
+      runnerIds: inherited ? [] : this.effectiveRunnerIds(sessionId).sort(), effectiveRunnerIds: this.effectiveRunnerIds(sessionId).sort() };
   }
 
   applyRunnerConfigurationSync(sessionId: string, scope: ConfigurationScope, selectionMode: "inherit" | "selected", runnerIds: string[]): void {
@@ -4651,7 +4659,7 @@ export class SessionStore {
     if (!session) return [];
     const project = this.getProject(session.projectId);
     if (!project) return [];
-    const selected = effectiveRunnerIds(project, session);
+    const selected = this.effectiveRunnerIds(sessionId);
     return selected
       .flatMap((hostId) => {
         const host = this.getRemoteHost(hostId);

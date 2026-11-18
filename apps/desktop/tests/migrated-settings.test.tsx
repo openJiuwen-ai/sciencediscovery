@@ -18,12 +18,13 @@ import { randomUUID } from "node:crypto";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { ApiClient } from "../src/api/client.js";
 import { runnerEnvironmentApi } from "../src/api/settings.js";
-import type { Environment, ProxySettingsDetails, ScientificEnvironmentSetup, SystemQuotaSettings, WebSettingsDetails } from "../src/api/types.js";
+import type { Environment, ProxySettingsDetails, ScientificEnvironmentSetup, SystemQuotaSettings, RunnerTarget, UpdateWebSettingsRequest, WebSettingsDetails } from "../src/api/types.js";
 import type { ConfirmRequest } from "../src/app/use-workspace.js";
 import { TEXT } from "../src/text.js";
 import { QuotaSettings } from "../src/views/settings/QuotaSettings.js";
 import { WebSearchSettings } from "../src/views/settings/WebSearchSettings.js";
-import { EnvironmentSettings } from "../src/views/settings/EnvironmentSettings.js";
+import { EnvironmentSources, RunnerEnvironmentPane } from "../src/views/settings/EnvironmentSettings.js";
+import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { ProxySettings } from "../src/views/settings/ProxySettings.js";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "./support/dom-renderer.js";
 
@@ -64,12 +65,19 @@ function web(): WebSettingsDetails { return {
   proxyPolicy: "inherit", providers: [{ provider: "jina", hasApiKey: true }],
 }; }
 const setup: ScientificEnvironmentSetup = {
-  state: "ready", phase: "ready", allowedChannels: [], completedAt: null, components: {
-    conda: { action: null, completedAt: null, error: null, message: "Ready", phase: "ready", startedAt: null, state: "ready", updatedAt: "" },
-    micromamba: { action: null, completedAt: null, error: null, message: "Ready", phase: "ready", startedAt: null, state: "ready", updatedAt: "" },
+  state: "ready", phase: "complete", allowedChannels: [], completedAt: null, components: {
+    conda: { action: null, completedAt: null, error: null, message: "Ready", phase: "complete", startedAt: null, state: "ready", updatedAt: "" },
+    micromamba: { action: null, completedAt: null, error: null, message: "Ready", phase: "complete", startedAt: null, state: "ready", updatedAt: "" },
   }, error: null, managedProvisioner: true, message: "Ready", networkPolicy: "allowed-channels", provisioner: "micromamba",
   provisionerVersion: "2", startedAt: null, starterPackages: { python: ["numpy"], r: [] }, updatedAt: "",
 };
+function runner(id: string, name = id, connected = true): RunnerTarget {
+  return { id, runnerName: name, alias: name, connectionKind: "ssh", location: id === "local" ? "local" : "remote",
+    createdAt: "", updatedAt: "", runnerCommand: "runner", status: "ready", capabilities: { platform: "Linux", conda: false, containerRuntimes: [], cpuCores: 4,
+      cuda: null, gpu: null, modules: false, memoryBytes: 1024, nodeVersion: null, probedAt: "",
+      runnerCommandAvailable: true, scratchPaths: [], slurm: false },
+    runnerStatus: { hostId: id, state: connected ? "ready" : "disconnected" } };
+}
 const environment = (name: string): Environment => ({ id: name, name, kind: "task", language: "python", currentRevisionId: "rev", createdAt: "", updatedAt: "" });
 function proxy(): ProxySettingsDetails { return { defaultPolicy: "none", noProxy: "localhost", servers: [
   { id: "env", kind: "environment", name: "Environment", hasUrl: false, createdAt: "", updatedAt: "" },
@@ -122,7 +130,7 @@ test("Swarm search hides native fields and patches only the selected engine", as
   const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
   try {
     assert.doesNotMatch(markup(view), /Tavily|Brave|Exa|789|456/);
-    assert.equal(view.root.findByProps({ "aria-label": TEXT.settings.system.migrated.web.deepseekSearch, role: "switch" }).props.disabled, true);
+    assert.equal(view.root.findAllByProps({ role: "switch" }).length, 2, "paid services have no enable switches");
     await act(async () => { handler(view.root.findByProps({ "aria-label": "Bing", role: "switch" }), "onClick"); });
     assert.deepEqual(writes(client)[0]?.body, { freeSearchEngines: { bing: false, duckduckgo: true, "brave-html": false } });
   } finally { await close(view); }
@@ -158,7 +166,8 @@ test("Runner changes discard late local answers and keep source preferences glob
   let finishLocal: ((value: unknown) => void) | undefined;
   const local = new Promise(resolve => { finishLocal = resolve; });
   const client = new Client(call => {
-    if (call.path === "/api/runners") return [{ id: "remote", runnerName: "GPU", runnerStatus: { state: "ready" } }];
+    if (call.path === "/api/runners") return [runner("local"), runner("remote", "GPU")];
+    if (call.path === "/api/runners/npu") return { selections: {} };
     if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
     if (call.path === "/api/runners/local/environment-setup") return local;
     if (call.path.endsWith("environment-setup")) return setup;
@@ -166,9 +175,10 @@ test("Runner changes discard late local answers and keep source preferences glob
     if (call.path.endsWith("environments")) return [environment(call.path.includes("remote") ? "remote-env" : "local-env")];
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<EnvironmentSettings client={client} onConfirm={noConfirm} />);
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} initialRunnerId="local" />);
   try {
-    await act(async () => { handler(view.root.findByProps({ "aria-label": TEXT.settings.system.migrated.environments.runner }), "onChange", { target: { value: "remote" } }); });
+    await act(async () => { handler(button(view, TEXT.settings.system.migrated.environments.back), "onClick"); });
+    await act(async () => { handler(button(view, "GPU"), "onClick"); });
     assert.match(markup(view), /remote-env/);
     await act(async () => { finishLocal?.(setup); });
     assert.doesNotMatch(markup(view), /local-env/);
@@ -177,8 +187,8 @@ test("Runner changes discard late local answers and keep source preferences glob
 });
 
 test("a disconnected Runner offers guidance without environment requests", async () => {
-  const client = new Client(call => call.path === "/api/runners" ? [{ id: "remote", runnerStatus: { state: "disconnected" } }] : { condaSource: "upstream", pipSource: "upstream" });
-  const view = await mount(<EnvironmentSettings client={client} onConfirm={noConfirm} initialRunnerId="remote" />);
+  const client = new Client(call => call.path === "/api/runners" ? [runner("remote", "GPU", false)] : { selections: {} });
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} initialRunnerId="remote" />);
   try { assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.unavailable)); assert.equal(client.calls.some(call => call.path.includes("/remote/")), false); }
   finally { await close(view); }
 });
@@ -190,7 +200,7 @@ test("initialization exposes failure and retries only the selected Runner", asyn
     if (call.path.endsWith("environment-setup")) return { ...setup, state: "failed", error: "download failed" };
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<EnvironmentSettings client={client} onConfirm={noConfirm} />);
+  const view = await mount(<RunnerEnvironmentPane client={client} runnerId="local" onConfirm={noConfirm} />);
   try {
     assert.match(markup(view), /download failed/);
     await act(async () => { handler(button(view, TEXT.settings.system.migrated.environments.retry), "onClick"); });
@@ -254,8 +264,8 @@ test("MCP proxy overrides deduplicate server IDs and preserve other policies", a
   const view = await mount(<ProxySettings client={client} onConfirm={noConfirm} />);
   try {
     const selectors = view.root.findAllByType("select").filter(node => String(node.props["aria-label"]).startsWith(TEXT.settings.system.migrated.proxy.mcp));
-    assert.equal(selectors.length, 1); assert.ok(selectors[0]);
-    await act(async () => { handler(selectors[0], "onChange", { target: { value: "proxy:env" } }); });
+    assert.equal(selectors.length, 1); const selector = selectors[0]; assert.ok(selector);
+    await act(async () => { handler(selector, "onChange", { target: { value: "proxy:env" } }); });
     assert.deepEqual(writes(client)[0]?.body, { policies: { other: "none", shared: "proxy:env" } });
   } finally { await close(view); }
 });
@@ -263,18 +273,21 @@ test("MCP proxy overrides deduplicate server IDs and preserve other policies", a
 test("custom environments create, install and delete on one Runner; base environments stay read-only", async () => {
   let environments: Environment[] = [{ ...environment("base"), kind: "starter" }];
   let confirmation: ConfirmRequest | undefined;
+  let finishCreation: (() => void) | undefined;
   const client = new Client(call => {
     if (call.path === "/api/runners") return [];
     if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
     if (call.path.endsWith("environment-setup")) return setup;
     if (call.path.endsWith("environment-revisions")) return [];
-    if (call.method === "POST" && call.path.endsWith("/environments")) { environments = [...environments, environment("analysis")]; return environment("analysis"); }
+    if (call.method === "POST" && call.path.endsWith("/environments")) return new Promise(resolve => {
+      finishCreation = () => { environments = [...environments, environment("analysis")]; resolve(environment("analysis")); };
+    });
     if (call.method === "DELETE") { environments = environments.filter(item => item.id !== "analysis"); return {}; }
     if (call.path.endsWith("/install")) return { status: "ready" };
     if (call.path.endsWith("/environments")) return environments;
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<EnvironmentSettings client={client} onConfirm={request => { confirmation = request; }} />);
+  const view = await mount(<RunnerEnvironmentPane client={client} runnerId="local" onConfirm={request => { confirmation = request; }} />);
   const text = TEXT.settings.system.migrated.environments;
   try {
     await act(async () => { handler(button(view, "base"), "onClick"); });
@@ -284,6 +297,11 @@ test("custom environments create, install and delete on one Runner; base environ
     await act(async () => { handler(button(view, text.create), "onClick"); });
     await act(async () => { handler(view.root.findByProps({ "aria-label": text.name }), "onChange", { target: { value: " analysis " } }); });
     await act(async () => { const form = view.root.findAllByType("form").at(-1); assert.ok(form); handler(form, "onSubmit", { preventDefault() {} }); });
+    assert.ok(markup(view).includes(text.creating));
+    assert.ok(!markup(view).includes(TEXT.settings.system.saving));
+    await act(async () => { finishCreation?.(); });
+    assert.ok(markup(view).includes(text.created));
+    assert.ok(!markup(view).includes(TEXT.settings.system.migrated.common.saved));
     assert.deepEqual(writes(client)[0], { path: "/api/runners/local/environments", method: "POST", body: { name: "analysis", language: "python" } });
     await act(async () => { handler(button(view, "analysis"), "onClick"); });
     await act(async () => { handler(view.root.findByProps({ "aria-label": `analysis · ${text.packages}` }), "onChange", { target: { value: "numpy==2, pandas\nscipy" } }); });
@@ -296,19 +314,25 @@ test("custom environments create, install and delete on one Runner; base environ
   } finally { await close(view); }
 });
 
-test("package source preferences reject unsupported Conda presets and patch the global endpoint", async () => {
+test("package source selections save quietly, reject unsupported presets and report failures", async () => {
+  let refuseWrite = false;
   const client = new Client(call => {
+    if (call.method === "PUT" && refuseWrite) throw new Error("package source write refused");
     if (call.path === "/api/runners") return [{ id: "offline", runnerStatus: { state: "disconnected" } }];
     return { condaSource: "upstream", pipSource: "upstream" };
   });
-  const view = await mount(<EnvironmentSettings client={client} initialRunnerId="offline" onConfirm={noConfirm} />);
+  const view = await mount(<EnvironmentSources client={client} />);
   try {
     const text = TEXT.settings.system.migrated.environments;
     const conda = view.root.findByProps({ "aria-label": text.conda });
     assert.equal(conda.findAllByType("option").some(node => node.props.value === "huawei"), false);
     await act(async () => { handler(view.root.findByProps({ "aria-label": text.pip }), "onChange", { target: { value: "huawei" } }); });
-    await act(async () => { handler(button(view, TEXT.settings.system.migrated.common.save), "onClick"); });
+    assert.equal(view.root.findAllByType("button").some(node => node.children.includes(TEXT.settings.system.migrated.common.save)), false);
     assert.deepEqual(writes(client), [{ path: "/api/environment-source-settings", method: "PUT", body: { pipSource: "huawei" } }]);
+    assert.ok(!markup(view).includes(TEXT.settings.system.migrated.common.saved));
+    refuseWrite = true;
+    await act(async () => { handler(view.root.findByProps({ "aria-label": text.conda }), "onChange", { target: { value: "ustc" } }); });
+    assert.match(markup(view), /package source write refused/);
   } finally { await close(view); }
 });
 
@@ -355,5 +379,225 @@ test("two immediate setting writes cannot race each other", async () => {
     assert.equal(writes(client).length, 1);
     assert.equal(view.root.findByProps({ role: "switch", "aria-label": "Bing" }).props.disabled, true);
     await act(async () => { finish?.(web()); });
+  } finally { await close(view); }
+});
+
+function editableWebClient(settings: WebSettingsDetails) {
+  return new Client(call => {
+    if (call.method === "PUT") {
+      const { providerApiKeys, ...values } = call.body as UpdateWebSettingsRequest;
+      Object.assign(settings, values);
+      for (const [provider, value] of Object.entries(providerApiKeys ?? {})) {
+        const state = settings.providers.find(item => item.provider === provider);
+        if (state) state.hasApiKey = value !== null;
+        else if (provider === "deepseek") settings.providers.push({ provider, hasApiKey: value !== null });
+      }
+    }
+    return settings;
+  });
+}
+async function openDeepseekKey(view: ReactTestRenderer) {
+  await act(async () => {
+    const controls = view.root.findAllByType("button").filter(node => node.children.includes(TEXT.settings.system.migrated.web.configure));
+    assert.equal(controls.length, 5, "DeepSeek belongs with the other four paid providers");
+    assert.ok(controls[4]); handler(controls[4], "onClick");
+  });
+}
+
+test("DeepSeek has no enable switches and legacy disabled credentials require an explicit save", async () => {
+  const settings: WebSettingsDetails = { ...web(), fetchProvider: "deepseek", providers: [{ provider: "deepseek", hasApiKey: true }] };
+  const client = editableWebClient(settings);
+  const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
+  const text = TEXT.settings.system.migrated.web;
+  try {
+    assert.equal(view.root.findAllByProps({ role: "switch" }).length, 2);
+    assert.equal(view.root.findByProps({ "aria-label": text.fetchProvider }).props.value, "jina");
+    assert.ok(markup(view).includes(text.searchInactive));
+    assert.equal(writes(client).length, 0, "opening settings must not start paid operations");
+    await openDeepseekKey(view);
+    await act(async () => { await handler(view.root.findByType("form"), "onSubmit", { preventDefault() {} }); });
+    assert.deepEqual(writes(client)[0]?.body, { deepseekEnabled: true, paidSearchProviders: ["exa", "deepseek"], fetchProvider: "jina" });
+    assert.ok(!markup(view).includes(text.searchInactive));
+  } finally { await close(view); }
+});
+
+test("saving a DeepSeek key enables paid search without selecting it for fetching", async () => {
+  const settings = web(); const client = editableWebClient(settings);
+  const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
+  try {
+    await openDeepseekKey(view);
+    const credential = randomUUID();
+    await act(async () => { handler(view.root.findByProps({ "aria-label": TEXT.settings.system.migrated.web.key }), "onChange", { target: { value: credential } }); });
+    await act(async () => { await handler(view.root.findByType("form"), "onSubmit", { preventDefault() {} }); });
+    assert.deepEqual(writes(client)[0]?.body, { providerApiKeys: { deepseek: credential }, deepseekEnabled: true, paidSearchProviders: ["exa", "deepseek"] });
+    assert.equal(settings.fetchProvider, "jina");
+    assert.equal(view.root.findByProps({ "aria-label": TEXT.settings.system.migrated.web.fetchProvider }).props.value, "jina");
+    assert.ok(!markup(view).includes(credential));
+  } finally { await close(view); }
+});
+
+test("removing the shared DeepSeek key disables search and restores default fetching", async () => {
+  const settings: WebSettingsDetails = { ...web(), deepseekEnabled: true, fetchProvider: "deepseek", providers: [{ provider: "deepseek", hasApiKey: true }] };
+  const client = editableWebClient(settings); let confirmation: ConfirmRequest | undefined;
+  const view = await mount(<WebSearchSettings client={client} onConfirm={request => { confirmation = request; }} />);
+  const text = TEXT.settings.system.migrated.web;
+  try {
+    assert.ok(markup(view).includes(text.fetchCost));
+    await act(async () => { handler(view.root.findByProps({ "aria-label": `DeepSeek · ${TEXT.settings.system.migrated.common.remove}` }), "onClick"); });
+    assert.ok(confirmation); await act(async () => { await confirmation?.onAccept(); });
+    assert.deepEqual(writes(client)[0]?.body, { providerApiKeys: { deepseek: null }, deepseekEnabled: false, paidSearchProviders: ["exa"], fetchProvider: "jina" });
+    assert.equal(view.root.findByProps({ "aria-label": text.fetchProvider }).props.value, "jina");
+    assert.ok(!markup(view).includes(text.fetchCost));
+  } finally { await close(view); }
+});
+
+test("fetch selection shares the saved key and switching back keeps paid search enabled", async () => {
+  const settings: WebSettingsDetails = { ...web(), providers: [{ provider: "deepseek", hasApiKey: true }] };
+  const client = editableWebClient(settings);
+  const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
+  const text = TEXT.settings.system.migrated.web;
+  try {
+    await act(async () => { handler(view.root.findByProps({ "aria-label": text.fetchProvider }), "onChange", { target: { value: "deepseek" } }); });
+    assert.deepEqual(writes(client)[0]?.body, { fetchProvider: "deepseek", deepseekEnabled: true, paidSearchProviders: ["exa", "deepseek"] });
+    assert.ok(markup(view).includes(text.fetchCost));
+    await act(async () => { handler(view.root.findByProps({ "aria-label": text.fetchProvider }), "onChange", { target: { value: "jina" } }); });
+    assert.deepEqual(writes(client)[1]?.body, { fetchProvider: "jina" });
+    assert.ok(!markup(view).includes(text.fetchCost));
+    assert.equal(settings.deepseekEnabled, true);
+    assert.deepEqual(settings.paidSearchProviders, ["exa", "deepseek"]);
+  } finally { await close(view); }
+});
+
+test("DeepSeek fetching requires the shared paid-provider key", async () => {
+  const client = editableWebClient(web());
+  const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
+  const text = TEXT.settings.system.migrated.web;
+  try {
+    assert.ok(markup(view).includes(text.keyRequired));
+    const selector = view.root.findByProps({ "aria-label": text.fetchProvider });
+    const option = selector.findAllByType("option").find(node => node.props.value === "deepseek");
+    assert.ok(option); assert.equal(option.props.disabled, true);
+    await act(async () => { handler(selector, "onChange", { target: { value: "deepseek" } }); });
+    assert.equal(writes(client).length, 0);
+  } finally { await close(view); }
+});
+
+test("DeepSeek credential updates preserve native-only fetch settings", async () => {
+  const settings: WebSettingsDetails = { ...web(), deepseekEnabled: true, fetchProvider: "exa", providers: [{ provider: "deepseek", hasApiKey: true }] };
+  const client = editableWebClient(settings);
+  const view = await mount(<WebSearchSettings client={client} onConfirm={noConfirm} />);
+  try {
+    await openDeepseekKey(view);
+    await act(async () => { await handler(view.root.findByType("form"), "onSubmit", { preventDefault() {} }); });
+    assert.deepEqual(writes(client)[0]?.body, { deepseekEnabled: true, paidSearchProviders: ["exa", "deepseek"] });
+    assert.equal(settings.fetchProvider, "exa");
+  } finally { await close(view); }
+});
+
+test("runtime overview owns shared sources while each Runner detail owns multiple environments", async () => {
+  const client = new Client(call => {
+    if (call.path === "/api/runners") return [runner("local"), runner("remote", "GPU")];
+    if (call.path === "/api/runners/npu") return { selections: {} };
+    if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
+    if (call.path.endsWith("environment-setup")) return setup;
+    if (call.path.endsWith("environment-revisions")) return [];
+    if (call.path.endsWith("environments")) return [environment(call.path.includes("remote") ? "GPU-analysis" : "local-analysis"), environment("second-environment")];
+    throw new Error(`Unexpected ${call.path}`);
+  });
+  const text = TEXT.settings.system.migrated.environments;
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
+  try {
+    assert.ok(markup(view).includes(text.local)); assert.match(markup(view), /GPU/);
+    assert.ok(markup(view).includes(text.sources));
+    assert.equal(client.calls.some(call => call.path.includes("environment-setup") || call.path === "/api/runners/npu"), false);
+    await act(async () => { handler(button(view, text.local), "onClick"); });
+    assert.match(markup(view), /local-analysis/); assert.match(markup(view), /second-environment/);
+    assert.ok(!markup(view).includes(text.setup), "ready environments need no separate initialization status row");
+    assert.ok(!markup(view).includes(text.catalog), "the environment list needs no second heading");
+    assert.ok(!markup(view).includes(text.sources));
+    assert.ok(!markup(view).includes(TEXT.settings.runtime.runner.add));
+    assert.ok(!markup(view).includes(TEXT.settings.runtime.runner.delete));
+    assert.ok(!markup(view).includes(TEXT.settings.runtime.runner.disconnect));
+    assert.equal(view.root.findAllByType("details").length, 0, "machine resources stay visible in detail");
+    await act(async () => { handler(button(view, text.back), "onClick"); });
+    assert.ok(markup(view).includes(text.sources));
+    await act(async () => { handler(button(view, "GPU"), "onClick"); });
+    assert.match(markup(view), /GPU-analysis/); assert.doesNotMatch(markup(view), /local-analysis/);
+    assert.ok(markup(view).includes(TEXT.settings.runtime.runner.disconnect));
+    assert.ok(markup(view).includes(TEXT.settings.runtime.runner.credentials.heading));
+    assert.ok(!markup(view).includes(text.sources));
+  } finally { await close(view); }
+});
+
+test("runtime system settings contain no project selection controls or project requests", async () => {
+  const client = new Client(call => {
+    if (call.path === "/api/runners") return [runner("local"), runner("remote", "GPU")];
+    if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
+    throw new Error(`Unexpected ${call.path}`);
+  });
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
+  try {
+    assert.equal(view.root.findAllByType("input").length, 0);
+    assert.equal(client.calls.some(call => call.path.includes("/projects")), false);
+    assert.equal(writes(client).length, 0);
+  } finally { await close(view); }
+});
+
+test("remote connection actions stay scoped to the selected Runner", async () => {
+  let connected = false;
+  const client = new Client(call => {
+    if (call.path === "/api/runners") return [runner("local"), runner("remote", "GPU", connected)];
+    if (call.path === "/api/runners/npu") return { selections: {} };
+    if (call.path === "/api/runners/remote/connect") { connected = true; return {}; }
+    if (call.path === "/api/runners/remote/disconnect") { connected = false; return {}; }
+    if (call.path.endsWith("environment-setup")) return setup;
+    if (call.path.endsWith("environments") || call.path.endsWith("environment-revisions")) return [];
+    throw new Error(`Unexpected ${call.path}`);
+  });
+  const view = await mount(<RuntimeSettings client={client} initialRunnerId="remote" onConfirm={noConfirm} />);
+  try {
+    await act(async () => { await handler(button(view, TEXT.settings.runtime.runner.connect), "onClick"); });
+    assert.equal(writes(client)[0]?.path, "/api/runners/remote/connect");
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.heading));
+    await act(async () => { await handler(button(view, TEXT.settings.runtime.runner.disconnect), "onClick"); });
+    assert.equal(writes(client)[1]?.path, "/api/runners/remote/disconnect");
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.unavailable));
+  } finally { await close(view); }
+});
+
+test("deleting a remote Runner returns to the overview and leaves built-in environments untouched", async () => {
+  let removed = false; let confirmation: ConfirmRequest | undefined;
+  const client = new Client(call => {
+    if (call.path === "/api/runners") return removed ? [runner("local")] : [runner("local"), runner("remote", "GPU")];
+    if (call.path === "/api/runners/npu") return { selections: {} };
+    if (call.method === "DELETE") { removed = true; return { deleted: "remote" }; }
+    if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
+    if (call.path.endsWith("environment-setup")) return setup;
+    if (call.path.endsWith("environments") || call.path.endsWith("environment-revisions")) return [];
+    throw new Error(`Unexpected ${call.path}`);
+  });
+  const view = await mount(<RuntimeSettings client={client} initialRunnerId="remote" onConfirm={request => { confirmation = request; }} />);
+  try {
+    await act(async () => { handler(button(view, TEXT.settings.runtime.runner.delete), "onClick"); });
+    assert.ok(confirmation); await act(async () => { await confirmation?.onAccept(); });
+    assert.equal(writes(client).length, 1);
+    assert.equal(writes(client)[0]?.path, "/api/remote-hosts/remote");
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.sources));
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.local));
+    assert.equal(view.root.findAllByProps({ className: "runner-detail-heading" }).length, 0);
+  } finally { await close(view); }
+});
+
+test("shared package sources remain available when the Runner catalog fails", async () => {
+  const client = new Client(call => {
+    if (call.path === "/api/runners") throw new Error("Runner catalog unavailable");
+    if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
+    throw new Error(`Unexpected ${call.path}`);
+  });
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
+  try {
+    assert.match(markup(view), /Runner catalog unavailable/);
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.sources));
+    assert.equal(view.root.findByProps({ "aria-label": TEXT.settings.system.migrated.environments.pip }).props.value, "upstream");
   } finally { await close(view); }
 });

@@ -44,11 +44,19 @@ export function useSettingsWrite() {
   return { busy, failure, saved, saving, run };
 }
 
-export function WriteStatus({ state }: { state: ReturnType<typeof useSettingsWrite> }) {
+export function WriteStatus({ state, pendingLabel, successLabel, quiet = false }: {
+  state: ReturnType<typeof useSettingsWrite>;
+  pendingLabel?: string;
+  successLabel?: string | null;
+  /** Quiet writes still report failures. */
+  quiet?: boolean;
+}) {
+  const message = state.busy
+    ? pendingLabel ?? (state.saving ? TEXT.settings.system.saving : TEXT.settings.system.migrated.common.working)
+    : state.saved ? successLabel === undefined ? TEXT.settings.system.migrated.common.saved : successLabel : null;
   return <div className="settings-write-status" aria-live="polite">
     {state.failure ? <p className="row-note is-error" role="alert">{state.failure}</p>
-      : state.busy ? <small>{state.saving ? TEXT.settings.system.saving : TEXT.settings.system.migrated.common.working}</small>
-        : state.saved ? <small>{TEXT.settings.system.migrated.common.saved}</small> : null}
+      : !quiet && message ? <small>{message}</small> : null}
   </div>;
 }
 

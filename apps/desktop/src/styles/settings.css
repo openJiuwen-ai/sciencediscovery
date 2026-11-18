@@ -565,17 +565,8 @@ a.secondary-button {
    group's, so this row holds the button and nothing else. */
 .machine-actions { display: flex; justify-content: flex-end; margin: 0 0 10px; }
 
-/* What a connected machine is made of. Folded away under the card, because the
-   connection is the card's subject and these readings are what someone opens
-   when the connection is not the question. */
+/* Resources are visible inside the selected Runner's detail. */
 .machine-details { flex: 1 0 100%; min-width: 0; }
-.machine-details > summary {
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 11.5px;
-  font-weight: 650;
-  letter-spacing: .04em;
-}
 .resource-panel {
   display: grid;
   gap: 10px;

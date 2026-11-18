@@ -25,11 +25,9 @@ import {
   type RemoteHostKeyInfo,
 } from "../../api/remote.js";
 import { probeRunner, listRunnerNpuDevices, setRunnerConnected } from "../../api/settings.js";
-import { setProjectRunnerIds } from "../../api/sessions.js";
 import type {
   GeneratedRemoteHostKey,
   NpuRunnerSelectionsResponse,
-  Project,
   RegisterRemoteHostRequest,
   RemoteConnectLogEntry,
   RemoteHostTarget,
@@ -37,26 +35,23 @@ import type {
   SshConfigHostImport,
 } from "../../api/types.js";
 import {
-  allowlistHosts,
   hostDestination,
   hostKeyChanged,
   hostKeyFromError,
   hostKeyLine,
   hostKindLabel,
-  projectRunnerIds,
   reachabilityHelp,
   reachabilityLabel,
   reachabilityTone,
   runnerUsable,
   storedCredentialLabels,
-  toggleRunnerId,
   type HostKeyPrompt as HostKeyIssue,
 } from "../../app/remote-format.js";
 import { runnerStateLabel, runnerStateTone } from "../../app/settings-format.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
 import { TEXT } from "../../text.js";
 import { NpuDevicePanel, RunnerResourcePanel, SshConfigImport, SshKeyFileField } from "./RunnerResources.js";
-import { Group, Tag } from "./rows.js";
+import { Tag } from "./rows.js";
 
 /** How often the connect log is read while a connect is in flight. The request
  *  itself can take minutes; this is how the waiting is made visible. */
@@ -85,7 +80,9 @@ interface Props {
   onConfirm: (request: ConfirmRequest) => void;
   /** Re-read the page after anything here changes it. */
   onReload: () => void;
-  onManageEnvironment?: (runnerId: string) => void;
+  overview?: boolean;
+  allowRegistration?: boolean;
+  onSelectRunner?: (runnerId: string) => void;
 }
 
 /**
@@ -101,7 +98,7 @@ interface Props {
  * "keep what is stored", and the only evidence that something is stored is the
  * `已存密码` / `已存私钥` tag on the card.
  */
-export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvironment }: Props) {
+export function RunnerSection({ client, hosts, onConfirm, onReload, overview = false, allowRegistration = true, onSelectRunner }: Props) {
   const [busy, setBusy] = useState<string>();
   const [failure, setFailure] = useState<string>();
   const [adding, setAdding] = useState<AddKind>();
@@ -130,6 +127,7 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
   // Read once for every Runner rather than per machine record, and separately
   // from the catalog, so a machine list still renders if this read fails.
   useEffect(() => {
+    if (overview) return;
     let cancelled = false;
     void listRunnerNpuDevices(client)
       .then((loaded) => {
@@ -141,7 +139,7 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, overview]);
 
   const selectNpu = (runnerId: string, devices: number[]) =>
     setNpu((current) => current && { ...current, selections: { ...current.selections, [runnerId]: devices } });
@@ -276,33 +274,34 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
 
   return (
     <>
-      {/* The section's own heading is the group's, so this row carries only the
-          one action: registering another machine. */}
-      <div className="machine-actions">
-        <button
-          className="secondary-button"
-          disabled={busy !== undefined}
-          onClick={() => setAdding(adding === undefined ? "ssh" : undefined)}
-          type="button"
-        >
-          {adding === undefined ? TEXT.settings.runtime.runner.add : TEXT.settings.runtime.runner.cancel}
-        </button>
-      </div>
+      {allowRegistration ? <>
+        <div className="machine-actions">
+          <button
+            className="secondary-button"
+            disabled={busy !== undefined}
+            onClick={() => setAdding(adding === undefined ? "ssh" : undefined)}
+            type="button"
+          >
+            {adding === undefined ? TEXT.settings.runtime.runner.add : TEXT.settings.runtime.runner.cancel}
+          </button>
+        </div>
 
-      {adding === undefined ? null : (
-        <AddHostForm
-          client={client}
-          kind={adding}
-          onCancel={() => setAdding(undefined)}
-          onDone={() => {
-            setAdding(undefined);
-            onReload();
-          }}
-          onKind={setAdding}
-          onReport={report}
-          onRevealedHost={reportReturnedHost}
-        />
-      )}
+        {adding === undefined ? null : (
+          <AddHostForm
+            client={client}
+            kind={adding}
+            onCancel={() => setAdding(undefined)}
+            onDone={() => {
+              setAdding(undefined);
+              onReload();
+            }}
+            onKind={setAdding}
+            onReport={report}
+            onRevealedHost={reportReturnedHost}
+          />
+        )}
+
+      </> : null}
 
       {keyPrompt ? <HostKeyCard onCancel={() => setKeyPrompt(undefined)} prompt={keyPrompt} /> : null}
 
@@ -316,14 +315,17 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
             const untrusted = host.hostKey?.trusted === false;
             const log = connectLogs[host.id];
             const live = connecting === host.id;
+            const Main = overview ? "button" : "div";
             return (
               <div className={`settings-card is-machine${untrusted ? " is-off" : ""}`} key={host.id}>
                 <span className="settings-card-mark">
                   {(host.runnerName ?? host.id).slice(0, 1).toUpperCase()}
                 </span>
-                <div className="settings-card-main">
+                <Main className="settings-card-main" type={overview ? "button" : undefined}
+                  disabled={overview ? live || busy === host.id : undefined}
+                  onClick={overview ? () => onSelectRunner?.(host.id) : undefined}>
                   <strong>
-                    {host.id === "local" ? TEXT.settings.runtime.runner.local : host.runnerName ?? host.alias}
+                    {host.id === "local" ? TEXT.settings.system.migrated.environments.local : host.runnerName ?? host.alias}
                     <Tag tone={runnerStateTone(state)}>{runnerStateLabel(state)}</Tag>
                     {/* No badge compares the two Runner versions: this card says
                         what the machine is, not whether it matches this build.
@@ -346,7 +348,7 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
                   </strong>
                   <small>
                     {[
-                      host.id === "local" ? TEXT.settings.runtime.runner.localHelp : hostKindLabel(host),
+                      host.id === "local" ? TEXT.settings.system.migrated.environments.localHint : hostKindLabel(host),
                       host.id === "local"
                         ? ""
                         : hostDestination(host) ?? TEXT.settings.runtime.runner.destinationUnknown,
@@ -364,12 +366,8 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
                       {error}
                     </small>
                   ))}
-                </div>
-                <div className="settings-card-actions">
-                  {onManageEnvironment ? <button className="secondary-button" type="button"
-                    disabled={live || busy === host.id} onClick={() => onManageEnvironment(host.id)}>
-                    {TEXT.settings.system.groups.environments.label}
-                  </button> : null}
+                </Main>
+                {!overview ? <div className="settings-card-actions">
                   {host.id === "local" ? null : (
                     <button
                       className="secondary-button"
@@ -415,15 +413,12 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
                       {TEXT.settings.runtime.runner.delete}
                     </button>
                   )}
-                </div>
+                </div> : <span className="runner-open-indicator" aria-hidden="true">›</span>}
 
-                {live || log?.length ? <ConnectLog entries={log ?? []} live={live} /> : null}
+                {!overview && (live || log?.length) ? <ConnectLog entries={log ?? []} live={live} /> : null}
 
-                {/* What the machine is, once it has answered. Folded away by
-                    default: the card's job is the connection, and this is what
-                    someone opens when the connection is not the question. */}
-                <details className="machine-details">
-                  <summary>{TEXT.settings.runtime.runner.machineDetails}</summary>
+                {!overview ? <div className="machine-details">
+                  <h4>{TEXT.settings.runtime.runner.machineDetails}</h4>
                   <RunnerResourcePanel host={host} />
                   <NpuDevicePanel
                     client={client}
@@ -433,9 +428,9 @@ export function RunnerSection({ client, hosts, onConfirm, onReload, onManageEnvi
                     runnerId={host.id}
                     selected={npu?.selections[host.id] ?? []}
                   />
-                </details>
+                </div> : null}
 
-                {editingCredentials === host.id ? (
+                {!overview && editingCredentials === host.id ? (
                   <CredentialsForm
                     client={client}
                     host={host}
@@ -972,78 +967,5 @@ function CredentialsForm({
         </button>
       </div>
     </div>
-  );
-}
-
-/**
- * Which machines a Project's Sessions may use.
- *
- * This is the whole permission, not a default: the API refuses a run whose
- * runner is not in this list, and an empty list forbids everything including
- * the local machine. Only usable remote machines are offered, because the only
- * thing a checkbox for an unusable one could produce is a run that fails at the
- * last step; that machine stays in the list above, where the reason is stated.
- * The local Runner has no checkbox for the same reason it has no card: it is
- * always there, and this page manages machines other than this one.
- *
- * The list on screen comes back from the server on every toggle rather than
- * being updated in place — the page re-reads, which is how the box the API
- * refused cannot linger as if it had been accepted.
- */
-export function ProjectRunnerAllowlist({
-  client,
-  hosts,
-  onReload,
-  project,
-}: {
-  client: ApiClient;
-  hosts: RunnerTarget[];
-  onReload: () => void;
-  project: Project;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string>();
-  const allowed = projectRunnerIds(project);
-  const usable = allowlistHosts(hosts);
-
-  const toggle = async (host: RemoteHostTarget) => {
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await setProjectRunnerIds(client, project.id, toggleRunnerId(allowed, host.id));
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-      onReload();
-    }
-  };
-
-  return (
-    <Group heading={TEXT.settings.runtime.allowlist.heading}>
-      {usable.length === 0 ? (
-        <p className="settings-empty">{TEXT.settings.runtime.allowlist.empty}</p>
-      ) : (
-        <div className="runner-choices">
-          {usable.map((host) => (
-            <label className="runner-choice" key={host.id}>
-              <input
-                checked={allowed.includes(host.id)}
-                disabled={busy}
-                onChange={() => void toggle(host)}
-                type="checkbox"
-              />
-              <span>
-                {host.runnerName ?? host.alias}
-                <small>
-                  {[hostKindLabel(host), hostDestination(host) ?? TEXT.settings.runtime.runner.destinationUnknown].join(" · ")}
-                </small>
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-      {failure ? <small className="row-note is-error">{failure}</small> : null}
-    </Group>
   );
 }

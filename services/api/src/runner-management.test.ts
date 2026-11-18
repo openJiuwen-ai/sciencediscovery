@@ -30,7 +30,7 @@ test("workspace management includes other Projects, archived Sessions and previo
   const states: string[] = [];
   const store = {
     getRemoteHost: () => ({ workspaceNamespace: "target" }),
-    listProjects: () => [{ id: "p1", name: "First", remoteRunnerHostIds: ["host"] }, { id: "p2", name: "Second", remoteRunnerHostIds: [] }],
+    listProjects: () => [{ id: "p1", name: "First", remoteRunnerHostIds: ["host"] }, { id: "p2", name: "Second", runnerIds: ["local"], remoteRunnerHostIds: [] }],
     listSessions: (id: string, state: string) => { states.push(state); return id === "p1" ? [{ id: "s1", title: "Inherited" }] : [{ id: "s2", title: "Previous use", remoteRunnerHostIds: [] }, { id: "unused", title: "Unused" }]; },
     listRemoteWorkspaceSyncs: () => [],
     listExecutionRuns: async (id: string) => id === "s2" ? [{ runnerId: "host" }] : [],

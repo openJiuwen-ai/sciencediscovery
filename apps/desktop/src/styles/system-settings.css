@@ -492,15 +492,6 @@
 .settings-write-status:empty { display: none; }
 .settings-number { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
 .settings-number .field-input.is-number { width: 112px; max-width: 100%; }
-.settings-advanced { margin: 20px 0; }
-.settings-advanced > summary {
-  cursor: pointer;
-  padding: 12px 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-}
-.settings-advanced[open] > summary { margin-bottom: 12px; }
 .environment-setup-progress,
 .proxy-diagnostics { display: grid; gap: 12px; font-size: 13px; color: var(--text-secondary); }
 .environment-setup-progress > div,
@@ -525,3 +516,14 @@
 .settings-modal-head h2 { min-width: 0; overflow-wrap: anywhere; }
 .settings-modal-close { flex-shrink: 0; }
 .settings-group-detail .settings-row .row-title strong { overflow-wrap: anywhere; }
+
+.runner-detail-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.runner-detail-heading h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 17px; }
+.runner-open-indicator { color: var(--text-faint); font-size: 24px; }
+.machine-details > h4 { margin: 0 0 12px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
