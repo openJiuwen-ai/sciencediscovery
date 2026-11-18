@@ -19,7 +19,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ModelRequestError, type ModelTurn, type ModelWireDiagnostics, type streamModelTurn } from "@sciencediscovery/model";
+import { ModelRequestError, type ModelTurn, type ModelUsage, type ModelWireDiagnostics, type streamModelTurn } from "@sciencediscovery/model";
 
 import { isSwarmCompaction, MODEL_RESPONSE_ID_HEADER, startModelGateway, toModelRequest, withoutWithheldNotice, type ModelGatewayLifecycle } from "./jiuwenswarm-model-gateway.js";
 
@@ -29,9 +29,11 @@ test("task admission counts plain replies and rejects excess calls before upstre
   const controller = new AbortController();
   let turns = 0;
   let progress = 0;
+  const usages: Array<ModelUsage | undefined> = [];
   const { calls, streamer } = fakeStreamer(answer(), [["text", "working"]]);
   const g = await startModelGateway(ENDPOINT, POLICY, controller.signal, streamer, undefined, {
     progress() { progress++; }, beforeTurn() { if (++turns > 1) controller.abort(); },
+    onUsage(usage) { usages.push(usage); },
   });
   const compaction = { messages: [{ role: "user", content: "## NON-NEGOTIABLE OUTPUT RULES\nDo NOT call any tools.\nYou are an Execution State Compression Assistant.\n<coverage_check>\n<state_snapshot>" }],
     tools: [{ type: "function", function: { name: "task" } }] };
@@ -52,6 +54,7 @@ test("task admission counts plain replies and rejects excess calls before upstre
     assert.equal(turns, 1, "a task with no tools is still a model turn");
     assert.equal((await post(g, { stream: true, messages: [] })).status, 502);
     assert.equal(calls.length, 3, "the over-budget request must never reach the model");
+    assert.equal(usages.length, 1, "only the admitted task call is accounted, not compaction, housekeeping or refused calls");
   } finally { await g.close(); }
 });
 
@@ -136,6 +139,34 @@ const post = (g: { url: string; token: string }, body: unknown, token = g.token)
 
 const events = async (response: Response) => (await response.text()).split("\n\n").filter((part) => part.startsWith("data: ") && !part.includes("[DONE]"))
   .map((part) => JSON.parse(part.slice(6)));
+
+test("gateway accounting and chat usage preserve reasoning values and missing reports in unary and streaming responses", async () => {
+  for (const stream of [false, true]) for (const reasoningTokens of [undefined, null, 0, 71]) {
+    const usage: ModelUsage = { inputTokens: 100, outputTokens: 80, totalTokens: 180, reasoningTokens };
+    const original = structuredClone(usage);
+    const recorded: Array<ModelUsage | undefined> = [];
+    const { streamer } = fakeStreamer(answer({ usage }));
+    const g = await gatewayWithLifecycle(streamer, { progress() {}, onUsage(value) { recorded.push(value); } });
+    try {
+      const response = await post(g, { stream, messages: [] });
+      const payload = stream ? (await events(response)).at(-1) : await response.json();
+      assert.deepEqual(recorded, [usage]);
+      assert.equal(payload.usage.completion_tokens_details?.reasoning_tokens, reasoningTokens ?? undefined);
+      assert.equal(payload.usage.total_tokens, 180, "reasoning is not added to total again");
+      assert.deepEqual(usage, original);
+    } finally { await g.close(); }
+  }
+  const recorded: Array<ModelUsage | undefined> = [];
+  const { streamer } = fakeStreamer(answer({ usage: undefined }));
+  const g = await gatewayWithLifecycle(streamer, { progress() {}, onUsage(value) { recorded.push(value); } });
+  try {
+    const response = await post(g, { messages: [] });
+    const body: unknown = await response.json();
+    assert.ok(body && typeof body === "object");
+    assert.equal("usage" in body, false);
+    assert.deepEqual(recorded, [undefined], "a call with no provider usage is still an unreported call");
+  } finally { await g.close(); }
+});
 
 test("gateway accepts Swarm's tool-less modality probe controls without changing the configured model", async () => {
   const { calls, streamer } = fakeStreamer(answer());

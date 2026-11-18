@@ -29,7 +29,7 @@ import { waitForRecording } from "./recording-wait.js";
 import { RunDeadlines } from "./run-deadlines.js";
 import { jiuwenSwarmWebResult } from "./jiuwenswarm-web-settings.js";
 
-import { resolveModelClientPolicy, type streamModelTurn } from "@sciencediscovery/model";
+import { resolveModelClientPolicy, type ModelUsage, type streamModelTurn } from "@sciencediscovery/model";
 import { BUNDLED_SKILL_IDS, subagentCapableParentRunTimeoutMs } from "@sciencediscovery/specialist";
 
 import {
@@ -237,6 +237,7 @@ export function createJiuwenSwarmAgentFactory(config: JiuwenSwarmAgentConfig) {
 
 class JiuwenSwarmAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
+  private readonly usage = new UsageReporter(event => this.emit(event));
   private readonly controller = new AbortController();
   private approvalDeliveryError?: Error;
   private executed = false;
@@ -400,6 +401,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         completed: (turn, history, call) => trajectory.modelCompleted(turn, history, call),
       } : undefined,
       { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }),
+        onUsage: usage => this.usage.record(usage),
         // Only the run's own instance has the output-recovery boundary; JiuwenSwarm's sub-agents do not.
         recoversWithheldCalls: !jiuwenSwarmSubagents,
         // A call that leaves out an argument its tool cannot run without is withheld and re-issued
@@ -740,7 +742,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }
     if (failure !== undefined) throw new Error(failure);
     if (!receivedTerminal) throw new Error("Swarm adapter stream ended without a terminal result");
-    translator.finish();
+    this.usage.finish();
     return finalText;
   }
 }
@@ -923,8 +925,6 @@ class Transcript {
  * bridge reporter, so the Swarm event is their authoritative fallback.
  */
 class EventTranslator {
-  private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; reasoningTokens: number | null; totalTokens: number } | undefined;
-
   constructor(
     private readonly emit: Listener,
     private readonly announcements: ToolAnnouncements,
@@ -1015,20 +1015,34 @@ class EventTranslator {
         this.transcript.settled();
         this.emit({ type: "response_settled", responseId: String(event.responseId), turn: Number(event.turn) });
         break;
-      case "model.usage": {
-        const reported = event as unknown as { reasoningTokens?: number | null; usage: { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; reasoningTokens?: number | null; totalTokens: number } };
-        const usage = { ...reported.usage, reasoningTokens: reported.reasoningTokens ?? reported.usage.reasoningTokens ?? null };
-        this.emit({ type: "model_usage", usage, usageReported: true });
-        this.add(usage);
+      case "model.usage":
+        // Account at the model gateway instead: Swarm fills missing reasoning with zero
+        // and these events repeat calls already recorded there, including native children.
         break;
-      }
       default:
         break;
     }
   }
+}
+
+/** Each platform agent (main or task child) owns its provider-reported usage. */
+class UsageReporter {
+  private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; reasoningTokens: number | null; totalTokens: number } | undefined;
+
+  constructor(private readonly emit: Listener) {}
+
+  record(reported: ModelUsage | undefined): void {
+    if (!reported) {
+      this.emit({ type: "model_usage", usageReported: false });
+      return;
+    }
+    const usage = { ...reported, reasoningTokens: reported.reasoningTokens ?? null };
+    this.emit({ type: "model_usage", usage, usageReported: true });
+    this.add(usage);
+  }
 
   /** Sum of the model calls of the run; null stays null unless some call reported a number. */
-  private add(usage: { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; reasoningTokens?: number | null; totalTokens: number }): void {
+  private add(usage: ModelUsage): void {
     const plus = (a: number | null, b: number | null | undefined) => (b === null || b === undefined ? a : (a ?? 0) + b);
     const total = this.total ?? { cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 0, outputTokens: 0, reasoningTokens: null, totalTokens: 0 };
     // Key order matters: subagent summaries serialise this object into a tool result string.
