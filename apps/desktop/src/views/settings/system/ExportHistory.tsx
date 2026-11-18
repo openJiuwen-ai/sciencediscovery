@@ -75,12 +75,8 @@ export function ExportHistorySettings({ projects }: { projects: Project[] }) {
 
   return (
     <section className="export-history-settings">
-      <header className="export-history-head">
-        <div>
-          <h3>{t.title}</h3>
-          <p className="export-history-description">{t.description}</p>
-        </div>
-      </header>
+      {/* The page's own header already says 导出记录 with its description; a second
+          one inside the pane repeated both (#1024). */}
       {/* The toolbar follows the session-management page: the scope control on the
           left, the search field on the right (#1024). */}
       <div className="export-history-filters">
