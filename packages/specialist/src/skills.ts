@@ -483,6 +483,26 @@ async function runGitRetry(arguments_: string[], timeout = GIT_CHECKOUT_TIMEOUT_
   }
 }
 
+/** The clone command itself, attempted twice when the first connection broke
+ *  or never opened. Only this step is retried on a timeout: a checkout that
+ *  ran out of time has files to show for it, and starting the download over
+ *  would spend the ceiling twice. */
+async function cloneRepository(
+  arguments_: string[],
+  checkout: string,
+  timeout: number,
+  retryTimeout: boolean,
+): Promise<void> {
+  const attempt = () => runGit(arguments_, timeout);
+  try {
+    await attempt();
+  } catch (error) {
+    await rm(checkout, { force: true, recursive: true });
+    if (!gitTransportFailure(error) && !(retryTimeout && gitTimedOut(error))) throw error;
+    await attempt();
+  }
+}
+
 async function cloneGitRepository(
   normalized: NormalizedGitImport,
   checkout: string,
@@ -494,18 +514,18 @@ async function cloneGitRepository(
     // The fallback is for a server that refuses the filter, so it asks for
     // none: the whole working tree arrives, which is slower but is what a
     // repository without partial-clone support can answer.
-    await runGit([
+    await cloneRepository([
       "-c", "protocol.file.allow=never", ...GIT_TRANSPORT_CONFIG,
       "clone", "--depth=1", "--no-tags", ...branch,
       "--", normalized.repositoryUrl, checkout,
-    ], GIT_CHECKOUT_TIMEOUT_MS);
+    ], checkout, GIT_CHECKOUT_TIMEOUT_MS, false);
     return;
   }
-  await runGit([
+  await cloneRepository([
     "-c", "protocol.file.allow=never", ...GIT_TRANSPORT_CONFIG,
     "clone", "--depth=1", "--filter=blob:none", "--no-checkout", "--no-tags", "--single-branch",
     ...branch, "--", normalized.repositoryUrl, checkout,
-  ], timeout);
+  ], checkout, timeout, true);
   await runGit(["-C", checkout, "sparse-checkout", "set", "--no-cone", GIT_SPARSE_SKILL_MARKDOWN]);
   await runGitRetry(["-C", checkout, ...GIT_TRANSPORT_CONFIG, "checkout"]);
 }
@@ -522,8 +542,9 @@ function gitTimedOut(error: unknown): boolean {
 }
 
 /** A transfer that broke or stopped moving. The repository is not at fault and
- *  the same clone can be attempted again. A command that used the whole
- *  timeout is not retried: another 180 s would not answer a different way. */
+ *  the same clone can be attempted again. A command that used its whole
+ *  ceiling is not this kind of failure: it is handled where the ceiling that
+ *  applies to it is known. */
 function gitTransportFailure(error: unknown): boolean {
   if (gitTimedOut(error)) return false;
   return /early eof|rpc failed|connection reset|operation too slow|the remote end hung up|could not read from remote|gnutls|ssl/i
@@ -536,26 +557,6 @@ function gitFilterRefused(error: unknown): boolean {
   if (gitTransportFailure(error)) return false;
   return /filtering not recognized|filter[^\n]*(?:not supported|unsupported)|does not support (?:the )?filter/i
     .test(gitErrorText(error));
-}
-
-/** One broken transfer says nothing about the repository. A second attempt
- *  costs seconds, where giving up on the partial clone would download every
- *  blob in the repository: hundreds of megabytes that turn a hiccup into a
- *  request that looks hung. */
-async function cloneWithRetry(
-  normalized: NormalizedGitImport,
-  checkout: string,
-  partial: boolean,
-  options: { retryTimeout: boolean; timeout?: number } = { retryTimeout: false },
-): Promise<void> {
-  const attempt = () => cloneGitRepository(normalized, checkout, partial, options.timeout ?? GIT_CLONE_TIMEOUT_MS);
-  try {
-    await attempt();
-  } catch (error) {
-    await rm(checkout, { force: true, recursive: true });
-    if (!gitTransportFailure(error) && !(options.retryTimeout && gitTimedOut(error))) throw error;
-    await attempt();
-  }
 }
 
 /** Fetch the files under `roots` that a partial checkout left on the server.
@@ -587,13 +588,7 @@ export async function checkoutGitSkillRepository(
   try {
     let partial = true;
     try {
-      // A connection that never opened is worth one more try, but the clone
-      // ceiling is short enough that the retry still fits in a wait a person
-      // will sit through.
-      await cloneWithRetry(normalized, checkout, true, {
-        retryTimeout: true,
-        ...(options.cloneTimeoutMs === undefined ? {} : { timeout: options.cloneTimeoutMs }),
-      });
+      await cloneGitRepository(normalized, checkout, true, options.cloneTimeoutMs ?? GIT_CLONE_TIMEOUT_MS);
     } catch (error) {
       await rm(checkout, { force: true, recursive: true });
       // Only a server that refuses the filter is worth a full download. Any
@@ -602,7 +597,7 @@ export async function checkoutGitSkillRepository(
       // megabytes the user waits for.
       if (!gitFilterRefused(error)) throw error;
       partial = false;
-      await cloneWithRetry(normalized, checkout, false);
+      await cloneGitRepository(normalized, checkout, false);
     }
     const { stdout } = await runGit(["-C", checkout, "rev-parse", "HEAD"], 10_000);
     return { checkout, commit: stdout.trim().toLowerCase(), normalized, partial };
