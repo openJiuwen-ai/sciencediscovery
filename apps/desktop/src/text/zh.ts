@@ -725,9 +725,30 @@ export const ZH = {
         jiuwenLocal: "JiuwenSwarm 安装",
         managed: "自建",
       },
-      instructionsHeading: "指令",
       instructionsLoading: "正在读取指令…",
-      instructionsFailed: "没有读到指令。",
+      /** 技能 › one package: what it tells the model, where it came from,
+       *  and whether it is available. */
+      detailView: {
+        availability: "可用范围",
+        files: "文件",
+        source: "来源",
+      },
+      /** The chevron on a managed Skill's row. */
+      rowMenu: {
+        actions: (name: string) => `「${name}」的操作`,
+        export: "导出",
+        edit: "编辑",
+        delete: "删除",
+        exported: (name: string) => `已导出「${name}」。`,
+        exportFailed: "没能导出这个技能。",
+        deleteTitle: (name: string) => `删除「${name}」`,
+        deleteBody: (name: string) =>
+          `「${name}」会从这台机器上移除，包含它的文件和版本记录。此操作无法撤销。`,
+        deleteBlocked: (name: string, count: number) =>
+          `「${name}」仍被 ${count} 个项目或会话选中。先在这些地方取消选择，再删除它。`,
+        deleted: (name: string) => `已删除「${name}」。`,
+        deleteFailed: "删除失败。",
+      },
       uploadView: {
         title: "上传技能",
         description: "把本机的 SKILL.md 或技能包添加到 ScienceDiscovery。",

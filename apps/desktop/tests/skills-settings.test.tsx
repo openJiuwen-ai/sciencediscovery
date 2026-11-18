@@ -48,6 +48,17 @@ async function mount(client: ApiClient): Promise<ReactTestRenderer> {
  * The authoring form is a page of 技能 now, so the tests that drive its
  * `onSaved` reach it the way a user does: 添加技能, then 从零开始写.
  */
+/** A card now opens its own page; the list's controls live behind the back
+ *  control above every page below it. */
+async function backToList(view: ReactTestRenderer): Promise<void> {
+  await act(async () => {
+    const back = view.root.findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.backToList);
+    assert.ok(back, "the page has no back control");
+    back.props.onClick();
+  });
+}
+
 async function openAuthoringForm(view: ReactTestRenderer): Promise<void> {
   await act(async () => {
     const trigger = view.root.findAllByType("button")
@@ -87,6 +98,7 @@ for (const backend of ["native", "unavailable"] as const) {
         onClick();
       });
       assert.match(text(view), /Review carefully/);
+      await backToList(view);
       stub.reply([skill]);
       if (backend === "native") stub.reply({ backend: "native", skills: [] });
       else stub.fail(new Error("skill adapter unavailable"));

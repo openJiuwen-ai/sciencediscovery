@@ -699,9 +699,32 @@ export const EN: Text = {
         jiuwenLocal: "Installed in JiuwenSwarm",
         managed: "managed",
       },
-      instructionsHeading: "Instructions",
       instructionsLoading: "Reading the instructions…",
-      instructionsFailed: "The instructions could not be read.",
+      /** 技能 › one package: what it tells the model, where it came from,
+       *  and whether it is available. */
+      detailView: {
+        availability: "Availability",
+        files: "Files",
+        source: "Source",
+      },
+      /** The chevron on a managed Skill's row. */
+      rowMenu: {
+        actions: (name: string) => `Actions for "${name}"`,
+        export: "Export",
+        edit: "Edit",
+        delete: "Delete",
+        exported: (name: string) => `Exported "${name}".`,
+        exportFailed: "This Skill could not be exported.",
+        deleteTitle: (name: string) => `Delete ${name}`,
+        deleteBody: (name: string) =>
+          `"${name}" is removed from this computer, along with its files and version history. This cannot be undone.`,
+        deleteBlocked: (name: string, count: number) =>
+          count === 1
+            ? `"${name}" is still selected by 1 project or session. Deselect it there before deleting it.`
+            : `"${name}" is still selected by ${count} projects or sessions. Deselect it there before deleting it.`,
+        deleted: (name: string) => `Deleted "${name}".`,
+        deleteFailed: "The Skill could not be deleted.",
+      },
       uploadView: {
         title: "Upload skills",
         description: "Add a SKILL.md or a package from this computer to ScienceDiscovery.",

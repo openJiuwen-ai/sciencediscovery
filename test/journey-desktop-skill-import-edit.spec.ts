@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
 import { api, DESKTOP_ORIGIN, seedDesktopOrigin, startDesktopEntry, stopDesktopEntry } from "./helpers/desktop-evolve.ts";
@@ -25,7 +25,12 @@ import { api, DESKTOP_ORIGIN, seedDesktopOrigin, startDesktopEntry, stopDesktopE
 const copy = {
   add: "添加技能",
   back: "返回技能列表",
+  delete: "删除",
+  detail: "详情",
+  detailAvailability: "可用范围",
+  detailFiles: "文件",
   edit: "编辑",
+  export: "导出",
   importAction: "导入",
   instructions: "指令",
   nav: "设置目录",
@@ -34,6 +39,42 @@ const copy = {
   settings: "设置",
   skills: "技能",
   upload: "上传技能",
+};
+
+/** The chevron the row of `name` carries. */
+const rowMenu = (settings: Locator, name: string) => settings
+  .locator(".settings-card").filter({ hasText: name })
+  .getByRole("button", { name: `「${name}」的操作`, exact: true });
+
+/**
+ * Put the row of `name` on screen, hover its chevron, and wait for the menu.
+ *
+ * The scroll is part of the step rather than left to the hover: Playwright
+ * scrolls a hovered element into view itself, and a row that is still moving
+ * when the press follows takes the pointer off the row, which closes the menu
+ * it just opened. A person scrolls to the row they mean before pointing at it,
+ * and so does this.
+ */
+const openRowMenu = async (settings: Locator, name: string) => {
+  await rowMenu(settings, name).scrollIntoViewIfNeeded();
+  await rowMenu(settings, name).hover();
+  await expect(settings.getByRole("menuitem", { name: copy.export, exact: true })).toBeVisible();
+};
+
+/**
+ * Press one entry of the open menu.
+ *
+ * `force` leaves out Playwright's own "scroll into view" before the press.
+ * That scroll measures the entry while the menu is still opening and then
+ * moves the settings pane by that distance, which carries the row out from
+ * under the pointer; the popover follows the pointer's absence and closes
+ * before the press lands. The visibility check above the press is what proves
+ * the entry is on screen, and every entry's effect is asserted after it.
+ */
+const chooseMenuItem = async (settings: Locator, label: string) => {
+  const item = settings.getByRole("menuitem", { name: label, exact: true });
+  await expect(item).toBeVisible();
+  await item.click({ force: true });
 };
 
 interface InstalledSkill {
@@ -50,14 +91,16 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
 
   /**
    * E2E-META
-   * Purpose: A desktop user imports a SKILL.md into the installed catalog, finds it in 设置 › 技能, edits its
-   *   instructions in place, and the saved package keeps the frontmatter keys the editor's form does not show.
+   * Purpose: A desktop user imports a SKILL.md into the installed catalog, finds it in 设置 › 技能, reads it on
+   *   its own page, edits its instructions from the row's menu, exports the saved package, and deletes it.
    * Steps:
    *   1. Open 设置 › 技能 on the desktop entry; the Skill about to be imported is not listed.
    *   2. 添加技能 › 上传技能: hand the view one file; the import reports the package by name.
-   *   3. Go back to the list and find the card, then open 编辑 on it.
-   *   4. Rewrite 指令 and 保存; the editor reports the save.
-   *   5. Read the package back through the API: the new instructions are installed and `license` survived the save.
+   *   3. Open the card: the Skill's own page names it, states 可用范围 and renders SKILL.md under 文件.
+   *   4. From the row's chevron menu, open 编辑 and rewrite 指令; 保存 reports the save.
+   *   5. 导出 from the same menu downloads `<name>.zip`.
+   *   6. Read the package back through the API: the new instructions are installed and `license` survived the save.
+   *   7. 删除 from the menu, confirmed in the dialog, removes the package from the list and from the catalog.
    * Environment: Immutable compiled isolated API at E2E_BASE_URL; desktop Vite on 4178; zh-CN at 1440x900.
    * Type: mocked
    * LLM: none — importing and editing a Skill package never calls a model.
@@ -66,9 +109,9 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
    * MCP: none
    * OtherExternal: none; non-local browser requests are blocked.
    * Credentials: E2E_API_TOKEN for the isolated stack only.
-   * CostSideEffects: no external cost; the imported Skill is deleted in finally.
+   * CostSideEffects: no external cost; the downloaded ZIP is discarded, and the Skill is deleted in finally.
    */
-  test("desktop: import a SKILL.md and edit it in place", { tag: "@mocked" }, async ({ journey, page }) => {
+  test("desktop: import, read, edit and remove a SKILL.md", { tag: "@mocked" }, async ({ journey, page }) => {
     test.setTimeout(120_000);
     const name = `desk-skill-${Date.now()}`;
     const description = "Imported from a single SKILL.md by the desktop journey.";
@@ -108,8 +151,9 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
     const projectId = workspace.project?.id ?? workspace.id;
 
     journey.scenario({
-      goal: "一位桌面用户把单个 SKILL.md 导入已安装的技能目录，在「设置 › 技能」里找到它，"
-        + "直接改写指令并保存；保存后新指令生效，表单没有展示的 frontmatter 字段（如许可证）不丢。",
+      goal: "一位桌面用户把单个 SKILL.md 导入已安装的技能目录，在「设置 › 技能」里打开它的详情页读完说明，"
+        + "再从条目的下三角菜单编辑指令、导出技能包，最后删除它；保存后新指令生效，"
+        + "表单没有展示的 frontmatter 字段（如许可证）不丢。",
       preconditions: [
         "隔离栈已启动，桌面入口由本旅程自行启动",
         "已通过 API 注册一个占位模型档案与一个项目，仅用于越过首次配置向导",
@@ -150,13 +194,32 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
       );
 
       await journey.step(
-        "在列表里找到这张技能卡片并打开编辑",
-        "卡片带上了 SKILL.md 里的描述，编辑页以技能名命名。",
+        "打开这张技能卡片的详情页",
+        "页面以技能名命名、沿用 SKILL.md 里的描述，分开「可用范围」与「文件」，SKILL.md 正文就渲染在「文件」下。",
         async () => {
           const card = settings.locator(".settings-card").filter({ hasText: name });
           await expect(card).toHaveCount(1, { timeout: 30_000 });
           await expect(card).toContainText(description);
-          await card.getByRole("button", { name: copy.edit, exact: true }).click();
+          await card.locator(".settings-card-main").click();
+          const subview = settings.locator(".skill-subview-copy");
+          await expect(subview.getByRole("heading", { name, exact: true })).toBeVisible();
+          await expect(subview).toContainText(description);
+          await expect(settings.getByRole("heading", { name: copy.detailAvailability, exact: true })).toBeVisible();
+          await expect(settings.getByRole("heading", { name: copy.detailFiles, exact: true })).toBeVisible();
+          await expect(settings.locator(".skill-detail-file")).toContainText(firstInstructions);
+          await expect(settings.getByRole("heading", { name: copy.detail, exact: true })).toBeVisible();
+          await expect(settings.locator(".skill-detail-meta-card")).toContainText("MIT");
+          await settings.getByRole("button", { name: copy.back, exact: true }).click();
+        },
+      );
+
+      await journey.step(
+        "从条目右侧的下三角菜单打开编辑",
+        "菜单列出导出、编辑、删除，编辑页以技能名命名。",
+        async () => {
+          await openRowMenu(settings, name);
+          await expect(settings.getByRole("menuitem", { name: copy.delete, exact: true })).toBeVisible();
+          await chooseMenuItem(settings, copy.edit);
           await expect(settings.getByRole("heading", { name: `编辑「${name}」`, exact: true })).toBeVisible();
         },
       );
@@ -170,6 +233,24 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           await instructions.fill(editedInstructions);
           await settings.getByRole("button", { name: copy.save, exact: true }).click();
           await expect(settings.getByRole("status")).toContainText(copy.saved);
+          await settings.getByRole("button", { name: copy.back, exact: true }).click();
+        },
+      );
+
+      await journey.step(
+        "从同一个菜单导出这个技能包",
+        "导出的 ZIP 以技能名命名并且确实是压缩包。",
+        async () => {
+          await openRowMenu(settings, name);
+          const download = page.waitForEvent("download");
+          await chooseMenuItem(settings, copy.export);
+          const file = await download;
+          expect(file.suggestedFilename()).toBe(`${name}.zip`);
+          const archive = await readFile(await file.path());
+          // A ZIP starts with "PK": the save produced the archive itself, not
+          // an empty or HTML error page.
+          expect(archive.subarray(0, 2).toString()).toBe("PK");
+          await expect(settings.getByRole("status")).toContainText(`已导出「${name}」`);
         },
       );
 
@@ -183,6 +264,23 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           const detail = await api<InstalledSkill>(page, `/api/skills/${encodeURIComponent(id!)}`);
           expect(detail.instructions?.trim()).toBe(editedInstructions);
           expect(detail.frontmatter?.license).toBe("MIT");
+        },
+      );
+
+      await journey.step(
+        "从菜单删除这个技能",
+        "确认对话框说明后果；确认后卡片消失，技能目录里也不再列出它。",
+        async () => {
+          await openRowMenu(settings, name);
+          await chooseMenuItem(settings, copy.delete);
+          const confirm = page.getByRole("dialog", { name: `删除「${name}」`, exact: true });
+          await expect(confirm).toBeVisible();
+          await confirm.getByRole("button", { name: copy.delete, exact: true }).click();
+          await expect(settings.getByRole("status")).toContainText(`已删除「${name}」`);
+          await expect(settings.locator(".settings-card").filter({ hasText: name })).toHaveCount(0);
+          const installed = await api<InstalledSkill[]>(page, "/api/skills");
+          expect(installed.some((skill) => skill.name === name)).toBe(false);
+          id = undefined;
         },
       );
     } finally {

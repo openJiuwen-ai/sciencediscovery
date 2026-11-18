@@ -16,6 +16,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { ApiRequestError, type ApiClient } from "../src/api/client.js";
+import type { ConfirmRequest } from "../src/app/use-workspace.js";
 import type {
   GitSkillRepositoryInspection,
   SkillDescriptor,
@@ -429,14 +430,182 @@ test("an import enables a new package and leaves an update's switch alone", asyn
   } finally { await act(async () => { view.unmount(); }); }
 });
 
-test("only a managed, writable skill offers 编辑", async () => {
+/** The row's chevron for `name`, after asserting the row has one. */
+function rowMenu(view: ReactTestRenderer, name: string) {
+  const trigger = view.root.findAllByType("button")
+    .find((node) => node.props["aria-label"] === TEXT.settings.skills.rowMenu.actions(name));
+  assert.ok(trigger, `the row for ${name} has no action menu`);
+  return trigger;
+}
+
+async function openRowMenu(view: ReactTestRenderer, name: string): Promise<void> {
+  await act(async () => { rowMenu(view, name).props.onClick(); });
+}
+
+function menuItem(view: ReactTestRenderer, label: string) {
+  const item = view.root.findAllByType("button")
+    .find((node) => node.props.role === "menuitem" && node.children.includes(label));
+  assert.ok(item, `the menu does not offer ${label}`);
+  return item;
+}
+
+test("a managed skill's chevron offers export, edit and delete; a built-in has none", async () => {
   const builtIn = { ...skill, id: "literature", name: "literature", source: "built-in" as const, readOnly: true };
   const stub = new StubClient().reply([skill, builtIn]).reply({ backend: "jiuwenswarm", skills: [] });
   const view = await mount(<SkillsSettings client={stub.asClient()} />);
   try {
-    const editable = view.root.findAllByType("button")
-      .filter((node) => node.props.className?.includes?.("skill-edit-button"));
-    assert.equal(editable.length, 1);
-    assert.equal(editable[0]?.props.className, "secondary-button skill-edit-button");
+    rowMenu(view, "review");
+    const builtInMenu = view.root.findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.rowMenu.actions("literature"));
+    assert.equal(builtInMenu, undefined, "a read-only package is offered a mutation menu");
+
+    await openRowMenu(view, "review");
+    menuItem(view, TEXT.settings.skills.rowMenu.export);
+    menuItem(view, TEXT.settings.skills.rowMenu.edit);
+    menuItem(view, TEXT.settings.skills.rowMenu.delete);
   } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("clicking a card opens the Skill's own page and the back control returns to the list", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await act(async () => {
+      const card = view.root.findAllByType("button")
+        .find((node) => node.props.className === "settings-card-main");
+      assert.ok(card);
+      card.props.onClick();
+    });
+    await settle();
+
+    assert.equal(stub.calls[2]?.path, "/api/skills/review");
+    const headings = view.root.findAllByType("h3").map((node) => JSON.stringify(node.children));
+    assert.ok(headings.some((heading) => heading.includes("review")), "the page is not named after the Skill");
+    assert.ok(JSON.stringify(view.toJSON()).includes("Review a draft"));
+    // The body of SKILL.md is on the page, not in an expanded card.
+    assert.ok(JSON.stringify(view.toJSON()).includes("Review carefully"));
+    assert.ok(!JSON.stringify(view.toJSON()).includes("settings-card is-expandable"));
+
+    await act(async () => {
+      const back = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.backToList);
+      assert.ok(back);
+      back.props.onClick();
+    });
+    assert.ok(view.root.findAllByType("button")
+      .some((node) => node.props.className === "settings-card-main"), "the list did not come back");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("编辑 in the row menu opens the editor for that package", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    assert.equal(stub.calls[2]?.path, "/api/skills/review");
+    const headings = view.root.findAllByType("h3").map((node) => JSON.stringify(node.children));
+    assert.ok(headings.some((heading) => heading.includes(TEXT.settings.skills.editor.title("review"))));
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("删除 checks the server first, then asks before removing the package", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply({ references: [], skillId: "review" })
+    .reply({ deleted: "review" })
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const asks: ConfirmRequest[] = [];
+  const view = await mount(
+    <SkillsSettings client={stub.asClient()} onConfirm={(request) => { asks.push(request); }} />,
+  );
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.delete).props.onClick(); });
+    await settle();
+
+    assert.equal(stub.calls[2]?.path, "/api/skills/review/deletion-impact");
+    assert.equal(stub.calls.some((call) => call.init.method === "DELETE"), false);
+    const ask = asks[0];
+    assert.ok(ask, "no confirmation was asked");
+    assert.ok(ask.body.includes("review"));
+    await act(async () => { await ask.onAccept(); });
+    await settle();
+
+    const remove = stub.calls.find((call) => call.init.method === "DELETE");
+    assert.equal(remove?.path, "/api/skills/review");
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.rowMenu.deleted("review")));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a package still selected somewhere is not deleted and the pane names the count", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply({
+      references: [
+        { id: "project-one", label: "One project", scope: "project" },
+        { id: "session-two", label: "One session", scope: "session" },
+      ],
+      skillId: "review",
+    });
+  const asks: ConfirmRequest[] = [];
+  const view = await mount(
+    <SkillsSettings client={stub.asClient()} onConfirm={(request) => { asks.push(request); }} />,
+  );
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.delete).props.onClick(); });
+    await settle();
+
+    assert.equal(asks.length, 0, "a blocked deletion still asked for confirmation");
+    assert.equal(stub.calls.some((call) => call.init.method === "DELETE"), false);
+    assert.ok(JSON.stringify(view.toJSON())
+      .includes(TEXT.settings.skills.rowMenu.deleteBlocked("review", 2)));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("导出 reads the package route and hands the ZIP to the save dialog", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .stream("PK\u0003\u0004package");
+  const written: number[] = [];
+  const previous = (globalThis as { window?: unknown }).window;
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: {
+    sdShell: {
+      exportFile: {
+        downloadsDir: async () => "/tmp",
+        saveDialog: async () => ({ canceled: false, token: "destination" }),
+        showInFolder: async () => ({ ok: true }),
+        write: async (token: string, data: ArrayBuffer) => {
+          assert.equal(token, "destination");
+          written.push(data.byteLength);
+          return { ok: true };
+        },
+      },
+    },
+  } });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.export).props.onClick(); });
+    await settle();
+
+    assert.equal(stub.calls[2]?.path, "/api/skills/review/package");
+    assert.ok((written[0] ?? 0) > 0, "the archive was not written");
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.rowMenu.exported("review")));
+  } finally {
+    await act(async () => { view.unmount(); });
+    Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: previous });
+  }
 });

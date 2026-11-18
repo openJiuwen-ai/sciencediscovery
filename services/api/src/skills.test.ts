@@ -20,7 +20,7 @@ import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
 
-import { strToU8, zipSync } from "fflate";
+import { strToU8, unzipSync, zipSync } from "fflate";
 
 import {
   BUNDLED_SKILL_IDS,
@@ -101,6 +101,52 @@ test("loads legacy managed Skills without descriptions but rejects new packages 
     assert.throws(
       () => packageFromUpload("legacy-description.md", Buffer.from("---\nname: legacy-description-skill\n---\n\n# New\n")),
       /description must be a non-empty string/,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("an exported package is the archive the importer accepts back", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    await catalog.createPackage({
+      description: "Portable enough to leave.",
+      instructions: "# Instructions\n\nExport me.",
+      name: "portable-export",
+      resources: [
+        { content: "guide", path: "references/guide.md" },
+        { content: "script", path: "scripts/inert.py" },
+      ],
+    });
+
+    const exported = catalog.exportPackage("portable-export");
+    assert.equal(exported.filename, "portable-export.zip");
+    assert.deepEqual(Object.keys(unzipSync(new Uint8Array(exported.bytes))).sort(), [
+      "portable-export/SKILL.md",
+      "portable-export/references/guide.md",
+      "portable-export/scripts/inert.py",
+    ]);
+    // Keeping the archive shape a package has is what makes the export usable:
+    // the same bytes import back, here or on another machine.
+    const reimported = packageFromUpload("portable-export.zip", exported.bytes);
+    assert.equal(reimported.detail.name, "portable-export");
+    assert.deepEqual([...reimported.files.keys()].sort(), [
+      "SKILL.md",
+      "references/guide.md",
+      "scripts/inert.py",
+    ]);
+
+    // Read-only says who may change a package, not who may copy it.
+    const builtIn = catalog.exportPackage(BUNDLED_SKILL_IDS[0]!);
+    const builtInEntries = unzipSync(new Uint8Array(builtIn.bytes));
+    assert.ok(builtInEntries[`${BUNDLED_SKILL_IDS[0]}/SKILL.md`]?.length);
+
+    assert.throws(
+      () => catalog.exportPackage("missing-skill"),
+      (error: unknown) => error instanceof SkillCatalogError && error.code === "SKILL_NOT_FOUND",
     );
   } finally {
     await rm(dataDir, { force: true, recursive: true });

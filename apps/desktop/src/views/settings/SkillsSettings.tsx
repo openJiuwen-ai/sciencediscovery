@@ -15,20 +15,35 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
-import { getJiuwenSwarmSkills, getSkill, listSkills, setJiuwenSwarmSkillEnabled, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
+import {
+  deleteSkill,
+  exportSkillPackage,
+  getJiuwenSwarmSkills,
+  getSkillDeletionImpact,
+  listSkills,
+  setJiuwenSwarmSkillEnabled,
+  setJiuwenSwarmSkillEnabledById,
+} from "../../api/settings.js";
 import type { JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/types.js";
+import type { ConfirmRequest } from "../../app/use-workspace.js";
+import { saveSkillPackage } from "../../app/skill-export.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
 import { SkillAddMenu } from "./SkillAddMenu.js";
+import { SkillDetailView } from "./SkillDetailView.js";
 import { SkillEditorView } from "./SkillEditorView.js";
 import { SkillForm } from "./SkillForm.js";
 import { SkillGitImportView } from "./SkillGitImportView.js";
+import { SkillRowMenu, type SkillRowAction } from "./SkillRowMenu.js";
 import { SkillUploadView } from "./SkillUploadView.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
 interface Props {
   client: ApiClient;
+  /** The workspace's one confirmation dialog. A package is deleted only
+   *  through it; without it the pane does not offer a deletion at all. */
+  onConfirm?: (request: ConfirmRequest) => void;
 }
 
 /**
@@ -44,6 +59,7 @@ type SkillView =
   | { kind: "create" }
   | { kind: "upload" }
   | { kind: "git" }
+  | { description: string; id: string; kind: "detail"; name: string }
   | { id: string; kind: "edit"; name: string };
 
 interface SkillPage {
@@ -61,38 +77,8 @@ function setSkillEnabled(client: ApiClient, skill: SkillDescriptor | JiuwenSwarm
     : setJiuwenSwarmSkillEnabled(client, skill.name, enabled);
 }
 
-/** The expanded card's SKILL.md body: absent while it is being read. */
-interface OpenDetail {
-  failed?: boolean;
-  id: string;
-  instructions?: string;
-}
-
 function sourceLabel(source: SkillDescriptor["source"]): string {
   return source === "built-in" ? TEXT.settings.skills.source.builtIn : TEXT.settings.skills.source.managed;
-}
-
-/**
- * The expanded card's version and file count; its source is already in the badge.
- *
- * Two of those used to be the server's own labels rather than a reader's.
- * `version` is `revision:N` for a package that declared none, and printing it
- * after a `v` produced `vrevision:1`; a declared version is a version and
- * reads as one, and a package without one is described by its revision.
- *
- * `resourceSummary.files` counts the files *beside* SKILL.md — that is what a
- * skill's resources are — so a skill whose package is SKILL.md and nothing
- * else counted zero files. A reader counting the skill's files counts
- * SKILL.md, and the package always has it.
- */
-export function skillMeta(skill: SkillDescriptor): string {
-  const version = skill.declaredVersion === undefined
-    ? TEXT.settings.skills.revision(skill.currentRevision)
-    : `v${skill.declaredVersion}`;
-  return [
-    version,
-    TEXT.workspace.filesCount(skill.resourceSummary.files + 1),
-  ].join(" · ");
 }
 
 /** The title and one-line description of a page below the list. Read through
@@ -105,6 +91,8 @@ function subviewCopy(view: Exclude<SkillView, { kind: "list" }>): { description:
       return TEXT.settings.skills.uploadView;
     case "git":
       return TEXT.settings.skills.git;
+    case "detail":
+      return { description: view.description, title: view.name };
     case "edit":
       return {
         description: TEXT.settings.skills.editor.hint,
@@ -125,11 +113,10 @@ function subviewCopy(view: Exclude<SkillView, { kind: "list" }>): { description:
  * title row travels with the page it names, so a sub-page never sits under a
  * header that still says the list is open.
  */
-export function SkillsSettings({ client }: Props) {
+export function SkillsSettings({ client, onConfirm }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const [detail, setDetail] = useState<OpenDetail>();
-  const [openId, setOpenId] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [view, setView] = useState<SkillView>({ kind: "list" });
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -199,27 +186,94 @@ export function SkillsSettings({ client }: Props) {
   };
 
   /**
-   * Opening a card reads the skill itself, because what closes it is the one
-   * thing the list does not carry: the body of SKILL.md, which is what the
-   * model is actually told. The summary above the divider is the description;
-   * this is the instructions.
+   * Switch an installed package on or off from its own page.
+   *
+   * The list owns the enabled set, so the page writes through the same route
+   * and the list re-reads: what the switch shows is what JiuwenSwarm stored,
+   * not a local guess.
    */
-  const reveal = (skill: SkillDescriptor) => {
-    if (openId === skill.id) {
-      setOpenId(undefined);
-      setDetail(undefined);
-      return;
+  const toggleInstalled = async (id: string, name: string, next: boolean) => {
+    const page = loaded.value;
+    if (!page?.switchesAvailable) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await setJiuwenSwarmSkillEnabledById(client, id, next);
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+    } finally {
+      setBusy(false);
+      loaded.reload();
     }
-    setOpenId(skill.id);
-    setDetail({ id: skill.id });
-    getSkill(client, skill.id).then(
-      (found) => setDetail((current) => (
-        current?.id === skill.id ? { id: skill.id, instructions: found.instructions.trim() } : current
-      )),
-      () => setDetail((current) => (
-        current?.id === skill.id ? { failed: true, id: skill.id } : current
-      )),
-    );
+  };
+
+  /** Save the package as a ZIP under a name the user picks. A cancelled save
+   *  is not a failure, and the pane says nothing about it. */
+  const exportSkill = async (skill: SkillDescriptor) => {
+    setBusy(true);
+    setFailure(undefined);
+    setNotice(undefined);
+    try {
+      const bytes = await exportSkillPackage(client, skill.id);
+      if (await saveSkillPackage(skill.name, bytes)) {
+        setNotice(TEXT.settings.skills.rowMenu.exported(skill.name));
+      }
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.exportFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Delete an installed package, after the server confirms nothing still
+   * selects it.
+   *
+   * The reference check happens first: a package named by a Project or Session
+   * selection would leave that document pointing at something gone, so the
+   * route refuses it, and asking first turns that refusal into a sentence
+   * naming the count instead of a failed request.
+   */
+  const removeSkill = async (skill: SkillDescriptor) => {
+    setBusy(true);
+    setFailure(undefined);
+    setNotice(undefined);
+    try {
+      const impact = await getSkillDeletionImpact(client, skill.id);
+      if (impact.references.length > 0) {
+        setFailure(TEXT.settings.skills.rowMenu.deleteBlocked(skill.name, impact.references.length));
+        return;
+      }
+      if (!onConfirm) return;
+      onConfirm({
+        accept: TEXT.menu.delete,
+        body: TEXT.settings.skills.rowMenu.deleteBody(skill.name),
+        eyebrow: TEXT.settings.skills.heading,
+        onAccept: async () => {
+          setBusy(true);
+          try {
+            await deleteSkill(client, skill.id);
+            setNotice(TEXT.settings.skills.rowMenu.deleted(skill.name));
+          } catch (reason) {
+            setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.deleteFailed);
+          } finally {
+            setBusy(false);
+            loaded.reload();
+          }
+        },
+        title: TEXT.settings.skills.rowMenu.deleteTitle(skill.name),
+      });
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.deleteFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chooseRowAction = (skill: SkillDescriptor, action: SkillRowAction) => {
+    if (action === "export") void exportSkill(skill);
+    else if (action === "edit") setView({ id: skill.id, kind: "edit", name: skill.name });
+    else void removeSkill(skill);
   };
 
   /**
@@ -306,6 +360,7 @@ export function SkillsSettings({ client }: Props) {
       <Group>
         <p className="row-note">{TEXT.settings.skills.scope}</p>
         {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+        {notice ? <small className="row-note" role="status">{notice}</small> : null}
         <LoadGate loaded={loaded}>
           {(page) => {
             return (
@@ -322,13 +377,17 @@ export function SkillsSettings({ client }: Props) {
                   : page.switchesAvailable ? <BulkToggles busy={busy} onAll={(next) => void setAll(next)} /> : null}
                 {page.skills.map((skill) => {
                   const on = page.enabled.includes(skill.id);
-                  const open = openId === skill.id;
                   return (
-                    <div className={`settings-card is-expandable${open ? " is-open" : ""}`} key={skill.id}>
+                    <div className="settings-card" key={skill.id}>
                       <span className="settings-card-mark">{skillMark(skill)}</span>
                       <button
                         className="settings-card-main"
-                        onClick={() => reveal(skill)}
+                        onClick={() => setView({
+                          description: skill.description,
+                          id: skill.id,
+                          kind: "detail",
+                          name: skill.name,
+                        })}
                         type="button"
                       >
                         <strong>
@@ -341,30 +400,15 @@ export function SkillsSettings({ client }: Props) {
                         <span className={`skill-source-badge ${skill.source === "built-in" ? "is-sd" : "is-managed"}`}>
                           {sourceLabel(skill.source)}
                         </span>
-                        {open ? (
-                          <span className="settings-detail">
-                            <span className="settings-detail-heading">
-                              {TEXT.settings.skills.instructionsHeading}
-                            </span>
-                            <span className={`settings-detail-body${detail?.instructions ? "" : " is-muted"}`}>
-                              {detail?.instructions
-                                ?? (detail?.failed
-                                  ? TEXT.settings.skills.instructionsFailed
-                                  : TEXT.settings.skills.instructionsLoading)}
-                            </span>
-                            <small className="settings-detail-meta">{skillMeta(skill)}</small>
-                          </span>
-                        ) : null}
                       </button>
                       <div className="settings-card-actions">
-                        {skill.source === "managed" && !skill.readOnly ? (
-                          <button
-                            className="secondary-button skill-edit-button"
-                            onClick={() => setView({ id: skill.id, kind: "edit", name: skill.name })}
-                            type="button"
-                          >
-                            {TEXT.settings.skills.editor.edit}
-                          </button>
+                        {skill.source === "managed" ? (
+                          <SkillRowMenu
+                            canEdit={!skill.readOnly}
+                            disabled={busy}
+                            name={skill.name}
+                            onAction={(action) => chooseRowAction(skill, action)}
+                          />
                         ) : null}
                         <Switch
                           disabled={busy || !page.switchesAvailable}
@@ -424,6 +468,18 @@ export function SkillsSettings({ client }: Props) {
 
       {view.kind === "git" ? (
         <SkillGitImportView client={client} onImported={afterInstall} />
+      ) : null}
+
+      {view.kind === "detail" ? (
+        <SkillDetailView
+          busy={busy}
+          client={client}
+          enabled={loaded.value?.enabled.includes(view.id) ?? false}
+          onToggle={(next) => void toggleInstalled(view.id, view.name, next)}
+          skillId={view.id}
+          skillName={view.name}
+          switchesAvailable={loaded.value?.switchesAvailable ?? false}
+        />
       ) : null}
 
       {view.kind === "edit" ? (
