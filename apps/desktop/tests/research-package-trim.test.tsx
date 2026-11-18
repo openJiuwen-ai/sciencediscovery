@@ -123,7 +123,9 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     };
     assert.equal(listsBothFiles(), true, "both files are listed before the click");
 
-    const box = view.root.findAllByProps({ type: "checkbox" })[0]!;
+    // Skip the select-all box: this case is about ticking one workspace file.
+    const grid = view.root.findAllByProps({ className: "research-file-grid" })[0]!;
+    const box = grid.findAllByProps({ type: "checkbox" })[0]!;
     // A synchronous act stops after the state update: this is the moment the user
     // sees, while the new estimate is still in flight.
     act(() => {
@@ -131,7 +133,7 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     });
     const markup = rendered(view);
     assert.equal(listsBothFiles(), true, "the file list survives the selection change");
-    assert.ok(markup.includes("100.0 KiB"), "the last known estimate stays visible");
+    assert.ok(markup.includes("100.0 KB"), "the last known estimate stays visible on the scope card");
     assert.ok(markup.includes(t.recalculating), "the size line says it is recalculating");
     assert.equal(markup.includes(t.calculating), false, "the dialog is not replaced by the calculating state");
     // A // line inside the fragment's children is text, not a comment: it renders
@@ -142,7 +144,7 @@ test("ticking a workspace file keeps the list and only marks the size as recalcu
     await act(async () => { await Promise.resolve(); });
     const settled = rendered(view);
     assert.equal(settled.includes(t.recalculating), false, "the estimate settles and the recalculating marker goes");
-    assert.ok(settled.includes("100.0 KiB"), "the settled size is still shown");
+    assert.ok(settled.includes("100.0 KB"), "the settled size is still shown");
   });
 });
 
@@ -158,7 +160,9 @@ test("omissions are one plain sentence with a count, never the packaging list", 
     client: client({ preview }),
     request: { kind: "export", projectId: "p1", sessionId: "s1" },
   }), async (view) => {
-    const box = view.root.findAllByProps({ type: "checkbox" })[0]!;
+    // Skip the select-all box: this case is about ticking one workspace file.
+    const grid = view.root.findAllByProps({ className: "research-file-grid" })[0]!;
+    const box = grid.findAllByProps({ type: "checkbox" })[0]!;
     await act(async () => {
       (box.props.onChange as (event: unknown) => void)({ target: { checked: false } });
     });
@@ -168,7 +172,7 @@ test("omissions are one plain sentence with a count, never the packaging list", 
   });
 });
 
-test("the import review is a single summary line with the size, and no omission list", async (context) => {
+test("the import review shows the source, the object count, the record bytes and the omissions", async (context) => {
   await withView(context, React.createElement(ResearchPackage, {
     ...props,
     client: client({
@@ -185,8 +189,14 @@ test("the import review is a single summary line with the size, and no omission 
     const markup = rendered(view);
     assert.ok(markup.includes("pkg.sdresearch"), "the file name stays");
     assert.ok(markup.includes("3"), "the object count stays");
-    assert.ok(markup.includes("KiB"), "the payload size is on the same line");
-    assert.equal(markup.includes("IMPORT-OMISSION-TEXT"), false, "no omission list");
+    // #1024 AC5: the dialog used to print `(size / 1024).toFixed(1) KiB` for a
+    // four-byte file, and the manifest's omissions never reached the screen.
+    assert.ok(markup.includes("4 B"), "the chosen file's size is formatted by magnitude, not as KiB");
+    assert.ok(markup.includes(t.recordsBytes), "the record byte count is labelled");
+    assert.ok(markup.includes("2.0 KB"), "2048 records bytes read as 2.0 KB");
+    assert.ok(markup.includes(t.sourceTitle), "the source title is labelled");
+    assert.ok(markup.includes("pkg"), "the package's source title is shown");
+    assert.ok(markup.includes("IMPORT-OMISSION-TEXT"), "the package's omissions are listed, not hidden");
   });
 });
 
