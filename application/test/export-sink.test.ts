@@ -115,19 +115,20 @@ test("abortAll drops every open stream when the renderer disappears", () => {
   assert.equal(sinks.size, 0);
 });
 
-test("an empty stream is dropped instead of published as a finished export", () => {
-  // #1216 review 3 (optional): a 0-byte stream must not replace the destination or be
-  // recorded as a completed export.
+test("an empty stream is refused instead of published as a finished export", () => {
+  // #1216 review 4: a 0-byte stream must not replace the destination, and it must not
+  // read as a completed save either — `end` throws, so the IPC handler cannot record a
+  // written destination or a `bytes: 0` history row for it.
   const { io, events } = recordingIo();
   const sinks = new ExportSinks(io);
   sinks.begin("t1", "C:/exports/a.sdresearch");
-  const written = sinks.end("t1");
-  assert.equal(written, 0);
+  assert.throws(() => sinks.end("t1"), /导出数据为空/u);
   assert.deepEqual(events, [
     "open:C:/exports/a.sdresearch.t1.part",
     "close:1",
     "remove:C:/exports/a.sdresearch.t1.part",
   ], "no rename when nothing was written");
+  assert.equal(sinks.size, 0, "the token is forgotten, so a retry opens a fresh temporary");
 });
 
 test("an aborted save over an existing destination leaves the old bytes", async () => {
