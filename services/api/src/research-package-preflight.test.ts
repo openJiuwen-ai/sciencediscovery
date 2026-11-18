@@ -40,13 +40,14 @@ test("the response export is charged no disk because it writes the client's byte
 });
 
 test("an inspect unpacks one copy where a restore adds three", () => {
-  const free = 12 * 1024 * MIB;
+  const free = 10 * 1024 * MIB;
   const unpacked = Math.floor(3.8 * 1024 * MIB);
   // Restore: upload + snapshot objects + CAS blobs + workspace files = four copies.
   assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB) < unpacked,
     "the restore budget must stay conservative");
   // Inspect: the upload plus the one copy it unpacks, so it fits (#1216 review 3).
-  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB, 1) >= unpacked);
+  assert.ok(researchPackageUnpackBudget(CAPACITY(free), 8 * 1024 * MIB, 2) >= unpacked,
+    "an inspect writes two copies: the unpacked tree and what it reads it with");
 });
 
 test("the upload check only stages the compressed file", () => {
@@ -93,9 +94,9 @@ test("the unpack budget and the post-parse check agree on the same free disk", (
     unpackedBytes: unpacked, largestObjectBytes: unpacked, recordsBytes: 1024,
   }), "a package the budget allowed must not be refused once it is on disk");
 
-  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 8 * 1024 * MIB), 7.5 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 1.5 * 1024 * MIB);
-  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 4));
+  assert.equal(researchPackageUnpackBudget(CAPACITY(30 * 1024 * MIB), 48 * 1024 * MIB), 10 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(6 * 1024 * MIB), 8 * 1024 * MIB), 2 * 1024 * MIB);
+  assert.equal(researchPackageUnpackBudget(CAPACITY(2 * MIB), 8 * 1024 * MIB), Math.floor((2 * MIB) / 3));
   assert.equal(researchPackageUnpackBudget(CAPACITY(Infinity), 8 * 1024 * MIB), 8 * 1024 * MIB);
 });
 
@@ -126,3 +127,18 @@ test("the measurement reports the volume and the available memory", async () => 
   assert.ok(capacity.freeDiskBytes > 0);
   assert.ok(capacity.freeMemoryBytes > 0);
 });
+
+test("the unpack budget counts the copies a route writes, so inspect and restore differ", () => {
+  // The same capacity and the same ceiling, two routes: an inspect unpacks one copy
+  // and writes nothing else, a restore keeps three. Pinning both keeps the third
+  // argument from being deleted later without a red test (#1216 review 3, #1024).
+  const capacity = { freeDiskBytes: 6_000, freeMemoryBytes: Number.POSITIVE_INFINITY };
+  const ceiling = 1_000_000;
+  assert.equal(researchPackageUnpackBudget(capacity, ceiling, 2), 3_000, "inspect: free / 2");
+  assert.equal(researchPackageUnpackBudget(capacity, ceiling), 2_000, "restore keeps the default free / 3");
+  assert.notEqual(researchPackageUnpackBudget(capacity, ceiling, 2), researchPackageUnpackBudget(capacity, ceiling));
+  // A ceiling still wins, and an infinite volume is never bounded.
+  assert.equal(researchPackageUnpackBudget(capacity, 500, 2), 500);
+  assert.equal(researchPackageUnpackBudget({ freeDiskBytes: Number.POSITIVE_INFINITY, freeMemoryBytes: 0 }, ceiling, 2), ceiling);
+});
+
