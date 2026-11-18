@@ -44,12 +44,14 @@ Never add it to make a refusal go away, and never say the run is sandboxed when 
 A design that continues one already in the session may start from a plain message instead of a new
 `/evolve-design` command. That message carries no flags, and the user's earlier answer does not
 disappear with it: the consent belongs to **the design being continued**, and the record of it is
-the `/evolve-design` command that started that design — the latest such command in the session's
-transcript, which is the command the server reads. A checkpoint answer does not replace it. Read
-that command before `create_evolve_run`: if it carries `--allow-direct`, pass
-`allowUnisolated: true`; if it does not, leave the flag out and say the run needs a design started
-from the setup dialog. A plain message is not itself an answer, and a design that begins from one
-has no command of its own: never carry an earlier design's `--allow-direct` into it.
+the `/evolve-design` command that started that design. That is the latest `/evolve-design` command
+in the transcript only when the design being continued is the newest one; in a session that holds
+more than one design, read the command together with the design it started, because the latest one
+may belong to another. A checkpoint answer does not replace it. Read that command before
+`create_evolve_run`: if it carries `--allow-direct`, pass `allowUnisolated: true`; if it does not,
+or you cannot tell which design the latest command belongs to, leave the flag out and say the run
+needs a design started from the setup dialog. A plain message is not itself an answer, and a design
+that begins from one has no command of its own: never carry another design's `--allow-direct` into it.
 
 Four checkpoints, numbered 1 to 4. **Do the work for a step, show the result, wait for the user,
 then go on.** A checkpoint is a glance, not a form: a few lines they can wave through, with a
