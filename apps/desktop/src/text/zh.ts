@@ -769,6 +769,11 @@ export const ZH = {
         found: (count: number) => `找到 ${count} 个技能包`,
         selectAll: "全选",
         importSelected: (count: number) => `导入选中的 ${count} 项`,
+        /** 翻页只改变显示哪一页；全选与「导入选中」始终按整个仓库计数，
+         *  所以勾选不会因为翻页而丢失。 */
+        page: (page: number, pages: number) => `第 ${page} / ${pages} 页`,
+        previousPage: "上一页",
+        nextPage: "下一页",
         empty: "这个仓库里没有找到技能包。",
       },
       editor: {

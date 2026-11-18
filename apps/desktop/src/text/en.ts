@@ -744,6 +744,11 @@ export const EN: Text = {
         found: (count: number) => count === 1 ? "Found 1 package" : `Found ${count} packages`,
         selectAll: "Select all",
         importSelected: (count: number) => `Import ${count} selected`,
+        /** Paging only changes which rows are drawn; Select all and Import
+         *  keep counting the whole repository, so ticks survive a page turn. */
+        page: (page: number, pages: number) => `Page ${page} of ${pages}`,
+        previousPage: "Previous",
+        nextPage: "Next",
         empty: "No Skill package was found in this repository.",
       },
       editor: {
