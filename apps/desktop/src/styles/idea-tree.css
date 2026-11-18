@@ -9,6 +9,36 @@
   padding: 0 24px 8px;
 }
 
+/* A list that could not be read is said in the conversation, above the cards:
+ * an empty column would otherwise read as "nothing was ever started". */
+.idea-notice {
+  margin: 0 24px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-m);
+  background: var(--warning-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The legacy card's mark: a hollow square, so it reads as an old recording
+ * rather than as a live research. */
+.idea-legacy-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--muted);
+  border-radius: 2px;
+}
+
+/* 结束 asks first: the two buttons and their sentence share the footer. */
+.idea-panel-confirm {
+  margin-right: auto;
+  align-self: center;
+  color: var(--warning);
+  font-size: 12px;
+}
+
 /* ── the task panel ────────────────────────────────────────────────────────── */
 
 /* The panel is a column of the shell, not an overlay: it has no width of its

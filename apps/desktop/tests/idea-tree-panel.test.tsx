@@ -89,3 +89,76 @@ test("a live stream frame replaces the view without refetching", async () => {
   assert.equal(api.calls.length, before, "the frame is the update; nothing is fetched again");
   panel.unmount();
 });
+
+test("结束 asks before it ends a research that cannot be resumed", async () => {
+  const api = fakeClient();
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const end = panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.end))[0]!;
+  await act(async () => { end.props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.equal(
+    api.calls.filter((call) => (call.body as { operation?: string } | undefined)?.operation === "end").length,
+    0,
+    "the first press only asks",
+  );
+  assert.match(JSON.stringify(panel.toJSON()), /结束后不可恢复/);
+  const confirm = panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.end) && node !== end)[0]!;
+  await act(async () => { confirm.props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.equal(
+    api.calls.filter((call) => (call.body as { operation?: string } | undefined)?.operation === "end").length,
+    1,
+    "the second press is the one that ends it",
+  );
+  panel.unmount();
+});
+
+test("a dropped stream refetches and reconnects instead of keeping a stale frame", async () => {
+  let attempts = 0;
+  const calls: string[] = [];
+  const api = {
+    calls,
+    request: async (path: string, init?: { method?: string; body?: string }) => {
+      calls.push(`${init?.method ?? "GET"} ${path}`);
+      return view("running");
+    },
+    fetchStream: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("stream dropped");
+      return new Response("", { status: 200, headers: { "content-type": "text/event-stream" } });
+    },
+  } as unknown as ApiClient;
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const before = calls.length;
+  // The first reconnect waits a second; waiting for it keeps this test
+  // independent of fake-timer support in the renderer.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_600)); });
+  assert.ok(calls.length > before, "the panel re-read the research before reconnecting");
+  assert.ok(attempts >= 2, "the stream was retried");
+  panel.unmount();
+});
+
+test("a 503 clears once a later read works", async () => {
+  let fail = true;
+  const api = {
+    request: async () => {
+      if (fail) throw new ApiRequestError("Evolve is not initialized or unavailable", 503);
+      return view("running");
+    },
+    fetchStream: async () => new Response("", { status: 200, headers: { "content-type": "text/event-stream" } }),
+  } as unknown as ApiClient;
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  assert.match(JSON.stringify(panel.toJSON()), /尚未就绪/);
+  fail = false;
+  const retry = panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.retry))[0]!;
+  await act(async () => { retry.props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.equal(JSON.stringify(panel.toJSON()).includes("尚未就绪"), false, "the notice goes away when the service answers");
+  panel.unmount();
+});

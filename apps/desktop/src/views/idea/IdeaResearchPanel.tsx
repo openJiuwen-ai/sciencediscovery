@@ -16,10 +16,12 @@
  * The Idea Tree task panel: progress, the tree, one node's detail, and the controls.
  *
  * Live updates come from the research's SSE stream, whose every frame is a whole view;
- * the stream closes once the research stops, and a reconnect refetches rather than
- * replaying. Nothing here starts a research: reopening a session must show the persisted
- * state without beginning anything, which is why the only actions are the ones the
- * research's own status allows.
+ * the stream closes once the research stops, so a reconnect refetches rather than
+ * replaying. A stream that fails is not the end of the panel: it refetches and
+ * reconnects with a backoff, because the only other thing an error leaves behind is a
+ * stale frame. Nothing here starts a research: reopening a session must show the
+ * persisted state without beginning anything, which is why the only actions are the
+ * ones the research's own status allows.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,6 +39,12 @@ function isUnavailable(reason: unknown): boolean {
   return reason instanceof ApiRequestError && reason.status === 503;
 }
 
+/** How many consecutive reconnect attempts a dropped stream gets before the panel
+ *  stops trying and leaves the error on screen with a manual action. */
+const MAX_RECONNECTS = 4;
+
+const LIVE = ["running", "pausing"];
+
 export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   client: ApiClient;
   sessionId: string;
@@ -47,6 +55,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   const [error, setError] = useState<string>();
   const [unavailable, setUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** 结束 is irreversible, so it asks first; the tree the research already grew
+   *  stays, but the research cannot be resumed. */
+  const [confirmEnd, setConfirmEnd] = useState(false);
   /** The selected node by id, not by value: a stream frame replaces the whole view, so
    *  holding the old object would show a node that no longer matches the tree. */
   const [selectedId, setSelectedId] = useState<string>();
@@ -55,6 +66,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   const load = useCallback(async () => {
     try {
       setView(await getIdeaResearch(client, sessionId, researchId));
+      // A later read that works is what makes the prerequisite notice go away:
+      // the service came back, and the panel should not keep saying it is down.
+      setUnavailable(false);
       setError(undefined);
     } catch (reason: unknown) {
       if (isUnavailable(reason)) setUnavailable(true);
@@ -64,24 +78,48 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Follow the research only while the engine says it is live; the stream closes itself
-  // once it is not, and an aborted stream must not overwrite a newer view.
+  // Follow the research only while the engine says it is live. A dropped stream
+  // refetches and reconnects with a backoff: frames are whole views, so the refetch
+  // is not a replay but the current state.
   const status = view?.research.status;
   useEffect(() => {
-    if (!status || !["running", "pausing"].includes(status)) return;
+    if (!status || !LIVE.includes(status)) return undefined;
     live.current?.abort();
     const controller = new AbortController();
     live.current = controller;
-    void subscribeIdeaResearchEvents(client, sessionId, researchId, (next) => setView(next), controller.signal)
-      .catch((reason: unknown) => { if (!controller.signal.aborted && !isUnavailable(reason)) setError(reason instanceof Error ? reason.message : String(reason)); });
-    return () => controller.abort();
-  }, [client, researchId, sessionId, status]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const follow = async () => {
+      try {
+        await subscribeIdeaResearchEvents(client, sessionId, researchId, (next) => setView(next), controller.signal);
+      } catch (reason: unknown) {
+        if (controller.signal.aborted) return;
+        if (isUnavailable(reason)) {
+          setUnavailable(true);
+          return;
+        }
+        setError(reason instanceof Error ? reason.message : String(reason));
+        attempt += 1;
+        if (attempt > MAX_RECONNECTS) return;
+        timer = globalThis.setTimeout(() => {
+          if (controller.signal.aborted) return;
+          void load().finally(() => { if (!controller.signal.aborted) void follow(); });
+        }, Math.min(30_000, 1_000 * 2 ** (attempt - 1)));
+      }
+    };
+    void follow();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) globalThis.clearTimeout(timer);
+    };
+  }, [client, researchId, sessionId, status, load]);
 
   const control = async (operation: "pause" | "continue" | "end") => {
     setBusy(true);
     setError(undefined);
     try {
       setView(await controlIdeaResearch(client, sessionId, researchId, operation));
+      setUnavailable(false);
     } catch (reason: unknown) {
       if (isUnavailable(reason)) setUnavailable(true);
       else setError(reason instanceof Error ? reason.message : String(reason));
@@ -89,14 +127,25 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
       await load();
     } finally {
       setBusy(false);
+      setConfirmEnd(false);
     }
   };
 
-  if (unavailable) return <p className="idea-panel-unavailable" role="alert">{t.unavailable}</p>;
+  if (unavailable) {
+    return (
+      <div className="idea-panel">
+        <p className="idea-panel-unavailable" role="alert">{t.unavailable}</p>
+        <div className="idea-panel-actions">
+          <button className="secondary-button" onClick={() => void load()} type="button">{t.retry}</button>
+        </div>
+      </div>
+    );
+  }
   if (!view) return <p className="idea-panel-loading">{error ?? TEXT.settings.loading}</p>;
   const research = view.research;
   // Re-read the node from the view that is on screen: a frame may have replaced it.
   const selectedNode = selectedId === undefined ? undefined : view.graph.nodes.find((node) => node.id === selectedId);
+  const canResume = research.status === "paused" || research.status === "interrupted";
   return (
     <section className="idea-panel" aria-label={t.heading}>
       <header className="idea-panel-header">
@@ -121,9 +170,15 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
       </div>
       <footer className="idea-panel-actions">
         {research.status === "running" ? <button className="secondary-button" disabled={busy} onClick={() => void control("pause")} type="button">{t.pause}</button> : null}
-        {research.status === "paused" || research.status === "interrupted" ? <button className="secondary-button" disabled={busy} onClick={() => void control("continue")} type="button">{t.resume}</button> : null}
-        {["running", "pausing", "paused", "interrupted"].includes(research.status)
-          ? <button className="secondary-button" disabled={busy} onClick={() => void control("end")} type="button">{t.end}</button>
+        {canResume ? <button className="secondary-button" disabled={busy} onClick={() => void control("continue")} type="button">{t.resume}</button> : null}
+        {LIVE.includes(research.status) || canResume || research.status === "paused"
+          ? (confirmEnd
+            ? <>
+              <span className="idea-panel-confirm">{t.endConfirm}</span>
+              <button className="secondary-button" disabled={busy} onClick={() => setConfirmEnd(false)} type="button">{TEXT.menu.cancel}</button>
+              <button className="primary-button" disabled={busy} onClick={() => void control("end")} type="button">{t.end}</button>
+            </>
+            : <button className="secondary-button" disabled={busy} onClick={() => setConfirmEnd(true)} type="button">{t.end}</button>)
           : null}
       </footer>
     </section>

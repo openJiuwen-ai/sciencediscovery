@@ -932,6 +932,7 @@ export const ZH = {
         remote: { label: "远程", description: "远端 Runner 与项目可用机器" },
         timeouts: { label: "超时", description: "墙钟限制与不限模式" },
         "export-history": { label: "导出记录", description: "本机保存过的研究包" },
+        "idea-tree": { label: "Idea Tree", description: "假设树的研究范围与阶段思考强度" },
       },
       global: {
         modelHeading: "主模型",
@@ -1549,6 +1550,11 @@ export const ZH = {
     empty: "这个会话还没有 Idea Tree 研究。",
     unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回来查看。",
     objective: "研究目标",
+    legacyCard: "旧版假设树",
+    legacyHint: "这条会话的树来自旧版本，只提供查看，不能在桌面端继续推进。",
+    legacyCount: (nodes: number) => `${nodes} 个节点`,
+    retry: "重试",
+    endConfirm: "结束后不可恢复；树里已有的节点会保留。",
     status: {
       running: "进行中",
       pausing: "正在暂停",

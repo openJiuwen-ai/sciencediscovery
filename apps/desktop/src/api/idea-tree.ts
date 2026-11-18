@@ -25,7 +25,7 @@
  * entry has not been designed yet, which is not a score of 0.
  */
 
-import type { IdeaResearchState, IdeaResearchView, IdeaTreeGraph, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
+import type { IdeaResearchState, IdeaResearchView, IdeaTreeGraph } from "@sciencediscovery/schema";
 import type { ApiClient } from "./client.js";
 import { SseFrameDecoder } from "./stream.js";
 
@@ -56,24 +56,6 @@ export async function getIdeaResearch(client: ApiClient, sessionId: string, rese
   return await client.request<IdeaResearchView>(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {
     method: "POST",
     body: JSON.stringify({ operation: "get", researchId }),
-  });
-}
-
-/**
- * Start one research from the launch dialog.
- *
- * `content` is the sentence the conversation records; `settings` are the per-research
- * overrides the dialog collected, merged over the stored defaults by the service.
- */
-export async function createIdeaResearch(
-  client: ApiClient,
-  sessionId: string,
-  content: string,
-  settings?: UpdateIdeaTreeSettingsRequest,
-): Promise<IdeaResearchView> {
-  return await client.request<IdeaResearchView>(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {
-    method: "POST",
-    body: JSON.stringify({ operation: "create", content, ...(settings ? { settings } : {}) }),
   });
 }
 

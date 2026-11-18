@@ -908,6 +908,7 @@ export const EN: Text = {
         remote: { label: "Remote", description: "Remote Runners and the machines a project may use" },
         timeouts: { label: "Timeouts", description: "Wall-clock limits and unlimited mode" },
         "export-history": { label: "Export history", description: "Study packages saved on this machine" },
+        "idea-tree": { label: "Idea Tree", description: "Research scope and per-stage thinking effort" },
       },
       global: {
         modelHeading: "Default model",
@@ -1499,6 +1500,11 @@ export const EN: Text = {
     empty: "This session has no Idea Tree research yet.",
     unavailable: "The Idea Tree service is not ready: start the Evolve service and come back.",
     objective: "Objective",
+    legacyCard: "Legacy hypothesis tree",
+    legacyHint: "This session's tree comes from an earlier version. It is readable here; the desktop cannot advance it.",
+    legacyCount: (nodes: number) => `${nodes} nodes`,
+    retry: "Retry",
+    endConfirm: "Ending cannot be undone; the nodes it already grew stay.",
     status: {
       running: "Running",
       pausing: "Pausing",
