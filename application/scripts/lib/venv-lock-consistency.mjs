@@ -37,7 +37,15 @@ export function parseUvLockVersions(text) {
   for (const block of String(text ?? "").split(/^\[\[package\]\]\s*$/m).slice(1)) {
     const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(block)?.[1];
     const version = /^\s*version\s*=\s*"([^"]+)"/m.exec(block)?.[1];
-    if (name && version) versions.set(normalizeDistributionName(name), version);
+    if (!name || !version) continue;
+    const key = normalizeDistributionName(name);
+    // One name can legitimately appear several times: uv writes a block per
+    // `resolution-markers` branch (numpy resolves 2.4.6 for <3.12 and 2.5.4 for
+    // >=3.12). Keeping the set means a venv whose interpreter picked either
+    // branch is accepted, instead of depending on which block came last.
+    const pinned = versions.get(key);
+    if (pinned) pinned.add(version);
+    else versions.set(key, new Set([version]));
   }
   return versions;
 }
@@ -64,17 +72,18 @@ export function parseDistributionSnapshot(text) {
  */
 export function venvLockSkew(lockText, installed) {
   const problems = [];
-  for (const [name, locked] of parseUvLockVersions(lockText)) {
+  for (const [name, pinned] of parseUvLockVersions(lockText)) {
     const actual = installed?.[name];
     if (actual === undefined) continue;
-    if (actual !== locked) problems.push({ installed: actual, locked, name });
+    if (!pinned.has(actual)) problems.push({ installed: actual, locked: [...pinned].sort(), name });
   }
   return problems;
 }
 
 /** The refusal text; names the same repair command the end-of-run gate uses. */
 export function venvPreflightFailure(problems) {
-  const named = problems.slice(0, 5).map((problem) => `${problem.name} ${problem.installed} (uv.lock requires ${problem.locked})`);
+  const named = problems.slice(0, 5).map((problem) => `${problem.name} ${problem.installed} `
+    + `(uv.lock requires ${problem.locked.join(" or ")})`);
   const rest = problems.length - named.length;
   return "jw venv preflight FAILED: the venv does not match the swarm patch set: "
     + `${named.join("; ")}${rest > 0 ? `; and ${rest} more` : ""}. `
