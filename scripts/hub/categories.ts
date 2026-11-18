@@ -30,10 +30,15 @@ function sorted(nodes: CategoryNode[]): CategoryNode[] {
   return nodes.toSorted((left, right) => right.count - left.count || left.id.localeCompare(right.id));
 }
 
-/** 学科 → 子领域。子领域计数之和等于该学科的资产数。 */
+/**
+ * 学科 → 子领域。子领域计数之和等于该学科的资产数。
+ * 只统计普通技能：团队技能在站点上有独立的 tab，不进入这棵树，否则分类栏的
+ * 计数会与技能列表的总数对不上。
+ */
 export function skillCategories(assets: SkillAsset[]): CategoryNode[] {
   const domains = new Map<string, { subdomains: Map<string, number>; total: number }>();
   for (const asset of assets) {
+    if (asset.kind !== "skill") continue;
     const { domain, subdomain } = asset.category;
     const entry = domains.get(domain) ?? { subdomains: new Map(), total: 0 };
     entry.total += 1;

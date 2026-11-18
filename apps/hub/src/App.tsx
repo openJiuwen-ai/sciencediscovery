@@ -34,7 +34,8 @@ type State =
   | { catalog: Catalog; status: "ready" };
 
 function assetsFor(catalog: Catalog, tab: Tab): Asset[] {
-  if (tab === "skills") return catalog.assets.filter((asset) => asset.kind === "skill" || asset.kind === "team-skill");
+  if (tab === "skills") return catalog.assets.filter((asset) => asset.kind === "skill");
+  if (tab === "teams") return catalog.assets.filter((asset) => asset.kind === "team-skill");
   if (tab === "specialists") return catalog.assets.filter((asset) => asset.kind === "specialist");
   if (tab === "connectors") return catalog.assets.filter((asset) => asset.kind === "connector");
   return catalog.assets.filter((asset) => asset.kind === "session-package");
@@ -144,6 +145,7 @@ export function App(): JSX.Element {
   const summary = counts
     ? ([
       [counts.skills, copy("skills")],
+      [counts.teams, copy("teams")],
       [counts.specialists, copy("specialists")],
       [counts.connectors, copy("connectors")],
       [counts.sessions, copy("sessions")],

@@ -108,7 +108,8 @@ describe("catalog", () => {
 
   it("labels every category in both languages and counts what is listed", () => {
     const total = (kind: string): number => catalog.assets.filter((asset) => asset.kind === kind).length;
-    assert.equal(counts(catalog.categories.skill), total("skill") + total("team-skill"));
+    // Team skills are their own tab in the site, so the skills tree counts only skills.
+    assert.equal(counts(catalog.categories.skill), total("skill"));
     assert.equal(counts(catalog.categories.connector), total("connector"));
     assert.equal(counts(catalog.categories.sessionPackage), 0);
     const walk = (nodes: CategoryNode[]): void => {

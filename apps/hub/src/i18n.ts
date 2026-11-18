@@ -65,6 +65,7 @@ const COPY = {
   upstream: { en: "View source", zh: "查看上游文件" },
   sessions: { en: "Session packages", zh: "会话包" },
   skills: { en: "Skills", zh: "技能" },
+  teams: { en: "Team skills", zh: "团队技能" },
   source: { en: "Source", zh: "来源" },
   specialists: { en: "Specialists", zh: "专家" },
   toolCount: { en: "tools", zh: "个工具" },

@@ -127,12 +127,7 @@ export function AssetCard({ asset, basePath, copy, language, onOpen }: AssetCard
           >
             {asset.name}
           </button>
-          {meta || asset.kind === "team-skill" ? (
-            <p className="card-meta">
-              {asset.kind === "team-skill" ? <span className="card-kind">{language === "zh" ? "团队" : "Team"}</span> : null}
-              {meta ? <span>{meta}</span> : null}
-            </p>
-          ) : null}
+          {meta ? <p className="card-meta"><span>{meta}</span></p> : null}
         </div>
         {version ? <span className="version">v{version}</span> : null}
       </header>
