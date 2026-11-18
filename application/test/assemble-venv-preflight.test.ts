@@ -38,12 +38,13 @@ source = { registry = "https://pypi.org/simple" }
 
 test("parseUvLockVersions reads every pinned [[package]] entry and nothing else", () => {
   const pins = parseUvLockVersions(LOCK);
-  assert.deepEqual([...pins.entries()].sort(), [["greenlet", "3.5.5"], ["openjiuwen", "0.2.6"], ["pywin32", "311"]]);
+  assert.deepEqual([...pins.keys()].sort(), ["greenlet", "openjiuwen", "pywin32"]);
+  assert.deepEqual([...pins.get("greenlet")], ["3.5.5"]);
 });
 
 test("venvLockSkew reports the stale installed version, not the pin", () => {
   const installed = parseDistributionSnapshot(JSON.stringify({ Greenlet: "3.5.0", "openjiuwen": "0.2.6" }));
-  assert.deepEqual(venvLockSkew(LOCK, installed), [{ installed: "3.5.0", locked: "3.5.5", name: "greenlet" }]);
+  assert.deepEqual(venvLockSkew(LOCK, installed), [{ installed: "3.5.0", locked: ["3.5.5"], name: "greenlet" }]);
   // pywin32 is listed by the lock but absent from this venv (another platform):
   // the subset is not a mismatch, only an installed version that lags its pin is.
   assert.equal(venvLockSkew(LOCK, installed).length, 1);
@@ -53,9 +54,20 @@ test("names are compared across the hyphen/underscore/dot spellings in play", ()
   // importlib.metadata reports `pydantic_core`; uv.lock writes `pydantic-core`.
   const lock = '[[package]]\nname = "pydantic-core"\nversion = "2.46.3"\n';
   const snapshot = parseDistributionSnapshot(JSON.stringify({ pydantic_core: "1.0.0" }));
-  assert.deepEqual(venvLockSkew(lock, snapshot), [{ installed: "1.0.0", locked: "2.46.3", name: "pydantic-core" }]);
+  assert.deepEqual(venvLockSkew(lock, snapshot), [{ installed: "1.0.0", locked: ["2.46.3"], name: "pydantic-core" }]);
   // A matching version under the other spelling is not a skew.
   assert.equal(venvLockSkew(lock, parseDistributionSnapshot(JSON.stringify({ "Pydantic-Core": "2.46.3" }))).length, 0);
+});
+
+test("one name may be pinned once per resolution branch and either is accepted", () => {
+  const lock = '[[package]]\nname = "numpy"\nversion = "2.4.6"\nresolution-markers = ["python_full_version < \'3.12\'"]\n'
+    + '\n[[package]]\nname = "numpy"\nversion = "2.5.4"\nresolution-markers = ["python_full_version >= \'3.12\'"]\n';
+  assert.equal(venvLockSkew(lock, parseDistributionSnapshot(JSON.stringify({ numpy: "2.5.4" }))).length, 0,
+    "the branch the venv actually installed is accepted");
+  assert.equal(venvLockSkew(lock, parseDistributionSnapshot(JSON.stringify({ numpy: "2.4.6" }))).length, 0);
+  const stale = venvLockSkew(lock, parseDistributionSnapshot(JSON.stringify({ numpy: "2.0.0" })));
+  assert.deepEqual(stale, [{ installed: "2.0.0", locked: ["2.4.6", "2.5.4"], name: "numpy" }]);
+  assert.match(venvPreflightFailure(stale), /uv\.lock requires 2\.4\.6 or 2\.5\.4/u);
 });
 
 test("a venv that matches the patch set produces no refusal", () => {
@@ -73,7 +85,7 @@ test("the refusal names both versions and the same repair command as the end gat
 });
 
 test("a long skew list is bounded instead of printing every package", () => {
-  const problems = Array.from({ length: 8 }, (_, index) => ({ installed: "1.0.0", locked: "2.0.0", name: `pkg${index}` }));
+  const problems = Array.from({ length: 8 }, (_, index) => ({ installed: "1.0.0", locked: ["2.0.0"], name: `pkg${index}` }));
   const message = venvPreflightFailure(problems);
   assert.match(message, /pkg0 1\.0\.0/u);
   assert.match(message, /and 3 more/u);
