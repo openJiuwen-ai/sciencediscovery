@@ -53,12 +53,34 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
   const [loads, setLoads] = useState(0);
   const [tick, setTick] = useState(0);
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
+  /** The session the state above belongs to. A list is only ever this session's:
+   *  until its own read lands, the previous session's cards must not be on
+   *  screen (and must not seed a command's baseline), and a read that answers for
+   *  a session that is no longer current is dropped. */
+  const loadedFor = useRef<string | undefined>(undefined);
 
   const reload = useCallback(() => setTick((value) => value + 1), []);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      loadedFor.current = undefined;
+      setViews([]);
+      setLoads(0);
+      setUnavailable(false);
+      setError(undefined);
+      setLoading(false);
+      return;
+    }
     let active = true;
+    if (loadedFor.current !== sessionId) {
+      loadedFor.current = sessionId;
+      // A new session starts from nothing: no views, no completed reads (which is
+      // what puts the auto-open baseline on its safe path), no inherited notice.
+      setViews([]);
+      setLoads(0);
+      setUnavailable(false);
+      setError(undefined);
+    }
     const load = async () => {
       setLoading(true);
       try {
