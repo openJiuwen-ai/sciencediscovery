@@ -1397,6 +1397,19 @@ body.is-resizing {
   font-size: 12px;
 }
 
+.answer-tools .turn-usage-trigger { display: flex; width: auto; gap: 6px; padding: 0 8px; margin-left: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.turn-usage-trigger[aria-expanded="true"] { background: var(--surface-soft); color: var(--text-strong); }
+.turn-usage-panel { position: fixed; z-index: 1200; width: 360px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow: auto; padding: 18px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text-secondary); box-shadow: 0 8px 32px #00000014; font-size: 13px; line-height: 1.6; }
+.turn-usage-heading { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); color: var(--text-strong); }
+.turn-usage-models { display: flex; justify-content: space-between; align-items: baseline; gap: 18px; margin-bottom: 10px; }
+.turn-usage-models > span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.turn-usage-panel dl { margin: 0; }
+.turn-usage-panel dl > div { display: flex; justify-content: space-between; gap: 18px; margin-top: 6px; }
+.turn-usage-panel dd { margin: 0; font-variant-numeric: tabular-nums; }
+.turn-usage-panel p { margin: 12px 0 0; font-size: 12px; }
+.turn-usage-error { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--danger); }
+.turn-usage-error button { color: var(--primary); }
+
 /* Artifact cards inside a reply. */
 .attachment-list {
   display: flex;

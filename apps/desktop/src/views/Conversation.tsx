@@ -42,6 +42,8 @@ import { coalesceTimeoutNotices } from "../run-failure.js";
 import { RunFailureCard } from "./RunFailureCard.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
+import { useTurnUsage } from "../app/use-turn-usage.js";
+import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
@@ -153,12 +155,14 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
 }
 
 function MessageRow({
+  usage,
   answered,
   message,
   onBranch,
   onReferenceClick,
   uploads,
 }: {
+  usage?: ReactNode;
   answered?: boolean;
   message: ChatMessage;
   onBranch?: () => void;
@@ -198,6 +202,7 @@ function MessageRow({
           actions
           answered={answered}
           content={message.content}
+          usage={usage}
           onBranch={onBranch}
           onReferenceClick={onReferenceClick}
           references={message.references}
@@ -262,6 +267,20 @@ export function Conversation({
   workspaceFiles,
 }: Props) {
   const language = useLanguage();
+  const usageRevision = `${run.runId ?? ""}:${run.terminal}:${detail?.messages.length ?? 0}:${replays.map(item => `${item.runId}:${item.state.terminal}`).join(",")}`;
+  const usage = useTurnUsage(client, detail?.id, usageRevision);
+  const usageNodes = useMemo(() => {
+    const nodes = new Map<string, ReactNode>();
+    for (const [id, data] of usage.index.byRun) nodes.set(`run:${id}`, <TurnUsage data={data}
+      loading={usage.loading} failed={usage.failed} onRefresh={usage.refresh} />);
+    for (const [id, data] of usage.index.byMessage) nodes.set(`message:${id}`, <TurnUsage data={data}
+      loading={usage.loading} failed={usage.failed} onRefresh={usage.refresh} />);
+    return nodes;
+  }, [usage.index, usage.loading, usage.failed, usage.refresh]);
+  const usageFallback = useMemo(() => usage.loading || usage.failed
+    ? <TurnUsage loading={usage.loading} failed={usage.failed} onRefresh={usage.refresh} /> : undefined,
+    [usage.loading, usage.failed, usage.refresh]);
+  const usageFor = (runId?: string, messageId?: string) => usageNodes.get(runId ? `run:${runId}` : `message:${messageId}`) ?? usageFallback;
   const presentation = genericConfigurationPresentation(configuration.requests, detail?.messages ?? [], new Map(), detail?.id);
   const legacyPresentation = legacyConfigurationPresentation(configuration.legacyRequests, detail?.messages ?? [], replays, detail?.id);
   function renderLegacyConfiguration(request: ConnectorConfigurationRequest) {
@@ -420,6 +439,7 @@ export function Conversation({
             <Fragment key={message.id}>
               {configurationAtNotice ? renderConfiguration(configurationAtNotice) : legacyAtNotice ? renderLegacyConfiguration(legacyAtNotice) : replacement === undefined ? (
                 <MessageRow
+                  usage={usageFor(undefined, message.id)}
                   answered={answeredAfter[index]}
                   message={message}
                   onBranch={onBranch && message.role === "assistant" ? () => onBranch(message.id) : undefined}
@@ -428,6 +448,7 @@ export function Conversation({
                 />
               ) : (
                 <AssistantTurns
+                  usage={usageFor(replacement.runId)}
                   answered={answeredAfter[index]}
                   client={client}
                   onDecide={onDecidePermission}
@@ -448,6 +469,7 @@ export function Conversation({
                   conversation it did not come last in. */}
               {(following.get(message.id) ?? []).map((replay) => (
                 <AssistantTurns
+                  usage={usageFor(replay.runId)}
                   answered={answeredAfter[index]}
                   client={client}
                   key={replay.runId}
@@ -464,6 +486,7 @@ export function Conversation({
         })}
         {trailing.map((replay) => (
           <AssistantTurns
+            usage={usageFor(replay.runId)}
             answered={pending !== undefined}
             client={client}
             key={replay.runId}
@@ -481,6 +504,7 @@ export function Conversation({
             never here: it is in `replays`, anchored to its own answer. */}
         {liveRun ? (
           <AssistantTurns
+            usage={usageFor(visibleRun.runId)}
             client={client}
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}

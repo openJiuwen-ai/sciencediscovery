@@ -21,7 +21,11 @@
  */
 
 import type { ApiClient } from "./client.js";
-import type { ModelUsageAnalyticsFilters, ModelUsageAnalyticsSummary } from "./types.js";
+import type { ModelUsageAnalyticsFilters, ModelUsageAnalyticsSummary, SessionUsageSummary } from "./types.js";
+
+export function getSessionUsage(client: ApiClient, sessionId: string): Promise<SessionUsageSummary> {
+  return client.request(`/api/sessions/${encodeURIComponent(sessionId)}/usage`);
+}
 
 /** Deployment-wide token statistics. No exchange-rate request is needed for this view. */
 export function getModelUsage(client: ApiClient, filters: Pick<ModelUsageAnalyticsFilters, "from" | "to" | "timeZone">): Promise<ModelUsageAnalyticsSummary> {
