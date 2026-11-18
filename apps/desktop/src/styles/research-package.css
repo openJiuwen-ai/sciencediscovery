@@ -109,6 +109,32 @@
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
 
+/* Notices stack in the top-right corner, as in the mock: one row per state, each
+   with its own icon, an optional action and a dismiss button. */
+.research-toast-stack {
+  display: flex; flex-direction: column; gap: 8px;
+  position: fixed; right: 16px; top: 16px; z-index: 60;
+}
+.research-toast {
+  align-items: center; border-radius: 8px; box-shadow: 0 4px 16px rgba(16, 24, 40, .10);
+  display: flex; font-size: 12px; gap: 8px; max-width: 340px; min-width: 200px;
+  padding: 10px 10px 10px 12px;
+}
+.research-toast.is-success { background: #f0f9ec; border: 1px solid #d6ebcf; color: #2f6b2f; }
+.research-toast.is-error { background: #fdf3f3; border: 1px solid #f3d9d9; color: #b42318; }
+.research-toast.is-neutral { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+.research-toast-icon { display: grid; flex-shrink: 0; place-items: center; }
+.research-toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.research-toast-action {
+  background: none; border: 0; color: inherit; cursor: pointer; flex-shrink: 0;
+  font-size: 12px; padding: 0; text-decoration: underline;
+}
+.research-toast-close {
+  background: none; border: 0; color: inherit; cursor: pointer; flex-shrink: 0;
+  font-size: 14px; line-height: 1; opacity: .6; padding: 0 2px;
+}
+.research-toast-close:hover { opacity: 1; }
+
 /* A cancel the user asked for is not a failure: it says what happened without the
    danger colour (#1024). */
 .research-package-flash.is-neutral { color: var(--text-secondary); background: var(--surface-sunk); }

@@ -122,7 +122,6 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(false);
   const [flashQueue, setFlashQueue] = useState<ExportFlash[]>([]);
-  const [activeFlash, setActiveFlash] = useState<ExportFlash | null>(null);
   // A transient poll message ("retrying…"), kept apart from `error` so a poll
   // step never clears an error it did not set.
   const [exportNotice, setExportNotice] = useState("");
@@ -140,29 +139,13 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const patchExport = useCallback((id: string, patch: Partial<ExportRecord>) => {
     setExports(current => current.map(record => record.id === id ? { ...record, ...patch } : record));
   }, []);
+  /** Toasts stack in the corner, as many as fit; each one retires on its own timer. */
   const pushFlash = useCallback((tone: ExportFlash["tone"], message: string, savedToken?: string) => {
-    setFlashQueue(current => [...current, { id: (flashSeq.current += 1), tone, message, savedToken }]);
+    const id = (flashSeq.current += 1);
+    setFlashQueue(current => [...current.slice(-3), { id, tone, message, savedToken }]);
+    setTimeout(() => setFlashQueue(current => current.filter(flash => flash.id !== id)), tone === "error" ? 8000 : 5000);
   }, []);
-
-  // Drain one flash at a time. Kept apart from the dismiss timer below: this
-  // effect writes state it also depends on, so returning a cleanup here would
-  // have React run clearTimeout on the timer the previous pass just armed.
-  useEffect(() => {
-    if (activeFlash || flashQueue.length === 0) return;
-    const [next, ...rest] = flashQueue;
-    if (!next) return;
-    setActiveFlash(next); setFlashQueue(rest);
-  }, [activeFlash, flashQueue]);
-
-  // Dismiss the visible flash after its dwell time (errors linger longer).
-  useEffect(() => {
-    if (!activeFlash) return;
-    const timer = setTimeout(
-      () => setActiveFlash(null),
-      activeFlash.tone === "error" ? 8000 : 4000,
-    );
-    return () => clearTimeout(timer);
-  }, [activeFlash]);
+  const dismissFlash = useCallback((id: number) => setFlashQueue(current => current.filter(flash => flash.id !== id)), []);
 
   useEffect(() => { exportsRef.current = exports; }, [exports]);
 
@@ -472,7 +455,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
-    {activeFlash ? <div className={`research-package-flash is-${activeFlash.tone}`} role="status"><span>{activeFlash.message}</span>{activeFlash.savedToken ? <button onClick={() => void openLocation(activeFlash.savedToken!)} type="button">{t.openLocation}</button> : null}</div> : null}
+    {flashQueue.length ? <div className="research-toast-stack">{flashQueue.map(flash => <div className={`research-toast is-${flash.tone}`} key={flash.id} role="status">
+      <span aria-hidden="true" className="research-toast-icon">{flash.tone === "success" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M4 12.5l5 5L20 6.5" /></svg> : flash.tone === "error" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M6 6l12 12M18 6L6 18" /></svg> : <span className="spinner" />}</span>
+      <span className="research-toast-text">{flash.message}</span>
+      {flash.savedToken ? <button className="research-toast-action" onClick={() => void openLocation(flash.savedToken!)} type="button">{t.openLocation}</button> : null}
+      <button aria-label={t.close} className="research-toast-close" onClick={() => dismissFlash(flash.id)} type="button">×</button>
+    </div>)}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
       <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
