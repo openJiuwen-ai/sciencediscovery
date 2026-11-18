@@ -25,6 +25,7 @@
 
 import type { IdeaResearchState, IdeaResearchView } from "@sciencediscovery/schema";
 import { TEXT } from "../../text.js";
+import "../../styles/idea-tree.css";
 
 const t = TEXT.ideaTree;
 

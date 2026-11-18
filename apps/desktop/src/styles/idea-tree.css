@@ -1,0 +1,220 @@
+/* Idea Tree: the session's research card, the task panel, the tree and one node's
+ * detail. Colours, radii and borders come from the shared tokens so the surface
+ * matches the rest of the desktop client rather than inventing its own. */
+
+.idea-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 24px 8px;
+}
+
+.idea-research-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.idea-research-card header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.idea-research-card .eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.idea-research-objective {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  color: var(--text);
+}
+
+.idea-research-objective > span:first-child {
+  color: var(--muted);
+}
+
+.idea-research-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.idea-research-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.idea-research-card footer,
+.idea-panel-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.idea-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 40;
+}
+
+.idea-panel {
+  width: min(560px, 92vw);
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.idea-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.idea-panel-header h2 {
+  margin: 2px 0 0;
+  font-size: 16px;
+  color: var(--text-heading);
+}
+
+.idea-panel-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.idea-panel-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  overflow: auto;
+}
+
+.idea-panel-error,
+.idea-panel-unavailable {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius, 10px);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+}
+
+.idea-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.idea-tree-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.idea-tree-node-button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 10px);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.idea-tree-node-button:hover {
+  background: var(--surface-hover);
+}
+
+.idea-tree-node.is-selected .idea-tree-node-button {
+  border-color: var(--primary-border-soft);
+  background: var(--primary-softer);
+}
+
+.idea-tree-hypothesis {
+  font-size: 13px;
+}
+
+.idea-tree-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.idea-tree-node.is-pruned .idea-tree-meta span:nth-child(2) {
+  color: var(--insight-strong);
+}
+
+.idea-node-detail {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+
+.idea-node-detail h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.idea-node-hypothesis {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.idea-node-detail dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 6px 10px;
+  font-size: 12px;
+}
+
+.idea-node-detail dt {
+  color: var(--muted);
+}
+
+.idea-node-detail dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.idea-node-detail ul {
+  margin: 0;
+  padding-left: 16px;
+}
