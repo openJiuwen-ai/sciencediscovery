@@ -167,6 +167,56 @@ test("a confirmed delivery is green, and its checks are one press away", async (
   await expect(rows.nth(1).locator(".review-item-title")).toHaveText("结构检查通过");
   await expect(rows.nth(2).locator(".review-item-title")).toHaveText("引用检查通过");
   await expect(rows.nth(0).locator(".review-pill")).toHaveText("快速 · 本地检查");
+  // Its own section names the file: the card's header reports the worst
+  // artifact, so the file in hand has no other place to say which it is.
+  await expect(card.locator(".review-artifact-name")).toHaveText("report.md");
+  await expect(card.locator(".review-artifact")).toHaveClass(/is-framed/u);
+});
+
+test("a checkpoint over two artifacts names both, in separate sections", async ({ page }) => {
+  await installMockApi(page, {
+    reviewer: {
+      reviews: [
+        review(),
+        review({
+          artifactId: "artifact-appendix",
+          artifactLogicalName: "appendix.md",
+          completeness: undefined,
+          decision: "REVISE_AND_RETRY",
+          findings: [{
+            code: "CITATION_UNCITED_CLAIM",
+            evidenceRefs: [],
+            id: "finding-appendix",
+            message: "§2 的结论没有引用。",
+            severity: "warning",
+            status: "open",
+          }],
+          id: "review-2",
+          stale: true,
+        }),
+      ],
+    },
+    sessions: [makeSession({ messages: [checkpointMessage("message-checkpoint-1", "call-1")] })],
+  });
+  await page.goto("/");
+
+  const card = page.locator(".review-card");
+  // The header answers for the worse of the two, and counts the other one:
+  // a superseded verdict is history (amber), which is what the header says.
+  await expect(card).toHaveClass(/is-warn/u);
+  await expect(card.locator(".review-count").first()).toHaveText("1 通过 · 1 需处理");
+  await card.locator(".review-head").click();
+
+  const sections = card.locator(".review-artifact");
+  await expect(sections).toHaveCount(2);
+  await expect(sections.nth(0).locator(".review-artifact-name")).toHaveText("report.md");
+  await expect(sections.nth(1).locator(".review-artifact-name")).toHaveText("appendix.md");
+  // Each section carries its own verdict, not the card's: the passing file
+  // behind a failing one still has to read as a pass.
+  await expect(sections.nth(0).locator(".review-artifact-verdict")).toHaveText("未发现问题");
+  await expect(sections.nth(1).locator(".review-artifact-verdict")).toHaveText("1 个问题（已过期）");
+  await expect(sections.nth(0)).toHaveClass(/is-pass/u);
+  await expect(sections.nth(1)).toHaveClass(/is-warn/u);
 });
 
 test("a review that never verified delivery is amber, not green", async ({ page }) => {
