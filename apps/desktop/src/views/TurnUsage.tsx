@@ -6,6 +6,11 @@ import type { TurnUsageData } from "../app/use-turn-usage.js";
 import { useLanguage } from "../app/use-language.js";
 import { TEXT } from "../text.js";
 import { leavesMenu } from "./RowMenu.js";
+import { modelLabel } from "./provider-name.js";
+
+function reported(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 function tokens(value: number | null | undefined, compact = false) {
   return value === null || value === undefined || !Number.isFinite(value)
@@ -21,8 +26,8 @@ export function TurnUsageDetails({ data }: { data: TurnUsageData }) {
     ...(data.bucket.reasoningTokens == null ? [] : [[text.reasoning, data.bucket.reasoningTokens] as const]),
   ] as const;
   return <>
-    {data.models.length ? <div className="turn-usage-models"><span>{text.models}</span><span>{data.models.join(" / ")}</span></div> : null}
-    <dl>{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{tokens(value)}</dd></div>)}</dl>
+    {data.models.length ? <div className="turn-usage-models"><span>{text.models}</span><span>{[...new Set(data.models.map(modelLabel))].join(" / ")}</span></div> : null}
+    <dl>{fields.map(([label, value]) => reported(value) ? <div key={label}><dt>{label}</dt><dd>{tokens(value)}</dd></div> : null)}</dl>
     {data.incomplete ? <p>{text.incomplete}</p> : null}
   </>;
 }
@@ -63,7 +68,7 @@ export function TurnUsage({ data, loading, failed, onRefresh }: {
   }, [anchor, data, failed, loading]);
   if (!data && !failed && !loading) return null;
   const details = anchor ? <div className="turn-usage-panel" id={id} ref={panel} role="dialog" aria-label={text.heading}>
-    <div className="turn-usage-heading"><strong>{text.heading}</strong><strong>{data ? tokens(data.bucket.totalTokens) : "—"}</strong></div>
+    <div className="turn-usage-heading"><strong>{text.heading}</strong>{reported(data?.bucket.totalTokens) ? <strong>{tokens(data.bucket.totalTokens)}</strong> : null}</div>
     {data ? <TurnUsageDetails data={data} /> : null}
     {loading ? <p role="status">{text.loading}</p> : null}
     {failed ? <div className="turn-usage-error" role="alert"><span>{text.failed}</span>
@@ -75,7 +80,7 @@ export function TurnUsage({ data, loading, failed, onRefresh }: {
       <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
         <ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0" />
       </svg>
-      <span>{text.label}{data ? ` ${tokens(data.bucket.totalTokens, true)}` : ""}</span>
+      <span>{text.label}{reported(data?.bucket.totalTokens) ? ` ${tokens(data.bucket.totalTokens, true)}` : ""}</span>
     </button>
     {details ? createPortal(details, document.body) : null}
   </>;

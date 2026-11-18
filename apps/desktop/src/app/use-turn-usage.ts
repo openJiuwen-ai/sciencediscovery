@@ -27,8 +27,7 @@ export function indexTurnUsage(summary: SessionUsageSummary, runs: readonly Pick
     const invocations = invocationsByRun.get(bucket.key) ?? [];
     byRun.set(bucket.key, {
       bucket,
-      models: [...new Set(invocations.map(item => item.modelProfileName && item.modelProfileName !== item.model
-        ? `${item.modelProfileName} · ${item.model}` : item.model))],
+      models: [...new Set(invocations.map(item => item.modelProfileName || item.model))],
       incomplete: bucket.unreportedInvocationCount > 0 || invocations.some(item =>
         item.inputTokens === null || item.outputTokens === null || item.totalTokens === null),
     });
