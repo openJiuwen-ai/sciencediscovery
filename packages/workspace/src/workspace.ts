@@ -116,6 +116,27 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
 
+const SANDBOX_NETWORK_PURPOSE_ERROR = /network purpose must be 1[–-]100 characters/i;
+const SANDBOX_NETWORK_AUTHORIZATION_ERROR = /(?:unknown|consumed|foreign).*sandbox network authorization|sandbox network authorization.*(?:unknown|consumed|foreign)/i;
+
+function sandboxNetworkArgumentRecovery(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (SANDBOX_NETWORK_PURPOSE_ERROR.test(message)) {
+    return invalidToolArguments(
+      "Invalid request_sandbox_network arguments: purpose must be a short reason from 1 to 100 characters. "
+      + "Shorten the purpose and issue a new request; do not reuse the failed call.",
+    );
+  }
+  if (SANDBOX_NETWORK_AUTHORIZATION_ERROR.test(message)) {
+    return invalidToolArguments(
+      "The network authorization is unknown, consumed, or belongs to another run. "
+      + "Discard the old network_authorization_id, call request_sandbox_network again for the complete host set, "
+      + "then use the new token in one new run_shell call.",
+    );
+  }
+  return undefined;
+}
+
 /** Keep the model-facing Shell result focused on facts it can act on.
  * The execution ledger and provenance store retain the complete record. */
 function shellExecutionModelView(execution: Pick<AgentShellExecution,
@@ -1640,13 +1661,19 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.sandboxNetwork) {
     const parameters = Type.Object({ hosts: Type.Array(Type.String({ minLength: 1, maxLength: 253 }), { minItems: 1, maxItems: 16 }),
-      purpose: Type.String({ minLength: 1, maxLength: 100 }), ...machineParameter });
+      purpose: Type.String({ minLength: 1, maxLength: 100, description: "Short reason for access, 1-100 characters; do not include a long search plan." }), ...machineParameter });
     const request: AgentTool<typeof parameters> = {
       name: "request_sandbox_network", label: "Request sandbox network access", parameters,
-      description: "For additional sandbox HTTP access beyond the configured policy, explicitly declare exact hosts (optionally :port) and why. Pauses on an in-conversation permission card. Returns a one-use network authorization for run_shell on the same Runner, Agent and run; approval NEVER executes code. Do not batch with dependent execution. Deny/cancel keeps offline: report required retrieval as blocked, never silently replace it with web_search success. For a previously executed command, inspect files and remote outcomes before issuing a safe NEW call; never blindly replay side effects. Global Sandbox network settings remain separate. Opaque scripts in none mode cannot automatically disclose hosts.",
+      description: "For additional sandbox HTTP access beyond the configured policy, explicitly declare exact hosts (optionally :port) and a short reason of 1-100 characters. Pauses on an in-conversation permission card. Returns a one-use network authorization for run_shell on the same Runner, Agent and run; approval NEVER executes code. Do not batch with dependent execution. Deny/cancel keeps offline: report required retrieval as blocked, never silently replace it with web_search success. For a previously executed command, inspect files and remote outcomes before issuing a safe NEW call; never blindly replay side effects. Global Sandbox network settings remain separate. Opaque scripts in none mode cannot automatically disclose hosts.",
       execute: async (id, params, signal) => {
-        const value = await options.sandboxNetwork!.request({ hosts: params.hosts, purpose: params.purpose, runnerId: params.runner_id }, signal, id);
-        return { isError: value.state === "blocked", content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        try {
+          const value = await options.sandboxNetwork!.request({ hosts: params.hosts, purpose: params.purpose, runnerId: params.runner_id }, signal, id);
+          return { isError: value.state === "blocked", content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        } catch (error) {
+          const recovery = sandboxNetworkArgumentRecovery(error);
+          if (recovery) return recovery;
+          throw error;
+        }
       },
     };
     tools.push(request);
@@ -1701,7 +1728,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         manifestDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
         attemptToken: Type.String({ pattern: "^[A-Za-z0-9_:.-]{1,160}$" }),
       }, { description: "Explicit NEW continuation attempt from execution_status evidence. Same token/request returns the existing attempt, including unknown; change token only for an intentional new attempt. Runner rechecks all prerequisites; ordinary permissions still apply." })),
-      network_authorization_id: Type.Optional(Type.String({ description: "One-use token returned by request_sandbox_network for this Runner, Agent and run. Adds only those hosts to existing configured access." })),
+      network_authorization_id: Type.Optional(Type.String({ description: "One-use token returned by request_sandbox_network for this Runner, Agent and run. Use it exactly once in a new execution; never reuse a consumed, failed, or older-run token." })),
       background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
       arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32, description: "Arguments passed to command or scriptPath, each quoted as one word." })),
@@ -1712,7 +1739,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner execution Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only when isolation is available. cwd is relative to this Agent's workspace. The target's check_runner capability is authoritative for platform, sandbox, Shell and utilities. Windows direct-execution Runners use managed Bash without profiles and guarantee cat, grep, head, sed, tail and wc; do not assume other host tools. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized execution policy. Before sandbox egress beyond the configured policy, call request_sandbox_network with hosts and purpose, then pass network_authorization_id. If a script fails offline, report the blocker and explicitly request known hosts; never claim complete retrieval through silent web_search fallback. Large output is bounded; use read_tool_output for retained output."
+      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner execution Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only when isolation is available. cwd is relative to this Agent's workspace. The target's check_runner capability is authoritative for platform, sandbox, Shell and utilities. Windows direct-execution Runners use managed Bash without profiles and guarantee cat, grep, head, sed, tail and wc; do not assume other host tools. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized execution policy. Before sandbox egress beyond the configured policy, call request_sandbox_network with exact hosts and a short purpose of 1-100 characters, then pass its one-use network_authorization_id to one new run_shell call. If authorization is rejected or consumed, discard the old token and request a new one; never replay the same token. If a script fails offline, report the blocker and explicitly request known hosts; never claim complete retrieval through silent web_search fallback. Large output is bounded; use read_tool_output for retained output."
         + (options.shellExecutions ? " Foreground execution waits up to wait_ms (default 10000); background=true returns after acceptance. A wait deadline does not stop the command. Retain the returned Execution ID and use execution_status/logs/cancel; do not resubmit a running or unknown command." : ""),
       execute: async (toolCallId, params, signal, onProgress) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
@@ -1793,6 +1820,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     runShell.execute = async (...args) => {
       try { return await execute(...args); }
       catch (error) {
+        const recovery = sandboxNetworkArgumentRecovery(error);
+        if (recovery) return recovery;
         if (!(error instanceof RunnerUnavailableError)) throw error;
         return { isError: true, content: [{ type: "text", text: runnerBlockedModelText(error.result) }], details: error.result };
       }
