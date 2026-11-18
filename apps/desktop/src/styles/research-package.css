@@ -139,6 +139,9 @@
    danger colour (#1024). */
 .research-package-flash.is-neutral { color: var(--text-secondary); background: var(--surface-sunk); }
 
+/* The import dialog's one-line explanation sits under its title. */
+.research-dialog-lede { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 4px 0 16px; }
+
 /* Import: the destination picker, the chosen package as a card, and the package's
    own omissions in a scrollable region (the mock's three bands). */
 .research-import-select {
