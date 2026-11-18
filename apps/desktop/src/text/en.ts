@@ -467,9 +467,9 @@ export const EN: Text = {
     noReviews: "No reviews yet.",
     tab: "Review",
     levelName: (level: string): string => (level === "deep" ? "Deep" : "Quick"),
-    levelPill: (level: string): string => (level === "deep" ? "Deep" : "Quick · local checks"),
-    /** What the pill above is claiming: the two levels differ in whether an
-     *  external source service is consulted at all. */
+    levelPill: (level: string): string => (level === "deep" ? "Deep" : "Quick"),
+    /** The pill only names the level; the tip carries what the name claims.
+     *  The two levels differ in whether a source service is consulted. */
     levelTip: (level: string): string => (level === "deep"
       ? "Deep review: on top of the Quick checks, calls the source service to verify each claim against its source."
       : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source service is called."),
