@@ -12,16 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DownloadIcon } from "./icons.js";
 import { assetUrl } from "../catalog/load.js";
 
 import type { JSX } from "react";
 
+interface DownloadButtonProps {
+  basePath: string;
+  label: string;
+  url: string;
+  /** `button` is the primary action of a detail page; `ghost` sits in a card footer. */
+  variant?: "button" | "ghost";
+}
+
 /** A plain same-origin anchor: the browser saves the file and stays on the page. */
-export function DownloadButton({ basePath, label, url }: { basePath: string; label: string; url: string }): JSX.Element {
+export function DownloadButton({ basePath, label, url, variant = "button" }: DownloadButtonProps): JSX.Element {
   const href = assetUrl(basePath, url);
   const filename = url.split("/").pop() ?? "download";
   return (
-    <a className="button" download={filename} href={href} onClick={(event) => event.stopPropagation()}>
+    <a
+      className={`button${variant === "ghost" ? " button-ghost" : ""}`}
+      download={filename}
+      href={href}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {variant === "ghost" ? <DownloadIcon size={15} /> : null}
       {label}
     </a>
   );

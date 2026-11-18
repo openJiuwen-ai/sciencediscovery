@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { AssetTile } from "../components/AssetCard.js";
 import { DownloadButton } from "../components/DownloadButton.js";
 import { MarkdownFile } from "../components/Markdown.js";
 import {
@@ -22,7 +23,7 @@ import {
   SUBDOMAIN_LABELS,
 } from "../labels.js";
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import type { Asset, Catalog, ConnectorAsset, SessionAsset, SkillAsset, SpecialistAsset } from "../catalog/types.js";
 import type { CopyKey, Language } from "../i18n.js";
 import type { Tab } from "../router.js";
@@ -34,6 +35,21 @@ export interface DetailProps {
   copy: (key: CopyKey) => string;
   language: Language;
   onNavigate: (tab: Tab, id: string) => void;
+}
+
+/** Shared heading: kind tile, title block and the primary action. */
+function DetailHeader({ actions, asset, children }: {
+  actions?: JSX.Element;
+  asset: Asset;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div className="detail-head">
+      <AssetTile asset={asset} large />
+      <div className="detail-title">{children}</div>
+      {actions ? <div className="actions">{actions}</div> : null}
+    </div>
+  );
 }
 
 function AssetLink({ catalog, id, onNavigate }: { catalog: Catalog; id: string; onNavigate: (tab: Tab, id: string) => void }): JSX.Element {
@@ -75,36 +91,36 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
   const snapshot = skill.source === "mindscience" ? catalog.sources.externalSkills : undefined;
   return (
     <article className="detail">
-      <div className="detail-head">
-        <div>
-          <h1>{skill.name}</h1>
-          <p className="muted">
-            {domain} · {subdomain}
-            {` · ${copy("version")} ${skill.version ?? "—"}`}
-            {skill.author ? ` · ${skill.author}` : ""}
-            {skill.download.size ? ` · ${(skill.download.size / 1024).toFixed(1)} KB` : ""}
+      <DetailHeader
+        actions={<DownloadButton basePath={basePath} label={copy("download")} url={skill.download.url} />}
+        asset={skill}
+      >
+        <h1>{skill.name}</h1>
+        <p className="muted">
+          {domain} · {subdomain}
+          {` · ${copy("version")} ${skill.version ?? "—"}`}
+          {skill.author ? ` · ${skill.author}` : ""}
+          {skill.download.size ? ` · ${(skill.download.size / 1024).toFixed(1)} KB` : ""}
+        </p>
+        {type || hardware ? (
+          <p className="badges detail-badges">
+            {type ? <span className="badge">{type}</span> : null}
+            {hardware ? <span className="badge">{hardware}</span> : null}
           </p>
-          {type || hardware ? (
-            <p className="badges detail-badges">
-              {type ? <span className="badge">{type}</span> : null}
-              {hardware ? <span className="badge">{hardware}</span> : null}
-            </p>
-          ) : null}
-          {snapshot ? (
-            <p className="muted">
-              {copy("snapshot")} {snapshot.ref}@{snapshot.commit.slice(0, 8)} ·{" "}
-              <a
-                href={`https://gitcode.com/${snapshot.repo}/blob/${snapshot.ref}/MindScienceSkills/${skill.id}/SKILL.md`}
-                rel="noreferrer"
-                target="_blank"
-              >
-                {copy("upstream")}
-              </a>
-            </p>
-          ) : null}
-        </div>
-        <DownloadButton basePath={basePath} label={copy("download")} url={skill.download.url} />
-      </div>
+        ) : null}
+        {snapshot ? (
+          <p className="muted">
+            {copy("snapshot")} {snapshot.ref}@{snapshot.commit.slice(0, 8)} ·{" "}
+            <a
+              href={`https://gitcode.com/${snapshot.repo}/blob/${snapshot.ref}/MindScienceSkills/${skill.id}/SKILL.md`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {copy("upstream")}
+            </a>
+          </p>
+        ) : null}
+      </DetailHeader>
 
       {members.length ? (
         <section className="members">
@@ -148,16 +164,18 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
   const specialist = asset as SpecialistAsset;
   return (
     <article className="detail">
-      <div className="detail-head">
-        <div>
-          <h1>{specialist.name}</h1>
-          <p className="muted">{SOURCE_LABELS[specialist.source]?.[language] ?? specialist.source}</p>
-        </div>
-        <div className="actions">
-          <DownloadButton basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} />
-          <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} />
-        </div>
-      </div>
+      <DetailHeader
+        actions={(
+          <>
+            <DownloadButton basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} />
+            <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} />
+          </>
+        )}
+        asset={specialist}
+      >
+        <h1>{specialist.name}</h1>
+        <p className="muted">{SOURCE_LABELS[specialist.source]?.[language] ?? specialist.source}</p>
+      </DetailHeader>
       <p>{specialist.description}</p>
       <details className="prompt">
         <summary>{copy("instructions")}</summary>
@@ -213,14 +231,14 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
   ];
   return (
     <article className="detail">
-      <div className="detail-head">
-        <div>
-          <h1>{session.name}</h1>
-          <p className="muted">{meta}</p>
-          {runMeta ? <p className="muted">{runMeta}</p> : null}
-        </div>
-        <DownloadButton basePath={basePath} label={copy("downloadPackage")} url={session.download.url} />
-      </div>
+      <DetailHeader
+        actions={<DownloadButton basePath={basePath} label={copy("downloadPackage")} url={session.download.url} />}
+        asset={session}
+      >
+        <h1>{session.name}</h1>
+        <p className="muted">{meta}</p>
+        {runMeta ? <p className="muted">{runMeta}</p> : null}
+      </DetailHeader>
       <p>{session.description}</p>
       <section aria-label={copy("contents")} className="session-contents">
         {stats.map(([label, value]) => (
@@ -242,15 +260,15 @@ export function ConnectorDetail({ asset, basePath, copy }: DetailProps): JSX.Ele
   const connector = asset as ConnectorAsset;
   return (
     <article className="detail">
-      <div className="detail-head">
-        <div>
-          <h1>{connector.name}</h1>
-          <p className="muted">
-            {copy("version")} {connector.version ?? "—"} · {connector.publisher} · {connector.toolCount} {copy("toolCount")}
-          </p>
-        </div>
-        <DownloadButton basePath={basePath} label={copy("downloadJson")} url={connector.download.url} />
-      </div>
+      <DetailHeader
+        actions={<DownloadButton basePath={basePath} label={copy("downloadJson")} url={connector.download.url} />}
+        asset={connector}
+      >
+        <h1>{connector.name}</h1>
+        <p className="muted">
+          {copy("version")} {connector.version ?? "—"} · {connector.publisher} · {connector.toolCount} {copy("toolCount")}
+        </p>
+      </DetailHeader>
       <p>{connector.description}</p>
       <section>
         <h2>{copy("config")}</h2>
