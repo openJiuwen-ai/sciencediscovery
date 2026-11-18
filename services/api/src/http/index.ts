@@ -1560,7 +1560,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             const opening = await measurePackageCapacity(store.dataDir);
             // An inspect unpacks one copy and writes nothing else, so it is bounded at
             // `free / 2`; the restore's three extra copies would refuse it (#1216 review 3).
-            const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES, 1);
+            const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES, 2);
             const imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
               objectDirectory: resolve(upload.directory, "objects"),
               maxBytes: unpackBudget,

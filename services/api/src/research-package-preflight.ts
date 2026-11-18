@@ -138,8 +138,8 @@ export function assertResearchPackageRestoreCapacity(capacity: PackageCapacity, 
  */
 export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number, copies = 3): number {
   if (!Number.isFinite(capacity.freeDiskBytes)) return ceiling;
-  const perCopy = Math.max(1, Math.floor(copies) + 1);
-  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / perCopy)));
+  const parts = Math.max(1, Math.floor(copies));
+  return Math.max(0, Math.min(ceiling, Math.floor(capacity.freeDiskBytes / parts)));
 }
 
 /** Derive the restore's size from a parsed package's inventory. */
