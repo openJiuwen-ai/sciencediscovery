@@ -212,9 +212,8 @@ export const ZH = {
       other: "通用发现：不属于某一类具体检查，是审查过程中记录的问题。",
       gaps: "未检查：这次审查没有做这一项，原因见下方；未检查不等于通过。",
       source: "来源核验：把一条结论与来源原文对照，给出支持、部分支持、矛盾或无结论。",
-      citationTask: "引文任务：为报告中的引文标识符查找对应文献，这里显示进度与结果。",
     } as Record<"structure" | "citation" | "computation" | "completeness" | "semantics"
-      | "other" | "gaps" | "source" | "citationTask", string>,
+      | "other" | "gaps" | "source", string>,
     checkPass: (name: string) => `${name}检查通过`,
     passBody: "这一项没有发现问题。",
     finding: "问题",
@@ -222,7 +221,6 @@ export const ZH = {
     badgePass: "通过",
     deepSemantic: "语义",
     source: "来源",
-    citationTask: "引文任务",
     gaps: "未检查",
     gapChecks: {
       claim_support: "主张与来源的对应",
@@ -267,12 +265,6 @@ export const ZH = {
       PARTIALLY_SUPPORTED: "部分支持",
       CONTRADICTED: "矛盾",
       INCONCLUSIVE: "无结论",
-    } as Record<string, string>,
-    taskStatus: {
-      completed: "完成",
-      failed: "失败",
-      inconclusive: "无结论",
-      reused: "复用",
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `排队 ${count}`,
