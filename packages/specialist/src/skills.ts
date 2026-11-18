@@ -61,7 +61,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { sha256 } from "@sciencediscovery/cas";
 import { settledExecutionRuns } from "@sciencediscovery/provenance";
-import { Unzip, UnzipInflate } from "fflate";
+import { Unzip, UnzipInflate, zipSync } from "fflate";
 import { parseDocument, stringify } from "yaml";
 
 /** Domain skills bundled with the first-party Specialist catalog. */
@@ -2234,6 +2234,24 @@ export class SkillCatalog {
     const value = this.builtIns.get(id) ?? this.managed.get(id);
     if (!value) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
     return resourceContent(value.detail, value.files, path);
+  }
+
+  /**
+   * One installed package as a ZIP the importer accepts back.
+   *
+   * The archive keeps the shape an uploaded package has — a single root
+   * directory named after the Skill, holding `SKILL.md` and its resources — so
+   * what is exported can be imported again, here or on another machine,
+   * without the caller rearranging anything. Built-in packages are exportable
+   * too: being read-only says who may change them, not who may copy them.
+   */
+  exportPackage(id: string): { bytes: Buffer; filename: string } {
+    this.assertLoaded();
+    const value = this.builtIns.get(id) ?? this.managed.get(id);
+    if (!value) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+    const entries: Record<string, Uint8Array> = {};
+    for (const [path, content] of value.files) entries[`${id}/${path}`] = content;
+    return { bytes: Buffer.from(zipSync(entries, { level: 6 })), filename: `${id}.zip` };
   }
 
   /** Resolve an immutable historical package and verify its frozen identity. */

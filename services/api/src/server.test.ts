@@ -103,7 +103,7 @@ import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, unzipSync, zipSync } from "fflate";
 import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from "@sciencediscovery/cas";
 
 import {
@@ -3946,6 +3946,25 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   );
   assert.equal(resource.body.content, "Imported reference");
   assert.equal(resource.body.revision, 1);
+
+  // 导出 answers with the shape the importer accepts back: one root directory
+  // named after the Skill, holding SKILL.md and the resources beside it.
+  const packageResponse = await fetch(`${origin}/api/skills/${imported.body.id}/package`, { headers: authorization });
+  assert.equal(packageResponse.status, 200);
+  assert.equal(packageResponse.headers.get("content-type"), "application/zip");
+  assert.match(packageResponse.headers.get("content-disposition") ?? "", /imported-api-skill\.zip/);
+  const exported = unzipSync(new Uint8Array(await packageResponse.arrayBuffer()));
+  assert.deepEqual(Object.keys(exported).sort(), [
+    "imported-api-skill/SKILL.md",
+    "imported-api-skill/references/guide.md",
+    "imported-api-skill/scripts/inert.py",
+  ]);
+  assert.match(new TextDecoder().decode(exported["imported-api-skill/SKILL.md"]!), /# Imported/);
+  assert.equal(
+    new TextDecoder().decode(exported["imported-api-skill/references/guide.md"]!),
+    "Imported reference",
+  );
+  assert.equal((await fetch(`${origin}/api/skills/missing-package/package`, { headers: authorization })).status, 404);
 
   const unsafeArchive = Buffer.from(zipSync({
     "../escape.txt": strToU8("escape"),

@@ -2676,6 +2676,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const skillPackageMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/package$/);
+      if (skillPackageMatch && request.method === "GET") {
+        const archive = skillCatalog.exportPackage(decodeURIComponent(skillPackageMatch[1]!));
+        response.writeHead(200, {
+          "cache-control": "no-store",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(archive.filename)}`,
+          "content-length": String(archive.bytes.byteLength),
+          "content-type": "application/zip",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(archive.bytes);
+        return;
+      }
+
       const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
       if (skillMatch && request.method === "GET") {
         const skillId = decodeURIComponent(skillMatch[1]!);

@@ -139,7 +139,7 @@ export function SystemSettingsDialog({
           />
         );
       case "skills":
-        return <SkillsSettings client={client} />;
+        return <SkillsSettings client={client} onConfirm={actions.confirmAction} />;
       case "mcp":
         return (
           <McpServers

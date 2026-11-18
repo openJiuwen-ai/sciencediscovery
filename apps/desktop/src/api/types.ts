@@ -129,6 +129,7 @@ export type {
   SessionRun,
   SessionRunEvent,
   SessionRunStatus,
+  SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
   SkillResourceContent,

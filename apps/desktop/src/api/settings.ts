@@ -46,6 +46,7 @@ import type {
   RuntimeSettingsOverrides,
   RuntimeStatus,
   SandboxNetworkSettings,
+  SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
   SkillResourceContent,
@@ -240,6 +241,30 @@ export function readSkillResource(
   path: string,
 ): Promise<SkillResourceContent> {
   return client.request<SkillResourceContent>(`/api/skills/${encodeURIComponent(skillId)}/resources/${encodeURIComponent(path)}`);
+}
+
+/**
+ * The installed package as a ZIP: one root directory named after the Skill,
+ * holding its `SKILL.md` and every resource. The same shape the importer
+ * accepts, so an exported package can be imported again unchanged.
+ */
+export async function exportSkillPackage(client: ApiClient, skillId: string): Promise<ArrayBuffer> {
+  const response = await client.fetchStream(`/api/skills/${encodeURIComponent(skillId)}/package`);
+  return await response.arrayBuffer();
+}
+
+/** What would break if this Skill were removed: the Project and Session
+ *  selection documents that still name it. */
+export function getSkillDeletionImpact(client: ApiClient, skillId: string): Promise<SkillDeletionImpact> {
+  return client.request<SkillDeletionImpact>(`/api/skills/${encodeURIComponent(skillId)}/deletion-impact`);
+}
+
+/** Remove an installed package. The route refuses (`SKILL_CONFLICT`) while a
+ *  runtime settings document still references it. */
+export function deleteSkill(client: ApiClient, skillId: string): Promise<{ deleted: string }> {
+  return client.request<{ deleted: string }>(`/api/skills/${encodeURIComponent(skillId)}`, {
+    method: "DELETE",
+  });
 }
 
 /**

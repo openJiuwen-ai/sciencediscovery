@@ -961,6 +961,101 @@ a.secondary-button {
 .skill-editor-new-file { display: flex; gap: 8px; }
 .skill-editor-new-file .field-input { flex: 1; min-width: 0; }
 .field-textarea.is-tall { min-height: 240px; font-family: var(--font-mono); font-size: 12px; }
-/* The card's 编辑 sits beside the switch, so it is a small press rather than
-   the form-width button the modal's actions carry. */
-.settings-card-actions .secondary-button.skill-edit-button { padding: 5px 12px; font-size: 12px; }
+
+/* 技能 › one package. The page shows the SKILL.md the model is told, rendered
+   as the document it is; the card keeps the pane's measure so a long
+   instruction does not run edge to edge. */
+.skill-detail { display: grid; }
+.skill-detail-availability { align-items: center; }
+.skill-detail-availability .settings-card-main small { margin-top: 4px; }
+.skill-detail-file {
+  display: block;
+  max-width: 100%;
+  padding: 18px 20px;
+  overflow-wrap: anywhere;
+}
+.skill-detail-meta-card { display: grid; gap: 2px; align-items: stretch; }
+.skill-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 5px 2px;
+}
+.skill-detail-row + .skill-detail-row { border-top: 1px solid var(--border-soft); }
+.skill-detail-row > span { color: var(--text-faint); font-size: 11.5px; }
+.skill-detail-row > strong {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* A managed Skill's chevron. Three actions behind one small press, so a row
+   stays a row rather than becoming a toolbar. The popover opens downward
+   against the trigger with no gap — the pointer crosses straight from one to
+   the other, and a gap would make a hover-opened menu close under it. */
+.skill-row-menu { position: relative; display: inline-flex; }
+.skill-row-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.skill-row-menu-trigger:hover:not(:disabled),
+.skill-row-menu-trigger.is-open {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text-strong);
+}
+.skill-row-menu-trigger:disabled { opacity: 0.5; cursor: progress; }
+.skill-row-menu-trigger svg { transition: transform 0.15s ease; }
+.skill-row-menu-trigger.is-open svg { transform: rotate(180deg); }
+.skill-row-menu-popover {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  width: 152px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(24, 24, 24, 0.14), 0 2px 6px rgba(24, 24, 24, 0.06);
+  animation: ctxIn 0.12s ease;
+}
+/* A row near the bottom of the pane has no space below it; the menu opens
+   upwards rather than off the edge of the list. */
+.skill-row-menu-popover.is-up {
+  top: auto;
+  bottom: calc(100% - 2px);
+}
+.skill-row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+.skill-row-menu-item:hover { background: var(--surface-hover); color: var(--text-strong); }
+.skill-row-menu-item.is-danger { color: var(--danger); }
+.skill-row-menu-item.is-danger:hover { background: var(--danger-soft); }
+.skill-row-menu-icon { display: inline-flex; color: var(--text-faint); }
+.skill-row-menu-item.is-danger .skill-row-menu-icon { color: inherit; }
+.skill-row-menu-divider { height: 1px; margin: 4px 0; background: var(--border-soft); }
