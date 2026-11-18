@@ -26,7 +26,7 @@ import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js"
 import { SkillUploadView } from "../src/views/settings/SkillUploadView.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
-import { json, StubClient } from "./api-stub.js";
+import { json, type RecordedCall, StubClient } from "./api-stub.js";
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
@@ -73,6 +73,13 @@ function buttonWithText(view: ReactTestRenderer, label: string) {
   ));
   assert.ok(found, `no button reading "${label}"`);
   return found;
+}
+
+/** The `index`th request the stub recorded, after asserting it was made. */
+function requestAt(stub: StubClient, index: number): RecordedCall {
+  const call = stub.calls[index];
+  assert.ok(call, `request ${index} was not made`);
+  return call;
 }
 
 /** Press 添加技能, then the entry whose bold line is `label`. */
@@ -166,12 +173,12 @@ test("a Git inspection pins the commit and never overwrites without the revision
     });
 
     assert.equal(stub.calls[1]?.path, "/api/skills/import-git");
-    assert.deepEqual(json(stub.calls[1]!), {
+    assert.deepEqual(json(requestAt(stub, 1)), {
       commit,
       repositoryUrl: inspection.repositoryUrl,
       subdirectory: "skills/fresh",
     });
-    assert.deepEqual(json(stub.calls[2]!), {
+    assert.deepEqual(json(requestAt(stub, 2)), {
       commit,
       expectedRevision: 3,
       overwrite: true,
@@ -222,7 +229,7 @@ test("a repository larger than one page reads the rest on request", async () => 
 
     // The next page is read at the same commit, from where the last one
     // ended; the rows already read stay on screen.
-    assert.deepEqual(json(stub.calls[1]!), { commit, cursor: "skills/skill-2", repositoryUrl: url });
+    assert.deepEqual(json(requestAt(stub, 1)), { commit, cursor: "skills/skill-2", repositoryUrl: url });
     assert.equal(checkboxes().length, 8);
     assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(7)));
     assert.ok(!rendered().includes(TEXT.settings.skills.git.loadMore));
@@ -242,7 +249,9 @@ test("loading more does not re-tick what the user unticked", async () => {
     await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
 
     const checkboxes = () => view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
-    await act(async () => { checkboxes()[0]!.props.onChange(); });
+    const first = checkboxes()[0];
+    assert.ok(first, "the page has no checkbox");
+    await act(async () => { first.props.onChange(); });
     assert.equal(buttonWithText(view, TEXT.settings.skills.git.importSelected(0)).props.disabled, true);
 
     await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
@@ -296,9 +305,10 @@ test("the editor submits the revision it read and hands back the keys its form d
     await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
 
     const write = stub.calls[1];
-    assert.equal(write?.path, "/api/skills/review");
-    assert.equal(write?.init.method, "PUT");
-    assert.deepEqual(json(write!), {
+    assert.ok(write);
+    assert.equal(write.path, "/api/skills/review");
+    assert.equal(write.init.method, "PUT");
+    assert.deepEqual(json(write), {
       allowedTools: "Bash",
       compatibility: "python 3.11",
       description: "Review a draft",
@@ -358,8 +368,9 @@ test("a resource file is read and written through its own route", async () => {
     await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
 
     const write = stub.calls[2];
-    assert.equal(write?.path, "/api/skills/review/files/references%2Fguide.md");
-    assert.deepEqual(json(write!), { content: "guide v2", expectedRevision: 1 });
+    assert.ok(write);
+    assert.equal(write.path, "/api/skills/review/files/references%2Fguide.md");
+    assert.deepEqual(json(write), { content: "guide v2", expectedRevision: 1 });
 
     await settle();
     assert.equal(textareaWithLabel(view, "references/guide.md").props.value, "guide v2");
@@ -412,8 +423,9 @@ test("an import enables a new package and leaves an update's switch alone", asyn
     const next = view.root.findByType(SkillUploadView);
     await act(async () => { await next.props.onImported({ ...detail, id: "fresh", name: "fresh" }); });
     const enable = stub.calls.find((call) => call.path.includes("skills-by-id"));
-    assert.equal(enable?.path, "/api/jiuwenswarm/skills-by-id/fresh");
-    assert.deepEqual(json(enable!), { enabled: true });
+    assert.ok(enable);
+    assert.equal(enable.path, "/api/jiuwenswarm/skills-by-id/fresh");
+    assert.deepEqual(json(enable), { enabled: true });
   } finally { await act(async () => { view.unmount(); }); }
 });
 

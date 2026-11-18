@@ -456,6 +456,24 @@ function gitCheckoutKey(normalized: NormalizedGitImport): string {
   return `${normalized.repositoryUrl}\u0000${normalized.ref ?? ""}`;
 }
 
+/** The checkout a Git request reads from: the one this call just made, or the
+ *  one an inspection left behind at the commit the request names. A request
+ *  that names no commit is answered by a fresh clone, so the fallback commit
+ *  is always there when the retained checkout is. */
+function checkoutSource(
+  fetched: { checkout: string; commit: string; partial?: boolean } | undefined,
+  reused: { checkout: string; partial: boolean } | undefined,
+  commit: string | undefined,
+): { checkout: string; commit: string; partial: boolean } {
+  if (fetched !== undefined) {
+    return { checkout: fetched.checkout, commit: fetched.commit, partial: fetched.partial === true };
+  }
+  if (reused === undefined || commit === undefined) {
+    throw validationError("The Git inspection expired or was replaced; inspect the repository again");
+  }
+  return { checkout: reused.checkout, commit, partial: reused.partial };
+}
+
 /** Every `SKILL.md` at any depth. Discovery only needs these files, and a
  *  repository whose packages carry hundreds of megabytes of data is scanned
  *  in seconds when the data stays on the server. */
@@ -1928,9 +1946,7 @@ export class SkillCatalog {
       throw validationError("The Git inspection expired or was replaced; inspect the repository again");
     }
     const fetched = reused === undefined ? await this.checkoutGit(importRoot, input) : undefined;
-    const checkout = fetched?.checkout ?? reused!.checkout;
-    const commit = fetched ? fetched.commit : requestedCommit!;
-    const partial = fetched ? fetched.partial === true : reused!.partial;
+    const { checkout, commit, partial } = checkoutSource(fetched, reused, requestedCommit);
     let retained = reused !== undefined;
     try {
       const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial, cursor);
@@ -1955,8 +1971,8 @@ export class SkillCatalog {
     input: CreateGitSkillReviewDraftsRequest,
   ): Promise<CreateGitSkillReviewDraftsResponse> {
     this.assertLoaded();
-    const expectedCommit = input.commit?.trim().toLowerCase();
-    if (!/^[0-9a-f]{40,64}$/.test(expectedCommit)) {
+    const expectedCommit = normalizeGitCommit(input.commit);
+    if (expectedCommit === undefined) {
       throw validationError("Git commit must be the exact commit returned by repository inspection");
     }
     const subdirectories = [...new Set(input.subdirectories?.map((path) => {
@@ -1970,10 +1986,8 @@ export class SkillCatalog {
     const requested = validateGitSkillImportRequest(input);
     const reused = this.retainedCheckoutFor(requested, expectedCommit);
     const fetched = reused === undefined ? await this.checkoutGit(importRoot, input) : undefined;
-    const checkout = fetched?.checkout ?? reused!.checkout;
-    const commit = fetched?.commit ?? expectedCommit!;
+    const { checkout, commit, partial } = checkoutSource(fetched, reused, expectedCommit);
     const normalized = requested;
-    const partial = fetched ? fetched.partial === true : reused!.partial;
     try {
       if (commit !== expectedCommit) {
         throw new SkillCatalogError(
@@ -2062,10 +2076,8 @@ export class SkillCatalog {
     const importRoot = resolve(this.root, ".imports");
     const reused = this.retainedCheckoutFor(normalized, requestedCommit);
     const fetched = reused === undefined ? await this.checkoutGit(importRoot, normalized) : undefined;
-    const checkout = fetched?.checkout ?? reused!.checkout;
-    const commit = fetched?.commit ?? requestedCommit!;
+    const { checkout, commit, partial } = checkoutSource(fetched, reused, requestedCommit);
     const checked = normalized;
-    const partial = fetched ? fetched.partial === true : reused!.partial;
     try {
       if (requestedCommit && requestedCommit !== commit) {
         throw new SkillCatalogError(
