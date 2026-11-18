@@ -439,8 +439,11 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
         FOUND=$((FOUND + 1))
       fi
     done
-    [ "$FOUND" -eq 1 ] \
-      || die "5f: expected exactly one of ${ZIP}.blockmap (26.x name) / ${ZIP%.zip}.blockmap (25.x name) in $(dirname "$ZIP"), found $FOUND — a stale same-version blockmap from a previous naming is present; clean release/ and rerun the gate"
+    if [ "$FOUND" -eq 2 ]; then
+      die "5f: found BOTH ${ZIP}.blockmap (26.x name) and ${ZIP%.zip}.blockmap (25.x name) in $(dirname "$ZIP") — a stale same-version blockmap from a previous build/naming is present; clean release/ and rerun the gate"
+    elif [ "$FOUND" -eq 0 ]; then
+      die "5f: missing ${ZIP}.blockmap (26.x name) / ${ZIP%.zip}.blockmap (25.x name) — the differential-update data was not written; rerun electron-builder (zip target) then the gate"
+    fi
     # F11: the update feed must describe THIS build. A stale yml from an
     # earlier run (or a mismatched version) would push the wrong update to
     # every user — gate the version and the exact carrier filename.
