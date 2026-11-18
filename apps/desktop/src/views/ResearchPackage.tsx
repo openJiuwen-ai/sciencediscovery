@@ -495,7 +495,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           </div>
           {estimating ? <p className="research-package-notice">{t.recalculating}</p> : null}
           {estimating && !preview ? <p className="research-package-status" role="status"><span aria-hidden="true" className="spinner" />{t.previewRetrying}</p> : null}
-          {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => setPreviewNonce(value => value + 1)} type="button">{t.retryPreview}</button></div> : null}
+          {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => { pendingTries.current = 0; setPreviewStalled(false); setEstimating(true); setPreviewNonce(value => value + 1); }} type="button">{t.retryPreview}</button></div> : null}
           {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
           {blockedByLimit ? <div role="alert" className="research-package-limit">
             <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
@@ -517,17 +517,30 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             {historyBridge ? null : finishedExports.filter(record => record.phase === "saved" && record.savedToken).map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span><button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button></div>)}
           </div> : null}
         </> : dialog === "import" ? <>
-          <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
-          <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span>{file ? <span className="research-package-upload-filename">{file.name}</span> : null}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
-          {inspection ? <div className="research-import-review"><p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects} · {formatBytes(file!.size)}</p>
-            {inspection.manifest.source.title ? <p className="research-import-meta">{t.sourceTitle} <b>{inspection.manifest.source.title}</b></p> : null}
-            <p className="research-import-meta">{t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
-            {inspection.manifest.omissions.length ? <details className="research-import-omissions-block" open><summary>{t.omissions} · {inspection.manifest.omissions.length}</summary><ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul></details> : null}
-            <p className="research-package-notice">{t.importHint}</p></div> : <p className="research-package-notice">{t.importHint}</p>}
+          <p className="research-field-label">{t.projectDestination}</p>
+          <select className="research-import-select" value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+          <p className="research-package-notice">{t.projectDestinationHint}</p>
+          <p className="research-field-label">{t.chooseFile}</p>
+          {file ? (
+            <div className="research-file-card">
+              <span aria-hidden="true" className="research-file-card-icon"><svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="20"><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h4" /></svg></span>
+              <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
+              <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+            </div>
+          ) : (
+            <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+          )}
+          {inspection ? <>
+            <p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects}{inspection.manifest.source.title ? <> · {t.sourceTitle} <b>{inspection.manifest.source.title}</b></> : null} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
+            <div className="research-import-scroll" role="region" aria-label={t.omissions}>
+              <p>{t.importHint}</p>
+              {inspection.manifest.omissions.length ? <ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul> : null}
+            </div>
+          </> : <p className="research-package-notice">{t.importHint}</p>}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{dialog === "export" ? t.cancelAction : t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the

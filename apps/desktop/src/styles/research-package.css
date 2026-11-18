@@ -113,6 +113,35 @@
    danger colour (#1024). */
 .research-package-flash.is-neutral { color: var(--text-secondary); background: var(--surface-sunk); }
 
+/* Import: the destination picker, the chosen package as a card, and the package's
+   own omissions in a scrollable region (the mock's three bands). */
+.research-import-select {
+  width: 100%; min-height: 38px; padding: 8px 12px; appearance: none;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface);
+  color: var(--text); font-size: 14px;
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23667085' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
+}
+.research-file-card {
+  align-items: center; border: 1px solid var(--border); border-radius: 10px;
+  display: flex; gap: 12px; padding: 12px 14px;
+}
+.research-file-card-icon { color: var(--warning-ink, #b45309); display: grid; place-items: center; }
+.research-file-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.research-file-card-body b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.research-file-card-body span { color: var(--muted); font-size: 11px; }
+.research-file-card-reselect {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-pill, 999px);
+  color: var(--text); cursor: pointer; flex-shrink: 0; font-size: 12px; margin-left: auto;
+  padding: 5px 12px; position: relative;
+}
+.research-file-card-reselect:hover { background: var(--surface-subtle); }
+.research-import-scroll {
+  background: var(--surface-sunk); border-radius: 8px; margin-top: 10px;
+  max-height: 180px; overflow: auto; padding: 12px 14px;
+}
+.research-import-scroll p { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
+
 /* The package's own omission list: the reader compares it against what they expect
    to carry, so it is a scrollable list rather than one long sentence. */
 .research-import-omissions-block { margin: 8px 0 0; }

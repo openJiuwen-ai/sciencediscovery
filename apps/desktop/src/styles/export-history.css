@@ -103,16 +103,7 @@
   font-size: 12px;
 }
 
-.export-history-settings h3 {
-  font-size: 14px;
-  margin: 0 0 10px;
-}
 
-.export-history-filters {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
 
 .export-history-filters input,
 .export-history-filters select {
@@ -124,9 +115,6 @@
   padding: 6px 10px;
 }
 
-.export-history-filters input {
-  flex: 1;
-}
 
 .export-history-notice {
   color: var(--warning-ink, #b45309);
