@@ -732,7 +732,7 @@ export const EN: Text = {
         subdirectoryPlaceholder: "Optional, for example skills/my-skill",
         inspect: "Inspect",
         inspecting: "Inspecting…",
-        inspectHint: "Cloning the repository and scanning for packages. A large repository can take a minute or two.",
+        inspectHint: "Cloning the repository and reading every SKILL.md. Usually seconds; a slow connection takes longer.",
         cancelInspect: "Cancel",
         inspectFailed: "The repository could not be inspected.",
         commit: (commit: string) => `commit ${commit.slice(0, 12)}`,

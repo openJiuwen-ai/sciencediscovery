@@ -15,9 +15,11 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   BUNDLED_SKILL_IDS,
@@ -28,6 +30,15 @@ import {
 } from "@sciencediscovery/specialist";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const exec = promisify(execFile);
+
+async function git(directory: string, arguments_: string[]): Promise<string> {
+  const { stdout } = await exec("git", arguments_, {
+    cwd: directory,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  return stdout;
+}
 
 function markdown(name = "git-skill", body = "# Instructions\n\nFrom Git."): string {
   return `---\nname: ${name}\ndescription: A Git-imported test skill.\n---\n\n${body}\n`;
@@ -121,6 +132,57 @@ test("importing after an inspection reuses the checkout it left behind", async (
       /moved after inspection/,
     );
     assert.equal(clones, 2);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("a partial checkout keeps resources on the server until a package needs them", async () => {
+  const dataDir = await temporaryDataDir();
+  const source = resolve(dataDir, "source");
+  await mkdir(resolve(source, "skills/git-skill/references"), { recursive: true });
+  await writeFile(resolve(source, "skills/git-skill/SKILL.md"), markdown());
+  await writeFile(resolve(source, "skills/git-skill/references/guide.md"), "guide");
+  await git(source, ["init", "-b", "main"]);
+  await git(source, ["-c", "protocol.file.allow=always", "add", "."]);
+  await git(source, [
+    "-c", "user.email=test@example.com", "-c", "user.name=Test",
+    "commit", "-m", "initial", "--no-gpg-sign",
+  ]);
+  const commit = (await git(source, ["rev-parse", "HEAD"])).trim().toLowerCase();
+
+  // A clone that is handed back exactly the way the real transport leaves it:
+  // metadata plus SKILL.md, with every other blob still on the "server".
+  const checkout: GitSkillCheckout = async (importRoot, input) => {
+    await mkdir(importRoot, { recursive: true });
+    const target = resolve(importRoot, `partial-${Math.random().toString(36).slice(2)}`);
+    await git(importRoot, [
+      "-c", "protocol.file.allow=always",
+      "clone", "--depth=1", "--filter=blob:none", "--no-checkout", "--no-tags", "--single-branch",
+      "--", `file://${source}`, target,
+    ]);
+    await git(target, ["sparse-checkout", "set", "--no-cone", "**/SKILL.md"]);
+    await git(target, ["checkout"]);
+    return { checkout: target, commit, normalized: validateGitSkillImportRequest(input), partial: true };
+  };
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, { checkoutGit: checkout });
+    await catalog.load();
+    const inspection = await catalog.inspectGitRepository({ repositoryUrl: "https://example.com/skills.git" });
+    assert.deepEqual(inspection.candidates.map((row) => [row.name, row.status]), [["git-skill", "new"]]);
+
+    // Importing reads the package, so the resource has to be fetched first.
+    const detail = await catalog.importFromGit({
+      commit,
+      repositoryUrl: "https://example.com/skills.git",
+      subdirectory: "skills/git-skill",
+    });
+    assert.deepEqual(detail.resources.map((resource) => resource.path), ["references/guide.md"]);
+
+    // An installed Skill can only be called unchanged after its whole package
+    // is compared, so the scan fetches the resources of that one package.
+    const again = await catalog.inspectGitRepository({ repositoryUrl: "https://example.com/skills.git" });
+    assert.deepEqual(again.candidates.map((row) => [row.name, row.status]), [["git-skill", "unchanged"]]);
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }
