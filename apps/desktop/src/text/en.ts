@@ -302,19 +302,48 @@ export const EN: Text = {
     levelQuickDesc: "Deterministic checks: structure, citation format, delivery completeness.",
     levelDeepDesc: "Adds source-by-source and computation evidence checks on top of Quick.",
     running: "Reviewing…",
+    /** The stage the coordinator is in, when it says. It is what tells a
+     *  reader that a long Deep review is working rather than stuck. */
+    phase: {
+      quick: "Running the quick checks",
+      preparing: "Preparing the review…",
+      computation: "Checking the computation evidence",
+      citation: "Checking the citations",
+    } as Record<string, string>,
     summaryPass: "No issues found",
     summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
     summarySkipped: "Review skipped",
+    /** Nothing was raised, but the review itself said part of the claim was
+     *  never examined. "No issues found" alone would read as a pass. */
+    summaryPartial: (count: number) => `No issues found, but ${count} ${count === 1 ? "check was" : "checks were"} not run`,
     checks: (count: number) => `${count} ${count === 1 ? "check" : "checks"}`,
+    /** One checkpoint can cover several artifacts; when their verdicts differ,
+     *  the header's worst-of phrase would hide the clean ones. */
+    outcomeCounts: (passed: number, attention: number) => `${passed} passed · ${attention} need attention`,
     checkNames: {
       structure: "Structure",
       citation: "Citation",
       computation: "Computation",
       completeness: "Completeness",
     } as Record<string, string>,
+    /** What a category means, for the label above each claim. The label is one
+     *  word ("Computation"), which is not enough to know what was compared
+     *  with what. */
+    labelTips: {
+      structure: "Structure: checks the artifact's fields, format and provenance are complete. It does not judge whether the content is right.",
+      citation: "Citation: checks the citation identifiers can be recognised and are well formed. It does not check whether the cited work supports the claim.",
+      computation: "Computation: compares the numbers in the report with the evidence, checking the figures and the statistics agree.",
+      completeness: "Completeness: checks every declared deliverable is present and not empty.",
+      semantics: "Semantics: the source service reads the cited text and decides whether the claim is supported. Deep reviews only.",
+      other: "General finding: not tied to one check, recorded during the review.",
+      gaps: "Not checked: this review did not run this check, and the reason is below. Not checked is not a pass.",
+      source: "Source verification: compares one claim with the source text and answers supported, partly supported, contradicted or inconclusive.",
+      citationTask: "Citation task: looks up the work behind a citation identifier; this shows its progress and result.",
+    } as Record<"structure" | "citation" | "computation" | "completeness" | "semantics"
+      | "other" | "gaps" | "source" | "citationTask", string>,
     checkPass: (name: string) => `${name} passed`,
     passBody: "Nothing was found wrong with this check.",
     finding: "Issue",
@@ -344,6 +373,12 @@ export const EN: Text = {
     outdated: " (outdated)",
     rerun: "Re-run review",
     rerunQueued: "Queued for review.",
+    /** Ask for a review of the Session's current report-shaped artifacts
+     *  without waiting for a new version to make the old verdict stale. */
+    runNow: "Review now",
+    stopRun: "Stop review",
+    runStarted: "Review started.",
+    runStopped: "Review stopped.",
     noCheckpoint: "There is no checkpoint to review again.",
     reused: "Reused the verdict for the same version",
     completeness: {
@@ -369,6 +404,7 @@ export const EN: Text = {
       reused: "Reused",
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
+    queued: (count: number) => `${count} queued`,
     locators: (count: number) => `${count} ${count === 1 ? "locator" : "locators"}`,
     failedDetail: "The review reported an error.",
     empty: "This checkpoint produced no review record.",
@@ -376,6 +412,11 @@ export const EN: Text = {
     tab: "Review",
     levelName: (level: string): string => (level === "deep" ? "Deep" : "Quick"),
     levelPill: (level: string): string => (level === "deep" ? "Deep" : "Quick · local checks"),
+    /** What the pill above is claiming: the two levels differ in whether an
+     *  external source service is consulted at all. */
+    levelTip: (level: string): string => (level === "deep"
+      ? "Deep review: on top of the Quick checks, calls the source service to verify each claim against its source."
+      : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source service is called."),
   },
 
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting

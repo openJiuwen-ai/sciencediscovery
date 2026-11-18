@@ -22,9 +22,19 @@
  * The tones are the transcript's status vocabulary, not a new palette:
  * pass = success, warn = insight, fail = danger, pending = muted. */
 
+/* The panel is the grey the reference draws the card on: the white claim cards
+   inside it are what make the verdict a block rather than a line of text.
+ *
+ * The 24px inset is the reference's own: its card sits inside the transcript's
+ * `px-4 md:px-6` container, so the grey never runs edge to edge. The transcript
+ * column here has no horizontal padding of its own, which without this margin
+ * draws the panel 48px wider than the reference on the same column. */
 .review-card {
-  margin: 6px 0 14px;
+  margin: 6px 24px 14px;
   max-width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-soft);
 }
 
 .review-head {
@@ -33,16 +43,21 @@
   gap: 7px;
   width: 100%;
   min-height: 30px;
-  padding: 3px 6px;
-  border-radius: var(--radius-s);
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
   text-align: left;
+  cursor: pointer;
 }
 
-.review-head:hover {
-  background: var(--surface-soft);
+/* No hover fill: the reference's header has none, and a darker patch inside the
+   grey panel reads as a second frame rather than as a background. The chevron
+   already says the line opens. */
+.review-head:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
 }
 
 .review-mark {
@@ -88,17 +103,44 @@
   transform: rotate(90deg);
 }
 
-/* The running state is a line, not a card: nothing exists to expand yet. */
+/* The running state is a line, not a card: nothing exists to expand yet. It
+   keeps the card's inset so the line does not jump sideways when the verdict
+   replaces it. */
 .review-running {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  flex-direction: column;
+  gap: 4px;
   min-height: 30px;
-  margin: 6px 0 14px;
+  margin: 6px 24px 14px;
   padding: 3px 6px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.review-running-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+}
+
+/* How far the run is, for the reviews that take long enough to wonder. Thin
+   and quiet: it is context for the counts beside it, not a focal element. */
+.review-progress-track {
+  height: 3px;
+  margin: 0 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+}
+
+.review-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--muted-light);
+  transition: width .3s ease;
 }
 
 .review-dots {
@@ -127,7 +169,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 2px 0 2px 6px;
+  padding: 8px 0 0;
 }
 
 .review-artifact {
@@ -169,7 +211,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-s);
-  background: var(--surface-soft);
+  background: var(--surface);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
@@ -220,9 +262,10 @@
   gap: 6px;
 }
 
+/* White on the panel's grey; the reference draws no line between them, and a
+   border here would be a second frame around every claim. */
 .review-item {
   padding: 10px 12px;
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-s);
   background: var(--surface);
 }
@@ -304,6 +347,16 @@
   max-width: 760px;
   margin: 0 auto;
   padding: 20px 24px 32px;
+}
+
+/* The dialog's page is already white, so the transcript's white-on-grey needs
+   its own edge here; the rows keep the tone the panel gives them elsewhere. */
+.review-dialog .review-item {
+  border: 1px solid var(--border-soft);
+}
+
+.review-dialog .review-banner {
+  background: var(--surface-soft);
 }
 
 .review-empty {

@@ -182,6 +182,54 @@ test("会话设置 carries the idea-tree entry under 程序演进实验", () => 
   assert.ok(markup.indexOf("idea-tree") < markup.indexOf(">专家<"));
   // A settings menu that cannot open the card does not offer the row.
   assert.doesNotMatch(settingsMenu(true), /idea-tree/);
+test("会话设置 can ask for a review now, and the same row stops one under way", async () => {
+  const calls: string[] = [];
+  const menu = (runningReview: boolean, reviewerEnabled = true) => (
+    <SessionSettingsMenu
+      automaticReviewEnabled={false}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      onRunReview={() => { calls.push("run"); }}
+      onStopReview={() => { calls.push("stop"); }}
+      reviewerEnabled={reviewerEnabled}
+      reviewerRunning={runningReview}
+      running={false}
+    />
+  );
+
+  // 自动审阅 is off, and the row is still there: one decides whether a review
+  // happens by itself, the other is the reader asking for one.
+  const idle = renderToStaticMarkup(menu(false));
+  assert.match(idle, />立即审查</u);
+  assert.doesNotMatch(idle, />停止审查</u);
+
+  const busy = renderToStaticMarkup(menu(true));
+  assert.match(busy, />停止审查</u);
+  assert.doesNotMatch(busy, />立即审查</u);
+
+  // A row with nowhere to go is not drawn, as with 程序演进实验 above.
+  assert.doesNotMatch(settingsMenu(), /立即审查/u);
+
+  const row = (view: ReturnType<typeof create>) =>
+    view.root.findAllByType("span").find((node) => node.props.className === "session-menu-label"
+      && (node.props.children === "立即审查" || node.props.children === "停止审查"))?.parent;
+
+  let view;
+  await act(async () => { view = create(menu(true)); });
+  try {
+    const stop = row(view);
+    assert.ok(stop);
+    await act(async () => { (stop.props.onClick as () => void)(); });
+    assert.deepEqual(calls, ["stop"]);
+    // The master switch being off leaves a row that cannot do anything, so it
+    // says so rather than accepting a click the server would ignore.
+    await act(async () => { view.update(menu(false, false)); });
+    const off = row(view);
+    assert.ok(off);
+    assert.equal(off.props.disabled, true);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
 });
 
 test("a permission option says on screen what it allows", () => {

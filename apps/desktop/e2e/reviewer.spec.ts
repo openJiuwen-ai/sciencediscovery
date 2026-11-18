@@ -327,6 +327,72 @@ test("the session's automatic review and level are written and survive a reload"
   await expect(menu.getByRole("switch", { name: "自动审阅" })).toHaveAttribute("aria-checked", "false");
 });
 
+test("会话设置 asks for a review now, and automatic review being off does not stop it", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    reviewer: {
+      sessionSettings: { [SESSION]: { automaticReviewEnabled: false, level: "quick" } },
+    },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "会话设置" }).click();
+  const menu = page.locator(".session-menu");
+  // 自动审阅 decides whether a review happens by itself; this row is the
+  // reader asking for one, so the switch being off leaves it enabled.
+  await expect(menu.getByRole("button", { name: "审查档位" })).toBeDisabled();
+  const run = menu.getByRole("button", { name: "立即审查" });
+  await expect(run).toBeEnabled();
+
+  await run.click();
+  await expect(page.locator(".toast.toast-info")).toContainText("已开始审查。");
+  // The request names a fresh message id: the coordinator appends the
+  // checkpoint under that id, so a re-used one would overwrite an older card.
+  await expect.poll(() => mock.state.reviewer.tasks.length).toBe(1);
+  const queued = mock.state.reviewer.tasks[0] as { checkpointMessageId?: string; origin?: string };
+  expect(queued.origin).toBe("manual");
+  expect(queued.checkpointMessageId).toMatch(/^[0-9a-f-]{36}$/u);
+
+  // The click leaves a card where the review happened rather than only a
+  // toast: the written checkpoint is drawn at once, and the coordinator's own
+  // copy of it replaces it when the queue empties (the mock's run produces no
+  // review record, so what settles is the empty verdict).
+  await expect(page.getByTestId("review-card-running")).toBeVisible();
+  // The queue is read on a 6s tick, which is what ends the run here.
+  await expect(page.getByTestId("review-card"))
+    .toContainText("这个检查点没有产生审查记录。", { timeout: 15_000 });
+});
+
+test("a review already under way is stopped from the same row", async ({ page }) => {
+  await installMockApi(page, {
+    reviewer: {
+      // Queued in the coordinator: the row has something to stop.
+      tasks: [{
+        artifactVersionIds: [],
+        checkpointMessageId: "message-checkpoint-1",
+        createdAt: AT,
+        feedbackPolicy: "record",
+        id: "task-manual-1",
+        inputFingerprint: "manual",
+        origin: "manual",
+        reviewLevel: "quick",
+        sessionId: SESSION,
+        status: "running",
+        toolCallId: "call-1",
+      }],
+    },
+    sessions: [makeSession({ messages: [checkpointMessage("message-checkpoint-1", "call-1")] })],
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "会话设置" }).click();
+  const menu = page.locator(".session-menu");
+  await expect(menu.getByRole("button", { name: "立即审查" })).toHaveCount(0);
+  await menu.getByRole("button", { name: "停止审查" }).click();
+
+  await expect(page.locator(".toast.toast-info")).toContainText("已停止审查。");
+});
+
 test("the artifact dialog's 审查 tab shows the version's verdict and can queue a re-run", async ({ page }) => {
   const report = output(
     "artifact-report",
