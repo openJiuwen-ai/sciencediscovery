@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { CategoryIcon, GridIcon } from "./icons.js";
+
 import type { JSX } from "react";
 import type { CategoryNode } from "../catalog/types.js";
 import type { Language } from "../i18n.js";
@@ -35,7 +37,7 @@ export function CategoryTree({ labels, language, nodes, onSelect, selected, tota
         onClick={() => onSelect(null, null)}
         type="button"
       >
-        <span>{labels.all}</span>
+        <span className="tree-label"><GridIcon size={16} />{labels.all}</span>
         <span className="tree-count">{total}</span>
       </button>
       {nodes.map((node) => {
@@ -48,7 +50,7 @@ export function CategoryTree({ labels, language, nodes, onSelect, selected, tota
               onClick={() => onSelect(node.id, null)}
               type="button"
             >
-              <span>{node.label[language]}</span>
+              <span className="tree-label"><CategoryIcon id={node.id} size={16} />{node.label[language]}</span>
               <span className="tree-count">{node.count}</span>
             </button>
             {active && node.children?.length ? (

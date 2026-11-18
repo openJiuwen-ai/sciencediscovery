@@ -14,6 +14,7 @@
 
 import { AssetCard } from "../components/AssetCard.js";
 import { CategoryTree } from "../components/CategoryTree.js";
+import { counted } from "../i18n.js";
 import { HARDWARE_LABELS, SKILL_TYPE_LABELS, SOURCE_LABELS } from "../labels.js";
 
 import type { JSX } from "react";
@@ -32,6 +33,8 @@ interface ListViewProps {
   onOpen: (asset: Asset) => void;
   onFilter: (changes: Record<string, string | null>) => void;
   route: Route;
+  /** The tab's own label, shown above the grid. */
+  title: string;
   total: number;
 }
 
@@ -121,7 +124,7 @@ export function ListView(props: ListViewProps): JSX.Element {
     <AssetCard
       asset={asset}
       basePath={props.basePath}
-      downloadLabel={copy("download")}
+      copy={copy}
       key={asset.id}
       language={language}
       onOpen={() => props.onOpen(asset)}
@@ -134,7 +137,7 @@ export function ListView(props: ListViewProps): JSX.Element {
         <AssetCard
           asset={asset}
           basePath={props.basePath}
-          downloadLabel={copy("download")}
+          copy={copy}
           key={asset.id}
           language={language}
           onOpen={() => props.onOpen(asset)}
@@ -189,16 +192,16 @@ export function ListView(props: ListViewProps): JSX.Element {
         </div> : null}
       </aside> : null}
       <section className="main">
-        <div className="main-head">
-          <input
-            aria-label={copy("search")}
-            className="search"
-            onChange={(event) => onFilter({ q: event.target.value || null })}
-            placeholder={copy("search")}
-            type="search"
-            value={route.params.get("q") ?? ""}
-          />
-          <span className="muted">{visible.length} {copy("count")}</span>
+        <div className="list-head">
+          <div>
+            <h2>{props.title}</h2>
+            <p className="muted">{counted(visible.length, copy("count"), language)}</p>
+          </div>
+          {route.params.get("q") ? (
+            <button className="clear" onClick={() => onFilter({ q: null })} type="button">
+              {copy("all")}
+            </button>
+          ) : null}
         </div>
         {visible.length === 0 ? <p className="empty">{copy("empty")}</p> : null}
         {groups ? groups.map((group) => (
