@@ -136,6 +136,17 @@ const GIT_SKILL_DISCOVERY_DEPTH = 12;
  *  ceiling has to leave room for a slow network without holding a request
  *  forever. */
 const GIT_CHECKOUT_TIMEOUT_MS = 180_000;
+/** The metadata clone carries no blobs, so a healthy one finishes in seconds
+ *  even on a slow link. Waiting the whole checkout ceiling for a connection
+ *  that never opened is what makes a bad network look like a hung import. */
+const GIT_CLONE_TIMEOUT_MS = 60_000;
+/** A connection that stops moving is a dead one, not a slow one: abandon it
+ *  after half a minute below 1 KiB/s instead of holding the request until the
+ *  whole-command ceiling. What a stalled transfer costs is the retry below. */
+const GIT_TRANSPORT_CONFIG = [
+  "-c", "http.lowSpeedLimit=1000",
+  "-c", "http.lowSpeedTime=30",
+];
 /** How long the checkout an inspection just made stays on disk for the imports
  *  that follow it. */
 const GIT_CHECKOUT_RETENTION_MS = 15 * 60_000;
@@ -459,27 +470,92 @@ async function runGit(arguments_: string[], timeout = GIT_CHECKOUT_TIMEOUT_MS): 
   return { stdout };
 }
 
+/** A `git` command that changes nothing a second run would find strange —
+ *  setting the sparse patterns, checking out the files they name — is run once
+ *  more when the transfer behind it broke. The user asked for the package;
+ *  a connection that dropped mid-fetch is not their answer. */
+async function runGitRetry(arguments_: string[], timeout = GIT_CHECKOUT_TIMEOUT_MS): Promise<{ stdout: string }> {
+  try {
+    return await runGit(arguments_, timeout);
+  } catch (error) {
+    if (!gitTransportFailure(error)) throw error;
+    return await runGit(arguments_, timeout);
+  }
+}
+
 async function cloneGitRepository(
   normalized: NormalizedGitImport,
   checkout: string,
   partial: boolean,
+  timeout = GIT_CLONE_TIMEOUT_MS,
 ): Promise<void> {
   const branch = normalized.ref ? ["--branch", normalized.ref] : [];
   if (!partial) {
+    // The fallback is for a server that refuses the filter, so it asks for
+    // none: the whole working tree arrives, which is slower but is what a
+    // repository without partial-clone support can answer.
     await runGit([
-      "-c", "protocol.file.allow=never",
-      "clone", "--depth=1", "--filter=blob:limit=10m", "--no-tags", ...branch,
+      "-c", "protocol.file.allow=never", ...GIT_TRANSPORT_CONFIG,
+      "clone", "--depth=1", "--no-tags", ...branch,
       "--", normalized.repositoryUrl, checkout,
-    ]);
+    ], GIT_CHECKOUT_TIMEOUT_MS);
     return;
   }
   await runGit([
-    "-c", "protocol.file.allow=never",
+    "-c", "protocol.file.allow=never", ...GIT_TRANSPORT_CONFIG,
     "clone", "--depth=1", "--filter=blob:none", "--no-checkout", "--no-tags", "--single-branch",
     ...branch, "--", normalized.repositoryUrl, checkout,
-  ]);
+  ], timeout);
   await runGit(["-C", checkout, "sparse-checkout", "set", "--no-cone", GIT_SPARSE_SKILL_MARKDOWN]);
-  await runGit(["-C", checkout, "checkout"]);
+  await runGitRetry(["-C", checkout, ...GIT_TRANSPORT_CONFIG, "checkout"]);
+}
+
+function gitErrorText(error: unknown): string {
+  const value = error as { message?: unknown; stderr?: unknown } | undefined;
+  return [value?.stderr, value?.message]
+    .filter((part): part is string => typeof part === "string")
+    .join("\n");
+}
+
+function gitTimedOut(error: unknown): boolean {
+  return (error as { killed?: boolean } | undefined)?.killed === true;
+}
+
+/** A transfer that broke or stopped moving. The repository is not at fault and
+ *  the same clone can be attempted again. A command that used the whole
+ *  timeout is not retried: another 180 s would not answer a different way. */
+function gitTransportFailure(error: unknown): boolean {
+  if (gitTimedOut(error)) return false;
+  return /early eof|rpc failed|connection reset|operation too slow|the remote end hung up|could not read from remote|gnutls|ssl/i
+    .test(gitErrorText(error));
+}
+
+/** Only a server that refuses the filter justifies a full download; a broken
+ *  transfer that happens to mention the filter is still a transport problem. */
+function gitFilterRefused(error: unknown): boolean {
+  if (gitTransportFailure(error)) return false;
+  return /filtering not recognized|filter[^\n]*(?:not supported|unsupported)|does not support (?:the )?filter/i
+    .test(gitErrorText(error));
+}
+
+/** One broken transfer says nothing about the repository. A second attempt
+ *  costs seconds, where giving up on the partial clone would download every
+ *  blob in the repository: hundreds of megabytes that turn a hiccup into a
+ *  request that looks hung. */
+async function cloneWithRetry(
+  normalized: NormalizedGitImport,
+  checkout: string,
+  partial: boolean,
+  options: { retryTimeout: boolean; timeout?: number } = { retryTimeout: false },
+): Promise<void> {
+  const attempt = () => cloneGitRepository(normalized, checkout, partial, options.timeout ?? GIT_CLONE_TIMEOUT_MS);
+  try {
+    await attempt();
+  } catch (error) {
+    await rm(checkout, { force: true, recursive: true });
+    if (!gitTransportFailure(error) && !(options.retryTimeout && gitTimedOut(error))) throw error;
+    await attempt();
+  }
 }
 
 /** Fetch the files under `roots` that a partial checkout left on the server.
@@ -492,12 +568,13 @@ async function expandGitSparseCheckout(checkout: string, roots: readonly string[
   const missing = wanted.filter((pattern) => !current.includes(pattern));
   if (!missing.length) return;
   await runGit(["-C", checkout, "sparse-checkout", "set", "--no-cone", ...current, ...missing]);
-  await runGit(["-C", checkout, "checkout"]);
+  await runGitRetry(["-C", checkout, ...GIT_TRANSPORT_CONFIG, "checkout"]);
 }
 
-async function checkoutGitSkillRepository(
+export async function checkoutGitSkillRepository(
   importRoot: string,
   input: InspectGitSkillRepositoryRequest,
+  options: { cloneTimeoutMs?: number } = {},
 ): Promise<{
   checkout: string;
   commit: string;
@@ -510,25 +587,34 @@ async function checkoutGitSkillRepository(
   try {
     let partial = true;
     try {
-      await cloneGitRepository(normalized, checkout, true);
+      // A connection that never opened is worth one more try, but the clone
+      // ceiling is short enough that the retry still fits in a wait a person
+      // will sit through.
+      await cloneWithRetry(normalized, checkout, true, {
+        retryTimeout: true,
+        ...(options.cloneTimeoutMs === undefined ? {} : { timeout: options.cloneTimeoutMs }),
+      });
     } catch (error) {
       await rm(checkout, { force: true, recursive: true });
-      // A server that does not support partial clones is the reason this is a
-      // retry rather than a failure; a timeout is not paid twice.
-      if ((error as { killed?: boolean } | undefined)?.killed === true) throw error;
+      // Only a server that refuses the filter is worth a full download. Any
+      // other failure has already been retried as the same clone, because
+      // falling back here is what turns a broken transfer into hundreds of
+      // megabytes the user waits for.
+      if (!gitFilterRefused(error)) throw error;
       partial = false;
-      await cloneGitRepository(normalized, checkout, false);
+      await cloneWithRetry(normalized, checkout, false);
     }
     const { stdout } = await runGit(["-C", checkout, "rev-parse", "HEAD"], 10_000);
     return { checkout, commit: stdout.trim().toLowerCase(), normalized, partial };
   } catch (error) {
     await rm(checkout, { force: true, recursive: true });
     // A clone that is cut off at the timeout is the one failure a user cannot
-    // tell apart from a broken URL, so it names the ceiling and the way out.
-    const timedOut = (error as { killed?: boolean } | undefined)?.killed === true;
-    throw validationError(timedOut
-      ? `Git skill checkout timed out after ${GIT_CHECKOUT_TIMEOUT_MS / 1000}s; retry, or narrow the import with a Ref or subdirectory`
-      : "Git skill checkout failed; verify the repository, ref, and locally configured credentials");
+    // tell apart from a broken URL, so it names the way out.
+    throw validationError(gitTimedOut(error)
+      ? "Git skill checkout timed out; retry, or narrow the import with a Ref or subdirectory"
+      : gitTransportFailure(error)
+        ? "Git skill checkout lost its connection to the repository; retry the import"
+        : "Git skill checkout failed; verify the repository, ref, and locally configured credentials");
   }
 }
 
