@@ -524,3 +524,48 @@ def test_a_stage_effort_must_name_a_known_stage_and_level():
     for efforts in (dict(review='high'), dict(design='ultra')):
         with pytest.raises(ValueError):
             Settings(roleThinkingEfforts=efforts)
+
+
+RESEARCH_READ_SCRIPT = """
+import sys
+from pathlib import Path
+from sciencediscovery_evolve.vendor.idea_tree.research import ResearchStore
+
+store = ResearchStore(Path(sys.argv[1]))
+expected = "".join(chr(code) for code in (0x8109, 0x86cb, 0x767d))
+one = store.read("p", "s", "r1")
+assert one["title"] == expected, one["title"]
+many = store.list("p", "s")
+assert [row["id"] for row in many] == ["r1"], [row["id"] for row in many]
+assert many[0]["title"] == expected, many[0]["title"]
+print("ok")
+"""
+
+
+def read_on_a_host_with_ascii_as_the_default_codec(root, script, *arguments):
+    """Run `script` where `read_text()` with no encoding would decode as ASCII.
+
+    cp936 and ASCII fail on the same bytes, so this reproduces the reported host
+    on any runner instead of only on Windows.
+    """
+    import os
+    import subprocess
+    import sys
+
+    environment = {**os.environ, "PYTHONUTF8": "0", "LC_ALL": "C", "LANG": "C", "PYTHONIOENCODING": "ascii"}
+    source = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, [source, environment.get("PYTHONPATH")]))
+    completed = subprocess.run([sys.executable, "-c", script, str(root), *arguments],
+                               capture_output=True, text=True, env=environment)
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
+
+
+def test_a_research_with_non_ascii_content_reads_on_a_non_utf8_host(tmp_path):
+    store = ResearchStore(tmp_path)
+    store.save(dict(projectId="p", sessionId="s", id="r1", status="completed",
+                    title="".join(chr(code) for code in (0x8109, 0x86cb, 0x767d)),
+                    createdAt=now(), nodes={}, materials={}))
+    # Both the single read and the directory scan: `get` after a restart goes
+    # through read(), `list` always goes through the scan (research_service.py).
+    assert read_on_a_host_with_ascii_as_the_default_codec(tmp_path, RESEARCH_READ_SCRIPT) == "ok"

@@ -46,7 +46,7 @@ class IdeaTreeStore:
         with lock:
             path = self.root / project / session / "state.json"
             try:
-                state = json.loads(path.read_text()) if path.exists() else dict(version=1, trees={}, creates={})
+                state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else dict(version=1, trees={}, creates={})
                 require(state.get("version") == 1, "STORAGE_ERROR", "Unsupported Idea Tree file format")
                 before = copy.deepcopy(state)
                 trees = {key: IdeaTree(value) for key, value in state["trees"].items()}
