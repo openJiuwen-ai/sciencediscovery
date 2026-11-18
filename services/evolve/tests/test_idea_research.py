@@ -3,12 +3,16 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 import asyncio
+import io
 import json
 import tempfile
+import time
 import unittest
+import unittest.mock
+import urllib.error
 from pathlib import Path
 
-from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, ResearchStore, node, now, parse_json
+from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, Interrupted, ResearchStore, node, now, parse_json
 from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
 from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
 
@@ -112,7 +116,10 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         fail = True
         async def model(role, payload):
             if role == 'stability' and fail:
-                raise RuntimeError('Model HTTP 429: budget exceeded')
+                # What transport() raises once its retry budget is exhausted
+                # (issue #1232): the stage fails, the run is interrupted, and
+                # the completed stages are kept for the resume.
+                raise RuntimeError('Model HTTP 429: retry budget exhausted after 2 attempts')
             return await self.model(role, payload)
         engine = IdeaTreeEngine(self.state, self.store, {}, model)
         await engine.run()
@@ -126,6 +133,56 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         await IdeaTreeEngine(self.state, self.store, {}, model).run()
         self.assertEqual(self.state['status'], 'completed')
         self.assertEqual(len([c for c in self.calls if c[0] == 'design']), prior)
+
+    async def test_run_continues_same_stage_after_transient_429(self):
+        # Issue #1232: one 429 on the first model call must not interrupt the
+        # research; the same stage continues once the retry succeeds.
+        attempts = []
+        sleeps = []
+
+        class Reply:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, *_):
+                return self.body
+
+        def urlopen(request, timeout):
+            body = json.loads(request.data)
+            system = body['messages'][0]['content']
+            attempts.append(json.loads(body['messages'][1]['content']))
+            if len(attempts) == 1:
+                raise urllib.error.HTTPError(request.full_url, 429, 'Too Many Requests', {'Retry-After': '1'},
+                                             io.BytesIO(b'{"error":{"type":"rate_limit_exceeded","message":"Too many requests; retry shortly"}}'))
+            if '"candidates"' in system:
+                payload = json.loads(body['messages'][1]['content'])
+                value = dict(candidates=[dict(parentId=payload['selectedParentIds'][0], direction=f"Direction {payload['round']}", hypothesis=f"Candidate {payload['round']}: addresses prior leaching")], reason='A distinct improvement remains')
+            elif '"score":1.0' in system:
+                value = dict(text='Independent assessment', score=8)
+            elif '"strengths"' in system:
+                value = dict(text='aggregate output', strengths=[], failureModes=[], uncertainties=[], evidenceGaps=[], recommendedNextMoves=[], constraintFlags=[], confidence=.5)
+            else:
+                value = dict(text='design output')
+            reply = Reply()
+            reply.body = json.dumps(dict(choices=[dict(message=dict(content=json.dumps(value)))], usage=dict(total_tokens=100))).encode()
+            return reply
+
+        monkeypatch = unittest.mock.patch('urllib.request.urlopen', urlopen)
+        sleep_patch = unittest.mock.patch.object(time, 'sleep', sleeps.append)
+        with monkeypatch, sleep_patch:
+            await IdeaTreeEngine(self.state, self.store, dict(url='http://model.test/v1/chat/completions', token='t')).run()
+        self.assertEqual(self.state['status'], 'completed', self.state['reason'])
+        # The first round's ideation was attempted twice (429, then success);
+        # later rounds were attempted once each.
+        ideations = [payload for payload in attempts if 'selectedParentIds' in payload]
+        self.assertEqual([payload['round'] for payload in ideations], [1, 1, 2, 3])
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
+        self.assertTrue(candidates and all(n['status'] == 'done' for n in candidates))
+        # One bounded wait, honoring the provider's Retry-After: 1.
+        self.assertAlmostEqual(sum(sleeps), 1.0)
 
     async def test_pause_does_not_commit_late_result(self):
         gate = asyncio.Event()
@@ -472,6 +529,91 @@ def test_transport_leaves_temperature_to_the_provider(monkeypatch):
         assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
     assert 'temperature' not in sent[0]
     assert sent[0]['max_tokens'] == 100
+
+
+def rate_limit_error(url, after='1', error_type='rate_limit_exceeded'):
+    return urllib.error.HTTPError(url, 429, 'Too Many Requests', {'Retry-After': after},
+                                  io.BytesIO(json.dumps(dict(error=dict(type=error_type, message='Too many requests; retry shortly'))).encode()))
+
+
+class SuccessReply:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self, *_):
+        return json.dumps(dict(choices=[dict(message=dict(content='{}'))], usage=dict(total_tokens=7))).encode()
+
+
+def transport_with_faults(monkeypatch, faults):
+    """A transport whose urlopen fails per `faults`, then succeeds; sleeps are recorded, not waited."""
+    attempts = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        attempts.append(1)
+        if len(attempts) <= len(faults):
+            raise faults[len(attempts) - 1](request.full_url)
+        return SuccessReply()
+
+    monkeypatch.setattr('urllib.request.urlopen', urlopen)
+    monkeypatch.setattr(time, 'sleep', sleeps.append)
+    with tempfile.TemporaryDirectory() as root:
+        engine = IdeaTreeEngine(dict(id='r'), ResearchStore(Path(root)), dict(url='http://model.test/v1/chat/completions', token='t'))
+        return engine, attempts, sleeps
+
+
+def test_transport_retries_transient_429_then_succeeds(monkeypatch):
+    # Issue #1232: one 429 with Retry-After: 1, then success, must continue.
+    engine, attempts, sleeps = transport_with_faults(monkeypatch, [rate_limit_error])
+    assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+    assert len(attempts) == 2
+    assert sum(sleeps) == pytest.approx(1.0)
+
+
+def test_transport_gives_up_after_bounded_429_retries(monkeypatch):
+    # Repeated 429s terminate after the existing two-attempt budget, with a clear reason.
+    engine, attempts, sleeps = transport_with_faults(monkeypatch, [rate_limit_error, rate_limit_error])
+    with pytest.raises(RuntimeError, match='Model HTTP 429: retry budget exhausted after 2 attempts'):
+        engine.transport('system', dict(a=1), 100)
+    assert len(attempts) == 2
+    assert sum(sleeps) == pytest.approx(1.0)
+
+
+def test_transport_does_not_retry_permanent_quota_429(monkeypatch):
+    # A 429 that reports exhausted quota/billing is permanent, not transient.
+    engine, attempts, sleeps = transport_with_faults(monkeypatch, [lambda url: rate_limit_error(url, error_type='insufficient_quota')])
+    with pytest.raises(RuntimeError, match='Model HTTP 429: permanent quota error, not retried'):
+        engine.transport('system', dict(a=1), 100)
+    assert len(attempts) == 1
+    assert sleeps == []
+
+
+def test_transport_retry_wait_respects_pause(monkeypatch):
+    # A pause issued while waiting out a 429 must interrupt the wait, not the retry.
+    engine, attempts, sleeps = transport_with_faults(monkeypatch, [rate_limit_error])
+
+    def pausing_sleep(seconds):
+        sleeps.append(seconds)
+        engine.stop_action = 'pause'
+
+    monkeypatch.setattr(time, 'sleep', pausing_sleep)
+    with pytest.raises(Interrupted):
+        engine.transport('system', dict(a=1), 100)
+    assert len(attempts) == 1
+
+
+def test_transport_still_retries_500_then_succeeds(monkeypatch):
+    # Control case: the pre-existing 5xx retry is unchanged by the 429 fix.
+    def server_error(url):
+        return urllib.error.HTTPError(url, 503, 'Service Unavailable', {}, io.BytesIO(b'{"error":"original temporary provider cause"}'))
+
+    engine, attempts, sleeps = transport_with_faults(monkeypatch, [server_error])
+    assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+    assert len(attempts) == 2
+    assert sum(sleeps) == pytest.approx(0.5)
 
 
 def test_a_fenced_json_answer_is_read_as_json():

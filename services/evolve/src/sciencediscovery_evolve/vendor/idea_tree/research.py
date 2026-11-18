@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -141,7 +142,27 @@ def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth:
                 searchStatus='active', priority=0.0, createdAt=now(), updatedAt=now())
 
 
+def is_permanent_quota(detail: str) -> bool:
+    """True when a 429 body reports exhausted quota/billing, which no wait fixes.
+
+    Provider-agnostic: only the `insufficient_quota` marker is treated as
+    permanent. A plain `rate_limit_exceeded` is transient and stays retriable.
+    """
+    return 'insufficient_quota' in detail.lower()
+
+
 class IdeaTreeEngine:
+    # Retry budget for the model transport, shared by 429 and 5xx: one retry
+    # after the first attempt. The protocol-compatibility suite pins exactly
+    # two upstream calls on a persistent provider failure, so enlarging this
+    # needs that suite updated in the same change.
+    MAX_ATTEMPTS = 2
+    # Longest single backoff wait. A provider may ask for more, but the wait
+    # must stay bounded and pause/cancel must stay responsive.
+    MAX_RETRY_AFTER_SECONDS = 60.0
+    # Poll interval while waiting out a retry, so a pause/end lands promptly.
+    RETRY_POLL_SECONDS = 0.25
+
     def __init__(self, state: dict, store: ResearchStore, endpoint: dict, call=None):
         self.state, self.store, self.endpoint = state, store, endpoint
         self.stop_action: str | None = None
@@ -178,6 +199,31 @@ class IdeaTreeEngine:
         stage = 'assess' if role in {item['id'] for item in self.assessors()} else role
         return self.state['settings'].get('roleThinkingEfforts', {}).get(stage)
 
+    def retry_delay(self, error: urllib.error.HTTPError, attempt: int) -> float:
+        """Backoff before retrying `attempt` (0-based). Honors the provider's
+        Retry-After delay when it is a plain number of seconds, capped so the
+        wait stays bounded; otherwise the fixed backoff the Agent client uses
+        (500ms, doubling, capped at 4s)."""
+        headers = getattr(error, 'headers', None) or {}
+        try:
+            after = float(headers.get('Retry-After'))
+        except (TypeError, ValueError):
+            after = None
+        if after is not None and math.isfinite(after):
+            return max(0.0, min(after, self.MAX_RETRY_AFTER_SECONDS))
+        return min(4.0, 0.5 * 2 ** attempt)
+
+    def wait_for_retry(self, delay: float) -> None:
+        """Wait out a retry delay in short slices, so pause/cancel lands
+        promptly instead of only after the whole wait."""
+        remaining = delay
+        while remaining > 0:
+            self.check_stop()
+            step = min(self.RETRY_POLL_SECONDS, remaining)
+            time.sleep(step)
+            remaining -= step
+        self.check_stop()
+
     def transport(self, system, payload, ceiling, effort=None):
         # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
         fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)
@@ -186,17 +232,25 @@ class IdeaTreeEngine:
             fields['reasoning_effort'] = effort
         body = json.dumps(fields).encode()
         request = urllib.request.Request(self.endpoint['url'], data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.endpoint['token']})
-        for attempt in range(2):
+        for attempt in range(self.MAX_ATTEMPTS):
             try:
                 with urllib.request.urlopen(request, timeout=1230) as response:
                     result = json.load(response)
                 usage = result.get('usage')
                 return result['choices'][0]['message']['content'], usage.get('total_tokens') if isinstance(usage, dict) else None
             except urllib.error.HTTPError as error:
-                if error.code >= 500 and attempt == 0:
-                    continue
                 detail = error.read(1000).decode(errors='replace')
-                raise RuntimeError(f"Model HTTP {error.code}: {detail}") from error
+                try:
+                    if error.code == 429 and is_permanent_quota(detail):
+                        raise RuntimeError(f"Model HTTP 429: permanent quota error, not retried: {detail}") from error
+                    if (error.code == 429 or error.code >= 500) and attempt + 1 < self.MAX_ATTEMPTS:
+                        self.wait_for_retry(self.retry_delay(error, attempt))
+                        continue
+                    if error.code == 429:
+                        raise RuntimeError(f"Model HTTP 429: retry budget exhausted after {self.MAX_ATTEMPTS} attempts: {detail}") from error
+                    raise RuntimeError(f"Model HTTP {error.code}: {detail}") from error
+                finally:
+                    error.close()
             except (urllib.error.URLError, TimeoutError):
                 raise
 

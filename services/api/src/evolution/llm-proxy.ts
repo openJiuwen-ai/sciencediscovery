@@ -219,8 +219,11 @@ export async function handleEvolveCompletion(
   if (!upstream.ok) {
     // The provider's own message is forwarded because the sidecar surfaces it
     // as the reason an expansion failed, and "something went wrong" would make
-    // a bad key indistinguishable from a bad prompt.
-    return sendJson(response, upstream.status, payload);
+    // a bad key indistinguishable from a bad prompt. The provider's retry
+    // delay is forwarded with it, so the sidecar can honor it instead of
+    // guessing a backoff (issue #1232).
+    const retryAfter = upstream.headers.get("retry-after");
+    return sendJson(response, upstream.status, payload, retryAfter ? { "retry-after": retryAfter } : {});
   }
 
   // The call already happened and was already paid for. A bookkeeping failure

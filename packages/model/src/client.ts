@@ -293,7 +293,7 @@ export class ModelJsonResponse extends Error {
 }
 
 export class ModelRequestError extends Error {
-  constructor(message: string, readonly statusCode: number, readonly responseDetail = "") {
+  constructor(message: string, readonly statusCode: number, readonly responseDetail = "", readonly retryAfterMs?: number) {
     super(message);
     this.name = "ModelRequestError";
   }
@@ -643,6 +643,7 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
       `Model request failed with status ${statusCode}${detail ? `: ${detail}` : ""}`,
       statusCode,
       detail,
+      retryAfterMs,
     );
     if ((statusCode === 429 || statusCode >= 500) && attempt < options.policy.maxRetries) {
       lastError = failure;

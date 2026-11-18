@@ -112,7 +112,9 @@ export async function completeChatRequest(
       }
       return new Response(error.responseDetail || error.message, {
         status: error.statusCode,
-        headers: { "content-type": "application/json" },
+        // The sidecar owns the retry decision for this path, so the provider's
+        // delay reaches it as a header instead of being spent here.
+        headers: { "content-type": "application/json", ...(error.retryAfterMs !== undefined ? { "retry-after": String(error.retryAfterMs / 1000) } : {}) },
       });
     }
   }
@@ -143,7 +145,13 @@ export async function completeChatRequest(
     } finally { await reader.cancel(); }
     const raw = Buffer.concat(chunks).toString("utf8");
     const redacted = endpoint.apiToken ? raw.split(endpoint.apiToken).join("[redacted]") : raw;
-    if (!response.ok) return new Response(redacted, { status: response.status, headers: { "content-type": "application/json" } });
+    if (!response.ok) {
+      // Forward the provider's retry delay when the upstream response carries
+      // it, so the sidecar can honor it; the undici-built response carries no
+      // upstream headers, so nothing is forwarded on that sub-path.
+      const retryAfter = response.headers.get("retry-after");
+      return new Response(redacted, { status: response.status, headers: { "content-type": "application/json", ...(retryAfter ? { "retry-after": retryAfter } : {}) } });
+    }
     return normalizeCompletionResponse(endpoint, raw);
   } finally { await dispatcher?.close(); }
 }

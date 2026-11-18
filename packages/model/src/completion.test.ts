@@ -196,6 +196,28 @@ for (const apiProtocol of protocols) test(`${apiProtocol} stream errors retain c
   } finally { await provider.close(); }
 });
 
+test("a streamed 429 forwards the provider's retry delay to the sidecar", async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) {}
+    res.writeHead(429, { "content-type": "application/json", "retry-after": "2" });
+    res.end(JSON.stringify({ error: { type: "rate_limit_exceeded", message: "too many requests" } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server did not expose a TCP address");
+    const endpoint = { baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "synthetic", proxy: { mode: "direct" as const } };
+    // The sidecar owns the retry for this path (issue #1232): the error
+    // response must carry Retry-After so the sidecar can honor the delay.
+    const result = await completeChatRequest(endpoint, { messages: [{ role: "user", content: "synthetic" }] }, AbortSignal.timeout(2_000), undefined, undefined, true);
+    assert.equal(result.status, 429);
+    assert.equal(result.headers.get("retry-after"), "2");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test("a mid-stream transport failure remains retryable after 2xx headers", async () => {
   const { createServer } = await import("node:http");
   const server = createServer(async (req, res) => {

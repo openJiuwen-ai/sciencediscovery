@@ -282,6 +282,28 @@ test("the provider's own error is forwarded rather than flattened", async () => 
   assert.equal(recorded.length, 0, "a failed call is not recorded as spend");
 });
 
+test("a provider 429 forwards its retry delay to the sidecar", async () => {
+  const tokens = new RunTokenRegistry();
+  const { recorded, store } = fakeStore();
+  const { origin } = await mount({
+    fetchImpl: (async () => new Response(
+      JSON.stringify({ error: { type: "rate_limit_exceeded", message: "too many requests" } }),
+      { headers: { "content-type": "application/json", "retry-after": "2" }, status: 429 },
+    )) as never,
+    store,
+    tokens,
+  });
+
+  const response = await completion(origin, "run-1", tokens.issue("run-1", "s1", "model-1"));
+
+  // Issue #1232: the sidecar owns the retry for Idea Tree research, so the
+  // provider's delay must reach it instead of being dropped in the proxy.
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "2");
+  assert.match(JSON.stringify(await response.json()), /too many requests/);
+  assert.equal(recorded.length, 0, "a failed call is not recorded as spend");
+});
+
 test("a run whose model has no key fails loudly instead of silently", async () => {
   const tokens = new RunTokenRegistry();
   const { store } = fakeStore({ apiToken: undefined });
