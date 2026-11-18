@@ -7,6 +7,7 @@ import type { Project, SessionDetail } from "../api/types.js";
 import { cancelExport, importPackage, inspectPackage, openExportStream, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { canStreamExport, exportHistoryBridge, exportShellBridge, writeExportStream, type ExportHistoryRow } from "../app/export-bridge.js";
 import { ExportHistoryList } from "./ExportHistoryList.js";
+import { formatBytes } from "../app/format-bytes.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
@@ -41,7 +42,10 @@ interface ExportRecord {
    *  exhaust another task's retry budget. */
   failures: number;
   savedToken?: string;
+  /** What the dialog shows: localized when the sentence is one the client knows. */
   error?: string;
+  /** The server's own wording, shown only inside a details block (#1024). */
+  rawError?: string;
   /** The package profile and session title travel with the write, so the shell
    *  can record a row that says which search the package belongs to. */
   level?: "necessary" | "complete";
@@ -51,7 +55,7 @@ interface ExportRecord {
   sessionId?: string;
   sessionTitle?: string;
 }
-interface ExportFlash { id: number; tone: "success" | "error"; message: string; savedToken?: string; }
+interface ExportFlash { id: number; tone: "success" | "error" | "neutral"; message: string; savedToken?: string; }
 
 interface Props {
   client: ApiClient; request?: PackageRequest; detail?: SessionDetail;
@@ -65,9 +69,19 @@ export function copyStatusLine(copy: CopyOperation | undefined, t: typeof TEXT.r
   if (!copy || copy.state === "ready") return undefined;
   return copy.state === "copying" ? t.copying : copy.error ?? t.failed;
 }
-/** A task that fails over the cap stores the same sentence the synchronous refusals use. */
+/**
+ * The task failures the client can phrase itself (#1024). A failure that is not
+ * named here keeps the server's wording, but only inside the details block: the
+ * alert line must not be raw English in a Chinese dialog.
+ */
 function taskErrorMessage(error?: string): string | undefined {
-  return error === "Research package exceeds the archive size limit" ? TEXT.researchPackage.packageTooLarge : error;
+  if (!error) return undefined;
+  const t = TEXT.researchPackage;
+  if (/exceeds the archive size limit/i.test(error)) return t.packageTooLarge;
+  if (/^(Export task not found|Completed export not found)$/i.test(error.trim())) return t.taskMissing;
+  if (/导出文件已过期|export (file )?(has )?expired/i.test(error)) return t.taskExpired;
+  if (/服务重启时导出尚未完成/i.test(error)) return t.taskRestarted;
+  return undefined;
 }
 
 export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
@@ -77,9 +91,10 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [importProjectId, setImportProjectId] = useState("");
   const projectId = request?.kind === "import" ? importProjectId || request.projectId : request?.projectId;
   const [level, setLevel] = useState("necessary");
-  // No trajectory state: this client has no trajectory view, so an export never
-  // asks for full trajectory details. The API parameter is kept for the web
-  // client, which does have one.
+  // The export dialog offers both optional payloads the API understands. The
+  // trajectory details are for whoever opens the package elsewhere — this client
+  // has no trajectory view of its own.
+  const [trajectory, setTrajectory] = useState(false);
   const [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
   // Keyed by revision + size: a new selection has to be confirmed again.
@@ -92,6 +107,14 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   /** The level/options the last preview described. Only a change there may
    *  reset the list, because only then does the list itself change. */
   const previewScope = useRef("");
+  /** How many times the pending answer has come back for this selection. A bounded
+   *  wait turns the silent retry into a status line with a manual retry (#1024). */
+  const pendingTries = useRef(0);
+  /** The selection the pending budget belongs to, so a file tick restarts it. */
+  const pendingScope = useRef("");
+  const [previewStalled, setPreviewStalled] = useState(false);
+  /** Bumped by the manual retry so the preview effect runs again. */
+  const [previewNonce, setPreviewNonce] = useState(0);
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
@@ -111,6 +134,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const copying = useRef(false);
   const busyRef = useRef(false);
   const exportsRef = useRef<ExportRecord[]>([]);
+  const savedRef = useRef<HTMLDivElement>(null);
   const flashSeq = useRef(0);
 
   const patchExport = useCallback((id: string, patch: Partial<ExportRecord>) => {
@@ -215,8 +239,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     let timer: ReturnType<typeof setTimeout>;
     const settle = async (record: ExportRecord, task: ExportOperation): Promise<void> => {
       if (task.status === "completed") { patchExport(record.id, { task }); await persistArchiveRef.current({ ...record, task }); }
-      else if (task.status === "canceled") { patchExport(record.id, { task, phase: "canceled" }); pushFlash("error", TEXT.researchPackage.exportCanceled); }
-      else { const message = taskErrorMessage(task.error); patchExport(record.id, { task, phase: "pack-failed", error: message }); pushFlash("error", message ?? TEXT.researchPackage.failed); }
+      else if (task.status === "canceled") { patchExport(record.id, { task, phase: "canceled" }); pushFlash("neutral", TEXT.researchPackage.exportCanceled); }
+      else { const message = taskErrorMessage(task.error); patchExport(record.id, { task, phase: "pack-failed", error: message ?? TEXT.researchPackage.failed, rawError: task.error }); pushFlash("error", message ?? TEXT.researchPackage.failed); }
     };
     const tick = async () => {
       if (cancelled) return;
@@ -291,16 +315,39 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     // Ticking a workspace file must not blank the dialog: the list stays mounted
     // and the size line says it is recalculating. A level or option change does
     // reset, because that is when the list itself changes (#1057).
+    // Ticking a workspace file must not blank the dialog: the list stays mounted and
+    // only the size line says it is recalculating (#1057). The pending budget is
+    // keyed on the whole selection, so a changed file set starts it over without
+    // touching what is already on screen.
     const scope = `${level}|${graph}`;
-    if (previewScope.current !== scope) { previewScope.current = scope; setPreview(undefined); }
+    if (previewScope.current !== scope) {
+      previewScope.current = scope;
+      setPreview(undefined);
+    }
+    const selection = `${scope}|${files?.join(",") ?? ""}`;
+    if (pendingScope.current !== selection) {
+      pendingScope.current = selection;
+      pendingTries.current = 0;
+      setPreviewStalled(false);
+    }
     setEstimating(true); setError("");
-    const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph, files).then(value => { if (active) { setPreview(value); setEstimating(false); } }).catch(reason => {
+    const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph, files).then(value => {
       if (!active) return;
-      if (reason?.code === "EXPORT_PREVIEW_PENDING") timer = setTimeout(load, 1500);
-      else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
+      pendingTries.current = 0; setPreviewStalled(false);
+      setPreview(value); setEstimating(false);
+    }).catch(reason => {
+      if (!active) return;
+      if (reason?.code === "EXPORT_PREVIEW_PENDING") {
+        // The server says the preview is still being computed. Keep retrying for a
+        // bounded wait, then stop and say so: a permanently disabled button with no
+        // status line is what #1024 reports.
+        pendingTries.current += 1;
+        if (pendingTries.current >= 6) { setPreviewStalled(true); setEstimating(false); }
+        else { setEstimating(true); timer = setTimeout(load, 1500); }
+      } else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
-  }, [client, dialog, detail?.id, projectId, level, graph, files]);
+  }, [client, dialog, detail?.id, projectId, level, graph, files, previewNonce]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
@@ -355,14 +402,14 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       const next = await cancelExport(client, record.project, record.id);
       if (next.status === "canceled") {
         patchExport(record.id, { task: next, phase: "canceled" });
-        pushFlash("error", t.exportCanceled);
+        pushFlash("neutral", t.exportCanceled);
       } else if (next.status === "completed") {
         // Packaging finished first: keep the package and go straight to saving.
         const completed = { ...record, task: next };
         patchExport(record.id, { task: next });
         await persistArchiveRef.current(completed);
       } else if (next.status === "failed") {
-        patchExport(record.id, { task: next, phase: "pack-failed", error: taskErrorMessage(next.error) });
+        patchExport(record.id, { task: next, phase: "pack-failed", error: taskErrorMessage(next.error) ?? t.failed, rawError: next.error });
         pushFlash("error", taskErrorMessage(next.error) ?? t.failed);
       } else {
         patchExport(record.id, { task: next });
@@ -408,6 +455,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const excludedWorkspaceFiles = preview
     ? preview.files.filter(item => files ? !files.includes(item.path) : item.selected === false).length
     : 0;
+  const allFilesSelected = preview ? preview.files.length > 0 && excludedWorkspaceFiles === 0 : false;
   // A ready copy is reached through 继续聊天, which navigates as soon as the copy
   // exists; a second permanent "open" entry point only duplicated it (#1057).
   // The cap and the exact tar size come from the preview response, so this gate
@@ -418,9 +466,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const limitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
   const overLimitAcknowledged = limitKey !== undefined && acknowledgedLimitKey === limitKey;
   const blockedByLimit = overLimit && !overLimitAcknowledged;
-  const formatLimit = (bytes: number) => bytes >= 1024 * 1024 * 1024
-    ? `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`
-    : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(0)} MiB` : `${(bytes / 1024).toFixed(0)} KiB`;
+  const formatLimit = (bytes: number) => formatBytes(bytes);
   return <>
     {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
@@ -429,18 +475,27 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     {activeFlash ? <div className={`research-package-flash is-${activeFlash.tone}`} role="status"><span>{activeFlash.message}</span>{activeFlash.savedToken ? <button onClick={() => void openLocation(activeFlash.savedToken!)} type="button">{t.openLocation}</button> : null}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
-      <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></header>
+      <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
           <p className="research-package-notice">{t.sessionScope}</p>
+          <p className="research-field-label">{t.exportTypes}</p>
           <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button">
-            <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><span className="research-profile-check" aria-hidden="true">{level === value ? "✓" : ""}</span></span>
-            <strong>{value === "necessary" ? t.necessary : t.complete}</strong><span className="research-profile-description">{value === "necessary" ? t.necessaryHint : t.completeHint}</span>
-            <span className="research-profile-contents">{value === "necessary" ? t.necessaryContents : t.completeContents}</span>
-            <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? `${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : "—"}</b></span>
+            <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><strong>{value === "necessary" ? t.necessary : t.complete}</strong></span>
+            <span className="research-profile-badges">{(value === "necessary"
+              ? [t.badgeConversation, t.badgeCurrentFiles, t.badgeDependencies]
+              : [t.badgeConversation, t.badgeFileVersions, t.badgeHistory]).map(badge => <span className="research-badge" key={badge}>{badge}</span>)}</span>
+            <span className="research-profile-description">{value === "necessary" ? t.necessaryHint : t.completeHint}</span>
+            <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? formatBytes(profiles[value]!.estimatedBytes) : "—"}</b></span>
           </button>)}</div>
-          {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
-          <p>{preview ? <>{t.estimate} <b>{(preview.estimatedBytes / 1024).toFixed(1)} KiB</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
+          <p className="research-field-label">{t.otherContent}</p>
+          <div className="research-package-options">
+            <label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.includeTrajectory}</label>
+            <label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label>
+          </div>
+          {estimating ? <p className="research-package-notice">{t.recalculating}</p> : null}
+          {estimating && !preview ? <p className="research-package-status" role="status"><span aria-hidden="true" className="spinner" />{t.previewRetrying}</p> : null}
+          {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => setPreviewNonce(value => value + 1)} type="button">{t.retryPreview}</button></div> : null}
           {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
           {blockedByLimit ? <div role="alert" className="research-package-limit">
             <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
@@ -449,22 +504,30 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             <button className="secondary-button" onClick={() => setAcknowledgedLimitKey(limitKey)} type="button">{t.exportAnyway}</button>
           </div> : null}
           {overLimitAcknowledged ? <p role="status" className="research-package-notice">{t.overLimitConfirmed}</p> : null}
-          {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
+          {preview ? <details className="research-files-block" open>
+            <summary>{t.files}（{preview.files.length}）</summary>
+            <label className="research-select-all"><input type="checkbox" checked={allFilesSelected} onChange={event => setFiles(event.target.checked ? preview.files.map(row => row.path) : [])} />{t.selectAll}</label>
+            <div className="research-file-grid">{preview.files.map(item => <label key={item.path} title={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} /><span>{item.path}</span></label>)}</div>
+          </details> : null}
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
-          {sessionHistory.length > 0 || finishedExports.some(record => record.phase !== "saved") ? <div className="research-package-saved"><h3>{t.savedExports}</h3>
+          {sessionHistory.length > 0 || finishedExports.some(record => record.phase !== "saved") ? <div className="research-package-saved" ref={savedRef}><h3>{t.savedExports}</h3>
             {historyBridge ? <ExportHistoryList locale={TEXT.languageTag} onForget={record => void forgetHistory(record)} onReveal={record => void revealHistory(record)} rows={sessionHistory} /> : null}
-            {finishedExports.filter(record => record.phase !== "saved").map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <span className="is-error">{record.error ?? t.failed}</span> : null}</div>)}
+            {finishedExports.filter(record => record.phase !== "saved").map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <><span className="is-error">{record.error ?? t.failed}</span>{record.rawError && record.rawError !== record.error ? <details className="research-package-raw"><summary>{t.detailsRaw}</summary><code>{record.rawError}</code></details> : null}</> : null}</div>)}
             {historyBridge ? null : finishedExports.filter(record => record.phase === "saved" && record.savedToken).map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span><button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button></div>)}
           </div> : null}
         </> : dialog === "import" ? <>
           <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
           <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span>{file ? <span className="research-package-upload-filename">{file.name}</span> : null}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
-          {inspection ? <div className="research-import-review"><p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects} · {(file!.size / 1024).toFixed(1)} KiB</p><p className="research-package-notice">{t.importHint}</p></div> : <p className="research-package-notice">{t.importHint}</p>}
+          {inspection ? <div className="research-import-review"><p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects} · {formatBytes(file!.size)}</p>
+            {inspection.manifest.source.title ? <p className="research-import-meta">{t.sourceTitle} <b>{inspection.manifest.source.title}</b></p> : null}
+            <p className="research-import-meta">{t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
+            {inspection.manifest.omissions.length ? <details className="research-import-omissions-block" open><summary>{t.omissions} · {inspection.manifest.omissions.length}</summary><ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul></details> : null}
+            <p className="research-package-notice">{t.importHint}</p></div> : <p className="research-package-notice">{t.importHint}</p>}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{dialog === "export" ? t.cancelAction : t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the
@@ -477,15 +540,15 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: trajectory, includeFullMemoryGraph: graph, filePaths: files, allowOverCap: overLimitAcknowledged });
           const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: taskErrorMessage(task.error), level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
           // to be settled immediately instead of waiting for a poll that never
           // runs against a non-active status.
           if (task.status === "completed") { await persistArchiveRef.current(record); }
-          else if (task.status === "failed") { const message = taskErrorMessage(task.error); patchExport(task.id, { phase: "pack-failed", error: message }); pushFlash("error", message ?? t.failed); }
-          else if (task.status === "canceled") { patchExport(task.id, { phase: "canceled" }); pushFlash("error", t.exportCanceled); }
+          else if (task.status === "failed") { const message = taskErrorMessage(task.error); patchExport(task.id, { phase: "pack-failed", error: message ?? t.failed, rawError: task.error }); pushFlash("error", message ?? t.failed); }
+          else if (task.status === "canceled") { patchExport(task.id, { phase: "canceled" }); pushFlash("neutral", t.exportCanceled); }
         });
         else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) onOpen(source); });
       }}>{busy ? t.working : dialog === "export" ? t.startExport : dialog === "import" ? t.confirmImport : t.branch}</button></footer>

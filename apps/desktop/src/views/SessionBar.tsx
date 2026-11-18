@@ -27,6 +27,9 @@ interface Props {
   /** Brings the collapsed left column back. The control belongs at the page
    *  head's left edge, where the content itself starts. */
   onExpandSidebar?: () => void;
+  /** Put the export dialog one click away from the session it exports. The row
+   *  menu keeps its entry as the shortcut (#1024). */
+  onExport?: () => void;
   onToggleWorkspace: () => void;
   projectName?: string;
   sidebarCollapsed?: boolean;
@@ -56,6 +59,7 @@ export function SessionBar({
   actions,
   detail,
   onExpandSidebar,
+  onExport,
   onToggleWorkspace,
   projectName,
   sidebarCollapsed,
@@ -98,6 +102,20 @@ export function SessionBar({
         ) : null}
       </div>
       <div className="task-head-actions">
+        {onExport ? (
+          <button
+            aria-label={TEXT.researchPackage.export}
+            className="bar-icon-button task-head-export"
+            onClick={onExport}
+            title={TEXT.researchPackage.export}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="15">
+              <path d="M12 3v10M8 9l4 4 4-4" />
+              <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+            </svg>
+          </button>
+        ) : null}
         {/* Only the closed state has this button: once the panel is open, its
             own header carries the collapse control, and a second one here
             would be the same action drawn twice. */}

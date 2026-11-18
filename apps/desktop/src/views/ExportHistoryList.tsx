@@ -57,21 +57,33 @@ export function ExportHistoryList({
     <ul className="export-history">
       {rows.map((row) => (
         <li className={row.exists ? "export-history-row" : "export-history-row is-missing"} key={row.id}>
-          <span className="export-history-name" title={row.filename}>{row.filename}</span>
-          <span className="export-history-meta">
-            <span>{exportSize(row.bytes)}</span>
-            <span aria-hidden="true">·</span>
-            <span>{exportSavedAt(row.savedAt, locale)}</span>
-            {row.sessionTitle ? <><span aria-hidden="true">·</span><span className="export-history-session" title={row.sessionTitle}>{row.sessionTitle}</span></> : null}
+          <span className="export-history-main">
+            <span className="export-history-name" title={row.filename}>{row.filename}</span>
+            <span className="export-history-meta">
+              <span>{exportSize(row.bytes)}</span>
+              <span aria-hidden="true">·</span>
+              <span>{exportSavedAt(row.savedAt, locale)}</span>
+              {row.sessionTitle ? <><span aria-hidden="true">·</span><span className="export-history-session" title={row.sessionTitle}>{row.sessionTitle}</span></> : null}
+            </span>
+            <span className="export-history-destination" title={row.directory}>{row.directory}</span>
           </span>
-          <span className="export-history-destination" title={row.directory}>{row.directory}</span>
           <span className="export-history-actions">
             {row.exists ? (
-              <button onClick={() => onReveal(row)} type="button">{t.reveal}</button>
+              <button aria-label={t.reveal} className="export-history-icon" onClick={() => onReveal(row)} title={t.reveal} type="button">
+                <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="15">
+                  <path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <path d="M9 13h6M12 10.5v5" />
+                </svg>
+              </button>
             ) : (
               <span className="is-warning">{t.missing}</span>
             )}
-            <button onClick={() => onForget(row)} type="button">{t.forget}</button>
+            <button aria-label={t.forget} className="export-history-icon" onClick={() => onForget(row)} title={t.forget} type="button">
+              <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="15">
+                <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+            </button>
           </span>
         </li>
       ))}

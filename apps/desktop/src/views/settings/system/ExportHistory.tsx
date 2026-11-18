@@ -75,8 +75,19 @@ export function ExportHistorySettings({ projects }: { projects: Project[] }) {
 
   return (
     <section className="export-history-settings">
-      <h3>{t.heading}</h3>
+      <header className="export-history-head">
+        <div>
+          <h3>{t.title}</h3>
+          <p className="export-history-description">{t.description}</p>
+        </div>
+      </header>
+      {/* The toolbar follows the session-management page: the scope control on the
+          left, the search field on the right (#1024). */}
       <div className="export-history-filters">
+        <select aria-label={t.allProjects} onChange={(event) => setProject(event.target.value)} value={project}>
+          <option value="all">{t.allProjects}</option>
+          {projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+        </select>
         <input
           aria-label={t.searchPlaceholder}
           onChange={(event) => setQuery(event.target.value)}
@@ -84,10 +95,6 @@ export function ExportHistorySettings({ projects }: { projects: Project[] }) {
           type="search"
           value={query}
         />
-        <select aria-label={t.allProjects} onChange={(event) => setProject(event.target.value)} value={project}>
-          <option value="all">{t.allProjects}</option>
-          {projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-        </select>
       </div>
       {notice ? <p className="export-history-notice" role="status">{notice}</p> : null}
       {visible.length > 0 ? (

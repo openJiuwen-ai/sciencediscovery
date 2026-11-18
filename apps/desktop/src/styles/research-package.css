@@ -13,22 +13,47 @@
 .research-package-dialog { width:min(680px,calc(100vw - 32px)); max-height:85vh; overflow:hidden; display:flex; flex-direction:column; }
 .research-package-dialog .modal-body { min-height:0; overflow:auto; overflow-wrap:anywhere; }
 .research-package-dialog .modal-header,.research-package-dialog .modal-footer { flex-shrink:0; }
+/* The header is a stacked block (eyebrow, title), so the tools are pinned to its
+   top-right corner rather than sitting in that flow. */
+.research-package-dialog .modal-header { position: relative; }
+.research-dialog-tools { position: absolute; top: 14px; right: 14px; display: flex; align-items: center; gap: 4px; }
+.modal-tool { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.modal-tool:hover { background: var(--surface-sunk); color: var(--text); }
 .research-package-profiles { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:20px 0; }
-.research-package-profiles button { display:flex; flex-direction:column; text-align:left; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-m); padding:20px; cursor:pointer; transition:border-color .15s,box-shadow .15s,background .15s; }
+.research-package-profiles button {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px 12px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
 .research-package-profiles button:hover { border-color:var(--border-strong); box-shadow:var(--shadow-1); }
 .research-package-profiles button:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
 .research-package-profiles .is-selected { border-color:var(--primary); background:var(--primary-softer); box-shadow:0 0 0 1px var(--primary) inset; }
-.research-profile-heading { display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:18px; }
-.research-profile-icon { display:grid; place-items:center; width:42px; height:42px; border-radius:var(--radius-m); background:var(--surface-sunk); color:var(--text-secondary); }
-.is-selected .research-profile-icon { background:var(--primary-tint); color:var(--primary-strong); }
-.research-profile-check { display:grid; place-items:center; width:18px; height:18px; border:1px solid var(--border-strong); border-radius:50%; color:#fff; font-size:11px; }
-.is-selected .research-profile-check { background:var(--primary); border-color:var(--primary); }
-.research-package-profiles strong { font-size:15px; font-weight:600; }
-.research-profile-description { color:var(--muted); font-size:12px; line-height:1.8; margin-top:8px; min-height:44px; }
-.research-profile-contents { color:var(--text-secondary); font-size:11px; line-height:1.8; margin:14px 0 18px; }
-.research-package-size { display:flex; justify-content:space-between; flex-wrap:wrap; align-items:baseline; gap:8px; width:100%; border-top:1px solid var(--border-soft); padding-top:14px; margin-top:auto; }
-.research-package-size span { font-size:10px; color:var(--muted); }
-.research-package-size b { font-size:14px; font-weight:600; color:var(--text-strong); font-variant-numeric:tabular-nums; }
+/* The mock's card: icon and name on one line, the three scope badges under it, the
+   note, and the size pinned to the bottom edge. */
+.research-profile-heading { display: flex; align-items: center; gap: 8px; width: 100%; }
+.research-profile-icon { display: grid; place-items: center; width: 20px; height: 20px; color: var(--text-secondary); }
+.is-selected .research-profile-icon { color: var(--primary-strong); }
+.research-package-profiles strong { font-size: 14px; font-weight: 600; }
+.research-profile-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0 8px; }
+.research-badge {
+  background: var(--surface-sunk); border-radius: 4px; color: var(--text-secondary);
+  font-size: 11px; line-height: 1; padding: 4px 6px;
+}
+.is-selected .research-badge { background: var(--primary-tint); color: var(--primary-strong); }
+.research-profile-description { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 14px; }
+.research-package-size { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; width: 100%; border-top: 1px solid var(--border-soft); padding-top: 10px; margin-top: auto; }
+.research-package-size span { font-size: 11px; color: var(--muted); }
+.research-package-size b { font-size: 14px; font-weight: 650; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+/* The dialog's own section headings, as in the mock. */
+.research-field-label { color: var(--text-secondary); font-size: 13px; font-weight: 600; margin: 18px 0 8px; }
+.research-field-label:first-child { margin-top: 0; }
 /* The dialog's buttons deliberately keep the shared .primary-button /
    .secondary-button styling (design.css): a bespoke green, 10px-radius primary
    button here was the one control on this surface that did not match the rest
@@ -39,8 +64,20 @@
    kept so this stays a pure token pass rather than a visual change. */
 .research-import-project select { width:100%; min-height:38px; margin-top:6px; padding:8px 12px; appearance:none; border:1px solid var(--border-strong); border-radius:var(--radius-s); background:var(--surface); color:var(--text); font-size:14px; background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23667085' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:30px; }
 .research-import-project > span { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:6px; }
-.research-package-options,.research-package-files { display:flex; flex-direction:column; gap:10px; margin:16px 0; }
-.research-package-files { max-height:180px; overflow:auto; font-size:12px; }
+.research-package-options { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 0; }
+.research-package-options label { align-items: center; display: flex; gap: 8px; font-size: 13px; }
+.research-files-block { margin: 14px 0 0; }
+.research-files-block > summary { color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; }
+.research-select-all { align-items: center; display: flex; gap: 8px; font-size: 13px; margin: 12px 0 10px; }
+.research-file-grid { display: grid; gap: 8px 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: 168px; overflow: auto; }
+.research-file-grid label { align-items: center; display: flex; gap: 8px; font-size: 12px; min-width: 0; }
+/* A long name keeps its head and its extension: the middle is what goes. */
+.research-file-grid span {
+  direction: rtl; min-width: 0; overflow: hidden; text-align: left;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.research-file-grid span::before { content: "\200E"; }
+@media (max-width: 620px) { .research-file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* The file picker is drawn here rather than by the platform control: a native
    <input type="file"> renders its button in the browser/Electron locale, which
    stays Chinese in an English UI. The input itself is kept for a11y and
@@ -71,6 +108,27 @@
 .research-package-saved-row { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-secondary); padding:4px 0; overflow-wrap:anywhere; }
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
+
+/* A cancel the user asked for is not a failure: it says what happened without the
+   danger colour (#1024). */
+.research-package-flash.is-neutral { color: var(--text-secondary); background: var(--surface-sunk); }
+
+/* The package's own omission list: the reader compares it against what they expect
+   to carry, so it is a scrollable list rather than one long sentence. */
+.research-import-omissions-block { margin: 8px 0 0; }
+.research-import-omissions-block > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.research-import-omissions-block .research-import-omissions { max-height: 160px; overflow: auto; }
+
+/* The preview never settles: the dialog says so and offers the retry instead of
+   leaving the primary action dead (#1024). */
+.research-package-pending {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 10px 0 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+}
+.research-package-pending p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+.research-package-pending button { flex-shrink: 0; }
 
 /* Over-cap warning in the export dialog: the risk is a sentence a person reads
    before the second confirmation, so it gets a bordered block rather than a
