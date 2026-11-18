@@ -425,13 +425,22 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
     [ -f "$LATEST_YML" ] || die "5f: missing latest-mac.yml (zip target did not write update info — is the publish section present in electron-builder.yml?)"
     # electron-builder 26.x appends .blockmap to the FULL carrier name
     # (ScienceDiscovery-…-mac-arm64.zip.blockmap); 25.x replaced the .zip
-    # suffix (…-mac-arm64.blockmap). Accept both so the differential-update
-    # gate survives builder upgrades; the file must sit beside the zip.
+    # suffix (…-mac-arm64.blockmap). Gate the differential-update data the
+    # same way the DMG/zip discovery gates carriers: EXACTLY ONE of the two
+    # names may exist. A leftover blockmap from a same-version rebuild under
+    # the other naming must fail the gate — first-existing would silently
+    # ship a stale blockmap that does not match this zip (bot F1 /
+    # maintainer note on #1217: prefer an exactly-one assertion).
     BLOCKMAP=""
+    FOUND=0
     for candidate in "${ZIP}.blockmap" "${ZIP%.zip}.blockmap"; do
-      [ -f "$candidate" ] && BLOCKMAP="$candidate" && break
+      if [ -f "$candidate" ]; then
+        BLOCKMAP="$candidate"
+        FOUND=$((FOUND + 1))
+      fi
     done
-    [ -n "$BLOCKMAP" ] || die "5f: missing ${ZIP}.blockmap (differential update data — electron-builder 26.x name) nor ${ZIP%.zip}.blockmap (25.x name)"
+    [ "$FOUND" -eq 1 ] \
+      || die "5f: expected exactly one of ${ZIP}.blockmap (26.x name) / ${ZIP%.zip}.blockmap (25.x name) in $(dirname "$ZIP"), found $FOUND — a stale same-version blockmap from a previous naming is present; clean release/ and rerun the gate"
     # F11: the update feed must describe THIS build. A stale yml from an
     # earlier run (or a mismatched version) would push the wrong update to
     # every user — gate the version and the exact carrier filename.
