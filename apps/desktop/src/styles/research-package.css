@@ -66,6 +66,9 @@
 .research-import-project > span { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:6px; }
 .research-package-options { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 0; }
 .research-package-options label { align-items: center; display: flex; gap: 8px; font-size: 13px; }
+/* The selection's own size sits under the payload switches: a paragraph has no
+   default margin here, so it needs its own gap to read as a separate line. */
+.research-package-selected-size { margin: 12px 0 0; }
 .research-files-block { margin: 14px 0 0; }
 .research-files-block > summary { color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; }
 .research-select-all { align-items: center; display: flex; gap: 8px; font-size: 13px; margin: 12px 0 10px; }
