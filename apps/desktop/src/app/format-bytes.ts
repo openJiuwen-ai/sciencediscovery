@@ -1,25 +1,24 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { sizeInUnit } from "./size-units.js";
+
 /**
  * Human size for a research package, by magnitude.
  *
- * One decimal from KB up — a size line is read to judge "can I copy this", not to
- * count bytes — and plain bytes below 1 KB. 1024-based, and spelled exactly like the
- * saved-export rows beside it so one dialog never shows two spellings of the same
- * unit. The previous dialog printed every size in KiB, which turned a ~910 MiB
- * session into `933095.4 KiB` and made the number unreadable (#1024).
+ * The magnitude loop is `sizeInUnit`, shared with the attachment and upload limits, so
+ * this file owns only the package's own spelling: KB/MB/GB with one decimal, exactly
+ * like the saved-export rows beside it. The previous dialog printed every size in KiB,
+ * which turned a ~910 MiB session into `933095.4 KiB` (#1024).
  */
+export const PACKAGE_SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+
+// One decimal at every level: a size line is compared across cards, so the shape of
+// the number should not change with its magnitude.
+const print = (value: number): number => Number(value.toFixed(1));
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return "—";
-  const value = Math.max(0, Math.round(bytes));
-  if (value < 1024) return `${value} B`;
-  const units = ["KB", "MB", "GB", "TB"] as const;
-  let scaled = value / 1024;
-  let unit = 0;
-  while (scaled >= 1024 && unit < units.length - 1) {
-    scaled /= 1024;
-    unit += 1;
-  }
-  return `${scaled.toFixed(1)} ${units[unit]}`;
+  const { unit, value } = sizeInUnit(Math.max(0, Math.round(bytes)), print, PACKAGE_SIZE_UNITS.length);
+  return `${unit === 0 ? Math.round(value) : value.toFixed(1)} ${PACKAGE_SIZE_UNITS[unit]}`;
 }
