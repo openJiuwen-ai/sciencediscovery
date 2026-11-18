@@ -47,6 +47,10 @@ function selectedGroup(route: Route, groupByCategory: boolean): { domain: string
 }
 
 function categoryFields(asset: Asset): { domain?: string; function?: string; subdomain?: string } {
+  // A session package's tree is task → domain, so the tree's parent and child
+  // have to map onto the generic two-level parameters the router already uses;
+  // reading category.domain here would match nothing.
+  if (asset.kind === "session-package") return { domain: asset.category.task, subdomain: asset.category.domain };
   return asset.kind === "specialist" ? {} : asset.category as { domain?: string; function?: string; subdomain?: string };
 }
 
