@@ -66,6 +66,7 @@ import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
 import { nativeConfigurationChoiceRecord } from "../configuration/native-choices.js";
 import type { ServerConfig } from "./config.js";
+import type { PackageCapacity } from "../research-package-preflight.js";
 
 export interface ApiServerDependencies {
   /** Embedding/test seam: exercise governed Web tools without contacting a live search engine. */
@@ -82,6 +83,8 @@ export interface ApiServerDependencies {
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
   remoteCompute?: RemoteComputeClient;
+  /** Test seam: keep package HTTP tests independent of the host volume's free space. */
+  measureResearchPackageCapacity?: (dataDir: string) => Promise<PackageCapacity>;
 }
 
 async function initializeComponent<T>(component: string, operation: () => Promise<T>): Promise<T> {
