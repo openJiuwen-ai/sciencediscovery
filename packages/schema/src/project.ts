@@ -34,9 +34,9 @@ export interface Project {
    *  a user Project, never renamed, never deleted. */
   kind?: typeof INBOX_PROJECT_KIND;
   name: string;
-  /** Default remote hosts for inheriting Sessions; not a ceiling on Session overrides. */
+  /** Legacy Project selection. Nonempty lists restrict inherited Sessions; empty with no runnerIds uses the live catalog. */
   remoteRunnerHostIds: string[];
-  /** Unified selection, including local. Absent preserves legacy defaults. */
+  /** Explicit selection, including local. Absent with no legacy hosts uses the registered Runner catalog. */
   runnerIds?: string[];
   settingsOverrides: RuntimeSettingsOverrides;
 }
@@ -44,7 +44,9 @@ export interface Project {
 export interface CreateProjectRequest {
   description?: string;
   name: string;
+  /** Omit both selections to use every registered Runner; an explicit legacy [] keeps only local. */
   remoteRunnerHostIds?: string[];
+  /** Explicit IDs, including local; [] disables execution for inheriting Sessions. */
   runnerIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
 }
@@ -82,10 +84,18 @@ export interface DeletionImpact {
   totalSessionCount: number;
 }
 
-/** Legacy remote-only lists always included the built-in Runner implicitly. */
+/**
+ * Explicit Session and Project choices take precedence, including empty lists.
+ * A Project with no selection uses the live registered catalog. Legacy remote
+ * selections keep the built-in Runner; an explicit empty Session legacy list
+ * still means built-in only.
+ */
 export function effectiveRunnerIds(project: Pick<Project, "runnerIds" | "remoteRunnerHostIds">,
-  session?: Pick<Session, "runnerIds" | "remoteRunnerHostIds">): string[] {
+  session?: Pick<Session, "runnerIds" | "remoteRunnerHostIds">,
+  registeredRunnerIds: readonly string[] = ["local"]): string[] {
   if (session?.runnerIds !== undefined) return [...session.runnerIds];
   if (session?.remoteRunnerHostIds !== undefined) return ["local", ...session.remoteRunnerHostIds];
-  return project.runnerIds ? [...project.runnerIds] : ["local", ...project.remoteRunnerHostIds];
+  if (project.runnerIds !== undefined) return [...project.runnerIds];
+  if (project.remoteRunnerHostIds.length) return ["local", ...project.remoteRunnerHostIds];
+  return [...registeredRunnerIds];
 }

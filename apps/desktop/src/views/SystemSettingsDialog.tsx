@@ -23,7 +23,6 @@ import { GeneralSettings } from "./settings/GeneralSettings.js";
 import { ModelSettings } from "./settings/ModelSettings.js";
 import { NetworkSettings } from "./settings/NetworkSettings.js";
 import { RuntimeSettings } from "./settings/RuntimeSettings.js";
-import { EnvironmentSettings } from "./settings/EnvironmentSettings.js";
 import { QuotaSettings } from "./settings/QuotaSettings.js";
 import { WebSearchSettings } from "./settings/WebSearchSettings.js";
 import { ProxySettings } from "./settings/ProxySettings.js";
@@ -46,7 +45,6 @@ export type SettingsGroup =
   | "idea-tree"
   | "sandbox-network"
   | "remote"
-  | "environments"
   | "quotas"
   | "web"
   | "proxies"
@@ -61,7 +59,7 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // the intelligence settings and after 专家, the last thing that is given to
   // the agent rather than the environment it runs in.
   { groups: ["models", "skills", "mcp", "specialists", "idea-tree", "memory", "web"], id: "intelligence" },
-  { groups: ["sandbox-network", "proxies", "remote", "environments"], id: "connection" },
+  { groups: ["sandbox-network", "proxies", "remote"], id: "connection" },
   { groups: ["timeouts", "quotas", "export-history"], id: "workspace" },
 ];
 
@@ -104,7 +102,6 @@ export function SystemSettingsDialog({
    *  pane keeps the width rather than reflowing around a zero column. */
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
-  const [environmentRunnerId, setEnvironmentRunnerId] = useState("local");
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -174,12 +171,8 @@ export function SystemSettingsDialog({
           <RuntimeSettings
             client={client}
             onConfirm={actions.confirmAction}
-            project={state.activeProject}
-            onManageEnvironment={(runnerId) => { setEnvironmentRunnerId(runnerId); onGroupChange("environments"); }}
           />
         );
-      case "environments":
-        return <EnvironmentSettings client={client} onConfirm={actions.confirmAction} initialRunnerId={environmentRunnerId} />;
       case "quotas":
         return <QuotaSettings client={client} onSaved={actions.applyQuotaSettings} />;
       case "web":

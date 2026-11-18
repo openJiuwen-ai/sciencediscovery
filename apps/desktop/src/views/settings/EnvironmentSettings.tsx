@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ApiClient } from "../../api/client.js";
-import { getEnvironmentSource, listRunners, runnerEnvironmentApi, updateEnvironmentSource } from "../../api/settings.js";
+import { getEnvironmentSource, runnerEnvironmentApi, updateEnvironmentSource } from "../../api/settings.js";
 import type { Environment, EnvironmentPackageManager, EnvironmentSourceSettings, ScientificLanguage } from "../../api/types.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
@@ -23,31 +23,7 @@ import { SettingsModal } from "./SettingsModal.js";
 import { Group, LoadGate, Row, Select, Tag } from "./rows.js";
 import { useSettingsWrite, WriteStatus } from "./setting-controls.js";
 
-interface Props { client: ApiClient; onConfirm: (request: ConfirmRequest) => void; initialRunnerId?: string }
-
-export function EnvironmentSettings({ client, onConfirm, initialRunnerId = "local" }: Props) {
-  const runners = useLoaded(() => listRunners(client));
-  const [runnerId, setRunnerId] = useState(initialRunnerId);
-  const text = TEXT.settings.system.migrated.environments;
-  return <>
-    <Group><p className="settings-note">{text.scope}</p>
-      <LoadGate loaded={runners}>{items => {
-        const remote = items.filter(item => item.id !== "local");
-        const selected = remote.find(item => item.id === runnerId);
-        return <>
-          <Row title={text.runner}><Select label={text.runner} value={runnerId} onChange={setRunnerId}
-            options={[{ value: "local", label: text.local }, ...remote.map(item => ({ value: item.id, label: item.runnerName ?? item.alias ?? item.id }))]} /></Row>
-          {runnerId !== "local" && selected?.runnerStatus?.state !== "ready"
-            ? <p className="settings-note" role="status">{text.unavailable}</p>
-            : <RunnerEnvironmentPane key={runnerId} client={client} runnerId={runnerId} onConfirm={onConfirm} />}
-        </>;
-      }}</LoadGate>
-    </Group>
-    <details className="settings-advanced"><summary>{text.sources}</summary><EnvironmentSources client={client} /></details>
-  </>;
-}
-
-function EnvironmentSources({ client }: { client: ApiClient }) {
+export function EnvironmentSources({ client }: { client: ApiClient }) {
   const loaded = useLoaded(() => getEnvironmentSource(client));
   const write = useSettingsWrite();
   const text = TEXT.settings.system.migrated.environments;
@@ -55,27 +31,27 @@ function EnvironmentSources({ client }: { client: ApiClient }) {
     { value: "upstream", label: "Official upstream" }, { value: "tsinghua", label: "Tsinghua TUNA" },
     { value: "ustc", label: "USTC" }, { value: "huawei", label: "Huawei Cloud" },
   ] as const;
-  const [patch, setPatch] = useState<Partial<EnvironmentSourceSettings>>({});
-  return <LoadGate loaded={loaded}>{settings => <Group>
+  return <LoadGate loaded={loaded}>{settings => <Group heading={text.sources}>
     <p className="settings-note">{text.sourcesHint}</p>
     {(["condaSource", "pipSource"] as const).map(field => <Row key={field} title={field === "condaSource" ? text.conda : text.pip}>
-      <Select label={field === "condaSource" ? text.conda : text.pip} value={patch[field] ?? settings[field]}
+      <Select label={field === "condaSource" ? text.conda : text.pip} value={settings[field]}
         disabled={write.busy || loaded.loading} options={options.filter(item => field !== "condaSource" || item.value !== "huawei")}
         onChange={value => {
           const option = options.find(item => item.value === value);
-          if (!option || (field === "condaSource" && option.value === "huawei")) return;
-          if (field === "condaSource" && option.value !== "huawei") setPatch(current => ({ ...current, condaSource: option.value }));
-          else if (field === "pipSource") setPatch(current => ({ ...current, pipSource: option.value }));
+          if (!option || option.value === settings[field] || (field === "condaSource" && option.value === "huawei")) return;
+          const patch: Partial<EnvironmentSourceSettings> = {};
+          if (field === "condaSource" && option.value !== "huawei") patch.condaSource = option.value;
+          else if (field === "pipSource") patch.pipSource = option.value;
+          void write.run(async () => { await updateEnvironmentSource(client, patch); loaded.reload(); });
         }} />
     </Row>)}
-    <div className="settings-form-actions"><button className="secondary-button" type="button"
-      disabled={write.busy || loaded.loading || !Object.keys(patch).some(field => field === "pipSource" ? patch.pipSource !== settings.pipSource : patch.condaSource !== settings.condaSource)}
-      onClick={() => void write.run(async () => { await updateEnvironmentSource(client, patch); setPatch({}); loaded.reload(); })}>
-      {TEXT.settings.system.migrated.common.save}</button></div><WriteStatus state={write} />
+    <WriteStatus state={write} quiet />
   </Group>}</LoadGate>;
 }
 
-function RunnerEnvironmentPane({ client, runnerId, onConfirm }: Required<Pick<Props, "client" | "onConfirm">> & { runnerId: string }) {
+export function RunnerEnvironmentPane({ client, runnerId, onConfirm }: {
+  client: ApiClient; runnerId: string; onConfirm: (request: ConfirmRequest) => void;
+}) {
   const api = useMemo(() => runnerEnvironmentApi(client, runnerId), [client, runnerId]);
   const loaded = useLoaded(async () => {
     const setup = await api.setup();
@@ -87,20 +63,27 @@ function RunnerEnvironmentPane({ client, runnerId, onConfirm }: Required<Pick<Pr
   const text = TEXT.settings.system.migrated.environments;
   const common = TEXT.settings.system.migrated.common;
   const [creating, setCreating] = useState(false);
+  const [creationWrite, setCreationWrite] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   useEffect(() => {
     if (loaded.value?.setup.state !== "installing") return;
     const timer = window.setInterval(loaded.reload, 1000);
     return () => window.clearInterval(timer);
   }, [loaded.value?.setup.state, loaded.reload]);
-  const run = (operation: () => Promise<unknown>) => write.run(async () => { await operation(); loaded.reload(); });
+  const run = (operation: () => Promise<unknown>, creation = false) => {
+    setCreationWrite(creation);
+    return write.run(async () => { await operation(); loaded.reload(); });
+  };
   return <LoadGate loaded={loaded}>{({ setup, environments, revisions }) => {
     const disabled = write.busy || loaded.loading;
     const selected = environments.find(item => item.id === selectedId);
-    return <>
-      <Row title={text.setup}><div className="row-inline-control"><Tag tone={setup.state === "ready" ? "ok" : undefined}>{text.states[setup.state]}</Tag>
-        <button className="secondary-button" type="button" disabled={disabled} onClick={loaded.reload}>{common.refresh}</button></div></Row>
+    return <Group heading={text.heading} actions={<>
+      <button className="secondary-button" type="button" disabled={disabled} onClick={loaded.reload}>{common.refresh}</button>
+      {setup.state === "ready" ? <button className="secondary-button" type="button" disabled={disabled}
+        onClick={() => setCreating(true)}>{text.create}</button> : null}
+    </>}>
       {setup.state !== "ready" ? <div className="environment-setup-progress" role="status">
+        <Tag>{text.states[setup.state]}</Tag>
         <p>{setup.message}</p>
         {setup.state === "not-configured" ? <small>Python · {setup.starterPackages.python.join(" · ")}</small> : null}
         {Object.entries(setup.components).map(([name, component]) => <div key={name}>
@@ -112,17 +95,16 @@ function RunnerEnvironmentPane({ client, runnerId, onConfirm }: Required<Pick<Pr
         <button className="primary-button" type="button" disabled={disabled || setup.state === "disabled" || setup.state === "installing"}
           onClick={() => void run(api.initialize)}>{setup.state === "failed" ? text.retry : text.initialize}</button>
       </div> : <>
-        <div className="settings-list-heading"><h3>{text.catalog}</h3><button className="secondary-button" type="button" disabled={disabled}
-          onClick={() => setCreating(true)}>{text.create}</button></div>
+        <p className="settings-note">{text.catalogHint}</p>
         {!environments.length ? <p className="settings-empty">{text.empty}</p> : environments.map(environment => <div className="settings-card" key={environment.id}>
           <button className="settings-card-main" type="button" disabled={disabled} onClick={() => setSelectedId(environment.id)}>
             <strong>{environment.name}</strong><small>{environment.language.toUpperCase()} · {environment.kind === "starter" ? text.base : text.managed}</small>
           </button><Tag>{text.environmentStates[environment.status ?? "ready"]}</Tag>
         </div>)}
       </>}
-      <WriteStatus state={write} />
+      <WriteStatus state={write} pendingLabel={creationWrite ? text.creating : undefined} successLabel={creationWrite ? text.created : undefined} />
       {creating ? <CreateEnvironment onClose={() => setCreating(false)} busy={disabled} write={write}
-        onCreate={async body => { if (await run(() => api.create(body))) setCreating(false); }} /> : null}
+        onCreate={async body => { if (await run(() => api.create(body), true)) setCreating(false); }} /> : null}
       {selected ? <SettingsModal wide label={selected.name} onClose={() => setSelectedId(undefined)}>
         <div className="environment-details">
           <Row title={text.revision} tone="stack"><code>{selected.currentRevisionId}</code></Row>
@@ -138,7 +120,7 @@ function RunnerEnvironmentPane({ client, runnerId, onConfirm }: Required<Pick<Pr
           <WriteStatus state={write} />
         </div>
       </SettingsModal> : null}
-    </>;
+    </Group>;
   }}</LoadGate>;
 }
 
@@ -155,7 +137,7 @@ function CreateEnvironment({ onClose, onCreate, busy, write }: {
       <Row title={text.language}><Select label={text.language} value={language} disabled={busy}
         options={[{ value: "python", label: "Python" }, { value: "r", label: "R" }]}
         onChange={value => { if (value === "python" || value === "r") setLanguage(value); }} /></Row>
-      <WriteStatus state={write} /><div className="settings-form-actions"><button className="primary-button" type="submit" disabled={busy || !name.trim()}>{text.create}</button></div>
+      <WriteStatus state={write} pendingLabel={text.creating} successLabel={null} /><div className="settings-form-actions"><button className="primary-button" type="submit" disabled={busy || !name.trim()}>{text.create}</button></div>
     </form>
   </SettingsModal>;
 }

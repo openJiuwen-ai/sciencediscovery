@@ -77,6 +77,8 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
           value={settings.defaultPolicy} inherit={false} disabled={disabled} onChange={defaultPolicy => {
             if (defaultPolicy !== "inherit") void run(() => updateProxySettings(client, { defaultPolicy }));
           }} /></Row>
+        <ProxyBypass key={settings.noProxy ?? ""} value={settings.noProxy ?? ""} disabled={disabled}
+          onSave={async noProxy => { await run(() => updateProxySettings(client, { defaultPolicy: settings.defaultPolicy, noProxy })); }} />
         {selected?.kind === "environment" ? <Row title={extra.diagnostics} tone="stack">
           <div className="proxy-diagnostics"><Tag>{selected.environment?.status ? text[({ configured: "environmentConfigured", invalid: "environmentInvalid", unconfigured: "environmentUnconfigured" } as const)[selected.environment.status]] : text.environmentUnconfigured}</Tag>
             {selected.environment?.reason ? <p>{selected.environment.reason}</p> : null}
@@ -93,6 +95,7 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
             onClick={() => { setTestResult(undefined); test(); }}>{extra.test}</button>
         </Row>
         {testResult ? <p className="settings-note" role="status">{testResult}</p> : null}
+        <p className="settings-note">{extra.systemNote}</p>
       </Group>
       <Group heading={text.serversHeading}>
         <div className="settings-form-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({})}>{text.add}</button></div>
@@ -104,12 +107,7 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
         </Row>)}
       </Group>
       <WriteStatus state={write} />
-      <details className="settings-advanced"><summary>{common.advanced}</summary>
-        <ProxyBypass key={settings.noProxy ?? ""} value={settings.noProxy ?? ""} disabled={disabled}
-          onSave={async noProxy => { await run(() => updateProxySettings(client, { defaultPolicy: settings.defaultPolicy, noProxy })); }} />
-        <p className="settings-note">{extra.systemNote}</p>
-        <ProxyModules key={settings.servers.map(server => server.id).join(":")} client={client} settings={settings} />
-      </details>
+      <ProxyModules key={settings.servers.map(server => server.id).join(":")} client={client} settings={settings} />
       {editing ? <ProxyForm key={editing.server?.id ?? "new"} server={editing.server} disabled={disabled} write={write}
         onClose={() => setEditing(undefined)} onSave={async body => {
           const server = editing.server;
@@ -122,11 +120,15 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
 function ProxyBypass({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (value: string) => Promise<void> }) {
   const [draft, setDraft] = useState(value);
   const text = TEXT.settings.system.migrated.proxy;
-  return <Group><form className="settings-card-form" onSubmit={event => { event.preventDefault(); void onSave(draft.trim()); }}>
-    <Row title={text.noProxy} hint={text.noProxyHint} tone="stack"><input className="field-input" aria-label={text.noProxy} value={draft} maxLength={4000}
-      disabled={disabled} onChange={event => setDraft(event.target.value)} /></Row>
-    <div className="settings-form-actions"><button className="secondary-button" type="submit" disabled={disabled || draft.trim() === value}>{TEXT.settings.system.migrated.common.save}</button></div>
-  </form></Group>;
+  return (
+    <Row title={text.noProxy} hint={text.noProxyHint} tone="stack">
+      <form className="allowlist-editor" onSubmit={event => { event.preventDefault(); void onSave(draft.trim()); }}>
+        <input className="field-input" aria-label={text.noProxy} value={draft} maxLength={4000}
+          disabled={disabled} onChange={event => setDraft(event.target.value)} />
+        <div className="allowlist-actions"><button className="secondary-button" type="submit" disabled={disabled || draft.trim() === value}>{TEXT.settings.system.migrated.common.save}</button></div>
+      </form>
+    </Row>
+  );
 }
 
 function ProxyForm({ server, disabled, write, onSave, onClose }: {

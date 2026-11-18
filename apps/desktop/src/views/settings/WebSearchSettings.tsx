@@ -20,12 +20,13 @@ import { useLoaded } from "../../app/use-loaded.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
 import { TEXT } from "../../text.js";
 import { SettingsModal } from "./SettingsModal.js";
-import { Group, LoadGate, Row, Select, Switch, Tag } from "./rows.js";
+import { Group, LoadGate, Row, Switch, Tag } from "./rows.js";
 import { useSettingsWrite, WriteStatus } from "./setting-controls.js";
 
 const PROVIDERS: { id: WebKeyProvider; name: string }[] = [
   { id: "bocha", name: "Bocha" }, { id: "perplexity", name: "Perplexity" },
   { id: "serper", name: "Serper" }, { id: "jina", name: "Jina" },
+  { id: "deepseek", name: "DeepSeek" },
 ];
 
 export function WebSearchSettings({ client, onConfirm }: {
@@ -44,16 +45,36 @@ export function WebSearchSettings({ client, onConfirm }: {
   return <LoadGate loaded={loaded}>{settings => {
     if (settings.backend !== "jiuwenswarm") return <Group><p className="settings-note">{text.unsupported}</p></Group>;
     const disabled = write.busy || loaded.loading;
+    const hasDeepseekKey = settings.providers.some(item => item.provider === "deepseek" && item.hasApiKey);
+    const fetchProvider = settings.deepseekEnabled && settings.fetchProvider === "deepseek" ? "deepseek" : "jina";
+    const credentialPatch = (provider: WebKeyProvider, value: string | null | undefined): UpdateWebSettingsRequest => {
+      const keys = value === undefined ? {} : { providerApiKeys: { [provider]: value } };
+      if (provider !== "deepseek") return keys;
+      const enabled = value !== null;
+      return {
+        ...keys,
+        deepseekEnabled: enabled,
+        paidSearchProviders: enabled
+          ? [...settings.paidSearchProviders.filter(id => id !== "deepseek"), "deepseek"]
+          : settings.paidSearchProviders.filter(id => id !== "deepseek"),
+        // Saving a search credential must not activate a reader hidden behind the old master switch.
+        ...(settings.fetchProvider === "deepseek" && (!enabled || !settings.deepseekEnabled) ? { fetchProvider: "jina" } : {}),
+      };
+    };
     const providerRow = (provider: { id: WebKeyProvider; name: string }) => {
       const saved = settings.providers.some(item => item.provider === provider.id && item.hasApiKey);
-      return <Row key={provider.id} title={provider.name}>
-        <div className="row-inline-control"><Tag>{saved ? text.configured : text.missing}</Tag>
+      const inactive = provider.id === "deepseek" && saved
+        && (!settings.deepseekEnabled || !settings.paidSearchProviders.includes("deepseek"));
+      return <Row key={provider.id} title={provider.name} hint={inactive ? text.reconfigureToEnable : undefined}>
+        <div className="row-inline-control"><Tag>{inactive ? text.searchInactive : saved ? text.configured : text.missing}</Tag>
           <button className="secondary-button" type="button" disabled={disabled}
             onClick={() => { setKey(""); setEditing(provider); }}>{text.configure}</button>
           {saved ? <button className="danger-button" type="button" disabled={disabled}
             aria-label={`${provider.name} · ${common.remove}`} onClick={() => onConfirm({
-              title: text.removeTitle, body: text.removeBody, eyebrow: provider.name, accept: common.remove,
-              onAccept: async () => { await save({ providerApiKeys: { [provider.id]: null } }); },
+              title: text.removeTitle,
+              body: provider.id === "deepseek" && settings.fetchProvider === "deepseek" ? text.deepseekRemoveBody : text.removeBody,
+              eyebrow: provider.name, accept: common.remove,
+              onAccept: async () => { await save(credentialPatch(provider.id, null)); },
             })}>{common.remove}</button> : null}
         </div>
       </Row>;
@@ -67,33 +88,33 @@ export function WebSearchSettings({ client, onConfirm }: {
               freeSearchEngines: { ...settings.freeSearchEngines, [engine.id]: enabled },
             })} /></Row>)}
       </Group>
-      <Group heading={text.paid}><p className="settings-note">{text.paidHint}</p>{PROVIDERS.map(providerRow)}</Group>
-      <Group heading="DeepSeek">
-        <Row title={text.deepseek} hint={text.deepseekHint}><Switch label={text.deepseek} disabled={disabled}
-          value={settings.deepseekEnabled} onChange={deepseekEnabled => void save({ deepseekEnabled })} /></Row>
-        {providerRow({ id: "deepseek", name: "DeepSeek" })}
-        <Row title={text.deepseekSearch}><Switch label={text.deepseekSearch} disabled={disabled || !settings.deepseekEnabled}
-          value={settings.paidSearchProviders.includes("deepseek")}
-          onChange={enabled => void save({ paidSearchProviders: enabled
-            ? [...settings.paidSearchProviders.filter(id => id !== "deepseek"), "deepseek"]
-            : settings.paidSearchProviders.filter(id => id !== "deepseek") })} /></Row>
-      </Group>
-      <Group heading={text.fetch}>
-        <Row title={text.fetchProvider}><Select label={text.fetchProvider} disabled={disabled}
-          value={settings.fetchProvider === "deepseek" ? "deepseek" : "jina"}
-          options={[{ value: "jina", label: text.fetchDefault }, { value: "deepseek", label: "DeepSeek" }]}
-          onChange={value => { if (value === "jina" || value === "deepseek") void save({ fetchProvider: value }); }} /></Row>
-        {!settings.deepseekEnabled && settings.fetchProvider === "deepseek" ? <p className="settings-note">{text.deepseekInactive}</p> : null}
+      <Group heading={text.paid}><p className="settings-note">{text.paidHint}</p>{PROVIDERS.map(provider => providerRow(provider))}</Group>
+      <Group heading={text.fetchHeading}>
+        <Row title={text.fetchProvider} hint={!hasDeepseekKey ? text.keyRequired : undefined}>
+          <select className="field-select scale-select" aria-label={text.fetchProvider} value={fetchProvider} disabled={disabled}
+            onChange={event => {
+              const value = event.target.value;
+              if (value === "jina") void save({ fetchProvider: "jina" });
+              else if (value === "deepseek" && hasDeepseekKey) void save({
+                fetchProvider: "deepseek", deepseekEnabled: true,
+                paidSearchProviders: [...settings.paidSearchProviders.filter(id => id !== "deepseek"), "deepseek"],
+              });
+            }}>
+            <option value="jina">{text.fetchDefault}</option>
+            <option value="deepseek" disabled={!hasDeepseekKey}>DeepSeek</option>
+          </select>
+        </Row>
+        {fetchProvider === "deepseek" ? <p className="settings-note">{text.fetchCost}</p> : null}
       </Group>
       <WriteStatus state={write} />
       <p className="settings-note">{text.activation}</p>
       {editing ? <SettingsModal label={`${editing.name} · ${text.key}`} onClose={() => { setEditing(undefined); setKey(""); }}>
         <form className="settings-card-form" onSubmit={async event => {
           event.preventDefault();
-          if (!key.trim()) { setEditing(undefined); return; }
-          if (await save({ providerApiKeys: { [editing.id]: key.trim() } })) { setKey(""); setEditing(undefined); }
+          if (!key.trim() && !(editing.id === "deepseek" && hasDeepseekKey)) { setEditing(undefined); return; }
+          if (await save(credentialPatch(editing.id, key.trim() || undefined))) { setKey(""); setEditing(undefined); }
         }}>
-          <p className="settings-note">{text.keyHint}</p>
+          <p className="settings-note">{editing.id === "deepseek" ? text.deepseekKeyHint : text.keyHint}</p>
           <Row title={text.key} tone="stack"><input aria-label={text.key} className="field-input" type="password"
             autoComplete="new-password" value={key} disabled={write.busy} onChange={event => setKey(event.target.value)} /></Row>
           <WriteStatus state={write} />

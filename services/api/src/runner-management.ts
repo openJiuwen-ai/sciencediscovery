@@ -84,7 +84,7 @@ export async function runnerWorkspaceBindings(store: SessionStore, hostId: strin
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
       const records = store.listRemoteWorkspaceSyncs(session.id).filter((record) => record.hostId === hostId);
-      const selected = local || effectiveRunnerIds(project, session).includes(hostId);
+      const selected = local || effectiveRunnerIds(project, session, ["local", hostId]).includes(hostId);
       const executions = selected || records.length ? [] : await store.listExecutionRuns(session.id);
       if (!selected && !records.length && !executions.some((run) => run.runnerId === hostId)) continue;
       result.push({ sessionId: session.id, sessionTitle: session.title, projectName: project.name,

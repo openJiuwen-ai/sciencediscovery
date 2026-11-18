@@ -20,10 +20,15 @@ import { TEXT } from "../../text.js";
 /** A titled block inside one settings page. Every page is a stack of these.
  *  The heading is the whole introduction: a sentence under it described the
  *  section to someone already looking at it, and every page opened with one. */
-export function Group({ children, heading }: { children: ReactNode; heading?: string }) {
+export function Group({ children, heading, actions }: {
+  children: ReactNode; heading?: string; actions?: ReactNode;
+}) {
   return (
     <section className="settings-section">
-      {heading ? <h3>{heading}</h3> : null}
+      {actions ? <div className="settings-list-heading">
+        {heading ? <h3>{heading}</h3> : null}
+        <div className="row-inline-control">{actions}</div>
+      </div> : heading ? <h3>{heading}</h3> : null}
       {children}
     </section>
   );
