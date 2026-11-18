@@ -99,10 +99,6 @@
 .research-package-progress-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
 .research-package-progress-list li { display:flex; align-items:center; gap:12px; }
 .research-package-progress-list button { border:0; background:none; color:var(--danger); cursor:pointer; font-size:11px; padding:0; }
-.research-package-flash { font-size:12px; padding:8px 28px; display:flex; gap:12px; align-items:center; overflow-wrap:anywhere; }
-.research-package-flash.is-success { color:var(--success); background:var(--success-soft); }
-.research-package-flash.is-error { color:var(--danger); background:var(--danger-soft); }
-.research-package-flash button { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved { border-top:1px solid var(--border-soft); margin-top:16px; padding-top:12px; }
 .research-package-saved h3 { font-size:12px; font-weight:600; color:var(--text-secondary); margin:0 0 8px; }
 .research-package-saved-row { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-secondary); padding:4px 0; overflow-wrap:anywhere; }
@@ -137,7 +133,6 @@
 
 /* A cancel the user asked for is not a failure: it says what happened without the
    danger colour (#1024). */
-.research-package-flash.is-neutral { color: var(--text-secondary); background: var(--surface-sunk); }
 
 /* The import dialog's one-line explanation sits under its title. */
 .research-dialog-lede { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 4px 0 16px; }
@@ -173,9 +168,6 @@
 
 /* The package's own omission list: the reader compares it against what they expect
    to carry, so it is a scrollable list rather than one long sentence. */
-.research-import-omissions-block { margin: 8px 0 0; }
-.research-import-omissions-block > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
-.research-import-omissions-block .research-import-omissions { max-height: 160px; overflow: auto; }
 
 /* The preview never settles: the dialog says so and offers the retry instead of
    leaving the primary action dead (#1024). */

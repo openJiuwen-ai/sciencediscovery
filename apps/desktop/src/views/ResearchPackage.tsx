@@ -134,6 +134,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const busyRef = useRef(false);
   const exportsRef = useRef<ExportRecord[]>([]);
   const savedRef = useRef<HTMLDivElement>(null);
+  const flashTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const flashSeq = useRef(0);
 
   const patchExport = useCallback((id: string, patch: Partial<ExportRecord>) => {
@@ -143,8 +144,10 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const pushFlash = useCallback((tone: ExportFlash["tone"], message: string, savedToken?: string) => {
     const id = (flashSeq.current += 1);
     setFlashQueue(current => [...current.slice(-3), { id, tone, message, savedToken }]);
-    setTimeout(() => setFlashQueue(current => current.filter(flash => flash.id !== id)), tone === "error" ? 8000 : 5000);
+    const timer = setTimeout(() => setFlashQueue(current => current.filter(flash => flash.id !== id)), tone === "error" ? 8000 : 5000);
+    flashTimers.current.push(timer);
   }, []);
+  useEffect(() => () => { flashTimers.current.forEach(clearTimeout); }, []);
   const dismissFlash = useCallback((id: number) => setFlashQueue(current => current.filter(flash => flash.id !== id)), []);
 
   useEffect(() => { exportsRef.current = exports; }, [exports]);
@@ -302,7 +305,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     // only the size line says it is recalculating (#1057). The pending budget is
     // keyed on the whole selection, so a changed file set starts it over without
     // touching what is already on screen.
-    const scope = `${level}|${graph}`;
+    const scope = `${level}|${graph}|${trajectory}`;
     if (previewScope.current !== scope) {
       previewScope.current = scope;
       setPreview(undefined);
@@ -314,7 +317,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       setPreviewStalled(false);
     }
     setEstimating(true); setError("");
-    const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph, files).then(value => {
+    const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory && level === "complete", graph && level === "complete", files).then(value => {
       if (!active) return;
       pendingTries.current = 0; setPreviewStalled(false);
       setPreview(value); setEstimating(false);
@@ -330,7 +333,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       } else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
-  }, [client, dialog, detail?.id, projectId, level, graph, files, previewNonce]);
+  }, [client, dialog, detail?.id, projectId, level, graph, trajectory, files, previewNonce]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
@@ -456,7 +459,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
     {flashQueue.length ? <div className="research-toast-stack">{flashQueue.map(flash => <div className={`research-toast is-${flash.tone}`} key={flash.id} role="status">
-      <span aria-hidden="true" className="research-toast-icon">{flash.tone === "success" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M4 12.5l5 5L20 6.5" /></svg> : flash.tone === "error" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M6 6l12 12M18 6L6 18" /></svg> : <span className="spinner" />}</span>
+      <span aria-hidden="true" className="research-toast-icon">{flash.tone === "success" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M4 12.5l5 5L20 6.5" /></svg> : flash.tone === "error" ? <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><path d="M6 6l12 12M18 6L6 18" /></svg> : <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16.5v.5" /></svg>}</span>
       <span className="research-toast-text">{flash.message}</span>
       {flash.savedToken ? <button className="research-toast-action" onClick={() => void openLocation(flash.savedToken!)} type="button">{t.openLocation}</button> : null}
       <button aria-label={t.close} className="research-toast-close" onClick={() => dismissFlash(flash.id)} type="button">×</button>
@@ -468,7 +471,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         {dialog === "export" ? <>
           <p className="research-package-notice">{t.sessionScope}</p>
           <p className="research-field-label">{t.exportTypes}</p>
-          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button">
+          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); if (value !== "complete") { setTrajectory(false); setGraph(false); } }} type="button">
             <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><strong>{value === "necessary" ? t.necessary : t.complete}</strong></span>
             <span className="research-profile-badges">{(value === "necessary"
               ? [t.badgeConversation, t.badgeCurrentFiles, t.badgeDependencies]
@@ -476,14 +479,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             <span className="research-profile-description">{value === "necessary" ? t.necessaryHint : t.completeHint}</span>
             <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? formatBytes(profiles[value]!.estimatedBytes) : "—"}</b></span>
           </button>)}</div>
-          <p className="research-field-label">{t.otherContent}</p>
-          <div className="research-package-options">
-            <label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.includeTrajectory}</label>
-            <label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label>
-          </div>
+          {level === "complete" ? <>
+            <p className="research-field-label">{t.otherContent}</p>
+            <div className="research-package-options">
+              <label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.includeTrajectory}</label>
+              <label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label>
+            </div>
+          </> : null}
           {estimating ? <p className="research-package-notice">{t.recalculating}</p> : null}
           {estimating && !preview ? <p className="research-package-status" role="status"><span aria-hidden="true" className="spinner" />{t.previewRetrying}</p> : null}
           {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => { pendingTries.current = 0; setPreviewStalled(false); setEstimating(true); setPreviewNonce(value => value + 1); }} type="button">{t.retryPreview}</button></div> : null}
+          <p className="research-package-selected-size">{preview ? <>{t.estimate} <b>{formatBytes(preview.estimatedBytes)}</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
           {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
           {blockedByLimit ? <div role="alert" className="research-package-limit">
             <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
@@ -522,7 +528,6 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {inspection ? <>
             <p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects}{inspection.manifest.source.title ? <> · {t.sourceTitle} <b>{inspection.manifest.source.title}</b></> : null} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
             <div className="research-import-scroll" role="region" aria-label={t.omissions}>
-              <p>{t.importHint}</p>
               {inspection.manifest.omissions.length ? <ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul> : null}
             </div>
           </> : null}
@@ -542,7 +547,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: trajectory, includeFullMemoryGraph: graph, filePaths: files, allowOverCap: overLimitAcknowledged });
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: level === "complete" && trajectory, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
           const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: taskErrorMessage(task.error), level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
