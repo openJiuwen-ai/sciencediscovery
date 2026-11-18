@@ -61,6 +61,8 @@ export interface CategoryNode {
 export interface SkillResource {
   path: string;
   size: number;
+  /** Served copy of the file, so the site can preview it without the archive. */
+  url: string;
 }
 
 export interface BaseAsset {

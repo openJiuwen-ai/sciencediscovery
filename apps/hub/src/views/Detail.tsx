@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AssetTile } from "../components/AssetCard.js";
 import { DownloadButton } from "../components/DownloadButton.js";
 import { FileIcon } from "../components/icons.js";
-import { MarkdownFile } from "../components/Markdown.js";
+import { Markdown, MarkdownFile } from "../components/Markdown.js";
 import { assetUrl } from "../catalog/load.js";
 import { formatSize } from "../format.js";
 import {
@@ -84,28 +84,97 @@ function InfoCard({ children, copy, rows }: {
 
 interface FileRow {
   name: string;
+  /** How the served file should be shown; `null` when it has no text preview. */
+  preview: "markdown" | "text" | null;
   size?: number;
-  /** Present when the file itself is served, so it can be opened in place. */
   url?: string;
 }
 
-/** The `Files` tab: exactly the files this asset ships, with the sizes we know. */
-function FileList({ basePath, copy, rows }: { basePath: string; copy: (key: CopyKey) => string; rows: FileRow[] }): JSX.Element {
+const TEXT_EXTENSIONS = new Set([
+  "cfg", "cjs", "css", "csv", "ini", "js", "json", "jsx", "mjs", "patch", "py",
+  "r", "sh", "sql", "toml", "ts", "tsv", "tsx", "txt", "xml", "yaml", "yml",
+]);
+
+function previewOf(path: string): "markdown" | "text" | null {
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  if (extension === "md") return "markdown";
+  return TEXT_EXTENSIONS.has(extension) ? "text" : null;
+}
+
+function basename(url: string): string {
+  return url.split("/").pop() ?? url;
+}
+
+/** Split at the last dot so a clipped name still shows its extension. */
+function splitExtension(name: string): [stem: string, extension: string] {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+}
+
+/** One file's served text, rendered as markdown or as a source listing. */
+function FilePreview({ basePath, copy, row }: { basePath: string; copy: (key: CopyKey) => string; row: FileRow }): JSX.Element {
+  const [state, setState] = useState<{ status: "error" | "loading" | "ready"; text: string }>({ status: "loading", text: "" });
+  useEffect(() => {
+    if (!row.url || !row.preview) return;
+    let cancelled = false;
+    setState({ status: "loading", text: "" });
+    fetch(assetUrl(basePath, row.url))
+      .then(async (response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return await response.text();
+      })
+      .then((text) => {
+        if (!cancelled) setState({ status: "ready", text });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error", text: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [basePath, row.preview, row.url]);
+
+  if (!row.preview || state.status === "error") return <p className="muted">{copy("previewUnavailable")}</p>;
+  if (state.status === "loading") return <p className="muted">{copy("loading")}</p>;
+  return row.preview === "markdown" ? <Markdown source={state.text} /> : <pre>{state.text}</pre>;
+}
+
+/** The `Files` tab: the file list on the left, the selected file's text beside it. */
+function FileBrowser({ basePath, copy, rows }: { basePath: string; copy: (key: CopyKey) => string; rows: FileRow[] }): JSX.Element {
+  const [selected, setSelected] = useState(rows[0]?.name ?? "");
+  const row = rows.find((entry) => entry.name === selected) ?? rows[0];
   return (
-    <ul className="file-list">
-      {rows.map((row) => (
-        <li className="file-row" key={row.name}>
-          <FileIcon size={18} />
-          <code className="file-name">{row.name}</code>
-          <span className="file-size">{formatSize(row.size)}</span>
-          {row.url ? (
-            <a className="file-view" href={assetUrl(basePath, row.url)} rel="noreferrer" target="_blank">
-              {copy("view")}
-            </a>
-          ) : <span />}
-        </li>
-      ))}
-    </ul>
+    <div className="browser">
+      <ul className="file-list">
+        {rows.map((entry) => {
+          const [stem, extension] = splitExtension(basename(entry.name));
+          return (
+            <li key={entry.name}>
+              <button
+                aria-current={entry.name === row?.name ? "true" : undefined}
+                className="file-item"
+                onClick={() => setSelected(entry.name)}
+                title={entry.name}
+                type="button"
+              >
+                <FileIcon size={16} />
+                <span className="file-text">
+                  <span className="file-name">
+                    <span className="file-stem">{stem}</span>
+                    {extension ? <span className="file-ext">{extension}</span> : null}
+                  </span>
+                  {entry.name.includes("/") ? <span className="file-dir">{entry.name.slice(0, entry.name.lastIndexOf("/"))}</span> : null}
+                </span>
+                <span className="file-size">{formatSize(entry.size)}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="file-preview">
+        {row ? <FilePreview basePath={basePath} copy={copy} key={row.name} row={row} /> : null}
+      </div>
+    </div>
   );
 }
 
@@ -194,11 +263,16 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
   const type = skill.type ? SKILL_TYPE_LABELS[skill.type]?.[language] ?? skill.type : null;
   const hardware = skill.hardware ? HARDWARE_LABELS[skill.hardware]?.[language] ?? skill.hardware : null;
   const snapshot = skill.source === "mindscience" ? catalog.sources.externalSkills : undefined;
-  // SKILL.md is served next to the archive; the resources only exist inside it, so
-  // they are listed with their size rather than offered as broken links.
+  // Every resource is served beside the skill, so the Files tab can preview it
+  // without unpacking the archive.
   const files: FileRow[] = [
-    { name: skill.readme, url: skill.readme },
-    ...skill.resources.map((resource) => ({ name: resource.path, size: resource.size })),
+    { name: "SKILL.md", preview: "markdown", url: skill.readme },
+    ...skill.resources.map((resource) => ({
+      name: resource.path,
+      preview: previewOf(resource.path),
+      size: resource.size,
+      url: resource.url,
+    })),
   ];
   return (
     <article className="detail">
@@ -221,7 +295,7 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
             fileCount={files.length}
             files={(
               <>
-                <FileList basePath={basePath} copy={copy} rows={files} />
+                <FileBrowser basePath={basePath} copy={copy} rows={files} />
                 <p className="archive-note">{copy("archiveNote")}</p>
               </>
             )}
@@ -286,8 +360,8 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
 export function SpecialistDetail({ asset, basePath, catalog, copy, language, onNavigate }: DetailProps): JSX.Element {
   const specialist = asset as SpecialistAsset;
   const files: FileRow[] = [
-    { name: specialist.download.url.split("/").pop() ?? specialist.id, size: specialist.download.size, url: specialist.download.url },
-    { name: specialist.download.text.split("/").pop() ?? specialist.id, url: specialist.download.text },
+    { name: basename(specialist.download.url), preview: "text", size: specialist.download.size, url: specialist.download.url },
+    { name: basename(specialist.download.text), preview: "markdown", url: specialist.download.text },
   ];
   return (
     <article className="detail">
@@ -313,7 +387,7 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
           <Reader
             copy={copy}
             fileCount={files.length}
-            files={<FileList basePath={basePath} copy={copy} rows={files} />}
+            files={<FileBrowser basePath={basePath} copy={copy} rows={files} />}
             key={specialist.id}
             readme={(
               <>

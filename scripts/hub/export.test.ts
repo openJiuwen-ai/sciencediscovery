@@ -167,6 +167,23 @@ describe("downloads", () => {
     assert.ok(!body.startsWith("---"), "frontmatter is not part of the rendered body");
   });
 
+  it("serves every skill file so the Files tab can preview it", async () => {
+    const skills = catalog.assets.filter((asset): asset is SkillAsset => asset.kind === "skill" || asset.kind === "team-skill");
+    let served = 0;
+    for (const skill of skills) {
+      for (const resource of skill.resources) {
+        assert.equal(resource.url, `skills/${skill.id}/${resource.path}`, `${skill.id} serves ${resource.path}`);
+        const bytes = await readFile(path.join(outDir, resource.url));
+        assert.equal(bytes.byteLength, resource.size, `${skill.id}/${resource.path} size`);
+        assert.deepEqual(bytes, await readFile(path.join(repoRoot, "skills", skill.id, resource.path)), `${skill.id}/${resource.path} bytes`);
+        served += 1;
+      }
+    }
+    // The built-in skills carry scripts and references, so an empty result means
+    // the exporter stopped publishing them.
+    assert.ok(served > 20, `served ${served} skill files`);
+  });
+
   it("ships a connector launch block that the import dialog accepts verbatim", async () => {
     const asset = catalog.assets.find((candidate) => candidate.id === "pubmed");
     assert.ok(asset?.kind === "connector");
