@@ -497,33 +497,127 @@ button, input, select { color: inherit; font: inherit; }
 
 .back:hover { text-decoration: underline; }
 
-.detail-head { align-items: flex-start; display: flex; gap: 16px; }
+/* The detail page follows the openJiuwen skill page: a tile/title/action header,
+   then a reading column (description, Readme and Files tabs) beside a spec sheet.
+   Fields the catalog does not carry — publisher, changelog — are simply absent. */
+.detail-hero { align-items: flex-start; border-bottom: 1px solid var(--border); display: flex; gap: 16px; padding-bottom: 22px; }
 
-.detail-title { flex: 1; min-width: 0; }
+.detail-heading { flex: 1; min-width: 0; }
 
 .detail h1 { font-size: 24px; letter-spacing: -.01em; margin: 0 0 4px; overflow-wrap: anywhere; }
 .detail h2 { font-size: 16px; margin: 28px 0 10px; }
 .detail h3 { font-size: 14px; margin: 20px 0 8px; }
 
+.detail-sub { align-items: center; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 8px 0 0; }
+
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.detail-badges { margin: 6px 0 4px; }
+.detail-body { align-items: start; display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr) 300px; margin-top: 26px; }
 
-.members { background: var(--surface-subtle); border-radius: var(--radius-m); margin-top: 20px; padding: 4px 18px 14px; }
-.members h2 { margin-top: 14px; }
-.member-list { list-style: none; margin: 0; padding: 0; }
-.member-list li { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; padding: 3px 0; }
-.member-skill { font-size: 11px; }
+.detail-main { min-width: 0; }
+
+.detail-description { color: var(--text-secondary); font-size: 14.5px; line-height: 1.7; margin: 0 0 22px; overflow-wrap: anywhere; }
+
+.tabs { border-bottom: 1px solid var(--border); display: flex; gap: 2px; }
+
+.tab {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 550;
+  gap: 8px;
+  margin-bottom: -1px;
+  padding: 10px 14px;
+}
+
+.tab:hover { color: var(--text); }
+
+.tab[aria-selected="true"] { border-bottom-color: var(--primary); color: var(--primary-strong); }
+
+.tab-count {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 8px;
+}
+
+.tab-panel { padding-top: 20px; }
+
+.reader-heading:first-child { margin-top: 0; }
+
+.info-card { background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-m); padding: 2px 16px 10px; }
+
+.info-card h2 {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .08em;
+  margin: 14px 0 4px;
+  text-transform: uppercase;
+}
+
+.info-list { margin: 0; }
+
+.info-list div { border-bottom: 1px dashed var(--border); display: grid; gap: 10px; grid-template-columns: 82px minmax(0, 1fr); padding: 8px 0; }
+
+.info-list div:last-child { border-bottom: 0; }
+
+.info-list dt { color: var(--muted); font-size: 12.5px; }
+
+.info-list dd { font-size: 13px; margin: 0; overflow-wrap: anywhere; }
+
+.info-list code { font-family: var(--font-mono); font-size: 12.5px; }
+
+.info-list a { color: var(--primary-strong); }
+
+.file-list { list-style: none; margin: 0; padding: 0; }
+
+.file-row {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  margin-bottom: 8px;
+  padding: 11px 14px;
+}
+
+.file-row svg { color: #8a90a2; }
+
+.file-name { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+
+.file-size { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.file-view { color: var(--primary-strong); font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+
+.file-view:hover { text-decoration: underline; }
+
+.archive-note { color: var(--muted); font-size: 12.5px; margin: 12px 0 0; }
+
+.detail-related { margin-top: 30px; }
+
+/* Team members join the spec sheet: for a team skill they are the thing the
+   reader came to see, so they must not wait at the end of a long Readme. */
+.info-members { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 2px; }
+.member-list { list-style: none; margin: 0; padding: 0 0 6px; }
+.member-list li { align-items: flex-start; display: flex; flex-direction: column; gap: 4px; padding: 5px 0; }
+.member-list .link { font-size: 13px; }
+.member-skill { font-size: 11px; white-space: normal; }
 
 .link { background: none; border: 0; color: var(--primary-strong); cursor: pointer; padding: 0; text-align: left; }
 .link:hover { text-decoration: underline; }
 
-.link-list { columns: 2; list-style: none; margin: 0; padding: 0; }
+/* Wrapping rows rather than columns: a five-item list keeps its items together
+   instead of spreading three and two across the full width. */
+.link-list { display: flex; flex-wrap: wrap; gap: 4px 28px; list-style: none; margin: 0; padding: 0; }
 .link-list li { padding: 2px 0; }
-
-.prompt { background: var(--surface-subtle); border-radius: var(--radius-m); margin: 20px 0; padding: 12px 16px; }
-.prompt summary { cursor: pointer; font-weight: 600; }
-.prompt pre { white-space: pre-wrap; }
 
 pre {
   background: var(--surface-subtle);
@@ -536,8 +630,7 @@ pre {
   white-space: pre-wrap;
 }
 
-.resources, .tools { list-style: none; margin: 0; padding: 0; }
-.resources li { padding: 3px 0; }
+.tools { list-style: none; margin: 0; padding: 0; }
 .tools li { border-bottom: 1px solid var(--border); padding: 10px 0; }
 .tools li:last-child { border-bottom: 0; }
 .tools p { margin: 4px 0 0; }
@@ -628,17 +721,19 @@ pre {
   .filter span { margin: 0; white-space: nowrap; }
   .filter select { padding: 6px 8px; }
   .detail { padding: 20px; }
-  .detail-head { flex-wrap: wrap; }
+  /* Below this width the spec sheet would squeeze the reading column, so it
+     moves under the description and the page keeps one column. */
+  .detail-body { grid-template-columns: minmax(0, 1fr); }
   .governance div { gap: 2px; grid-template-columns: minmax(0, 1fr); }
-  .link-list { columns: 1; }
 }
 
 /* On a phone the action button would squeeze the title into a two-word column. */
 @media (max-width: 700px) {
-  .detail-head { display: grid; grid-template-columns: auto minmax(0, 1fr); row-gap: 14px; }
-  .detail-head .actions { grid-column: 1 / -1; }
+  .detail-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); row-gap: 14px; }
+  .detail-hero .actions { grid-column: 1 / -1; }
   /* A JSON line is long; wrapping keeps it readable without a sideways scroll. */
   .detail pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+  .info-list div { grid-template-columns: 70px minmax(0, 1fr); }
 }
 
 @media (max-width: 560px) {
