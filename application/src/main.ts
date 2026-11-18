@@ -1738,6 +1738,9 @@ ipcMain.handle("sd-shell:export-stream-end", async (_event, args: unknown) => {
   const destination = typeof token === "string" ? exportDestinations.resolve(token) : undefined;
   if (!destination) throw new Error("保存位置无效，请重新选择。");
   const written = exportStreams.end(token as string);
+  // `end` refuses an empty stream itself; a zero here means the sink is gone (its
+  // token was aborted), and neither case may be filed as a completed export.
+  if (written === 0) throw new Error("导出数据为空，未保存。");
   exportDestinations.markWritten(token as string);
   recordExportRow(token as string, destination.path, written, meta);
   return { ok: true };

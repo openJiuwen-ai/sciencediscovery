@@ -71,12 +71,14 @@ export class ExportSinks {
     const sink = this.open.get(token);
     if (!sink) return 0;
     this.io.close(sink.handle);
-    // Nothing arrived: drop the empty temporary instead of publishing it over the
-    // destination (#1216 review 3, optional).
+    // Nothing arrived: drop the empty temporary and refuse. Returning 0 here looked
+    // like "no such token" to the handler, which then still recorded a written
+    // destination and a zero-byte history row for a save that never happened
+    // (#1216 review 4).
     if (sink.bytes === 0) {
       this.open.delete(token);
       try { this.io.remove(sink.part); } catch { /* already gone */ }
-      return 0;
+      throw new Error("导出数据为空，未保存。");
     }
     this.io.rename(sink.part, sink.path);
     this.open.delete(token);
