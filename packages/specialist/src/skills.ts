@@ -126,6 +126,13 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 const execFileAsync = promisify(execFile);
 const GIT_SKILL_DISCOVERY_LIMIT = 100;
 const GIT_SKILL_DISCOVERY_DEPTH = 12;
+/** A shallow clone of a large skills repository takes tens of seconds; the
+ *  ceiling has to leave room for a slow network without holding a request
+ *  forever. */
+const GIT_CHECKOUT_TIMEOUT_MS = 180_000;
+/** How long the checkout an inspection just made stays on disk for the imports
+ *  that follow it. */
+const GIT_CHECKOUT_RETENTION_MS = 15 * 60_000;
 
 interface CatalogIndex {
   managed: Record<string, { currentRevision: number }>;
@@ -412,6 +419,14 @@ export type GitSkillCheckout = (
   normalized: ReturnType<typeof validateGitSkillImportRequest>;
 }>;
 
+type NormalizedGitImport = ReturnType<typeof validateGitSkillImportRequest>;
+
+/** Two requests belong to the same clone when they ask for the same repository
+ *  at the same ref; the subdirectory only chooses what to read out of it. */
+function gitCheckoutKey(normalized: NormalizedGitImport): string {
+  return `${normalized.repositoryUrl}\u0000${normalized.ref ?? ""}`;
+}
+
 async function checkoutGitSkillRepository(
   importRoot: string,
   input: InspectGitSkillRepositoryRequest,
@@ -438,16 +453,21 @@ async function checkoutGitSkillRepository(
     await execFileAsync("git", arguments_, {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       maxBuffer: 1024 * 1024,
-      timeout: 120_000,
+      timeout: GIT_CHECKOUT_TIMEOUT_MS,
     });
     const { stdout } = await execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], {
       maxBuffer: 64 * 1024,
       timeout: 10_000,
     });
     return { checkout, commit: stdout.trim().toLowerCase(), normalized };
-  } catch {
+  } catch (error) {
     await rm(checkout, { force: true, recursive: true });
-    throw validationError("Git skill checkout failed; verify the repository, ref, and locally configured credentials");
+    // A clone that is cut off at the timeout is the one failure a user cannot
+    // tell apart from a broken URL, so it names the ceiling and the way out.
+    const timedOut = (error as { killed?: boolean } | undefined)?.killed === true;
+    throw validationError(timedOut
+      ? `Git skill checkout timed out after ${GIT_CHECKOUT_TIMEOUT_MS / 1000}s; retry, or narrow the import with a Ref or subdirectory`
+      : "Git skill checkout failed; verify the repository, ref, and locally configured credentials");
   }
 }
 
@@ -843,6 +863,22 @@ export class SkillCatalog {
   private readonly checkoutGit: GitSkillCheckout;
   private readonly repositoryRoot: string;
   private readonly root: string;
+  /**
+   * The checkout the last inspection made, kept for the imports that follow.
+   *
+   * Importing one package per request means the client asks the server N times
+   * for the same repository; cloning it N times made importing a repository of
+   * a hundred skills take most of an hour. The clone is the expensive half of
+   * every request, so inspection leaves its checkout behind for a short while
+   * and an import pinned to that same commit reads from it.
+   */
+  private retainedGitCheckout?: {
+    checkout: string;
+    commit: string;
+    expiresAt: number;
+    key: string;
+    normalized: NormalizedGitImport;
+  };
 
   constructor(dataDir: string, repositoryRoot: string, options: { checkoutGit?: GitSkillCheckout } = {}) {
     this.root = resolve(dataDir, "skills");
@@ -1639,12 +1675,53 @@ export class SkillCatalog {
     return results;
   }
 
+  /** A checkout an inspection left behind, when this request is about the same
+   *  repository at the commit that inspection saw. Anything else is a clone. */
+  private retainedCheckoutFor(normalized: NormalizedGitImport, commit?: string): string | undefined {
+    const retained = this.retainedGitCheckout;
+    if (!retained) return undefined;
+    if (retained.expiresAt < Date.now()) {
+      // The retention window is only a hint about reuse; a stale checkout is
+      // dropped the next time one is made or asked for.
+      this.retainedGitCheckout = undefined;
+      void rm(retained.checkout, { force: true, recursive: true }).catch(() => undefined);
+      return undefined;
+    }
+    if (retained.key !== gitCheckoutKey(normalized)) return undefined;
+    // An import without a commit means "whatever the ref points at now", which
+    // a remembered checkout cannot answer.
+    if (commit === undefined || commit !== retained.commit) return undefined;
+    return retained.checkout;
+  }
+
+  /** Keep this checkout for the imports that follow, replacing the last one. */
+  private async retainCheckout(
+    checkout: string,
+    commit: string,
+    normalized: NormalizedGitImport,
+  ): Promise<void> {
+    const previous = this.retainedGitCheckout;
+    this.retainedGitCheckout = {
+      checkout,
+      commit,
+      expiresAt: Date.now() + GIT_CHECKOUT_RETENTION_MS,
+      key: gitCheckoutKey(normalized),
+      normalized,
+    };
+    if (previous && previous.checkout !== checkout) {
+      await rm(previous.checkout, { force: true, recursive: true }).catch(() => undefined);
+    }
+  }
+
   async inspectGitRepository(input: InspectGitSkillRepositoryRequest): Promise<GitSkillRepositoryInspection> {
     this.assertLoaded();
     const importRoot = resolve(this.root, ".imports");
     const { checkout, commit, normalized } = await this.checkoutGit(importRoot, input);
+    let retained = false;
     try {
       const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory);
+      await this.retainCheckout(checkout, commit, normalized);
+      retained = true;
       return {
         candidates: inspected.map(({ candidate }) => candidate),
         commit,
@@ -1652,7 +1729,7 @@ export class SkillCatalog {
         repositoryUrl: normalized.repositoryUrl,
       };
     } finally {
-      await rm(checkout, { force: true, recursive: true });
+      if (!retained) await rm(checkout, { force: true, recursive: true });
     }
   }
 
@@ -1672,7 +1749,11 @@ export class SkillCatalog {
       throw validationError(`Select between 1 and ${GIT_SKILL_DISCOVERY_LIMIT} Git Skill packages`);
     }
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized } = await this.checkoutGit(importRoot, input);
+    const requested = validateGitSkillImportRequest(input);
+    const reused = this.retainedCheckoutFor(requested, expectedCommit);
+    const { checkout, commit, normalized } = reused === undefined
+      ? await this.checkoutGit(importRoot, input)
+      : { checkout: reused, commit: expectedCommit!, normalized: requested };
     try {
       if (commit !== expectedCommit) {
         throw new SkillCatalogError(
@@ -1736,7 +1817,7 @@ export class SkillCatalog {
       });
       return { commit, drafts };
     } finally {
-      await rm(checkout, { force: true, recursive: true });
+      if (reused === undefined) await rm(checkout, { force: true, recursive: true });
     }
   }
 
@@ -1754,7 +1835,10 @@ export class SkillCatalog {
       throw validationError("expectedRevision must be a positive integer");
     }
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized: checked } = await this.checkoutGit(importRoot, normalized);
+    const reused = this.retainedCheckoutFor(normalized, requestedCommit);
+    const { checkout, commit, normalized: checked } = reused === undefined
+      ? await this.checkoutGit(importRoot, normalized)
+      : { checkout: reused, commit: requestedCommit!, normalized };
     try {
       if (requestedCommit && requestedCommit !== commit) {
         throw new SkillCatalogError(
@@ -1815,7 +1899,7 @@ export class SkillCatalog {
         return structuredClone(committed.detail);
       });
     } finally {
-      await rm(checkout, { force: true, recursive: true });
+      if (reused === undefined) await rm(checkout, { force: true, recursive: true });
     }
   }
 

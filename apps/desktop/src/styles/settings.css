@@ -843,6 +843,10 @@ a.secondary-button {
    inspection found is the answer, so it is drawn as one block below them. */
 .skill-git { display: grid; gap: 18px; width: min(100%, 860px); }
 .skill-git-source { display: grid; gap: 12px; }
+/* The clone is the long part of an inspection: it says so and can be stopped,
+   rather than leaving one button reading 正在检查… with no other way out. */
+.skill-git-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.skill-git-progress .row-note { color: var(--text-secondary); margin: 0; }
 .skill-git-url { display: flex; align-items: flex-end; gap: 8px; }
 .skill-git-url .settings-field { flex: 1; min-width: 0; }
 .skill-git-results {

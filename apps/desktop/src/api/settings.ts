@@ -184,14 +184,18 @@ export function importSkillFile(client: ApiClient, file: File): Promise<SkillDet
   });
 }
 
-/** List the Skill packages a repository contains at the commit it resolves to. */
+/** List the Skill packages a repository contains at the commit it resolves to.
+ *  `signal` lets the caller stop waiting: a clone of a large repository is the
+ *  one request here long enough that a user may change their mind. */
 export function inspectGitSkillRepository(
   client: ApiClient,
   body: InspectGitSkillRepositoryRequest,
+  signal?: AbortSignal,
 ): Promise<GitSkillRepositoryInspection> {
   return client.request<GitSkillRepositoryInspection>("/api/skills/import-git/inspect", {
     body: JSON.stringify(body),
     method: "POST",
+    ...(signal ? { signal } : {}),
   });
 }
 

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import { isAbortError, type ApiClient } from "../../api/client.js";
 import { importSkillFromGit, inspectGitSkillRepository } from "../../api/settings.js";
 import type {
   GitSkillImportCandidate,
@@ -64,6 +64,8 @@ export function SkillGitImportView({ client, onImported }: Props) {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const inspectionRequest = useRef<AbortController | undefined>(undefined);
 
   const reset = () => {
     setInspection(undefined);
@@ -74,6 +76,8 @@ export function SkillGitImportView({ client, onImported }: Props) {
   };
 
   const inspect = async () => {
+    const controller = new AbortController();
+    inspectionRequest.current = controller;
     setInspecting(true);
     setInspection(undefined);
     setSelected(new Set());
@@ -85,7 +89,7 @@ export function SkillGitImportView({ client, onImported }: Props) {
         repositoryUrl: url.trim(),
         ...(ref.trim() ? { ref: ref.trim() } : {}),
         ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
-      });
+      }, controller.signal);
       setInspection(found);
       // Everything that can be written is ticked: the usual import is "all of
       // it", and the user unticks rather than ticks.
@@ -93,10 +97,18 @@ export function SkillGitImportView({ client, onImported }: Props) {
         .filter((candidate) => candidate.status === "new" || candidate.status === "update")
         .map((candidate) => candidate.subdirectory)));
     } catch (reason) {
-      setFailure(messageOf(reason));
+      // A cancelled inspection is not a failure: the user said stop.
+      if (!isAbortError(reason)) setFailure(messageOf(reason));
     } finally {
+      if (inspectionRequest.current === controller) inspectionRequest.current = undefined;
       setInspecting(false);
     }
+  };
+
+  /** Stop waiting for the clone. The server finishes its own work; what this
+   *  ends is the page being unusable while it does. */
+  const cancelInspect = () => {
+    inspectionRequest.current?.abort();
   };
 
   const toggle = (entry: string, next: boolean) => {
@@ -125,6 +137,7 @@ export function SkillGitImportView({ client, onImported }: Props) {
     setNotice(undefined);
     const errors: Record<string, string> = {};
     let imported = 0;
+    setProgress({ done: 0, total: chosen.length });
     for (const candidate of chosen) {
       try {
         const detail = await importSkillFromGit(client, {
@@ -141,6 +154,7 @@ export function SkillGitImportView({ client, onImported }: Props) {
       } catch (reason) {
         errors[candidate.subdirectory] = messageOf(reason);
       }
+      setProgress({ done: imported + Object.keys(errors).length, total: chosen.length });
     }
     setRowErrors(errors);
     // What failed stays ticked, so a retry after fixing the cause is one press.
@@ -216,6 +230,15 @@ export function SkillGitImportView({ client, onImported }: Props) {
         </div>
       </div>
 
+      {inspecting ? (
+        <div className="skill-git-progress" role="status">
+          <small className="row-note">{TEXT.settings.skills.git.inspectHint}</small>
+          <button className="secondary-button" onClick={cancelInspect} type="button">
+            {TEXT.settings.skills.git.cancelInspect}
+          </button>
+        </div>
+      ) : null}
+
       {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
 
       {inspection ? (
@@ -234,7 +257,9 @@ export function SkillGitImportView({ client, onImported }: Props) {
               type="button"
             >
               {busy
-                ? TEXT.settings.skills.importBusy
+                ? progress.total === 0
+                  ? TEXT.settings.skills.importBusy
+                  : TEXT.settings.skills.importProgress(progress.done, progress.total)
                 : TEXT.settings.skills.git.importSelected(selected.size)}
             </button>
           </div>

@@ -183,6 +183,36 @@ test("a Git inspection pins the commit and never overwrites without the revision
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a slow inspection says what it is doing and can be cancelled", async () => {
+  // A clone of a large repository is the one request in this pane that takes
+  // long enough for a user to wonder whether the page is alive.
+  let aborted = false;
+  const client = {
+    request: <T,>(_path: string, init: RequestInit = {}): Promise<T> => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    }),
+  } as unknown as ApiClient;
+  const view = await mount(<SkillGitImportView client={client} onImported={() => {}} />);
+  try {
+    const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+    assert.ok(url);
+    await act(async () => { url.props.onChange({ target: { value: "https://example.invalid/org/skills.git" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.inspectHint));
+    const cancel = buttonWithText(view, TEXT.settings.skills.git.cancelInspect);
+    await act(async () => { cancel.props.onClick(); });
+
+    assert.equal(aborted, true);
+    // Cancelling is not a failure: the page goes back to 检查 with no alert.
+    buttonWithText(view, TEXT.settings.skills.git.inspect);
+    assert.ok(!JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.inspectHint));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("the editor submits the revision it read and hands back the keys its form does not show", async () => {
   const stub = new StubClient().reply(detail).reply({ ...detail, currentRevision: 2, instructions: "Review twice" });
   const saved: SkillDetail[] = [];

@@ -93,6 +93,39 @@ test("imports a Git package with the commit inspection saw and its provenance", 
   }
 });
 
+test("importing after an inspection reuses the checkout it left behind", async () => {
+  const dataDir = await temporaryDataDir();
+  const commit = "f".repeat(40);
+  const repositoryUrl = "https://example.com/skills.git";
+  let clones = 0;
+  const clone: GitSkillCheckout = async (importRoot, input) => {
+    clones += 1;
+    return await fakeGitCheckout({ commit, subdirectory: "skills/git-skill" })(importRoot, input);
+  };
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, { checkoutGit: clone });
+    await catalog.load();
+    const inspection = await catalog.inspectGitRepository({ repositoryUrl });
+    assert.equal(clones, 1);
+    assert.equal(inspection.commit, commit);
+
+    // One package per request is the client's contract; the second one must
+    // not pay for the same clone again.
+    await catalog.importFromGit({ commit, repositoryUrl, subdirectory: "skills/git-skill" });
+    assert.equal(clones, 1, "the import read the checkout inspection made");
+
+    // A package pinned to another commit is a different question, so it is
+    // answered by a fresh clone (and then refused, because the ref moved).
+    await assert.rejects(
+      catalog.importFromGit({ commit: "0".repeat(40), repositoryUrl, subdirectory: "skills/git-skill" }),
+      /moved after inspection/,
+    );
+    assert.equal(clones, 2);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("a Git update needs the revision the user saw and preserves earlier revisions", async () => {
   const dataDir = await temporaryDataDir();
   const firstCommit = "b".repeat(40);
