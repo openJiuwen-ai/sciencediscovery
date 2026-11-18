@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
-import { IdeaNodeDetail, IdeaTreeView, ideaNodeStages, ideaScoreText, ideaTreeRows } from "../src/views/idea/IdeaTree.js";
+import { IdeaNodeDetail, IdeaTreeView, ideaNodeStages, ideaScoreText, ideaTreeLayout, ideaTreeRows } from "../src/views/idea/IdeaTree.js";
 import { TEXT } from "../src/text.js";
 
 const t = TEXT.ideaTree.detail;
@@ -76,4 +76,38 @@ test("selecting a node in the tree calls back with that node", async () => {
   assert.match(html, /可检验的假设/);
   assert.match(html, /0\.3/);
   view.unmount();
+});
+
+test("the layout puts a parent over the middle of its children, one row per depth", () => {
+  const layout = ideaTreeLayout(graph([
+    node({ id: "root", kind: "direction", childrenIds: ["a", "b"] }),
+    node({ id: "a", parentId: "root", depth: 1, kind: "candidate" }),
+    node({ id: "b", parentId: "root", depth: 1, kind: "candidate" }),
+  ]));
+  const byId = new Map(layout.nodes.map((placed) => [placed.node.id, placed]));
+  const root = byId.get("root")!;
+  const a = byId.get("a")!;
+  const b = byId.get("b")!;
+  assert.equal(root.x, (a.x + b.x) / 2, "the parent is centred over its children");
+  assert.ok(a.y > root.y && a.y === b.y, "one row per depth");
+  assert.equal(layout.edges.length, 2);
+  // Two leaves, so the drawing is one node wide per leaf plus the gaps.
+  assert.ok(layout.width > 2 * 176, "the drawing is as wide as the fan-out, not the column");
+});
+
+test("a node whose parent did not list it is still drawn as a child", () => {
+  const layout = ideaTreeLayout(graph([
+    node({ id: "root", childrenIds: [] }),
+    node({ id: "forgotten", parentId: "root", depth: 1 }),
+  ]));
+  assert.equal(layout.edges.length, 1);
+  assert.equal(layout.edges[0]!.to.node.id, "forgotten");
+});
+
+test("a parent cycle does not hang the layout", () => {
+  const layout = ideaTreeLayout(graph([
+    node({ id: "a", parentId: "b", childrenIds: ["b"] }),
+    node({ id: "b", parentId: "a", childrenIds: ["a"] }),
+  ]));
+  assert.equal(layout.nodes.length, 2);
 });

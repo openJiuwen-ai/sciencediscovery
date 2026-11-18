@@ -9,80 +9,19 @@
   padding: 0 24px 8px;
 }
 
-.idea-research-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 10px);
-  background: var(--surface);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+/* ── the task panel ────────────────────────────────────────────────────────── */
 
-.idea-research-card header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-}
-
-.idea-research-card .eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.idea-research-objective {
-  margin: 0;
-  display: flex;
-  gap: 8px;
-  color: var(--text);
-}
-
-.idea-research-objective > span:first-child {
-  color: var(--muted);
-}
-
-.idea-research-progress {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.idea-research-reason {
-  margin: 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.idea-research-card footer,
-.idea-panel-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.idea-panel-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.28);
-  display: flex;
-  justify-content: flex-end;
-  z-index: 40;
-}
-
+/* The panel is a column of the shell, not an overlay: it has no width of its
+ * own, no backdrop and no height of its own. It fills the task tab. */
 .idea-panel {
-  width: min(560px, 92vw);
-  height: 100%;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  flex: 1 1 auto;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 16px;
+  min-height: 0;
+  min-width: 0;
+  padding: 12px 12px 14px;
   overflow: hidden;
 }
 
@@ -95,93 +34,239 @@
 
 .idea-panel-header h2 {
   margin: 2px 0 0;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 21px;
   color: var(--text-heading);
+}
+
+.idea-panel-header .eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .idea-panel-progress {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 4px 12px;
   font-size: 12px;
   color: var(--text-secondary);
 }
 
+.idea-panel-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The drawing scrolls by itself and the detail scrolls under it, so a deep tree
+ * never pushes the controls off the bottom of the column. */
 .idea-panel-body {
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   overflow: auto;
+}
+
+.idea-panel-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .idea-panel-error,
 .idea-panel-unavailable {
   margin: 0;
   padding: 10px 12px;
-  border-radius: var(--radius, 10px);
+  border-radius: var(--radius-m);
   border: 1px solid var(--border);
   background: var(--surface-subtle);
   color: var(--text-secondary);
 }
 
-.idea-tree {
-  list-style: none;
+.idea-panel-loading {
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── the tree ──────────────────────────────────────────────────────────────── */
+
+.idea-tree {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 120px;
+  max-height: clamp(280px, 52vh, 620px);
+  padding: 4px;
+  overflow: auto;
+  border-radius: var(--radius-m);
+  background-color: var(--surface-subtle);
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+
+.idea-tree-fit {
+  position: relative;
+  margin: 0 auto;
+  overflow: hidden;
+}
+
+/* The plane is drawn at the layout's own size and scaled to the column; the fit
+ * box around it takes the scaled size so the scrollbars follow the drawing. */
+.idea-tree-plane {
+  position: relative;
+  transform-origin: top left;
+}
+
+.idea-tree-edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.idea-tree-edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.1;
+}
+
+/* A pruned branch is one the engine stopped following; the line says so before
+ * the node's own badge does. */
+.idea-tree-edge.is-pruned {
+  stroke-dasharray: 4 4;
+  opacity: 0.75;
+}
+
+.idea-tree-arrowhead {
+  fill: var(--border-strong);
 }
 
 .idea-tree-empty {
   margin: 0;
+  padding: 12px;
   color: var(--muted);
   font-size: 13px;
 }
 
+/* One node is a small card: the hypothesis is what identifies it, so the node
+ * carries text, not only a score. Direction and candidate differ by shape and
+ * tint because the engine treats them differently. */
 .idea-tree-node-button {
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius, 10px);
-  padding: 6px 8px;
+  position: absolute;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  cursor: pointer;
+  padding: 6px 8px;
+  overflow: hidden;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
   color: var(--text);
 }
 
 .idea-tree-node-button:hover {
-  background: var(--surface-hover);
+  border-color: var(--primary-border-soft);
 }
 
-.idea-tree-node.is-selected .idea-tree-node-button {
-  border-color: var(--primary-border-soft);
+.idea-tree-node-button.is-kind-direction {
+  border-radius: var(--radius-l);
   background: var(--primary-softer);
 }
 
-.idea-tree-hypothesis {
-  font-size: 13px;
+.idea-tree-node-button.is-kind-candidate {
+  border-radius: var(--radius-m);
 }
 
-.idea-tree-meta {
+.idea-tree-node-button.is-selected {
+  border-color: var(--primary-border-soft);
+  box-shadow: var(--shadow-glow);
+}
+
+.idea-tree-node-button.is-search-pruned {
+  opacity: 0.85;
+}
+
+.idea-tree-node-button.is-running {
+  border-color: var(--primary-border-soft);
+}
+
+.idea-tree-node-button.is-failed {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.idea-tree-node-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 11px;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 
-.idea-tree-node.is-pruned .idea-tree-meta span:nth-child(2) {
-  color: var(--insight-strong);
+.idea-tree-kind {
+  color: var(--text-secondary);
 }
 
+.idea-tree-pruned {
+  margin-left: auto;
+  color: var(--insight-strong);
+  letter-spacing: 0;
+}
+
+.idea-tree-hypothesis {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.idea-tree-node-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.idea-tree-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.idea-tree-dot.is-live {
+  background: var(--primary);
+  animation: evolvePulse 1.6s ease-out infinite;
+}
+
+.idea-tree-node-score {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── one node's detail ─────────────────────────────────────────────────────── */
+
 .idea-node-detail {
-  border-top: 1px solid var(--border-soft);
+  flex: 0 0 auto;
   padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
 }
 
 .idea-node-detail h3 {
