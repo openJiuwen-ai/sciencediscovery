@@ -943,6 +943,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   });
   const usageAnalyticsSummary = async (url: URL) => {
     const summary = await store.getModelUsageAnalyticsSummary(usageAnalyticsFilters(url));
+    if (url.searchParams.get("includeExchangeRates") === "false") return summary;
     const exchangeRates = await usageExchangeRateProvider.rates();
     return exchangeRates.length ? { ...summary, exchangeRates } : summary;
   };

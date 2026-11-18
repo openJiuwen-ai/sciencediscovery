@@ -21,6 +21,7 @@ import { claimsEscape } from "./dialog-escape.js";
 import { SidebarToggle } from "./SidebarToggle.js";
 import { GeneralSettings } from "./settings/GeneralSettings.js";
 import { ModelSettings } from "./settings/ModelSettings.js";
+import { ModelUsageSettings } from "./settings/ModelUsageSettings.js";
 import { NetworkSettings } from "./settings/NetworkSettings.js";
 import { RuntimeSettings } from "./settings/RuntimeSettings.js";
 import { QuotaSettings } from "./settings/QuotaSettings.js";
@@ -39,6 +40,7 @@ export type SettingsGroup =
   | "general"
   | "memory"
   | "models"
+  | "usage"
   | "skills"
   | "mcp"
   | "specialists"
@@ -58,7 +60,7 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // 科学记忆 is how the agent remembers what it read and made, so it sits with
   // the intelligence settings and after 专家, the last thing that is given to
   // the agent rather than the environment it runs in.
-  { groups: ["models", "skills", "mcp", "specialists", "idea-tree", "memory", "web"], id: "intelligence" },
+  { groups: ["models", "usage", "skills", "mcp", "specialists", "idea-tree", "memory", "web"], id: "intelligence" },
   { groups: ["sandbox-network", "proxies", "remote"], id: "connection" },
   { groups: ["timeouts", "quotas", "export-history"], id: "workspace" },
 ];
@@ -144,6 +146,8 @@ export function SystemSettingsDialog({
             state={state}
           />
         );
+      case "usage":
+        return <ModelUsageSettings client={client} />;
       case "skills":
         return <SkillsSettings client={client} onConfirm={actions.confirmAction} />;
       case "mcp":
