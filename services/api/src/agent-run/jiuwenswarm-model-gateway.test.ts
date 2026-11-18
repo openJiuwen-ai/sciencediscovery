@@ -1165,12 +1165,12 @@ test("gateway stops replaying after the bounded stream retry budget", async (t) 
     const response = await post(g, { stream: false, messages: [] });
     assert.equal(response.status, 502);
     assert.match(await response.text(), /terminated/);
-    assert.equal(calls, 3, "two retries plus the initial request");
+    assert.equal(calls, 5, "four retries plus the initial request");
     const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
     assert.ok(summary);
     const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
-    assert.deepEqual(record.retryErrors, ["network", "network"]);
-    assert.equal(record.retries, 2);
+    assert.deepEqual(record.retryErrors, ["network", "network", "network", "network"]);
+    assert.equal(record.retries, 4);
     assert.deepEqual(record.error, { classification: "network" });
   } finally { await g.close(); }
 });

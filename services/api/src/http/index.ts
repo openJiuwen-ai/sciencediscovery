@@ -546,6 +546,7 @@ async function readSpecialistBody<T>(request: IncomingMessage): Promise<T> {
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
+  const measurePackageCapacity = dependencies.measureResearchPackageCapacity ?? measureResearchPackageCapacity;
   const {
     artifactManager,
     evolutionStore,
@@ -1417,7 +1418,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if ((sized.archiveBytes ?? 0) > sizeCap)
             return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
           try {
-            assertResearchPackageExportCapacity(await measureResearchPackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+            assertResearchPackageExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
           } catch (error) {
             return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
               (error as { code?: string }).code);
@@ -1538,7 +1539,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             await readBytesToFile(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package", upload.packageFile);
             // Bound the unpacking by the disk the restore can hold, so a highly
             // compressible archive is refused before it fills the volume.
-            const opening = await measureResearchPackageCapacity(store.dataDir);
+            const opening = await measurePackageCapacity(store.dataDir);
             const unpackBudget = researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES);
             const imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
               objectDirectory: resolve(upload.directory, "objects"),
@@ -1567,7 +1568,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             // answer, not an internal failure. Measure before dropping the staged upload,
             // so the message compares what the package needs with the space it met.
             if ((error as { code?: string }).code === RESEARCH_PACKAGE_UNPACK_BUDGET_CODE) {
-              const capacity = await measureResearchPackageCapacity(store.dataDir);
+              const capacity = await measurePackageCapacity(store.dataDir);
               await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
               const refusal = researchPackageBudgetRefusal((error as { unpackedBytes?: number }).unpackedBytes ?? 0, capacity.freeDiskBytes);
               return sendError(response, 507, refusal.message, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE);
@@ -1587,7 +1588,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             // Refuse before a long upload when the machine cannot hold the work, and
             // say what is missing rather than failing halfway through the restore.
             try {
-              assertResearchPackageUploadCapacity(await measureResearchPackageCapacity(store.dataDir),
+              assertResearchPackageUploadCapacity(await measurePackageCapacity(store.dataDir),
                 Number(request.headers["content-length"] ?? "0"));
             } catch (error) {
               return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
@@ -1610,7 +1611,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             owned = upload.directory;
             try {
               await readBytesToFile(request, RESEARCH_PACKAGE_UPLOAD_MAX_BYTES, "Research package", upload.packageFile);
-              const opening = await measureResearchPackageCapacity(store.dataDir);
+              const opening = await measurePackageCapacity(store.dataDir);
               imported = await importResearchPackageStreamed(createReadStream(upload.packageFile), {
                 objectDirectory: resolve(upload.directory, "objects"),
                 maxBytes: researchPackageUnpackBudget(opening, RESEARCH_PACKAGE_MAX_MAX_BYTES),
@@ -1618,7 +1619,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               source = { imported, packageFile: upload.packageFile };
             } catch (error) {
               if ((error as { code?: string }).code === RESEARCH_PACKAGE_UNPACK_BUDGET_CODE) {
-                const capacity = await measureResearchPackageCapacity(store.dataDir);
+                const capacity = await measurePackageCapacity(store.dataDir);
                 await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
                 const refusal = researchPackageBudgetRefusal((error as { unpackedBytes?: number }).unpackedBytes ?? 0, capacity.freeDiskBytes);
                 return sendError(response, 507, refusal.message, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE);
@@ -1631,7 +1632,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             // The compressed upload says nothing about the unpacked work: check what the
             // restore will write and hold now that the archive has been parsed.
             try {
-              assertResearchPackageRestoreCapacity(await measureResearchPackageCapacity(store.dataDir),
+              assertResearchPackageRestoreCapacity(await measurePackageCapacity(store.dataDir),
                 restoreSizeOf(imported.manifest.inventory, imported.receipt.importedRecordBytes));
             } catch (error) {
               return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",

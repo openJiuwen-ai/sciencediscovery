@@ -268,6 +268,6 @@ test("network consent guidance prevents alternating single-host retries without 
   assert.match(prompt, /Declare all known required hosts together up front/);
   assert.match(prompt, /approvals do not accumulate across executions/);
   assert.match(prompt, /observed denial names only hosts attempted in that execution/);
-  assert.match(prompt, /reconcile prior side effects, request the complete known host set/);
-  assert.match(prompt, /new token only for a safe NEW execution/);
+  assert.match(prompt, /reconcile prior side effects, (?:discard any old authorization, )?request the complete known host set/);
+  assert.match(prompt, /(?:new token only|use only the new token) for a safe NEW execution/);
 });
