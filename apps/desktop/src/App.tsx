@@ -59,6 +59,7 @@ import {
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
 import { isIdeaTreeCommand, ideaTreeCommandTask } from "./idea/command.js";
+import { taskTabKept } from "./idea/task-tab.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
@@ -233,6 +234,8 @@ export function App({ initialToken }: Props) {
   // the switch.
   useEffect(() => {
     setEvolveRunId(undefined);
+    // A research id is the previous session's, so it goes with the run id.
+    setIdeaResearchId(undefined);
     setAwaitingRun(false);
     setSeededCommand(undefined);
     seenRunIds.current = new Set();
@@ -270,10 +273,15 @@ export function App({ initialToken }: Props) {
 
   // 任务 is a tab an open panel shows; when the Session's runs go away (a new
   // Session, a deleted run) the tab goes with them, and an empty mode would
-  // leave the column with nothing in it.
+  // leave the column with nothing in it. An Idea Tree research is the other
+  // thing the tab shows, so a selected one keeps the tab: without it, opening
+  // a research's card landed on 产物 and the panel never appeared.
   useEffect(() => {
-    if (panelGroup === "task" && evolve.runs.length === 0) setPanelGroup("artifacts");
-  }, [evolve.runs.length, panelGroup]);
+    if (panelGroup !== "task") return;
+    const selected = idea.views.some((view) => view.research.id === ideaResearchId);
+    if (taskTabKept(evolve.runs.length, selected)) return;
+    setPanelGroup("artifacts");
+  }, [evolve.runs.length, idea.views, ideaResearchId, panelGroup]);
 
   // A search is created by the server while the agent's turn is running, and
   // the list is not polled until one is active. The created event is therefore
