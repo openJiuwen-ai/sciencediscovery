@@ -17,7 +17,7 @@ import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thi
 
 import { writeCaseMetrics } from "./helpers/case-measurements.ts";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
+import { formatEnvironmentSetupBlockedReason, waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
   artifactTree,
   cleanupJourney,
@@ -72,7 +72,7 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
       testInfo.skip(
         setup.state !== "ready",
-        `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
+        `BLOCKED: managed Python base is not ready (${formatEnvironmentSetupBlockedReason(setup)})`,
       );
     },
   );

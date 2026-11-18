@@ -15,7 +15,7 @@
 import { expect } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
-import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
+import { formatEnvironmentSetupBlockedReason, waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
   cleanupJourney,
   createProjectAndSession,
@@ -76,7 +76,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     async () => {
       const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
       expect(setup.state,
-        `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
+        `BLOCKED: managed Python base is not ready (${formatEnvironmentSetupBlockedReason(setup)})`,
       ).toBe("ready");
       await page.goto("/");
       manager = await openEnvironmentPage(page);
