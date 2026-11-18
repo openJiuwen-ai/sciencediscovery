@@ -19,9 +19,9 @@ def api(tmp_path):
     call.store, call.root = store, tmp_path
     return call
 
-def create(api, key="create"):
+def create(api, key="create", **overrides):
     return api("create", dict(executor=EXECUTOR, idempotencyKey=key, maxDepth=2, maxNodes=20,
-        maxSearchRounds=3, objective="Catalyst", rootHypothesis="Explore catalysts"))
+        maxSearchRounds=3, objective="Catalyst", rootHypothesis="Explore catalysts", **overrides))
 
 def mutate(api, tree, op, **params):
     result = api(op, dict(treeId=tree["treeId"], expectedRevision=tree["revision"], idempotencyKey=f'{op}-{tree["revision"]}', **params))
@@ -150,10 +150,19 @@ import sys
 from pathlib import Path
 from sciencediscovery_evolve.vendor.idea_tree.idea_tree_service import IdeaTreeStore
 
-store = IdeaTreeStore(Path(sys.argv[1]))
+root = Path(sys.argv[1])
+expected = "".join(chr(code) for code in (0x50ac, 0x5316, 0x5242))
+store = IdeaTreeStore(root)
 tree = store.call("project", "session", "readTree", {"treeId": sys.argv[2]}, "reader")
 assert tree is not None, "the tree did not survive the restart"
 assert tree["treeId"] == sys.argv[2], tree["treeId"]
+assert tree["objective"] == expected, tree["objective"]
+try:
+    (root / "project" / "session" / "state.json").read_text()
+except UnicodeDecodeError:
+    pass
+else:
+    raise SystemExit("this child decodes as UTF-8, so the probe above proves nothing")
 print("ok")
 """
 
@@ -166,7 +175,8 @@ def test_a_tree_with_non_ascii_content_reads_on_a_non_utf8_host(api):
     import sys
     from pathlib import Path
 
-    tree = create(api, key="non-ascii")
+    title = "".join(chr(code) for code in (0x50ac, 0x5316, 0x5242))
+    tree = create(api, key="non-ascii", objective=title, rootHypothesis=title)
     environment = {**os.environ, "PYTHONUTF8": "0", "LC_ALL": "C", "LANG": "C", "PYTHONIOENCODING": "ascii"}
     source = str(Path(__file__).resolve().parents[1] / "src")
     environment["PYTHONPATH"] = os.pathsep.join(filter(None, [source, environment.get("PYTHONPATH")]))

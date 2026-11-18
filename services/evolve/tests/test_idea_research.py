@@ -531,13 +531,20 @@ import sys
 from pathlib import Path
 from sciencediscovery_evolve.vendor.idea_tree.research import ResearchStore
 
-store = ResearchStore(Path(sys.argv[1]))
+root = Path(sys.argv[1])
+store = ResearchStore(root)
 expected = "".join(chr(code) for code in (0x8109, 0x86cb, 0x767d))
 one = store.read("p", "s", "r1")
 assert one["title"] == expected, one["title"]
 many = store.list("p", "s")
 assert [row["id"] for row in many] == ["r1"], [row["id"] for row in many]
 assert many[0]["title"] == expected, many[0]["title"]
+try:
+    (root / "p" / "s" / "r1.json").read_text()
+except UnicodeDecodeError:
+    pass
+else:
+    raise SystemExit("this child decodes as UTF-8, so the probe above proves nothing")
 print("ok")
 """
 
