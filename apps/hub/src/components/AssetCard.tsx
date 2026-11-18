@@ -14,6 +14,7 @@
 
 import { DownloadButton } from "./DownloadButton.js";
 import { ConnectorIcon, SessionIcon, SpecialistIcon } from "./icons.js";
+import { formatSize } from "../format.js";
 import { counted } from "../i18n.js";
 import { SOURCE_LABELS } from "../labels.js";
 
@@ -52,13 +53,6 @@ function tileTone(asset: Asset): string {
   if (asset.kind === "specialist") return "orange";
   if (asset.kind === "connector") return "cyan";
   return "green";
-}
-
-function formatSize(bytes: number | undefined): string {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** The signals each kind actually carries; no invented popularity counters. */

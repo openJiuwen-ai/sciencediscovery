@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { useRef, useState } from "react";
+
 import { AssetTile } from "../components/AssetCard.js";
 import { DownloadButton } from "../components/DownloadButton.js";
+import { FileIcon } from "../components/icons.js";
 import { MarkdownFile } from "../components/Markdown.js";
+import { assetUrl } from "../catalog/load.js";
+import { formatSize } from "../format.js";
 import {
   DOMAIN_LABELS,
   HARDWARE_LABELS,
@@ -22,8 +27,9 @@ import {
   SOURCE_LABELS,
   SUBDOMAIN_LABELS,
 } from "../labels.js";
+import { counted } from "../i18n.js";
 
-import type { JSX, ReactNode } from "react";
+import type { JSX, KeyboardEvent, ReactNode } from "react";
 import type { Asset, Catalog, ConnectorAsset, SessionAsset, SkillAsset, SpecialistAsset } from "../catalog/types.js";
 import type { CopyKey, Language } from "../i18n.js";
 import type { Tab } from "../router.js";
@@ -44,10 +50,109 @@ function DetailHeader({ actions, asset, children }: {
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="detail-head">
+    <header className="detail-hero">
       <AssetTile asset={asset} large />
-      <div className="detail-title">{children}</div>
+      <div className="detail-heading">{children}</div>
       {actions ? <div className="actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+type InfoRow = [label: string, value: ReactNode];
+
+/** The right-hand spec sheet. Callers pass only the fields the asset carries. */
+function InfoCard({ children, copy, rows }: {
+  children?: ReactNode;
+  copy: (key: CopyKey) => string;
+  rows: (InfoRow | null)[];
+}): JSX.Element {
+  return (
+    <aside className="info-card">
+      <h2>{copy("basicInfo")}</h2>
+      <dl className="info-list">
+        {rows.filter((row): row is InfoRow => row !== null).map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {children}
+    </aside>
+  );
+}
+
+interface FileRow {
+  name: string;
+  size?: number;
+  /** Present when the file itself is served, so it can be opened in place. */
+  url?: string;
+}
+
+/** The `Files` tab: exactly the files this asset ships, with the sizes we know. */
+function FileList({ basePath, copy, rows }: { basePath: string; copy: (key: CopyKey) => string; rows: FileRow[] }): JSX.Element {
+  return (
+    <ul className="file-list">
+      {rows.map((row) => (
+        <li className="file-row" key={row.name}>
+          <FileIcon size={18} />
+          <code className="file-name">{row.name}</code>
+          <span className="file-size">{formatSize(row.size)}</span>
+          {row.url ? (
+            <a className="file-view" href={assetUrl(basePath, row.url)} rel="noreferrer" target="_blank">
+              {copy("view")}
+            </a>
+          ) : <span />}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type ReaderTab = "files" | "readme";
+
+/** Readme and Files share one panel; the tab choice resets when the asset changes. */
+function Reader({ copy, fileCount, files, readme }: {
+  copy: (key: CopyKey) => string;
+  fileCount: number;
+  files: JSX.Element;
+  readme: JSX.Element;
+}): JSX.Element {
+  const [tab, setTab] = useState<ReaderTab>("readme");
+  const buttons = useRef<Partial<Record<ReaderTab, HTMLButtonElement | null>>>({});
+  const order: ReaderTab[] = ["readme", "files"];
+  function select(next: ReaderTab): void {
+    setTab(next);
+    buttons.current[next]?.focus();
+  }
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    select(tab === "readme" ? "files" : "readme");
+  }
+  const labels: Record<ReaderTab, ReactNode> = {
+    files: <>{copy("files")}<span className="tab-count">{fileCount}</span></>,
+    readme: copy("readme"),
+  };
+  return (
+    <div className="reader">
+      <div className="tabs" onKeyDown={onKeyDown} role="tablist">
+        {order.map((id) => (
+          <button
+            aria-selected={tab === id}
+            className="tab"
+            key={id}
+            onClick={() => setTab(id)}
+            ref={(node) => { buttons.current[id] = node; }}
+            role="tab"
+            tabIndex={tab === id ? 0 : -1}
+            type="button"
+          >
+            {labels[id]}
+          </button>
+        ))}
+      </div>
+      <div className="tab-panel" role="tabpanel">{tab === "readme" ? readme : files}</div>
     </div>
   );
 }
@@ -89,6 +194,12 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
   const type = skill.type ? SKILL_TYPE_LABELS[skill.type]?.[language] ?? skill.type : null;
   const hardware = skill.hardware ? HARDWARE_LABELS[skill.hardware]?.[language] ?? skill.hardware : null;
   const snapshot = skill.source === "mindscience" ? catalog.sources.externalSkills : undefined;
+  // SKILL.md is served next to the archive; the resources only exist inside it, so
+  // they are listed with their size rather than offered as broken links.
+  const files: FileRow[] = [
+    { name: skill.readme, url: skill.readme },
+    ...skill.resources.map((resource) => ({ name: resource.path, size: resource.size })),
+  ];
   return (
     <article className="detail">
       <DetailHeader
@@ -96,99 +207,145 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
         asset={skill}
       >
         <h1>{skill.name}</h1>
-        <p className="muted">
-          {domain} · {subdomain}
-          {` · ${copy("version")} ${skill.version ?? "—"}`}
-          {skill.author ? ` · ${skill.author}` : ""}
-          {skill.download.size ? ` · ${(skill.download.size / 1024).toFixed(1)} KB` : ""}
+        <p className="detail-sub">
+          <span>{domain} · {subdomain}</span>
+          {skill.version ? <span className="version">v{skill.version}</span> : null}
         </p>
-        {type || hardware ? (
-          <p className="badges detail-badges">
-            {type ? <span className="badge">{type}</span> : null}
-            {hardware ? <span className="badge">{hardware}</span> : null}
-          </p>
-        ) : null}
-        {snapshot ? (
-          <p className="muted">
-            {copy("snapshot")} {snapshot.ref}@{snapshot.commit.slice(0, 8)} ·{" "}
-            <a
-              href={`https://gitcode.com/${snapshot.repo}/blob/${snapshot.ref}/MindScienceSkills/${skill.id}/SKILL.md`}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {copy("upstream")}
-            </a>
-          </p>
-        ) : null}
       </DetailHeader>
 
-      {members.length ? (
-        <section className="members">
-          <h2>{copy("members")}</h2>
-          <ul className="member-list">
-            {members.map((specialist) => (
-              <li key={specialist.id}>
-                <button className="link" onClick={() => onNavigate("specialists", specialist.id)} type="button">
-                  {specialist.name}
-                </button>
-                {specialist.skills.map((skillId) => (
-                  <span className="badge member-skill" key={skillId}>{copy("boundSkills")} · {skillId}</span>
+      <div className="detail-body">
+        <div className="detail-main">
+          <p className="detail-description">{skill.description}</p>
+          <Reader
+            copy={copy}
+            fileCount={files.length}
+            files={(
+              <>
+                <FileList basePath={basePath} copy={copy} rows={files} />
+                <p className="archive-note">{copy("archiveNote")}</p>
+              </>
+            )}
+            key={skill.id}
+            readme={<MarkdownFile basePath={basePath} url={skill.readme} />}
+          />
+        </div>
+        <InfoCard
+          copy={copy}
+          rows={[
+            [copy("id"), <code key="id">{skill.id}</code>],
+            skill.version ? [copy("version"), skill.version] : null,
+            [copy("category"), `${domain} · ${subdomain}`],
+            type ? [copy("type"), type] : null,
+            hardware ? [copy("hardware"), hardware] : null,
+            skill.author ? [copy("author"), skill.author] : null,
+            [copy("source"), SOURCE_LABELS[skill.source]?.[language] ?? skill.source],
+            files.length > 1 ? [copy("files"), counted(files.length, copy("files"), language)] : null,
+            [copy("size"), formatSize(skill.download.size) || "—"],
+            snapshot ? [
+              copy("snapshot"),
+              <span key="snapshot">
+                {snapshot.ref}@{snapshot.commit.slice(0, 8)} ·{" "}
+                <a
+                  href={`https://gitcode.com/${snapshot.repo}/blob/${snapshot.ref}/MindScienceSkills/${skill.id}/SKILL.md`}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {copy("upstream")}
+                </a>
+              </span>,
+            ] : null,
+          ]}
+        >
+          {members.length ? (
+            <div className="info-members">
+              <h2>{copy("members")}</h2>
+              <ul className="member-list">
+                {members.map((specialist) => (
+                  <li key={specialist.id}>
+                    <button className="link" onClick={() => onNavigate("specialists", specialist.id)} type="button">
+                      {specialist.name}
+                    </button>
+                    {specialist.skills.map((skillId) => (
+                      <span className="badge member-skill" key={skillId}>{copy("boundSkills")} · {skillId}</span>
+                    ))}
+                  </li>
                 ))}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+              </ul>
+            </div>
+          ) : null}
+        </InfoCard>
+      </div>
 
-      <MarkdownFile basePath={basePath} url={skill.readme} />
-
-      {skill.resources.length ? (
-        <section>
-          <h2>{copy("resources")}</h2>
-          <ul className="resources">
-            {skill.resources.map((resource) => (
-              <li key={resource.path}>
-                <code>{resource.path}</code>
-                <span className="muted"> {resource.size} B</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <Links catalog={catalog} ids={skill.related?.specialists ?? []} label={copy("specialists")} onNavigate={onNavigate} />
+      <div className="detail-related">
+        <Links catalog={catalog} ids={skill.related?.specialists ?? []} label={copy("specialists")} onNavigate={onNavigate} />
+      </div>
     </article>
   );
 }
 
 export function SpecialistDetail({ asset, basePath, catalog, copy, language, onNavigate }: DetailProps): JSX.Element {
   const specialist = asset as SpecialistAsset;
+  const files: FileRow[] = [
+    { name: specialist.download.url.split("/").pop() ?? specialist.id, size: specialist.download.size, url: specialist.download.url },
+    { name: specialist.download.text.split("/").pop() ?? specialist.id, url: specialist.download.text },
+  ];
   return (
     <article className="detail">
       <DetailHeader
         actions={(
           <>
             <DownloadButton basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} />
-            <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} />
+            <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} variant="ghost" />
           </>
         )}
         asset={specialist}
       >
         <h1>{specialist.name}</h1>
-        <p className="muted">{SOURCE_LABELS[specialist.source]?.[language] ?? specialist.source}</p>
+        <p className="detail-sub">
+          <span>{SOURCE_LABELS[specialist.source]?.[language] ?? specialist.source}</span>
+          {specialist.version ? <span className="version">v{specialist.version}</span> : null}
+        </p>
       </DetailHeader>
-      <p>{specialist.description}</p>
-      <details className="prompt">
-        <summary>{copy("instructions")}</summary>
-        <pre>{specialist.instructions}</pre>
-      </details>
-      {specialist.runtime ? (
-        <section>
-          <h3>Runtime</h3>
-          <pre>{JSON.stringify(specialist.runtime, null, 2)}</pre>
-        </section>
-      ) : null}
-      <Links catalog={catalog} ids={specialist.skills} label={copy("boundSkills")} onNavigate={onNavigate} />
-      <Links catalog={catalog} ids={specialist.connectors} label={copy("boundConnectors")} onNavigate={onNavigate} />
+
+      <div className="detail-body">
+        <div className="detail-main">
+          <p className="detail-description">{specialist.description}</p>
+          <Reader
+            copy={copy}
+            fileCount={files.length}
+            files={<FileList basePath={basePath} copy={copy} rows={files} />}
+            key={specialist.id}
+            readme={(
+              <>
+                <h3 className="reader-heading">{copy("instructions")}</h3>
+                <pre>{specialist.instructions}</pre>
+                {specialist.runtime ? (
+                  <>
+                    <h3 className="reader-heading">{copy("runtime")}</h3>
+                    <pre>{JSON.stringify(specialist.runtime, null, 2)}</pre>
+                  </>
+                ) : null}
+              </>
+            )}
+          />
+        </div>
+        <InfoCard
+          copy={copy}
+          rows={[
+            [copy("id"), <code key="id">{specialist.id}</code>],
+            specialist.version ? [copy("version"), specialist.version] : null,
+            [copy("source"), SOURCE_LABELS[specialist.source]?.[language] ?? specialist.source],
+            specialist.skills.length ? [copy("boundSkills"), String(specialist.skills.length)] : null,
+            specialist.connectors.length ? [copy("boundConnectors"), String(specialist.connectors.length)] : null,
+            [copy("size"), formatSize(specialist.download.size) || "—"],
+          ]}
+        />
+      </div>
+
+      <div className="detail-related">
+        <Links catalog={catalog} ids={specialist.skills} label={copy("boundSkills")} onNavigate={onNavigate} />
+        <Links catalog={catalog} ids={specialist.connectors} label={copy("boundConnectors")} onNavigate={onNavigate} />
+      </div>
     </article>
   );
 }
