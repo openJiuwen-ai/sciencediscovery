@@ -126,15 +126,19 @@ export function assertResearchPackageRestoreCapacity(capacity: PackageCapacity, 
 }
 
 /**
- * The unpacked budget the free disk can hold, given the copies the route adds.
+ * The unpacked budget the free disk can hold, given how many copies the route writes.
  *
- * The upload itself is one copy, and a restore adds three more — snapshot objects,
- * CAS blobs and workspace files — so `free / 4` is the size that keeps the later
- * restore check satisfiable (#1211 F5). An inspect unpacks one copy and writes
- * nothing else, so it passes `copies: 1` and gets `free / 2`; sharing the restore
- * budget refused an inspect whose objects fit (#1216 review 3). The bound has to
- * reach the parser itself: checking only after the unpacking finishes would let a
- * highly compressible archive fill the disk before the check runs.
+ * The divisor is `copies` itself, so the default three is `free / 3`: a restore writes
+ * the unpacked tree, the snapshot's object directory and one CAS blob per object, and
+ * this check has always divided by three (#1211 F5).
+ *
+ * An inspect unpacks one copy and writes nothing else, but it still needs room for the
+ * tree plus the reader's own metadata, so it passes `copies: 2` and gets `free / 2`;
+ * sharing the restore's divisor refused an inspect whose objects fit (#1216 review 3).
+ * Passing `1` would be `free / 1`, which is no bound at all.
+ *
+ * The bound has to reach the parser itself: checking only after the unpacking finishes
+ * would let a highly compressible archive fill the disk before the check runs.
  */
 export function researchPackageUnpackBudget(capacity: PackageCapacity, ceiling: number, copies = 3): number {
   if (!Number.isFinite(capacity.freeDiskBytes)) return ceiling;
