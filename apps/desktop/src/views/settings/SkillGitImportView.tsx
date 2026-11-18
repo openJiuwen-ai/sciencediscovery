@@ -37,12 +37,6 @@ const STATUS_LABEL: Record<GitSkillImportCandidate["status"], () => string> = {
   update: () => TEXT.settings.skills.git.update,
 };
 
-/** A curated repository can hold a couple of hundred packages, and a card is
- *  too tall to scan a hundred of them in one column. The inspection still
- *  answers with every candidate it found; this only decides how many rows are
- *  drawn at a time. */
-export const GIT_CANDIDATE_PAGE_SIZE = 20;
-
 function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : TEXT.settings.skills.importFailed;
 }
@@ -66,27 +60,16 @@ export function SkillGitImportView({ client, onImported }: Props) {
   const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [inspection, setInspection] = useState<GitSkillRepositoryInspection>();
-  const [page, setPage] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const inspectionRequest = useRef<AbortController | undefined>(undefined);
-  const resultsBlock = useRef<HTMLElement | null>(null);
-
-  /** Paging from the row at the bottom leaves the pane where the old page
-   *  ended, which is now its middle. Those presses return to the block header;
-   *  the copy at the top needs no move, because the new rows are drawn below
-   *  the control that was just pressed. */
-  const goToPage = (next: number, jump: boolean) => {
-    setPage(next);
-    if (jump) resultsBlock.current?.scrollIntoView?.({ block: "start" });
-  };
 
   const reset = () => {
     setInspection(undefined);
-    setPage(0);
     setSelected(new Set());
     setRowErrors({});
     setFailure(undefined);
@@ -98,7 +81,6 @@ export function SkillGitImportView({ client, onImported }: Props) {
     inspectionRequest.current = controller;
     setInspecting(true);
     setInspection(undefined);
-    setPage(0);
     setSelected(new Set());
     setRowErrors({});
     setFailure(undefined);
@@ -140,14 +122,6 @@ export function SkillGitImportView({ client, onImported }: Props) {
   };
 
   const candidates = inspection?.candidates ?? [];
-  const pageCount = Math.max(1, Math.ceil(candidates.length / GIT_CANDIDATE_PAGE_SIZE));
-  // A fresh inspection resets the page, so this only guards a list that shrank
-  // under a page someone was already standing on.
-  const currentPage = Math.min(page, pageCount - 1);
-  const visibleCandidates = candidates.slice(
-    currentPage * GIT_CANDIDATE_PAGE_SIZE,
-    (currentPage + 1) * GIT_CANDIDATE_PAGE_SIZE,
-  );
   const selectable = candidates.filter(
     (candidate) => candidate.status === "new" || candidate.status === "update",
   );
@@ -157,34 +131,44 @@ export function SkillGitImportView({ client, onImported }: Props) {
     : new Set(selectable.map((candidate) => candidate.subdirectory)));
 
   const chosen = candidates.filter((candidate) => selected.has(candidate.subdirectory));
+  const total = inspection?.total ?? candidates.length;
 
-  /** The same control above and below the rows: a page of cards is taller than
-   *  the pane, so whichever end the user is at, the way to the next page is
-   *  one press. Only the top copy announces the page it moved to; two live
-   *  regions would say it twice. */
-  const pager = (live: boolean, jump: boolean) => pageCount > 1 ? (
-    <div className="skill-git-pager">
-      <button
-        className="secondary-button"
-        disabled={busy || currentPage === 0}
-        onClick={() => goToPage(currentPage - 1, jump)}
-        type="button"
-      >
-        {TEXT.settings.skills.git.previousPage}
-      </button>
-      <small className="row-note" {...(live ? { role: "status" } : {})}>
-        {TEXT.settings.skills.git.page(currentPage + 1, pageCount)}
-      </small>
-      <button
-        className="secondary-button"
-        disabled={busy || currentPage >= pageCount - 1}
-        onClick={() => goToPage(currentPage + 1, jump)}
-        type="button"
-      >
-        {TEXT.settings.skills.git.nextPage}
-      </button>
-    </div>
-  ) : null;
+  /** Read the next page the server offered. The rows already read stay put,
+   *  and new importable rows join the selection only when the user had kept
+   *  everything selected: loading more must not re-tick what they unticked. */
+  const loadMore = async () => {
+    if (!inspection?.nextCursor || loadingMore) return;
+    const keepSelecting = selectable.length > 0 && selected.size === selectable.length;
+    setLoadingMore(true);
+    setFailure(undefined);
+    try {
+      const more = await inspectGitSkillRepository(client, {
+        commit: inspection.commit,
+        cursor: inspection.nextCursor,
+        ...(inspection.ref ? { ref: inspection.ref } : {}),
+        repositoryUrl: inspection.repositoryUrl,
+        ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
+      });
+      setInspection((current) => current
+        ? { ...more, candidates: [...current.candidates, ...more.candidates] }
+        : more);
+      if (keepSelecting) {
+        setSelected((current) => {
+          const grown = new Set(current);
+          for (const candidate of more.candidates) {
+            if (candidate.status === "new" || candidate.status === "update") {
+              grown.add(candidate.subdirectory);
+            }
+          }
+          return grown;
+        });
+      }
+    } catch (reason) {
+      setFailure(messageOf(reason));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const importFromGit = async () => {
     if (!inspection || chosen.length === 0) return;
@@ -215,13 +199,6 @@ export function SkillGitImportView({ client, onImported }: Props) {
     setRowErrors(errors);
     // What failed stays ticked, so a retry after fixing the cause is one press.
     setSelected(new Set(Object.keys(errors)));
-    // A failed row may not be on the page the user is looking at; showing the
-    // first one is what makes "fix the cause and press again" one press.
-    const firstFailure = Object.keys(errors)[0];
-    if (firstFailure !== undefined) {
-      const index = candidates.findIndex((candidate) => candidate.subdirectory === firstFailure);
-      if (index >= 0) goToPage(Math.floor(index / GIT_CANDIDATE_PAGE_SIZE), true);
-    }
     const failed = chosen.length - imported;
     setNotice(imported === 0
       ? undefined
@@ -306,15 +283,18 @@ export function SkillGitImportView({ client, onImported }: Props) {
 
       {inspection ? (
         <section
-          aria-label={TEXT.settings.skills.git.found(inspection.candidates.length)}
+          aria-label={TEXT.settings.skills.git.found(total)}
           className="skill-git-results"
-          ref={resultsBlock}
         >
           <div className="skill-git-results-head">
             <div>
-              <h3>{TEXT.settings.skills.git.found(inspection.candidates.length)}</h3>
+              <h3>{TEXT.settings.skills.git.found(total)}</h3>
               <p className="row-note">
-                {TEXT.settings.skills.git.commit(inspection.commit)} · {TEXT.settings.skills.git.selectHint}
+                {TEXT.settings.skills.git.commit(inspection.commit)}
+                {candidates.length < total
+                  ? ` · ${TEXT.settings.skills.git.loaded(candidates.length, total)}`
+                  : null}
+                {" · "}{TEXT.settings.skills.git.selectHint}
               </p>
             </div>
             <button
@@ -346,10 +326,9 @@ export function SkillGitImportView({ client, onImported }: Props) {
                   />
                   {TEXT.settings.skills.git.selectAll}
                 </label>
-                {pager(true, false)}
               </div>
               <div className="skill-candidates">
-                {visibleCandidates.map((candidate) => {
+                {candidates.map((candidate) => {
                   const canChoose = candidate.status === "new" || candidate.status === "update";
                   return (
                     <label
@@ -381,7 +360,23 @@ export function SkillGitImportView({ client, onImported }: Props) {
                   );
                 })}
               </div>
-              {pager(false, true)}
+              {inspection.nextCursor !== undefined ? (
+                <div className="skill-git-more">
+                  <small className="row-note">
+                    {TEXT.settings.skills.git.loaded(candidates.length, total)}
+                  </small>
+                  <button
+                    className="secondary-button"
+                    disabled={busy || loadingMore}
+                    onClick={() => void loadMore()}
+                    type="button"
+                  >
+                    {loadingMore
+                      ? TEXT.settings.skills.git.loadingMore
+                      : TEXT.settings.skills.git.loadMore}
+                  </button>
+                </div>
+              ) : null}
             </>
           )}
         </section>

@@ -124,10 +124,13 @@ const FRONTMATTER_KEYS = new Set([
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 const execFileAsync = promisify(execFile);
-/** A scan now reads SKILL.md files that the checkout already holds, so the
- *  ceiling only bounds one response, not the download. A curated repository
- *  can carry a couple of hundred packages; 100 silently hid half of one. */
-const GIT_SKILL_DISCOVERY_LIMIT = 500;
+/** How many packages one inspection response carries. A repository can hold
+ *  more than this, so the response also says how many there are and hands
+ *  back a cursor for the next page; discovery itself walks every `SKILL.md`
+ *  in the checkout, and only the page's files are read. */
+const GIT_SKILL_INSPECTION_PAGE_SIZE = 500;
+/** One bulk review request may name at most this many packages. */
+const GIT_SKILL_SELECTION_LIMIT = 500;
 const GIT_SKILL_DISCOVERY_DEPTH = 12;
 /** A shallow clone of a large skills repository takes tens of seconds; the
  *  ceiling has to leave room for a slow network without holding a request
@@ -372,6 +375,16 @@ function normalizeGitCommit(value: string | undefined): string | undefined {
   return commit;
 }
 
+/** The `nextCursor` an inspection returned: the subdirectory the next page
+ *  starts after. `.` is a legitimate package root and means the checkout
+ *  itself, so it is kept rather than rejected as an empty path segment. */
+function normalizeGitCursor(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const cursor = value.trim();
+  if (!cursor) throw validationError("Git inspection cursor must not be empty");
+  return cursor === "." ? "." : normalizedPackagePath(cursor);
+}
+
 export async function discoverGitSkillRoots(checkout: string, requestedSubdirectory?: string): Promise<string[]> {
   const discoveryRoot = requestedSubdirectory
     ? resolve(checkout, ...requestedSubdirectory.split("/"))
@@ -386,7 +399,7 @@ export async function discoverGitSkillRoots(checkout: string, requestedSubdirect
   }
   const roots: string[] = [];
   async function visit(directory: string, depth: number): Promise<void> {
-    if (roots.length >= GIT_SKILL_DISCOVERY_LIMIT || depth > GIT_SKILL_DISCOVERY_DEPTH) return;
+    if (depth > GIT_SKILL_DISCOVERY_DEPTH) return;
     const entries = await readdir(directory, { withFileTypes: true });
     const skillMarkdown = entries.find((entry) => entry.name === "SKILL.md");
     if (skillMarkdown?.isFile() && !skillMarkdown.isSymbolicLink()) {
@@ -395,7 +408,6 @@ export async function discoverGitSkillRoots(checkout: string, requestedSubdirect
       return;
     }
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      if (roots.length >= GIT_SKILL_DISCOVERY_LIMIT) return;
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
       if (new Set([".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv"]).has(entry.name)) continue;
       await visit(resolve(directory, entry.name), depth + 1);
@@ -1682,12 +1694,37 @@ export class SkillCatalog {
     });
   }
 
+  /** One page of discovery. Discovery walks every `SKILL.md` in the checkout
+   *  (cheap: a partial checkout holds nothing else), then the page's files are
+   *  read and validated. `total` is the repository's count, not the page's. */
   private async inspectGitCheckout(
     checkout: string,
     subdirectory: string | undefined,
     partial: boolean,
-  ): Promise<Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }>> {
+    cursor?: string,
+  ): Promise<{
+    entries: Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }>;
+    nextCursor?: string;
+    total: number;
+  }> {
     const roots = await discoverGitSkillRoots(checkout, subdirectory);
+    const start = cursor === undefined ? 0 : roots.findIndex((root) => root > cursor);
+    const from = start === -1 ? roots.length : start;
+    const page = roots.slice(from, from + GIT_SKILL_INSPECTION_PAGE_SIZE);
+    const entries = await this.inspectGitRoots(checkout, page, partial);
+    const last = page.at(-1);
+    return {
+      entries,
+      ...(last !== undefined && from + page.length < roots.length ? { nextCursor: last } : {}),
+      total: roots.length,
+    };
+  }
+
+  private async inspectGitRoots(
+    checkout: string,
+    roots: readonly string[],
+    partial: boolean,
+  ): Promise<Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }>> {
     const results: Array<{ candidate: GitSkillImportCandidate; loaded?: LoadedPackage }> = [];
     for (const root of roots) {
       try {
@@ -1797,17 +1834,36 @@ export class SkillCatalog {
   async inspectGitRepository(input: InspectGitSkillRepositoryRequest): Promise<GitSkillRepositoryInspection> {
     this.assertLoaded();
     const importRoot = resolve(this.root, ".imports");
-    const { checkout, commit, normalized, partial } = await this.checkoutGit(importRoot, input);
-    let retained = false;
+    const normalized = validateGitSkillImportRequest(input);
+    const requestedCommit = normalizeGitCommit(input.commit);
+    const cursor = normalizeGitCursor(input.cursor);
+    if (cursor !== undefined && requestedCommit === undefined) {
+      throw validationError("A Git inspection cursor requires the commit the inspection returned");
+    }
+    // A page after the first reads the checkout the first page made: same
+    // tree, same commit, no second clone.
+    const reused = this.retainedCheckoutFor(normalized, requestedCommit);
+    if (requestedCommit !== undefined && reused === undefined) {
+      throw validationError("The Git inspection expired or was replaced; inspect the repository again");
+    }
+    const fetched = reused === undefined ? await this.checkoutGit(importRoot, input) : undefined;
+    const checkout = fetched?.checkout ?? reused!.checkout;
+    const commit = fetched ? fetched.commit : requestedCommit!;
+    const partial = fetched ? fetched.partial === true : reused!.partial;
+    let retained = reused !== undefined;
     try {
-      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial === true);
-      await this.retainCheckout(checkout, commit, normalized, partial === true);
+      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial, cursor);
+      // Reading another page is using the checkout, so the window restarts:
+      // a long list should not expire halfway through.
+      await this.retainCheckout(checkout, commit, normalized, partial);
       retained = true;
       return {
-        candidates: inspected.map(({ candidate }) => candidate),
+        candidates: inspected.entries.map(({ candidate }) => candidate),
         commit,
+        ...(inspected.nextCursor !== undefined ? { nextCursor: inspected.nextCursor } : {}),
         ...(normalized.ref ? { ref: normalized.ref } : {}),
         repositoryUrl: normalized.repositoryUrl,
+        total: inspected.total,
       };
     } finally {
       if (!retained) await rm(checkout, { force: true, recursive: true });
@@ -1826,8 +1882,8 @@ export class SkillCatalog {
       const trimmed = path?.trim();
       return trimmed === "." ? "." : normalizedPackagePath(trimmed);
     }) ?? [])];
-    if (!subdirectories.length || subdirectories.length > GIT_SKILL_DISCOVERY_LIMIT) {
-      throw validationError(`Select between 1 and ${GIT_SKILL_DISCOVERY_LIMIT} Git Skill packages`);
+    if (!subdirectories.length || subdirectories.length > GIT_SKILL_SELECTION_LIMIT) {
+      throw validationError(`Select between 1 and ${GIT_SKILL_SELECTION_LIMIT} Git Skill packages`);
     }
     const importRoot = resolve(this.root, ".imports");
     const requested = validateGitSkillImportRequest(input);
@@ -1847,7 +1903,9 @@ export class SkillCatalog {
       // The scan kept only SKILL.md files; the packages being reviewed need
       // their resources before they can be read as packages.
       if (partial) await this.expandCheckout(checkout, subdirectories);
-      const inspected = await this.inspectGitCheckout(checkout, normalized.subdirectory, partial);
+      // The request names its packages, so read those rather than paging
+      // through a discovery that may hold thousands of them.
+      const inspected = await this.inspectGitRoots(checkout, subdirectories, partial);
       const byPath = new Map(inspected.map((entry) => [entry.candidate.subdirectory, entry]));
       const selected = subdirectories.map((subdirectory) => {
         const entry = byPath.get(subdirectory);
