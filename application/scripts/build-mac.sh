@@ -419,12 +419,19 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
     # The zip target emits latest-mac.yml + .blockmap alongside the carrier
     # zip (ArchiveTarget isWriteUpdateInfo=true — requires the publish
     # section to exist, which is why electron-builder.yml carries it).
-    # Gate: all four assets must exist; upload itself is MANUAL (gh CLI or
+    # Gate: all five assets must exist; upload itself is MANUAL (gh CLI or
     # the GitHub web UI) — commands printed below, run after review.
     LATEST_YML="$SHELL_ROOT/release/latest-mac.yml"
     [ -f "$LATEST_YML" ] || die "5f: missing latest-mac.yml (zip target did not write update info — is the publish section present in electron-builder.yml?)"
-    BLOCKMAP="${ZIP%.zip}.blockmap"
-    [ -f "$BLOCKMAP" ] || die "5f: missing ${BLOCKMAP##*/} (differential update data)"
+    # electron-builder 26.x appends .blockmap to the FULL carrier name
+    # (ScienceDiscovery-…-mac-arm64.zip.blockmap); 25.x replaced the .zip
+    # suffix (…-mac-arm64.blockmap). Accept both so the differential-update
+    # gate survives builder upgrades; the file must sit beside the zip.
+    BLOCKMAP=""
+    for candidate in "${ZIP}.blockmap" "${ZIP%.zip}.blockmap"; do
+      [ -f "$candidate" ] && BLOCKMAP="$candidate" && break
+    done
+    [ -n "$BLOCKMAP" ] || die "5f: missing ${ZIP}.blockmap (differential update data — electron-builder 26.x name) nor ${ZIP%.zip}.blockmap (25.x name)"
     # F11: the update feed must describe THIS build. A stale yml from an
     # earlier run (or a mismatched version) would push the wrong update to
     # every user — gate the version and the exact carrier filename.
@@ -434,16 +441,21 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
       || die "5f: latest-mac.yml version '$YML_VERSION' != this build's $APP_VERSION — stale update info, rerun the gate"
     grep -q "url: $(basename "$ZIP")" "$LATEST_YML" \
       || die "5f: latest-mac.yml does not list this build's zip '$(basename "$ZIP")' — stale update info, rerun the gate"
+    # F4: the uninstaller must ship WITH the release — a macOS user who
+    # wants out (or hits a broken install) has no other supported removal
+    # path. Gate it here so a release cannot go out without it.
+    UNINSTALLER="$SHELL_ROOT/scripts/uninstall-mac.command"
+    [ -f "$UNINSTALLER" ] || die "5f: missing scripts/uninstall-mac.command (the supported macOS removal path — a release must ship it)"
     echo ""
     echo "=== release asset manifest (upload manually, D4 §1) ==================="
-    for asset in "$DMG" "$ZIP" "$LATEST_YML" "$BLOCKMAP"; do
+    for asset in "$DMG" "$ZIP" "$LATEST_YML" "$BLOCKMAP" "$UNINSTALLER"; do
       printf '  %s  (%s bytes)\n' "$(basename "$asset")" "$(stat -f%z "$asset")"
     done
     echo "======================================================================="
-    echo "Create a draft release (v${SD_RELEASE_TAG:-<version>}), upload all four assets,"
+    echo "Create a draft release (v${SD_RELEASE_TAG:-<version>}), upload all five assets,"
     echo "verify Gatekeeper on a clean machine, then publish. gh CLI:"
     echo "  gh release create v<version> \\"
-    echo "    '$DMG' '$ZIP' '$LATEST_YML' '$BLOCKMAP' --draft --title 'v<version>'"
+    echo "    '$DMG' '$ZIP' '$LATEST_YML' '$BLOCKMAP' '$UNINSTALLER' --draft --title 'v<version>'"
     echo "or with the API token electron-builder knows:"
     if [ "${SD_MAC_SIGN:-0}" = "1" ]; then
       echo "  GH_TOKEN=<token> npx electron-builder --mac --publish always \\"

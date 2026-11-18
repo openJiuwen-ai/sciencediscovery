@@ -68,6 +68,13 @@ mac:
       arch: [arm64]
   icon: build/icon.icns
   category: public.app-category.productivity
+  # Acceptance item ⑦ (issue #1165): floor = macOS 14.0 (Sonoma). Electron 37
+  # upstream supports the last 3 macOS majors (15/14/13); our only real test
+  # machine runs 14.8.9 and macOS 13 has fallen outside that window (no test
+  # coverage, no Gatekeeper data). Pinning the Info.plist LSMinimumSystemVersion
+  # here makes Gatekeeper enforce the floor at install/first-run time instead
+  # of relying on documentation.
+  minimumSystemVersion: 14.0.0
   # Notarization prerequisites (D4 §3); B4-1 wires the Developer ID identity,
   # until then builds sign ad-hoc for local smoke only.
   hardenedRuntime: true
