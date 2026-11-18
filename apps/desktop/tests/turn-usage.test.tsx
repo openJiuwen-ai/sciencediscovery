@@ -45,7 +45,7 @@ test("turn usage uses durable run IDs, keeps the backend total and does not mix 
   assert.equal(index.byMessage.get("answer-a")?.bucket.totalTokens, 60744);
   assert.equal(index.byMessage.get("answer-b")?.bucket.totalTokens, 20);
   assert.equal(index.byMessage.get("answer-a"), index.byRun.get("run-a"));
-  assert.deepEqual(index.byRun.get("run-a")?.models, ["Gateway · deepseek-model"]);
+  assert.deepEqual(index.byRun.get("run-a")?.models, ["Gateway"]);
   assert.equal(index.byMessage.has("unlinked-answer"), false);
   assert.deepEqual(source, original, "indexing must not mutate backend data");
 });
@@ -59,9 +59,11 @@ test("partial reports stay partial; reported zero and absent cache fields remain
   const index = indexTurnUsage(source, runs);
   const data = index.byRun.get("run-a"); assert.ok(data);
   assert.equal(data.incomplete, true);
-  const html = renderToStaticMarkup(<TurnUsageDetails data={{ ...data, bucket: { ...data.bucket, inputTokens: 0 } }} />);
+  const html = renderToStaticMarkup(<TurnUsageDetails data={{ ...data, models: ["Custom · DeepSeek V4 Pro"], bucket: { ...data.bucket, inputTokens: 0 } }} />);
   assert.ok(html.includes(`<dt>${TEXT.conversation.usage.input}</dt><dd>0 tok</dd>`));
-  assert.ok(html.includes(`<dt>${TEXT.conversation.usage.cacheWrite}</dt><dd>${TEXT.conversation.usage.unreported}</dd>`));
+  assert.ok(!html.includes(TEXT.conversation.usage.cacheWrite));
+  assert.ok(html.includes("DeepSeek V4 Pro"));
+  assert.doesNotMatch(html, /Custom|DeepSeek-V4-Pro/);
   assert.ok(html.includes(TEXT.conversation.usage.incomplete));
   assert.ok(!html.includes(TEXT.conversation.usage.reasoning), "absent optional reasoning is not invented");
 });
@@ -77,7 +79,7 @@ test("a completed answer has a compact per-turn usage entry beside copy; streami
   assert.doesNotMatch(live, /turn-usage-trigger/);
   const unknown = renderToStaticMarkup(<TurnUsage data={{ ...data, bucket: bucket("run", { totalTokens: null }) }}
     loading={false} failed={false} onRefresh={() => {}} />);
-  assert.ok(unknown.includes(TEXT.conversation.usage.unreported));
+  assert.ok(!unknown.includes(TEXT.conversation.usage.unreported));
   const stopped = renderToStaticMarkup(<AssistantTurns client={new Client(() => ({}))} onDecide={async () => {}}
     run={{ ...emptyRunStream(), runId: "run-a", terminal: true, status: "failed", error: { message: "Stopped before an answer" } }} usage={usage} />);
   assert.match(stopped, /60\.7K tok/, "a failed turn can still have provider-reported usage");
