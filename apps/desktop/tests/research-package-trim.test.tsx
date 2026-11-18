@@ -211,3 +211,41 @@ test("a ready copy renders no text and no open affordance", () => {
   assert.equal("open" in t, false, "the open label is gone from both locales");
 
 });
+
+test("the complete export asks the preview and the export body for the trajectory", async (context) => {
+  // The switch used to be pure component state: the preview never saw it, so the
+  // estimate and the cap described a package without the trajectory, and the export
+  // body dropped it as well (#1235 review 2).
+  const calls: Array<{ path: string; init?: { body?: unknown; method?: string } }> = [];
+  const inner = client();
+  const tracking = {
+    ...inner,
+    request: async (target: string, init?: { body?: unknown; method?: string }) => {
+      calls.push({ path: target, init });
+      return (inner.request as (path: string, init?: unknown) => Promise<unknown>)(target, init);
+    },
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: tracking as never,
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    // The unselected card is the complete profile.
+    const cards = view.root.findAllByProps({ "aria-pressed": false });
+    assert.ok(cards.length > 0, "the complete card is rendered");
+    await act(async () => { (cards[0]!.props.onClick as () => void)(); await Promise.resolve(); });
+
+    // On a complete export the two payload switches come first, before the file grid.
+    const boxes = view.root.findAllByProps({ type: "checkbox" });
+    assert.ok(boxes.length >= 2, "the payload switches are rendered for a complete export");
+    await act(async () => {
+      (boxes[0]!.props.onChange as (event: unknown) => void)({ target: { checked: true } });
+      await Promise.resolve();
+    });
+
+    const previewQueries = calls.filter((call) => call.path.includes("/preview")).map((call) => call.path);
+    assert.ok(previewQueries.some((query) => /includeFullTrajectory=1/.test(query)),
+      `the preview must be asked for the trajectory: ${JSON.stringify(previewQueries.slice(-2))}`);
+  });
+});
+
