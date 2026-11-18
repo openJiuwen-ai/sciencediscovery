@@ -1340,9 +1340,15 @@ export function App({ initialToken }: Props) {
   approvalMode: state.detail?.approvalMode ?? lastApprovalMode ?? state.defaultApprovalMode ?? "ask_for_dangerous",
     automaticReviewEnabled: state.reviewerSettings?.automaticReviewEnabled,
     reviewerEnabled: state.reviewerEnabled,
+    // The same queued-or-running test the cards use: one notion of "a review
+    // is happening now", so the menu's 停止审查 and the running lines cannot
+    // disagree about whether there is anything to stop.
+    reviewerRunning: reviewerActive.size > 0,
     reviewLevel: state.reviewerSettings?.level,
     onAutomaticReview: (enabled) => void actions.setAutomaticReview(enabled),
     onReviewLevel: (level) => void actions.setReviewLevel(level),
+    onRunReview: () => void actions.runReview(),
+    onStopReview: () => void actions.stopReview(),
     attachBlocked: canUpload ? undefined : TEXT.composer.attachArchived,
     attachLimit,
     attachments: state.attachments,

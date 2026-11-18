@@ -46,6 +46,10 @@ export interface ReviewRow {
   id: string;
   tone: ReviewTone;
   label: string;
+  /** What the label means, as a hover hint. "计算" is a category name, not a
+   *  sentence: a first-time reader cannot tell whether it checks the numbers or
+   *  computes them. The label stays one word; the hint carries the explanation. */
+  labelTip: string;
   title: string;
   body?: string;
   /** The badge's word, when it is not simply the tone. */
@@ -69,6 +73,16 @@ function labelFor(category: string): string {
   return TEXT.reviewer.checkNames[category] ?? TEXT.reviewer.title;
 }
 
+/** The hover explanation behind a label. A category the card has no separate
+ *  wording for falls back to the general finding sentence rather than to
+ *  nothing: a row whose label explains itself is still better than a silent one. */
+function labelTipFor(category: string): string {
+  // The record's keys are named so the `other` fallback is a known string; the
+  // lookup itself stays open because a check name comes off the wire.
+  const tips: Record<string, string | undefined> = TEXT.reviewer.labelTips;
+  return tips[category] ?? TEXT.reviewer.labelTips.other;
+}
+
 /**
  * Whether this review may be presented as a delivery pass.
  *
@@ -80,6 +94,19 @@ export function unverifiedDelivery(review: ArtifactReviewRun): boolean {
   if (review.completeness) return review.completeness.status !== "complete";
   const checks = review.checks ?? [];
   return !(checks.length > 0 && checks.every((check) => check === "structure"));
+}
+
+/**
+ * A review that ran but declared, itself, that some checks were not performed.
+ *
+ * Port of the server's `reviewDeclaredGap`. A card whose header says
+ * "未发现问题" while its own gap rows say "未检查" contradicts itself: what ran
+ * did not raise anything, but part of the claim was never examined, so the
+ * verdict is not a pass. The web client counts these separately for the same
+ * reason.
+ */
+export function declaredGap(review: Pick<ArtifactReviewRun, "notChecked">): boolean {
+  return (review.notChecked?.length ?? 0) > 0;
 }
 
 function deliveryFindings(review: ArtifactReviewRun): ArtifactReviewRun["findings"] {
@@ -120,6 +147,9 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.completeness?.status === "incomplete") return "fail";
   if (review.findings.length > 0) return "fail";
   if (unverifiedDelivery(review)) return "warn";
+  // Nothing was found wrong, but part of the claim was never examined. Amber
+  // is the tone the card already uses for "cannot be trusted as it stands".
+  if (declaredGap(review)) return "warn";
   return "pass";
 }
 
@@ -131,6 +161,7 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code)).length;
     if (raised > 0) return TEXT.reviewer.summaryFindings(raised);
     if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
+    if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;
   })();
   // A verdict on a version that has since been replaced says what it found and
@@ -164,6 +195,9 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       label: category === "semantics" ? TEXT.reviewer.deepSemantic : category === undefined
         ? TEXT.reviewer.title
         : labelFor(category),
+      labelTip: category === "semantics"
+        ? TEXT.reviewer.labelTips.semantics
+        : labelTipFor(category ?? "other"),
       title: finding.message,
       badge: finding.severity === "critical" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
     });
@@ -185,6 +219,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
         ? "pass"
         : completeness.status === "incomplete" ? "fail" : "warn",
       label: labelFor("completeness"),
+      labelTip: labelTipFor("completeness"),
       title: completeness.status === "complete"
         ? text.complete
         : completeness.status === "incomplete" ? text.incomplete : text.unconfirmed,
@@ -200,6 +235,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:gap:${index}`,
       tone: "warn",
       label: TEXT.reviewer.gaps,
+      labelTip: labelTipFor("gaps"),
       title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
       body: gap.reason,
       badge: TEXT.reviewer.gaps,
@@ -216,6 +252,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:smart`,
       tone: "warn",
       label: TEXT.reviewer.deepSemantic,
+      labelTip: labelTipFor("semantics"),
       title: TEXT.reviewer.inconclusive,
       body: TEXT.reviewer.inconclusiveBody,
       badge: TEXT.reviewer.warning,
@@ -230,6 +267,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
         ? "pass"
         : verdict === "CONTRADICTED" ? "fail" : "warn",
       label: TEXT.reviewer.source,
+      labelTip: labelTipFor("source"),
       title: claimText(assessment.claim) ?? TEXT.reviewer.source,
       body: assessment.locators.length > 0
         ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
@@ -244,6 +282,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:citation:${task.key}`,
       tone: task.status === "failed" ? "fail" : "warn",
       label: TEXT.reviewer.citationTask,
+      labelTip: labelTipFor("citationTask"),
       title: `${task.label} · ${TEXT.reviewer.taskStatus[task.status] ?? task.status}`,
       body: task.message,
       badge: TEXT.reviewer.taskStatus[task.status] ?? task.status,
@@ -258,6 +297,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:check:${check}`,
       tone: "pass",
       label: labelFor(check),
+      labelTip: labelTipFor(check),
       title: TEXT.reviewer.checkPass(labelFor(check)),
       body: TEXT.reviewer.passBody,
       badge: TEXT.reviewer.badgePass,
@@ -271,6 +311,23 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
  *  more than expansion reveals. */
 export function reviewRowCount(reviews: readonly ArtifactReviewRun[]): number {
   return reviews.reduce((total, review) => total + reviewRows(review).length, 0);
+}
+
+/**
+ * How a checkpoint's artifacts split, when they disagree.
+ *
+ * The header reports the worst artifact, so one failing report hides the
+ * passing ones behind it. Only a mixed batch gets the extra count: when every
+ * artifact agrees, the verdict already says the same thing in one phrase, and
+ * repeating it as numbers is noise.
+ */
+export function mixedOutcomeCounts(reviews: readonly ArtifactReviewRun[]): string | undefined {
+  if (reviews.length < 2) return undefined;
+  const tones = reviews.map(reviewTone);
+  const passed = tones.filter((tone) => tone === "pass").length;
+  const attention = tones.filter((tone) => tone === "fail" || tone === "warn").length;
+  if (passed === 0 || attention === 0) return undefined;
+  return TEXT.reviewer.outcomeCounts(passed, attention);
 }
 
 const TONE_RANK: Record<ReviewTone, number> = { fail: 4, warn: 3, pending: 2, pass: 1, neutral: 0 };
