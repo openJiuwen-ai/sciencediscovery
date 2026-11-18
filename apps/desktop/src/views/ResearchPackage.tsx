@@ -505,6 +505,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             {historyBridge ? null : finishedExports.filter(record => record.phase === "saved" && record.savedToken).map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span><button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button></div>)}
           </div> : null}
         </> : dialog === "import" ? <>
+          <p className="research-dialog-lede">{t.importHint}</p>
           <p className="research-field-label">{t.projectDestination}</p>
           <select className="research-import-select" value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
           <p className="research-package-notice">{t.projectDestinationHint}</p>
@@ -524,7 +525,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               <p>{t.importHint}</p>
               {inspection.manifest.omissions.length ? <ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul> : null}
             </div>
-          </> : <p className="research-package-notice">{t.importHint}</p>}
+          </> : null}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
