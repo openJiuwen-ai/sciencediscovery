@@ -13,30 +13,21 @@
 // limitations under the License.
 
 /**
- * `/idea-tree` typed in the composer opens the launch dialog, the way `/evolve-design`
- * opens the design dialog: the sentence is a task, not a message, and the settings it
- * may start with are chosen before the research exists rather than after.
+ * `/idea-tree <task>` is a message, like every other command: the agent runs its
+ * preparation and starts the research through `create_idea_research`. The desktop
+ * recognises the command only to know that a research is expected, so its panel
+ * can open when it appears.
  */
 
 const IDEA_TREE_COMMANDS = ["/idea-tree-team", "/idea-tree"] as const;
 
-/** True when the draft is one of the Idea Tree commands (longest prefix first). */
+/** True when the draft is one of the Idea Tree commands (longest prefix first).
+ *
+ *  The command itself is never intercepted: it is sent as a message so the agent
+ *  runs its preparation and calls `create_idea_research`, which is the only path
+ *  that carries the evidence the engine cannot gather. Recognising it here is
+ *  only what lets the panel open when the research it starts appears. */
 export function isIdeaTreeCommand(text: string): boolean {
   const trimmed = text.trim();
   return IDEA_TREE_COMMANDS.some((command) => trimmed === command || trimmed.startsWith(`${command} `));
-}
-
-/** The task after the command, trimmed; empty when nothing was typed after it. */
-export function ideaTreeCommandTask(text: string): string {
-  const trimmed = text.trim();
-  for (const command of IDEA_TREE_COMMANDS) {
-    if (trimmed === command) return "";
-    if (trimmed.startsWith(`${command} `)) return trimmed.slice(command.length).trim();
-  }
-  return trimmed;
-}
-
-/** The command a task should be sent with, so the agent still sees the handoff. */
-export function ideaTreeCommand(task: string): string {
-  return task.trim() ? `/idea-tree ${task.trim()}` : "/idea-tree";
 }

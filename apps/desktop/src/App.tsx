@@ -58,7 +58,7 @@ import {
   splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
-import { isIdeaTreeCommand, ideaTreeCommandTask } from "./idea/command.js";
+import { isIdeaTreeCommand } from "./idea/command.js";
 import { taskTabKept } from "./idea/task-tab.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
@@ -90,8 +90,8 @@ import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
 import { IdeaResearchCard } from "./views/idea/IdeaResearchCard.js";
-import { IdeaTreeCreateDialog } from "./views/idea/IdeaTreeCreateDialog.js";
 import { IdeaResearchPanel } from "./views/idea/IdeaResearchPanel.js";
+import { LegacyIdeaCard, LegacyIdeaTreePanel, useLegacyIdeaTree } from "./views/idea/LegacyIdeaTree.js";
 import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
 import { SetupWizard } from "./views/SetupWizard.js";
 import {
@@ -190,10 +190,19 @@ export function App({ initialToken }: Props) {
   /** The session's Idea Tree researches. Read at this level for the same reason
    *  as the searches: a card stays reachable while the task panel is closed. */
   const idea = useIdeaResearches(client, state.sessionId);
+  /** Sessions written before the research API still carry a legacy tree; it is
+   *  only asked for when the session has no research to describe it. */
+  const legacy = useLegacyIdeaTree(client, state.sessionId, idea.views.length === 0 && !idea.unavailable);
   /** Which research the task panel shows, by id. */
   const [ideaResearchId, setIdeaResearchId] = useState<string>();
-  /** `/idea-tree <task>` opens the launch dialog rather than sending the text. */
-  const [ideaCreate, setIdeaCreate] = useState<{ task?: string }>();
+  /** True from the moment `/idea-tree <task>` is sent until the research it
+   *  starts shows up in the list. The command is a message the agent acts on —
+   *  it is not intercepted — so the only way to open the panel at the start
+   *  rather than at the next unrelated refresh is to know that one is expected. */
+  const [awaitingIdea, setAwaitingIdea] = useState(false);
+  /** The legacy tree, open in the 任务 tab. It has no research and no stream, so
+   *  it is selected separately from `ideaResearchId`. */
+  const [legacyOpen, setLegacyOpen] = useState(false);
   const refreshEvolve = evolve.refresh;
   /** Which search the panel is showing, by id. Storing the id rather than the
    *  record keeps the panel reading the same list the run cards do, so a status
@@ -207,6 +216,10 @@ export function App({ initialToken }: Props) {
   /** The ids the list already held, so "new" means new and not merely "the
    *  first list a slow poll happened to return". */
   const seenRunIds = useRef<Set<string>>(new Set());
+  /** The same for the session's researches, kept apart from the runs: an Idea
+   *  Tree research is created by the agent, so it can only be recognised after
+   *  the fact. */
+  const seenIdeaIds = useRef<Set<string>>(new Set());
   /** The instant the command was sent; a run older than it was already there. */
   const awaitingSince = useRef(0);
   /** The create dialog, open with a typed goal when the command was diverted
@@ -236,10 +249,49 @@ export function App({ initialToken }: Props) {
     setEvolveRunId(undefined);
     // A research id is the previous session's, so it goes with the run id.
     setIdeaResearchId(undefined);
+    setLegacyOpen(false);
     setAwaitingRun(false);
+    setAwaitingIdea(false);
     setSeededCommand(undefined);
     seenRunIds.current = new Set();
+    seenIdeaIds.current = new Set();
   }, [state.sessionId]);
+
+  // The list is not polled until a research is live, and the agent creates this
+  // one during a run, so the panel would otherwise wait for an unrelated
+  // refresh. Looking every few seconds is bounded: a command that never produced
+  // a research must not keep the window asking forever.
+  useEffect(() => {
+    if (!awaitingIdea) return undefined;
+    void idea.reload();
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - started > 5 * 60_000) {
+        setAwaitingIdea(false);
+        return;
+      }
+      idea.reload();
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [awaitingIdea, idea.reload]);
+
+  // Open a research this window asked for. The agent creates it during the run,
+  // so it appears in the list a little later; everything the list already held is
+  // recorded as seen, which is also what keeps a reopened session from opening
+  // anything by itself.
+  useEffect(() => {
+    const fresh = awaitingIdea
+      ? idea.views.find((view) => !seenIdeaIds.current.has(view.research.id))
+      : undefined;
+    for (const view of idea.views) seenIdeaIds.current.add(view.research.id);
+    if (fresh === undefined) return;
+    setAwaitingIdea(false);
+    setIdeaResearchId(fresh.research.id);
+    setEvolveRunId(undefined);
+    setLegacyOpen(false);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  }, [awaitingIdea, idea.views]);
 
   // A start is only visible once the list is re-read, and the list poll is
   // idle until something is active. Looking every few seconds until the new
@@ -695,9 +747,11 @@ export function App({ initialToken }: Props) {
       return;
     }
     if (isIdeaTreeCommand(content)) {
-      // A command is a task, not a message: its settings are chosen first.
-      setIdeaCreate({ task: ideaTreeCommandTask(content) || undefined });
-      return;
+      // The command stays a message: the agent runs its preparation and calls
+      // `create_idea_research`, because the evidence it gathers cannot be
+      // produced here. Remembering that one was asked for is what lets the card
+      // open itself once the research exists.
+      setAwaitingIdea(true);
     }
     void actions.send(content);
   };
@@ -876,6 +930,21 @@ export function App({ initialToken }: Props) {
 
   const showEvolveRun = (id: string) => {
     setEvolveRunId(id);
+    // 任务 shows one thing: a research or a legacy tree left selected would keep
+    // drawing over the run the reader just asked for, and #1169 requires Evolve
+    // to stay usable in a session that has both.
+    setIdeaResearchId(undefined);
+    setLegacyOpen(false);
+    setPanelGroup("task");
+    setWorkspaceOpen(true);
+  };
+
+  /** The same for a research's card: the panel is the 任务 tab, and the search
+   *  detail steps aside for it. */
+  const showIdeaResearch = (id: string) => {
+    setIdeaResearchId(id);
+    setEvolveRunId(undefined);
+    setLegacyOpen(false);
     setPanelGroup("task");
     setWorkspaceOpen(true);
   };
@@ -1073,17 +1142,24 @@ export function App({ initialToken }: Props) {
                   ending's badge for a frame. */}
               {/* One card per research; the panel is where the tree and the
                   controls live, so the card itself only opens it. */}
+              {/* The research list is the way in, so a list that could not be
+                  read is said here: an empty column would otherwise read as
+                  "nothing was ever started" when the sidecar is simply down. */}
+              {idea.unavailable || idea.error ? (
+                <p className="idea-notice" role="alert">{idea.unavailable ? TEXT.ideaTree.unavailable : idea.error}</p>
+              ) : null}
+              {legacy.graph ? (
+                <LegacyIdeaCard
+                  graph={legacy.graph}
+                  onOpen={() => { setLegacyOpen(true); setIdeaResearchId(undefined); setEvolveRunId(undefined); setPanelGroup("task"); setWorkspaceOpen(true); }}
+                />
+              ) : null}
               {idea.views.length ? (
                 <div className="idea-cards">
                   {idea.views.map((view) => (
                     <IdeaResearchCard
                       key={view.research.id}
-                      onOpen={(researchId) => {
-                        // Same path as a search card: the panel's task tab, opened.
-                        setIdeaResearchId(researchId);
-                        setPanelGroup("task");
-                        setWorkspaceOpen(true);
-                      }}
+                      onOpen={showIdeaResearch}
                       view={view}
                     />
                   ))}
@@ -1117,15 +1193,6 @@ export function App({ initialToken }: Props) {
             </>
           )}
           <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />
-          {ideaCreate && state.sessionId ? (
-            <IdeaTreeCreateDialog
-              client={client}
-              onClose={() => setIdeaCreate(undefined)}
-              onStarted={() => { idea.reload(); setPanelGroup("task"); setWorkspaceOpen(true); }}
-              sessionId={state.sessionId}
-              task={ideaCreate.task}
-            />
-          ) : null}
         </main>
 
         <WorkspacePanel
@@ -1143,21 +1210,23 @@ export function App({ initialToken }: Props) {
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
           subagentStale={subagentStale}
-          task={ideaResearch === undefined ? (evolveRun === undefined ? undefined : <EvolveDetail
-            client={client}
-            key={evolveRun.id}
-            onError={(message) => actions.toast(message, "error")}
-            onRunChanged={() => void refreshEvolve()}
-            run={evolveRun}
-          />) : (
-            <IdeaResearchPanel
-              client={client}
-              key={ideaResearch.research.id}
-              onClose={() => setIdeaResearchId(undefined)}
-              researchId={ideaResearch.research.id}
-              sessionId={state.sessionId!}
-            />
-          )}
+          task={legacyOpen && legacy.graph !== undefined
+            ? <LegacyIdeaTreePanel graph={legacy.graph} onClose={() => setLegacyOpen(false)} />
+            : ideaResearch !== undefined
+              ? <IdeaResearchPanel
+                client={client}
+                key={ideaResearch.research.id}
+                onClose={() => setIdeaResearchId(undefined)}
+                researchId={ideaResearch.research.id}
+                sessionId={state.sessionId!}
+              />
+              : evolveRun === undefined ? undefined : <EvolveDetail
+                client={client}
+                key={evolveRun.id}
+                onError={(message) => actions.toast(message, "error")}
+                onRunChanged={() => void refreshEvolve()}
+                run={evolveRun}
+              />}
           tabs={state.tabs}
           tool={openTool}
         />
