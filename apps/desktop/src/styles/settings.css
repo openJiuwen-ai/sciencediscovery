@@ -867,7 +867,10 @@ a.secondary-button {
 .skill-git-results-head .row-note { margin: 4px 0 0; }
 .skill-git-select-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 2px;
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
@@ -917,6 +920,18 @@ a.secondary-button {
 .skill-candidate-status.is-new { background: var(--primary-tint); color: var(--primary-strong); }
 .skill-candidate-status.is-update { background: var(--warning-soft, var(--surface-subtle)); color: var(--warning-strong, #745612); }
 .skill-candidate-status.is-invalid { background: var(--danger-soft, var(--surface-subtle)); color: var(--danger); }
+/* Paging moves the window over one answer, it does not ask the repository a
+   new question: the page number sits between two plain buttons. */
+.skill-git-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+.skill-git-pager .row-note { color: var(--text-secondary); margin: 0; }
+/* The top copy shares its line with 全选 instead of owning one. */
+.skill-git-select-bar .skill-git-pager { gap: 8px; padding-top: 0; }
 
 /* 技能 › 编辑. A file rail beside one pane: which file is being edited is the
    question the editor asks before anything else. */
