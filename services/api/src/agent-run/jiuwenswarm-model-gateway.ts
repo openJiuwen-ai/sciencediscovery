@@ -185,7 +185,7 @@ const MAX_RECOVERY_ATTEMPTS = 2;
  * budget: a mid-stream replay is safe only before any text or tool call has
  * been exposed to Swarm, and must never turn a tool round into a duplicate.
  */
-const MAX_STREAM_RETRIES = 2;
+const MAX_STREAM_RETRIES = 4;
 const finishReason = (turn: ModelTurn) => turn.truncated ? "length" : turn.toolCalls.length ? "tool_calls" : "stop";
 /** Which recovery attempt a request is, from the feedback Swarm's recovery boundary appended last. */
 const recoveryAttemptOf = (body: ChatRequest) => {
