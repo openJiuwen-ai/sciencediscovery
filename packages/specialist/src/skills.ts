@@ -124,7 +124,10 @@ const FRONTMATTER_KEYS = new Set([
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 const execFileAsync = promisify(execFile);
-const GIT_SKILL_DISCOVERY_LIMIT = 100;
+/** A scan now reads SKILL.md files that the checkout already holds, so the
+ *  ceiling only bounds one response, not the download. A curated repository
+ *  can carry a couple of hundred packages; 100 silently hid half of one. */
+const GIT_SKILL_DISCOVERY_LIMIT = 500;
 const GIT_SKILL_DISCOVERY_DEPTH = 12;
 /** A shallow clone of a large skills repository takes tens of seconds; the
  *  ceiling has to leave room for a slow network without holding a request

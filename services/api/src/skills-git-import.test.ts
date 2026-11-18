@@ -137,6 +137,29 @@ test("importing after an inspection reuses the checkout it left behind", async (
   }
 });
 
+test("a scan lists a repository with more than a hundred packages", async () => {
+  const dataDir = await temporaryDataDir();
+  const commit = "9".repeat(40);
+  const count = 120;
+  const checkout: GitSkillCheckout = async (importRoot, input) => {
+    const root = resolve(importRoot, `fake-${Math.random().toString(36).slice(2)}`);
+    for (let index = 0; index < count; index += 1) {
+      const name = `skill-${String(index).padStart(3, "0")}`;
+      await mkdir(resolve(root, "skills", name), { recursive: true });
+      await writeFile(resolve(root, "skills", name, "SKILL.md"), markdown(name));
+    }
+    return { checkout: root, commit, normalized: validateGitSkillImportRequest(input) };
+  };
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, { checkoutGit: checkout });
+    await catalog.load();
+    const inspection = await catalog.inspectGitRepository({ repositoryUrl: "https://example.com/skills.git" });
+    assert.equal(inspection.candidates.length, count);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("a partial checkout keeps resources on the server until a package needs them", async () => {
   const dataDir = await temporaryDataDir();
   const source = resolve(dataDir, "source");
