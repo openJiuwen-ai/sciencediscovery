@@ -466,6 +466,48 @@ test("a managed skill's chevron offers export, edit and delete; a built-in has n
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("Escape and a press outside close the menu the chevron opened", async () => {
+  // The menu listens on `document`, which the stub above discards. This test
+  // records what the component registers so both ways out of the popover can
+  // be pressed, then puts the stub back for the tests after it.
+  const registrations: Array<[string, EventListener]> = [];
+  const shared = globalThis.document;
+  Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: {
+    addEventListener(type: string, handler: EventListener) { registrations.push([type, handler]); },
+    removeEventListener(type: string, handler: EventListener) {
+      const at = registrations.findIndex(([, added]) => added === handler);
+      if (at >= 0) registrations.splice(at, 1);
+    },
+  } });
+  const stub = new StubClient().reply([skill]).reply({ backend: "jiuwenswarm", skills: [] });
+  let view: ReactTestRenderer | undefined;
+  const openEntries = () => view!.root.findAllByType("button").filter((node) => node.props.role === "menuitem");
+  try {
+    view = await mount(<SkillsSettings client={stub.asClient()} />);
+
+    await openRowMenu(view, "review");
+    assert.equal(openEntries().length, 3, "the menu did not open");
+    const escape = registrations.find(([type]) => type === "keydown")?.[1];
+    assert.ok(escape, "an open menu does not listen for the keyboard");
+    let claimed = false;
+    await act(async () => {
+      escape({ key: "Escape", preventDefault() { claimed = true; } } as unknown as Event);
+    });
+    assert.equal(openEntries().length, 0, "Escape left the menu open");
+    assert.ok(claimed, "Escape also closed the settings dialog behind the menu");
+
+    await openRowMenu(view, "review");
+    assert.equal(openEntries().length, 3, "the menu did not reopen");
+    const press = registrations.find(([type]) => type === "pointerdown")?.[1];
+    assert.ok(press, "an open menu does not listen for a press outside it");
+    await act(async () => { press({ target: {} } as unknown as Event); });
+    assert.equal(openEntries().length, 0, "a press outside left the menu open");
+  } finally {
+    if (view) await act(async () => { view!.unmount(); });
+    Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: shared });
+  }
+});
+
 test("clicking a card opens the Skill's own page and the back control returns to the list", async () => {
   const stub = new StubClient()
     .reply([skill])
