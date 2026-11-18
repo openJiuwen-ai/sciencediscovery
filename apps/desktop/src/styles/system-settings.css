@@ -488,8 +488,6 @@
 }
 .settings-list-heading { justify-content: space-between; }
 .settings-list-heading h3 { margin: 0; font-size: 14px; }
-.settings-write-status { color: var(--text-secondary); font-size: 12px; }
-.settings-write-status:empty { display: none; }
 .settings-number { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
 .settings-number .field-input.is-number { width: 112px; max-width: 100%; }
 .environment-setup-progress,

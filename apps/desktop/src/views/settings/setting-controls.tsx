@@ -20,7 +20,7 @@ import { TEXT } from "../../text.js";
 export function useSettingsWrite() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const [saved, setSaved] = useState(false);
+  const [savedAt, setSavedAt] = useState<string>();
   const [saving, setSaving] = useState(true);
   const writing = useRef(false);
   const mounted = useRef(true);
@@ -28,10 +28,10 @@ export function useSettingsWrite() {
   const run = async (operation: () => Promise<void>, markSaved = true) => {
     if (writing.current) return false;
     writing.current = true;
-    setBusy(true); setSaving(markSaved); setFailure(undefined); setSaved(false);
+    setBusy(true); setSaving(markSaved); setFailure(undefined); setSavedAt(undefined);
     try {
       await operation();
-      if (mounted.current) setSaved(markSaved);
+      if (mounted.current && markSaved) setSavedAt(new Date().toLocaleTimeString());
       return true;
     } catch (reason) {
       if (mounted.current) setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
@@ -41,7 +41,7 @@ export function useSettingsWrite() {
       if (mounted.current) setBusy(false);
     }
   };
-  return { busy, failure, saved, saving, run };
+  return { busy, failure, saved: savedAt !== undefined, savedAt, saving, run };
 }
 
 export function WriteStatus({ state, pendingLabel, successLabel, quiet = false }: {
@@ -51,13 +51,14 @@ export function WriteStatus({ state, pendingLabel, successLabel, quiet = false }
   /** Quiet writes still report failures. */
   quiet?: boolean;
 }) {
+  const success = successLabel === undefined ? TEXT.settings.system.migrated.common.saved : successLabel;
   const message = state.busy
     ? pendingLabel ?? (state.saving ? TEXT.settings.system.saving : TEXT.settings.system.migrated.common.working)
-    : state.saved ? successLabel === undefined ? TEXT.settings.system.migrated.common.saved : successLabel : null;
-  return <div className="settings-write-status" aria-live="polite">
-    {state.failure ? <p className="row-note is-error" role="alert">{state.failure}</p>
-      : !quiet && message ? <small>{message}</small> : null}
-  </div>;
+    : state.saved && success ? `${success} · ${state.savedAt}` : null;
+  return <>
+    <small className="settings-detail-meta" aria-live="polite">{!quiet && !state.failure ? message : null}</small>
+    {state.failure ? <small className="row-note is-error" role="alert">{state.failure}</small> : null}
+  </>;
 }
 
 /** Keep empty and fractional input as text until the user finishes editing. */
