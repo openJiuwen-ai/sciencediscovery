@@ -337,3 +337,39 @@ test("a localized poll answer reaches the alert instead of the details block", (
   assert.equal(taskErrorMessage("socket hang up"), undefined,
     "an unrecognized server text stays in the details block");
 });
+
+test("a new export request starts with the payload switches off", async (context) => {
+  // The component stays mounted across opens (App renders it unconditionally), so a
+  // switch ticked for one package used to come back ticked for the next (#1235
+  // review 3). Only the profile card cleared it, and only when leaving 完整导出.
+  function Harness() {
+    const [request, setRequest] = React.useState<unknown>({ kind: "export", projectId: "p1", sessionId: "s1" });
+    return React.createElement(React.Fragment, null,
+      React.createElement(ResearchPackage, { ...props, client: client(), request: request as never }),
+      React.createElement("button", {
+        id: "reopen",
+        onClick: () => setRequest({ kind: "export", projectId: "p1", sessionId: "s1" }),
+        type: "button",
+      }, "reopen"));
+  }
+  const options = (view: ReturnType<typeof create>) => view.root.findAllByProps({ className: "research-package-options" })[0];
+  await withView(context, React.createElement(Harness), async (view) => {
+    // Open the complete profile, then tick the trajectory switch.
+    await act(async () => { (view.root.findAllByProps({ "aria-pressed": false })[0]!.props.onClick as () => void)(); await Promise.resolve(); });
+    const ticked = options(view)!.findAllByProps({ type: "checkbox" })[0]!;
+    await act(async () => {
+      (ticked.props.onChange as (event: unknown) => void)({ target: { checked: true } });
+      await Promise.resolve();
+    });
+    assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, true, "the switch is on before reopening");
+
+    const reopen = view.root.findAllByProps({ id: "reopen" })[0]!;
+    await act(async () => { (reopen.props.onClick as () => void)(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    assert.equal(options(view), undefined, "the reopened dialog starts on 必要导出, where the switches are hidden");
+
+    await act(async () => { (view.root.findAllByProps({ "aria-pressed": false })[0]!.props.onClick as () => void)(); await Promise.resolve(); });
+    assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, false,
+      "choosing complete again shows the trajectory switch off");
+  });
+});
