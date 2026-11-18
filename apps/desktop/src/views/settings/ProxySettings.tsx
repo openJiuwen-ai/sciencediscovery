@@ -73,10 +73,21 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
     return <>
       <Group heading={text.defaultHeading}>
         <p className="settings-note">{extra.scope}</p>
-        <Row title={text.default} hint={text.defaultHint}><PolicySelect label={text.default} settings={settings}
-          value={settings.defaultPolicy} inherit={false} disabled={disabled} onChange={defaultPolicy => {
-            if (defaultPolicy !== "inherit") void run(() => updateProxySettings(client, { defaultPolicy }));
-          }} /></Row>
+        <Row title={text.default} hint={text.defaultHint}>
+          <div className="proxy-default-controls">
+            <div className="row-inline-control">
+              <PolicySelect label={text.default} settings={settings}
+                value={settings.defaultPolicy} inherit={false} disabled={disabled} onChange={defaultPolicy => {
+                  if (defaultPolicy !== "inherit") void run(() => updateProxySettings(client, { defaultPolicy }));
+                }} />
+              <button className="secondary-button" type="button" disabled={disabled || selected?.kind === "system"}
+                title={selected?.kind === "system" ? extra.systemTest : undefined}
+                onClick={() => { setTestResult(undefined); test(); }}>{extra.test}</button>
+            </div>
+            {selected?.kind === "system" ? <small className="settings-note">{extra.systemTest}</small> : null}
+            {testResult ? <p className="settings-note" role="status">{testResult}</p> : null}
+          </div>
+        </Row>
         <ProxyBypass key={settings.noProxy ?? ""} value={settings.noProxy ?? ""} disabled={disabled}
           onSave={async noProxy => { await run(() => updateProxySettings(client, { defaultPolicy: settings.defaultPolicy, noProxy })); }} />
         {selected?.kind === "environment" ? <Row title={extra.diagnostics} tone="stack">
@@ -90,12 +101,6 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
             </div>)}
           </div>
         </Row> : null}
-        <Row title={extra.test} hint={selected?.kind === "system" ? extra.systemTest : extra.testHint}>
-          <button className="secondary-button" type="button" disabled={disabled || selected?.kind === "system"}
-            onClick={() => { setTestResult(undefined); test(); }}>{extra.test}</button>
-        </Row>
-        {testResult ? <p className="settings-note" role="status">{testResult}</p> : null}
-        <p className="settings-note">{extra.systemNote}</p>
       </Group>
       <Group heading={text.serversHeading}>
         <div className="settings-form-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({})}>{text.add}</button></div>
