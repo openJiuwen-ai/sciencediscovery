@@ -425,23 +425,22 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
     [ -f "$LATEST_YML" ] || die "5f: missing latest-mac.yml (zip target did not write update info — is the publish section present in electron-builder.yml?)"
     # electron-builder 26.x appends .blockmap to the FULL carrier name
     # (ScienceDiscovery-…-mac-arm64.zip.blockmap); 25.x replaced the .zip
-    # suffix (…-mac-arm64.blockmap). Gate the differential-update data the
-    # same way the DMG/zip discovery gates carriers: EXACTLY ONE of the two
-    # names may exist. A leftover blockmap from a same-version rebuild under
-    # the other naming must fail the gate — first-existing would silently
-    # ship a stale blockmap that does not match this zip (bot F1 /
-    # maintainer note on #1217: prefer an exactly-one assertion).
-    BLOCKMAP=""
-    FOUND=0
-    for candidate in "${ZIP}.blockmap" "${ZIP%.zip}.blockmap"; do
-      if [ -f "$candidate" ]; then
-        BLOCKMAP="$candidate"
-        FOUND=$((FOUND + 1))
+    # suffix (…-mac-arm64.blockmap). The 26.x name is not just the current
+    # toolchain's output — it is the UPDATER CONTRACT: electron-updater's
+    # Provider.getBlockMapFiles() fetches `${zipUrl.pathname}.blockmap`, so
+    # a 25.x-named file is unreachable at update time regardless of what we
+    # publish (verified in electron-updater@6.8.12 out/providers/Provider.js).
+    # Gate accordingly: only ${ZIP}.blockmap (the name the updater requests)
+    # is accepted; a legacy-named file beside this carrier is stale by
+    # definition and must fail the gate (review round 2 on #1217).
+    BLOCKMAP="${ZIP}.blockmap"
+    if [ -f "$BLOCKMAP" ]; then
+      if [ -f "${ZIP%.zip}.blockmap" ]; then
+        die "5f: found BOTH ${ZIP}.blockmap (26.x name) and ${ZIP%.zip}.blockmap (25.x name) in $(dirname "$ZIP") — a stale same-version blockmap from a previous build/naming is present; clean release/ and rerun the gate"
       fi
-    done
-    if [ "$FOUND" -eq 2 ]; then
-      die "5f: found BOTH ${ZIP}.blockmap (26.x name) and ${ZIP%.zip}.blockmap (25.x name) in $(dirname "$ZIP") — a stale same-version blockmap from a previous build/naming is present; clean release/ and rerun the gate"
-    elif [ "$FOUND" -eq 0 ]; then
+    elif [ -f "${ZIP%.zip}.blockmap" ]; then
+      die "5f: only the legacy ${ZIP%.zip}.blockmap (25.x name) exists, no ${ZIP}.blockmap — the 26.x build did not write its blockmap AND the updater can never fetch the legacy name (electron-updater requests \${zipUrl}.blockmap); clean release/ and rerun electron-builder (zip target) then the gate"
+    else
       die "5f: missing ${ZIP}.blockmap (26.x name) / ${ZIP%.zip}.blockmap (25.x name) — the differential-update data was not written; rerun electron-builder (zip target) then the gate"
     fi
     # F11: the update feed must describe THIS build. A stale yml from an
