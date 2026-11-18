@@ -126,11 +126,13 @@ class ResearchStore:
             queue.put_nowait(True)
 
     def read(self, project: str, session: str, research: str) -> dict:
-        return json.loads(self.path(project, session, research).read_text())
+        # The writer stores UTF-8 (see save above); a read that lets the host pick
+        # the codec fails on a Chinese Windows install, where the default is cp936.
+        return json.loads(self.path(project, session, research).read_text(encoding='utf-8'))
 
     def list(self, project: str, session: str) -> list[dict]:
         directory = self.path(project, session, 'unused').parent
-        return sorted((json.loads(p.read_text()) for p in directory.glob('*.json')), key=lambda s: s['createdAt'], reverse=True)
+        return sorted((json.loads(p.read_text(encoding='utf-8')) for p in directory.glob('*.json')), key=lambda s: s['createdAt'], reverse=True)
 
 
 def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth: int) -> dict:

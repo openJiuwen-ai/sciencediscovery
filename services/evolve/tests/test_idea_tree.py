@@ -143,3 +143,34 @@ def test_lease_comparison_handles_microseconds_at_millisecond_boundary(api, monk
     assert result(api, tree, request)["handle"]
     monkeypatch.setattr(idea_tree_service, "now", lambda: "2026-09-10T12:00:00.124Z")
     assert api("recover")["recoveredExecutions"] == 1
+
+
+IDEA_TREE_READ_SCRIPT = """
+import sys
+from pathlib import Path
+from sciencediscovery_evolve.vendor.idea_tree.idea_tree_service import IdeaTreeStore
+
+store = IdeaTreeStore(Path(sys.argv[1]))
+tree = store.call("project", "session", "readTree", {"treeId": sys.argv[2]}, "reader")
+assert tree is not None, "the tree did not survive the restart"
+assert tree["treeId"] == sys.argv[2], tree["treeId"]
+print("ok")
+"""
+
+
+def test_a_tree_with_non_ascii_content_reads_on_a_non_utf8_host(api):
+    # IdeaTreeStore.call() re-reads state.json on every operation, so a host whose
+    # default codec is not UTF-8 could not list or open any tree at all (#1229).
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    tree = create(api, key="non-ascii")
+    environment = {**os.environ, "PYTHONUTF8": "0", "LC_ALL": "C", "LANG": "C", "PYTHONIOENCODING": "ascii"}
+    source = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, [source, environment.get("PYTHONPATH")]))
+    completed = subprocess.run([sys.executable, "-c", IDEA_TREE_READ_SCRIPT, str(api.root), tree["treeId"]],
+                               capture_output=True, text=True, env=environment)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
