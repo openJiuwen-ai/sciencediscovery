@@ -690,36 +690,191 @@ a.secondary-button {
 .ssh-config-entry strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 12px; }
 .ssh-config-entry small { color: var(--text-faint); font-size: 11px; }
 
-/* 技能's two header actions: 导入 writes nothing by itself, so it is the quiet
-   button and 添加 stays the one the pane leads with. */
-.settings-header-actions { display: flex; flex: 0 0 auto; gap: 8px; }
-
-/* 技能 › 导入技能. Three sources behind one row of tabs: SKILL.md, a ZIP, and a
-   Git repository. The tabs are buttons rather than native tabs because the
-   panel has no fixed height and each source's form is drawn in place. */
-.skill-import { display: grid; gap: 14px; }
-.skill-import-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--radius-s);
+/* 技能's header: the installed count beside the title, and one 添加技能 press
+   for all three sources. The count is a chip rather than a sentence because it
+   changes under the page whenever a switch row is added or removed. */
+.skill-installed-count {
+  margin-left: 10px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
   background: var(--surface-subtle);
-}
-.skill-import-tab {
-  flex: 1;
-  padding: 6px 10px;
-  border-radius: calc(var(--radius-s) - 2px);
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
+  vertical-align: 4px;
 }
-.skill-import-tab:hover:not(:disabled) { color: var(--text-strong); }
-.skill-import-tab.is-active {
+
+/* 添加技能. The popover hangs inside the header: the header is pinned to the
+   top of a pane that scrolls, so there is nothing a portal would keep in view
+   that this does not. */
+.skill-add-menu { position: relative; flex: 0 0 auto; }
+.skill-add-trigger { gap: 7px; }
+.skill-add-chev { transition: transform .15s ease; }
+.skill-add-chev.is-open { transform: rotate(180deg); }
+.skill-add-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: 312px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(25, 25, 25, 0.1);
-  color: var(--text-strong);
+  box-shadow: 0 16px 40px rgba(24, 24, 24, 0.14), 0 2px 6px rgba(24, 24, 24, 0.06);
+  animation: ctxIn .12s ease;
 }
-.skill-import-tab:disabled { color: var(--text-faint); cursor: progress; }
+.skill-add-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.skill-add-item:hover { background: var(--surface-hover); }
+.skill-add-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+.skill-add-item:hover .skill-add-icon { border-color: var(--border-strong); color: var(--text-strong); }
+.skill-add-copy { display: grid; gap: 2px; min-width: 0; }
+.skill-add-copy strong { color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.skill-add-copy small { color: var(--text-secondary); font-size: 11.5px; line-height: 1.45; }
+
+/* 技能's sub-pages: 上传技能, 从 GitHub 导入 and 编辑. The back control sits
+   level with the title it leaves, so the eye finds the way out where the page
+   was entered. */
+.skill-subview-title { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.skill-subview-copy { min-width: 0; }
+.skill-back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.skill-back:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-strong); }
+/* The three add pages share one measure, so moving between them does not move
+   the fields under the pointer. */
+.skill-create { width: min(100%, 860px); }
+
+/* 技能 › 上传技能. The whole block is the drop target: a file dragged from a
+   window is already chosen, and the dashed edge is the only thing saying so. */
+.skill-upload { display: grid; gap: 16px; width: min(100%, 860px); }
+.skill-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 24px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-soft);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.skill-drop:hover,
+.skill-drop.is-dragging {
+  border-color: var(--primary-strong);
+  background: var(--primary-tint);
+}
+.skill-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.skill-drop.is-dragging .skill-drop-icon { border-color: var(--primary-border-soft); color: var(--primary-strong); }
+.skill-drop-title { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.skill-drop-hint { max-width: 440px; color: var(--text-secondary); font-size: 11.5px; line-height: 1.55; }
+.skill-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.skill-file-name { min-width: 0; flex: 1; overflow: hidden; color: var(--text-strong); font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.skill-file-size { flex: 0 0 auto; color: var(--text-faint); font-size: 11px; }
+.skill-file-remove {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+}
+.skill-file-remove:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-strong); }
+.skill-view-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.skill-view-footer { display: flex; justify-content: flex-end; }
+
+/* 技能 › 从 GitHub 导入. The repository fields are the question; what the
+   inspection found is the answer, so it is drawn as one block below them. */
+.skill-git { display: grid; gap: 18px; width: min(100%, 860px); }
+.skill-git-source { display: grid; gap: 12px; }
+.skill-git-url { display: flex; align-items: flex-end; gap: 8px; }
+.skill-git-url .settings-field { flex: 1; min-width: 0; }
+.skill-git-results {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-soft);
+}
+.skill-git-results-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.skill-git-results-head h3 { color: var(--text-strong); font-size: 13.5px; }
+.skill-git-results-head .row-note { margin: 4px 0 0; }
+.skill-git-select-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 2px;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+.skill-git-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
 
 /* What inspection found in the repository. A row is a label around the
    checkbox, so the whole line is the hit target. */
@@ -761,7 +916,6 @@ a.secondary-button {
 
 /* 技能 › 编辑. A file rail beside one pane: which file is being edited is the
    question the editor asks before anything else. */
-.settings-modal.is-editor { width: min(880px, calc(100vw - 64px)); }
 .skill-editor { display: flex; align-items: flex-start; gap: 20px; }
 .skill-editor-files {
   display: grid;

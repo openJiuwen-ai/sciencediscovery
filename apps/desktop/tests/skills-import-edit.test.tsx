@@ -21,8 +21,9 @@ import type {
   SkillDescriptor,
   SkillDetail,
 } from "../src/api/types.js";
-import { SkillEditorDialog } from "../src/views/settings/SkillEditorDialog.js";
-import { SkillImportDialog } from "../src/views/settings/SkillImportDialog.js";
+import { SkillEditorView } from "../src/views/settings/SkillEditorView.js";
+import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
+import { SkillUploadView } from "../src/views/settings/SkillUploadView.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
 import { json, StubClient } from "./api-stub.js";
@@ -74,6 +75,23 @@ function buttonWithText(view: ReactTestRenderer, label: string) {
   return found;
 }
 
+/** Press 添加技能, then the entry whose bold line is `label`. */
+async function openAddView(view: ReactTestRenderer, label: string): Promise<void> {
+  await act(async () => {
+    const trigger = view.root.findAllByType("button")
+      .find((node) => node.props.className?.includes?.("skill-add-trigger"));
+    assert.ok(trigger, "the list has no 添加技能");
+    trigger.props.onClick();
+  });
+  await act(async () => {
+    const item = view.root.findAllByType("button").find((node) => node
+      .findAllByType("strong")
+      .some((heading) => heading.children.includes(label)));
+    assert.ok(item, `添加技能 does not offer ${label}`);
+    item.props.onClick();
+  });
+}
+
 function textareaWithLabel(view: ReactTestRenderer, label: string) {
   const found = view.root.findAllByType("textarea").find((node) => node.props["aria-label"] === label);
   assert.ok(found, `no textarea labelled "${label}"`);
@@ -84,7 +102,11 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
   const stub = new StubClient().reply(detail);
   const imported: SkillDetail[] = [];
   const view = await mount(
-    <SkillImportDialog client={stub.asClient()} onImported={(row) => { imported.push(row); }} />,
+    <SkillUploadView
+      client={stub.asClient()}
+      onImported={(row) => { imported.push(row); }}
+      onWriteInstead={() => {}}
+    />,
   );
   try {
     const file = new File(["# review"], "SKILL.md", { type: "text/markdown" });
@@ -121,10 +143,9 @@ test("a Git inspection pins the commit and never overwrites without the revision
     .reply({ ...detail, currentRevision: 4 });
   const imported: SkillDetail[] = [];
   const view = await mount(
-    <SkillImportDialog client={stub.asClient()} onImported={(row) => { imported.push(row); }} />,
+    <SkillGitImportView client={stub.asClient()} onImported={(row) => { imported.push(row); }} />,
   );
   try {
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.importTabs.git).props.onClick(); });
     const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(url);
     await act(async () => { url.props.onChange({ target: { value: inspection.repositoryUrl } }); });
@@ -133,11 +154,12 @@ test("a Git inspection pins the commit and never overwrites without the revision
     assert.equal(stub.calls[0]?.path, "/api/skills/import-git/inspect");
     assert.ok(JSON.stringify(view.toJSON()).includes("A fresh skill"));
     assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.commit(commit)));
-    // The unchanged package is offered but cannot be chosen: there is nothing
-    // to write, and writing it would be a revision for a no-op.
+    // The select-all control, then the rows: the unchanged package is offered
+    // but cannot be chosen, because there is nothing to write and writing it
+    // would be a revision for a no-op.
     const checkboxes = view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
-    assert.deepEqual(checkboxes.map((node) => node.props.disabled), [false, false, true]);
-    assert.deepEqual(checkboxes.map((node) => node.props.checked), [true, true, false]);
+    assert.deepEqual(checkboxes.map((node) => node.props.disabled), [false, false, false, true]);
+    assert.deepEqual(checkboxes.map((node) => node.props.checked), [true, true, true, false]);
 
     await act(async () => {
       buttonWithText(view, TEXT.settings.skills.git.importSelected(2)).props.onClick();
@@ -165,7 +187,7 @@ test("the editor submits the revision it read and hands back the keys its form d
   const stub = new StubClient().reply(detail).reply({ ...detail, currentRevision: 2, instructions: "Review twice" });
   const saved: SkillDetail[] = [];
   const view = await mount(
-    <SkillEditorDialog client={stub.asClient()} onClose={() => {}} onSaved={(row) => { saved.push(row); }} skillId="review" />,
+    <SkillEditorView client={stub.asClient()} onSaved={(row) => { saved.push(row); }} skillId="review" />,
   );
   try {
     assert.equal(stub.calls[0]?.path, "/api/skills/review");
@@ -195,7 +217,7 @@ test("a stale revision is reported as a conflict, not as a failed save", async (
     .reply(detail)
     .fail(new ApiRequestError("Skill revision conflict", 409));
   const view = await mount(
-    <SkillEditorDialog client={stub.asClient()} onClose={() => {}} onSaved={() => {}} skillId="review" />,
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
   );
   try {
     await act(async () => {
@@ -220,7 +242,7 @@ test("a resource file is read and written through its own route", async () => {
     // the file again — the pane then shows what was stored, not the draft.
     .reply({ content: "guide v2", hash: "h2", path: "references/guide.md", revision: 2, skillId: "review", size: 8 });
   const view = await mount(
-    <SkillEditorDialog client={stub.asClient()} onClose={() => {}} onSaved={() => {}} skillId="review" />,
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
   );
   try {
     await act(async () => {
@@ -253,7 +275,7 @@ test("a resource that is not UTF-8 is shown as uneditable rather than decoded", 
     .reply(withBinary)
     .fail(new Error("Skill resource is not valid UTF-8"));
   const view = await mount(
-    <SkillEditorDialog client={stub.asClient()} onClose={() => {}} onSaved={() => {}} skillId="review" />,
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
   );
   try {
     await act(async () => {
@@ -280,21 +302,14 @@ test("an import enables a new package and leaves an update's switch alone", asyn
     .reply([skill, { ...skill, id: "fresh", name: "fresh" }])
     .reply({ backend: "jiuwenswarm", skills: [] });
   const client: ApiClient = stub.asClient();
-  const view = await mount(
-    <SkillsSettings
-      adding={false}
-      client={client}
-      importing
-      onAddingChange={() => {}}
-      onImportingChange={() => {}}
-    />,
-  );
+  const view = await mount(<SkillsSettings client={client} />);
   try {
-    const dialog = view.root.findByType(SkillImportDialog);
-    await act(async () => { await dialog.props.onImported(skill); });
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    const upload = view.root.findByType(SkillUploadView);
+    await act(async () => { await upload.props.onImported(skill); });
     assert.equal(stub.calls.some((call) => call.path.includes("skills-by-id")), false);
 
-    const next = view.root.findByType(SkillImportDialog);
+    const next = view.root.findByType(SkillUploadView);
     await act(async () => { await next.props.onImported({ ...detail, id: "fresh", name: "fresh" }); });
     const enable = stub.calls.find((call) => call.path.includes("skills-by-id"));
     assert.equal(enable?.path, "/api/jiuwenswarm/skills-by-id/fresh");
@@ -305,15 +320,7 @@ test("an import enables a new package and leaves an update's switch alone", asyn
 test("only a managed, writable skill offers 编辑", async () => {
   const builtIn = { ...skill, id: "literature", name: "literature", source: "built-in" as const, readOnly: true };
   const stub = new StubClient().reply([skill, builtIn]).reply({ backend: "jiuwenswarm", skills: [] });
-  const view = await mount(
-    <SkillsSettings
-      adding={false}
-      client={stub.asClient()}
-      importing={false}
-      onAddingChange={() => {}}
-      onImportingChange={() => {}}
-    />,
-  );
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
   try {
     const editable = view.root.findAllByType("button")
       .filter((node) => node.props.className?.includes?.("skill-edit-button"));

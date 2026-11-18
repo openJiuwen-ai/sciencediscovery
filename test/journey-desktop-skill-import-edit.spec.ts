@@ -23,16 +23,17 @@ import { test } from "./helpers/e2e.ts";
 import { api, DESKTOP_ORIGIN, seedDesktopOrigin, startDesktopEntry, stopDesktopEntry } from "./helpers/desktop-evolve.ts";
 
 const copy = {
-  close: "关闭设置",
+  add: "添加技能",
+  back: "返回技能列表",
   edit: "编辑",
   importAction: "导入",
-  importTitle: "导入技能",
   instructions: "指令",
   nav: "设置目录",
   save: "保存",
   saved: "已保存。",
   settings: "设置",
   skills: "技能",
+  upload: "上传技能",
 };
 
 interface InstalledSkill {
@@ -53,8 +54,8 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
    *   instructions in place, and the saved package keeps the frontmatter keys the editor's form does not show.
    * Steps:
    *   1. Open 设置 › 技能 on the desktop entry; the Skill about to be imported is not listed.
-   *   2. 导入技能 › SKILL.md: hand the dialog one file; the import reports the package by name.
-   *   3. Close the dialog and find the card, then open 编辑 on it.
+   *   2. 添加技能 › 上传技能: hand the view one file; the import reports the package by name.
+   *   3. Go back to the list and find the card, then open 编辑 on it.
    *   4. Rewrite 指令 and 保存; the editor reports the save.
    *   5. Read the package back through the API: the new instructions are installed and `license` survived the save.
    * Environment: Immutable compiled isolated API at E2E_BASE_URL; desktop Vite on 4178; zh-CN at 1440x900.
@@ -135,41 +136,40 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
       );
 
       await journey.step(
-        "用 SKILL.md 导入一个技能",
-        "导入对话框说明这次装入的是哪一个技能。",
+        "用添加技能 › 上传技能导入一个 SKILL.md",
+        "上传页说明这次装入的是哪一个技能。",
         async () => {
-          await settings.getByRole("button", { name: copy.importTitle, exact: true }).click();
-          const dialog = page.getByRole("dialog", { name: copy.importTitle, exact: true });
-          await expect(dialog).toBeVisible();
-          await dialog.locator('input[type="file"]').setInputFiles(skillFile);
-          await dialog.getByRole("button", { name: copy.importAction, exact: true }).click();
-          await expect(dialog.getByRole("status")).toContainText(name);
-          await dialog.getByRole("button", { name: copy.close, exact: true }).click();
+          await settings.getByRole("button", { name: copy.add, exact: true }).click();
+          await page.getByRole("menuitem", { name: new RegExp(copy.upload) }).click();
+          await expect(settings.getByRole("heading", { name: copy.upload, exact: true })).toBeVisible();
+          await settings.locator('input[type="file"]').setInputFiles(skillFile);
+          await settings.getByRole("button", { name: copy.importAction, exact: true }).click();
+          await expect(settings.getByRole("status")).toContainText(name);
+          await settings.getByRole("button", { name: copy.back, exact: true }).click();
         },
       );
 
       await journey.step(
         "在列表里找到这张技能卡片并打开编辑",
-        "卡片带上了 SKILL.md 里的描述，编辑对话框以技能名命名。",
+        "卡片带上了 SKILL.md 里的描述，编辑页以技能名命名。",
         async () => {
           const card = settings.locator(".settings-card").filter({ hasText: name });
           await expect(card).toHaveCount(1, { timeout: 30_000 });
           await expect(card).toContainText(description);
           await card.getByRole("button", { name: copy.edit, exact: true }).click();
-          await expect(page.getByRole("dialog", { name: `编辑「${name}」`, exact: true })).toBeVisible();
+          await expect(settings.getByRole("heading", { name: `编辑「${name}」`, exact: true })).toBeVisible();
         },
       );
 
       await journey.step(
         "改写指令并保存",
-        "编辑器报告已保存，对话框收起了原来的指令。",
+        "编辑器报告已保存。",
         async () => {
-          const editor = page.getByRole("dialog", { name: `编辑「${name}」`, exact: true });
-          const instructions = editor.getByLabel(copy.instructions, { exact: true });
+          const instructions = settings.getByLabel(copy.instructions, { exact: true });
           await expect(instructions).toHaveValue(new RegExp(firstInstructions.replace(/\./g, "\\.")));
           await instructions.fill(editedInstructions);
-          await editor.getByRole("button", { name: copy.save, exact: true }).click();
-          await expect(editor.getByRole("status")).toContainText(copy.saved);
+          await settings.getByRole("button", { name: copy.save, exact: true }).click();
+          await expect(settings.getByRole("status")).toContainText(copy.saved);
         },
       );
 

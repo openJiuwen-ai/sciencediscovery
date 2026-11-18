@@ -536,7 +536,7 @@ describe("the specialist form", () => {
 describe("the add-skill form", () => {
   const form = () =>
     renderToStaticMarkup(
-      <SkillForm client={client} onCancel={noConfirm} onSaved={noConfirm} />,
+      <SkillForm client={client} onSaved={noConfirm} />,
     );
 
   it("asks for the authored fields and starts with 创建 disabled", () => {
@@ -563,12 +563,16 @@ describe("the add-skill form", () => {
     assert.match(markup, /disabled=""[^>]*>创建<\/button>/, "创建 is enabled with an empty form");
   });
 
-  it("is what 新增技能 opens", () => {
-    const markup = renderToStaticMarkup(
-      <SkillsSettings adding client={client} onAddingChange={noConfirm} />,
+  it("is offered by the list's 添加技能 menu, not opened by it", () => {
+    // The menu's entries are drawn on press, so the static page carries the
+    // one control; that pressing 从零开始写 lands on this form is the dynamic
+    // check in skills-import-edit.test.tsx.
+    const markup = renderToStaticMarkup(<SkillsSettings client={client} />);
+    assert.ok(markup.includes(TEXT.settings.skills.addMenu.label), "the list has no 添加技能");
+    assert.ok(
+      !markup.includes(TEXT.settings.skills.namePlaceholder),
+      "the authoring form is on the page before 从零开始写 was chosen",
     );
-    assert.ok(markup.includes(TEXT.settings.skills.add), "the modal is not labelled 新增技能");
-    assert.ok(markup.includes(TEXT.settings.skills.namePlaceholder), "the authoring form is not open");
   });
 });
 
@@ -597,7 +601,7 @@ describe("the skill card", () => {
       jiuwenSwarmSkills: [{ name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" }],
     });
     const markup = renderToStaticMarkup(
-      <SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />,
+      <SkillsSettings client={sourceClient} />,
     );
     for (const label of ["SD 内置", "JiuwenSwarm 内置", "自建"]) {
       assert.ok(markup.includes(label), `The collapsed list does not identify ${label}`);
@@ -616,7 +620,7 @@ describe("the skill card", () => {
     try {
       for (const language of ["en", "zh-CN"] as const) {
         setLanguage(language);
-        const markup = renderToStaticMarkup(<SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />);
+        const markup = renderToStaticMarkup(<SkillsSettings client={sourceClient} />);
         assert.ok(markup.includes(TEXT.settings.skills.source.builtIn));
         assert.ok(markup.includes(TEXT.settings.skills.source.managed));
       }
@@ -697,7 +701,7 @@ describe("each settings page", () => {
   it("技能 renders and asks for its data", () => {
     asksForItsData(
       "技能",
-      <SkillsSettings adding={false} client={client} onAddingChange={noConfirm} />,
+      <SkillsSettings client={client} />,
     );
   });
 
@@ -724,7 +728,7 @@ describe("each settings page", () => {
 
   it("技能 loads global switches without requiring a project", () => {
     const markup = renderToStaticMarkup(
-      <SkillsSettings adding={false} client={client} onAddingChange={noConfirm} />,
+      <SkillsSettings client={client} />,
     );
     assert.ok(markup.includes(loading));
   });

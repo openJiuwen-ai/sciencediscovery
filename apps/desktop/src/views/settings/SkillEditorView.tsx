@@ -24,10 +24,9 @@ import {
 import type { SkillDetail } from "../../api/types.js";
 import { TEXT } from "../../text.js";
 
-interface DialogProps {
+interface Props {
   client: ApiClient;
-  onClose: () => void;
-  /** The list behind the modal reloads with what was installed. */
+  /** The list behind this view reloads with what was saved. */
   onSaved: (skill: SkillDetail) => void;
   skillId: string;
 }
@@ -65,17 +64,21 @@ function frontmatterMetadata(detail: SkillDetail): Record<string, unknown> | und
 }
 
 /**
- * The editor behind a managed Skill's 编辑.
+ * 技能 › 编辑, shown in place of the list rather than over it.
  *
- * SKILL.md is edited as fields rather than raw YAML, and the four optional
+ * SKILL.md is edited as fields rather than raw YAML, and the optional
  * frontmatter keys this form does not show are submitted back unchanged:
  * `SkillCatalog.update` rebuilds the file from the request and deletes what it
  * is not given, which would silently strip a license or metadata block.
  *
  * Resource files are written as UTF-8 through the same package-file route. The
  * route has no delete, so neither does this editor.
+ *
+ * Leaving is the header's back control, so there is no 取消 beside 保存: two
+ * ways out of one form, one of which discards a draft, is a decision the user
+ * did not ask to make.
  */
-export function SkillEditorDialog({ client, onClose, onSaved, skillId }: DialogProps) {
+export function SkillEditorView({ client, onSaved, skillId }: Props) {
   const [detail, setDetail] = useState<SkillDetail>();
   const [failure, setFailure] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -112,7 +115,6 @@ export function SkillEditorDialog({ client, onClose, onSaved, skillId }: DialogP
         detail={detail}
         key={`${detail.id}:${detail.currentRevision}`}
         onActivePath={setActivePath}
-        onCancel={onClose}
         onNotice={setNotice}
         onSaved={(next) => {
           setNotice(TEXT.settings.skills.editor.saved);
@@ -126,7 +128,7 @@ export function SkillEditorDialog({ client, onClose, onSaved, skillId }: DialogP
   );
 }
 
-function EditorBody({ activePath, client, detail, onActivePath, onNotice, onSaved, onCancel }: BodyProps & { onCancel: () => void }) {
+function EditorBody({ activePath, client, detail, onActivePath, onNotice, onSaved }: BodyProps) {
   const readOnly = detail.readOnly;
   const [description, setDescription] = useState(detail.description);
   const [license, setLicense] = useState(frontmatterString(detail, "license"));
@@ -302,9 +304,6 @@ function EditorBody({ activePath, client, detail, onActivePath, onNotice, onSave
               />
             </label>
             <div className="settings-card-actions">
-              <button className="secondary-button" onClick={onCancel} type="button">
-                {TEXT.settings.cancel}
-              </button>
               <button
                 className="primary-button"
                 disabled={busy || readOnly || description.trim() === "" || instructions.trim() === ""}
@@ -333,9 +332,6 @@ function EditorBody({ activePath, client, detail, onActivePath, onNotice, onSave
               )}
             </label>
             <div className="settings-card-actions">
-              <button className="secondary-button" onClick={onCancel} type="button">
-                {TEXT.settings.cancel}
-              </button>
               <button
                 className="primary-button"
                 disabled={busy || readOnly || binary || fileText === undefined}
