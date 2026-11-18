@@ -17,6 +17,17 @@ export const DISTRIBUTION_SNAPSHOT_PROGRAM =
   + "print(json.dumps({(d.metadata['Name'] or '').lower(): d.version for d in md.distributions()}))";
 
 /**
+ * PEP 503 name normalization. The two sides spell names differently in practice:
+ * `importlib.metadata` reports the project name as published (`pydantic_core`,
+ * `discord.py`, `huggingface_hub`), while `uv.lock` writes the normalized form
+ * (`pydantic-core`, `discord-py`, `huggingface-hub`). Without this the lookup
+ * silently skips those packages, which is the one direction this gate exists for.
+ */
+export function normalizeDistributionName(name) {
+  return String(name ?? "").toLowerCase().replace(/[-_.]+/g, "-");
+}
+
+/**
  * `uv.lock` pins one resolved version per package. Only the `[[package]]`
  * blocks that carry both `name` and `version` are read; the workspace metadata
  * blocks at the top of the file have neither.
@@ -26,7 +37,7 @@ export function parseUvLockVersions(text) {
   for (const block of String(text ?? "").split(/^\[\[package\]\]\s*$/m).slice(1)) {
     const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(block)?.[1];
     const version = /^\s*version\s*=\s*"([^"]+)"/m.exec(block)?.[1];
-    if (name && version) versions.set(name.toLowerCase(), version);
+    if (name && version) versions.set(normalizeDistributionName(name), version);
   }
   return versions;
 }
@@ -36,7 +47,9 @@ export function parseDistributionSnapshot(text) {
   const raw = JSON.parse(String(text ?? "{}"));
   const versions = Object.create(null);
   for (const [name, version] of Object.entries(raw ?? {})) {
-    if (typeof name === "string" && name && typeof version === "string") versions[name.toLowerCase()] = version;
+    if (typeof name === "string" && name && typeof version === "string") {
+      versions[normalizeDistributionName(name)] = version;
+    }
   }
   return versions;
 }
