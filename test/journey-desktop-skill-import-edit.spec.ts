@@ -212,7 +212,7 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           await expect(settings.getByRole("heading", { name: copy.upload, exact: true })).toBeVisible();
           await settings.locator('input[type="file"]').setInputFiles(skillFile);
           await settings.getByRole("button", { name: copy.importAction, exact: true }).click();
-          await expect(settings.getByRole("status")).toContainText(name);
+          await expect(settings.locator("small.row-note[role=status]")).toContainText(name);
           await settings.getByRole("button", { name: copy.back, exact: true }).click();
         },
       );
@@ -270,7 +270,7 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           await expect(instructions).toHaveValue(new RegExp(firstInstructions.replace(/\./g, "\\.")));
           await instructions.fill(editedInstructions);
           await settings.getByRole("button", { name: copy.save, exact: true }).click();
-          await expect(settings.getByRole("status")).toContainText(copy.saved);
+          await expect(settings.locator("small.row-note[role=status]")).toContainText(copy.saved);
           await settings.getByRole("button", { name: copy.back, exact: true }).click();
         },
       );
@@ -292,7 +292,7 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           // an empty or HTML error page.
           expect(exported?.head).toBe("PK");
           expect(exported?.bytes ?? 0).toBeGreaterThan(0);
-          await expect(settings.getByRole("status")).toContainText(`已导出「${name}」`);
+          await expect(settings.locator(".skill-export-status[role=status]")).toContainText(`已导出「${name}」`);
         },
       );
 
@@ -318,7 +318,7 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           const confirm = page.getByRole("dialog", { name: `删除「${name}」`, exact: true });
           await expect(confirm).toBeVisible();
           await confirm.getByRole("button", { name: copy.delete, exact: true }).click();
-          await expect(settings.getByRole("status")).toContainText(`已删除「${name}」`);
+          await expect(settings.locator("small.row-note[role=status]")).toContainText(`已删除「${name}」`);
           await expect(settings.locator(".settings-card").filter({ hasText: name })).toHaveCount(0);
           const installed = await api<InstalledSkill[]>(page, "/api/skills");
           expect(installed.some((skill) => skill.name === name)).toBe(false);

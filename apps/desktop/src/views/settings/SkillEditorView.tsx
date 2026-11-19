@@ -91,6 +91,16 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+/** The directory an imported reference file lands in. Empty means the skill
+ *  root; `..` and empty segments are refused here, and the server refuses the
+ *  same paths again when the file is written. */
+function normalizedReferenceDirectory(value: string): string | null {
+  const directory = value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (directory === "") return "";
+  if (directory.split("/").some((part) => part === "" || part === "." || part === "..")) return null;
+  return directory;
+}
+
 /** A pasted or uploaded SKILL.md, split at its frontmatter block. Only the
  *  scalar keys the form shows are taken; everything else stays in the package
  *  untouched, exactly as an edit that never opened the block would leave it. */
@@ -205,7 +215,9 @@ function EditorBody({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [contentMode, setContentMode] = useState<"write" | "upload">("write");
-  const [advancedOpen, setAdvancedOpen] = useState(detail.resources.length > 0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [referenceDirectory, setReferenceDirectory] = useState("references");
+  const contentRef = useRef<HTMLElement>(null);
   const contentInput = useRef<HTMLInputElement>(null);
   const referenceInput = useRef<HTMLInputElement>(null);
 
@@ -249,6 +261,11 @@ function EditorBody({
 
   const addReferences = async (files: File[]) => {
     if (files.length === 0) return;
+    const directory = normalizedReferenceDirectory(referenceDirectory);
+    if (directory === null) {
+      setFailure(TEXT.settings.skills.editor.referenceDirectoryInvalid);
+      return;
+    }
     setBusy(true);
     setFailure(undefined);
     onNotice(undefined);
@@ -259,7 +276,8 @@ function EditorBody({
       let latest = detail;
       for (const file of files) {
         const name = file.name.split(/[\\/]/).pop() ?? file.name;
-        latest = await updateSkillFile(client, detail.id, `references/${name}`, {
+        const path = directory ? `${directory}/${name}` : name;
+        latest = await updateSkillFile(client, detail.id, path, {
           content: await file.text(),
           expectedRevision: revision,
         });
@@ -346,12 +364,32 @@ function EditorBody({
           <span className="settings-field-hint">{TEXT.settings.skills.editor.descriptionHint}</span>
         </label>
 
-        <section className="skill-editor-content">
+        <section className="skill-editor-content" ref={contentRef}>
           <div className="skill-editor-content-head">
-            <div>
-              <span className="settings-field-label">{TEXT.settings.skills.editor.content}</span>
-              <span className="settings-field-hint">{TEXT.settings.skills.editor.contentHint}</span>
-            </div>
+            {activePath === SKILL_FILE ? (
+              <div>
+                <span className="settings-field-label">{TEXT.settings.skills.editor.content}</span>
+                <span className="settings-field-hint">{TEXT.settings.skills.editor.contentHint}</span>
+              </div>
+            ) : (
+              <div className="skill-editor-editing-head">
+                <div>
+                  <span className="settings-field-label">
+                    {TEXT.settings.skills.editor.editingResource(activePath)}
+                  </span>
+                  <span className="settings-field-hint">
+                    {TEXT.settings.skills.editor.referenceEditingHint}
+                  </span>
+                </div>
+                <button
+                  className="secondary-button skill-editor-back-to-skill"
+                  onClick={() => onActivePath(SKILL_FILE)}
+                  type="button"
+                >
+                  {TEXT.settings.skills.editor.backToSkill}
+                </button>
+              </div>
+            )}
             {activePath === SKILL_FILE ? (
               <div aria-label={TEXT.settings.skills.editor.content} className="skill-editor-mode" role="group">
                 <button
@@ -415,8 +453,7 @@ function EditorBody({
               </button>
             )
           ) : (
-            <label className="settings-field">
-              <span className="settings-field-label">{activePath}</span>
+            <div className="settings-field">
               {binary ? (
                 <p className="row-note">{TEXT.settings.skills.editor.binary}</p>
               ) : (
@@ -430,7 +467,7 @@ function EditorBody({
                   value={fileText ?? ""}
                 />
               )}
-            </label>
+            </div>
           )}
 
           <input
@@ -511,6 +548,20 @@ function EditorBody({
                 )}
               </span>
 
+              <label className="settings-field skill-editor-directory">
+                <span className="settings-field-label">{TEXT.settings.skills.editor.referenceDirectory}</span>
+                <input
+                  aria-label={TEXT.settings.skills.editor.referenceDirectory}
+                  className="field-input"
+                  disabled={busy || readOnly}
+                  onChange={(event) => setReferenceDirectory(event.target.value)}
+                  placeholder={TEXT.settings.skills.editor.referenceDirectoryPlaceholder}
+                  spellCheck={false}
+                  value={referenceDirectory}
+                />
+                <span className="settings-field-hint">{TEXT.settings.skills.editor.referenceDirectoryHint}</span>
+              </label>
+
               <button
                 className="skill-editor-drop is-reference"
                 disabled={busy || readOnly}
@@ -522,7 +573,9 @@ function EditorBody({
                   <path d="M14 3v5h5M12 12v5m-2.5-2.5L12 17l2.5-2.5" />
                 </svg>
                 <span className="skill-editor-drop-title">{TEXT.settings.skills.editor.referencesDrop}</span>
-                <span className="skill-editor-drop-hint">{TEXT.settings.skills.editor.referencesDropHint}</span>
+                <span className="skill-editor-drop-hint">
+                  {TEXT.settings.skills.editor.referencesDropHint(referenceDirectory.trim() || "/")}
+                </span>
               </button>
               <input
                 aria-label={TEXT.settings.skills.editor.references}
@@ -539,22 +592,43 @@ function EditorBody({
               />
 
               {resourceCount > 0 ? (
-                <ul className="skill-editor-resources">
-                  {detail.resources.map((resource) => (
-                    <li key={resource.path}>
-                      <button
-                        aria-label={resource.path}
-                        aria-pressed={activePath === resource.path}
-                        className={`skill-editor-resource${activePath === resource.path ? " is-active" : ""}`}
-                        onClick={() => onActivePath(resource.path)}
-                        type="button"
-                      >
-                        <span className="skill-editor-resource-path">{resource.path}</span>
-                        <span className="skill-editor-resource-size">{formatBytes(resource.size)}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <span className="skill-editor-usage">{TEXT.settings.skills.editor.referencesEditHint}</span>
+                  <ul className="skill-editor-resources">
+                    {detail.resources.map((resource) => (
+                      <li key={resource.path}>
+                        <button
+                          aria-label={resource.path}
+                          aria-pressed={activePath === resource.path}
+                          className={`skill-editor-resource${activePath === resource.path ? " is-active" : ""}`}
+                          onClick={() => {
+                            onActivePath(resource.path);
+                            // The editor is above this list; bring it back into
+                            // view instead of leaving the reader looking at the
+                            // row they just pressed.
+                            const reveal = () => contentRef.current?.scrollIntoView?.({
+                              behavior: "smooth",
+                              block: "start",
+                            });
+                            if (typeof requestAnimationFrame === "function") {
+                              requestAnimationFrame(reveal);
+                            } else {
+                              reveal();
+                            }
+                          }}
+                          title={TEXT.settings.skills.editor.editResource(resource.path)}
+                          type="button"
+                        >
+                          <span className="skill-editor-resource-path">{resource.path}</span>
+                          <span className="skill-editor-resource-size">{formatBytes(resource.size)}</span>
+                          <span className="skill-editor-resource-edit">
+                            {TEXT.settings.skills.editor.edit}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               ) : null}
             </section>
           ) : null}
