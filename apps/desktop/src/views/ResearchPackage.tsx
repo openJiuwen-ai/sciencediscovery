@@ -286,7 +286,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     // Every open starts a fresh bounded wait: a stalled preview from the previous
     // open must not greet the user as already exhausted (#1235 review 2, F11).
     pendingTries.current = 0; pendingScope.current = ""; setPreviewStalled(false);
-    if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
+    if (request.sessionId) void getSession(client, request.sessionId).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
 
