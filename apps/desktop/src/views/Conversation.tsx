@@ -38,6 +38,7 @@ import type {
 } from "../api/types.js";
 import type { RunStreamState } from "../run-stream/model.js";
 import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
+import { allSubagents } from "../run-stream/model.js";
 import { TEXT } from "../text.js";
 import { coalesceTimeoutNotices } from "../run-failure.js";
 import { RunFailureCard } from "./RunFailureCard.js";
@@ -46,7 +47,7 @@ import { UploadCards } from "./UploadCards.js";
 import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
-import { turnArtifactsByRun } from "../app/turn-artifacts.js";
+import { turnArtifactsByRun, turnLineage } from "../app/turn-artifacts.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
@@ -357,11 +358,27 @@ export function Conversation({
    *  own, so the id is not a per-row value. Stable so the memoised turns under
    *  it are not re-rendered — and their Markdown re-parsed — by a press that
    *  merely opens the dialog. */
-  /** One selection per run, made once per `outputs` reference: the
+  /** Which Run a version belongs to: the transcript's own runs, and the children
+   *  whose versions name them instead. A version with neither is left out rather
+   *  than guessed at by timestamp. */
+  const lineage = useMemo(
+    () => turnLineage(
+      [
+        ...(run.runId === undefined ? [] : [run.runId]),
+        ...replays.map((replay) => replay.runId),
+      ],
+      [...allSubagents(run), ...replays.flatMap((replay) => allSubagents(replay.state))],
+    ),
+    [run, replays],
+  );
+  /** One selection per run, made once per `outputs`/`lineage` pair: the
    *  conversation draws a strip under every turn, and walking the whole output
    *  list in each of them would make typing in the composer cost
    *  O(turns × outputs). */
-  const artifactsByRun = useMemo(() => turnArtifactsByRun(outputs ?? NO_OUTPUTS), [outputs]);
+  const artifactsByRun = useMemo(
+    () => turnArtifactsByRun(outputs ?? NO_OUTPUTS, lineage),
+    [lineage, outputs],
+  );
   const referenceClick = useMemo(
     () => onReferenceClick === undefined
       ? undefined

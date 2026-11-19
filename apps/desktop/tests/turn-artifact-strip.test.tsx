@@ -13,7 +13,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api/client.js";
 import type { ComposerReference, SessionArtifactOutput } from "../src/api/types.js";
-import { turnArtifactsByRun } from "../src/app/turn-artifacts.js";
+import { turnArtifactsByRun, turnLineage } from "../src/app/turn-artifacts.js";
 import { emptyRunStream, type RunStreamState } from "../src/run-stream/model.js";
 import { TEXT } from "../src/text.js";
 import { AssistantTurns } from "../src/views/AssistantTurn.js";
@@ -28,7 +28,8 @@ function output(over: {
   artifactId?: string;
   kind?: SessionArtifactOutput["artifact"]["kind"];
   name?: string;
-  runIds?: string[];
+  /** The run (or subagent) the version names in `turnId`. */
+  turnId?: string;
   version?: number;
   baseVersionId?: string;
 } = {}): SessionArtifactOutput {
@@ -54,20 +55,25 @@ function output(over: {
       artifactId,
       content: { hash: `hash-${artifactId}-${version}`, size: 2048 },
       createdAt: "2026-11-19T10:00:00.000Z",
-      executionRunIds: over.runIds ?? ["run-1"],
+      // The execution that wrote the bytes, distinct from the run — the shape
+      // the backend writes. Joining on this is the bug the review caught.
+      executionRunIds: [`exec-${artifactId}-${version}`],
       id: `${artifactId}-v${version}`,
       inputArtifactVersionIds: [],
       mediaType: "text/markdown",
       projectId: "p1",
       sessionId: "s1",
+      turnId: over.turnId ?? "run-1",
       version,
       ...(over.baseVersionId ? { baseVersionId: over.baseVersionId } : {}),
     },
   };
 }
 
+const LINEAGE = turnLineage(["run-1", "run-2"], []);
+
 function turns(run: Partial<RunStreamState>, outputs: SessionArtifactOutput[]): string {
-  const byRun = turnArtifactsByRun(outputs);
+  const byRun = turnArtifactsByRun(outputs, LINEAGE);
   const state = { ...emptyRunStream(), finalContent: "done", modelName: "m", runId: "run-1", ...run };
   return renderToStaticMarkup(
     <AssistantTurns
@@ -82,7 +88,7 @@ function turns(run: Partial<RunStreamState>, outputs: SessionArtifactOutput[]): 
 
 describe("the strip under a turn (#1252)", () => {
   it("draws nothing for a turn that wrote no artifact", () => {
-    const html = turns({ terminal: true, status: "completed" }, [output({ runIds: ["another-run"] })]);
+    const html = turns({ terminal: true, status: "completed" }, [output({ turnId: "run-2" })]);
     assert.equal(html.includes("turn-artifacts"), false);
     assert.equal(html.includes(TEXT.turnArtifacts.title), false);
   });
@@ -97,15 +103,15 @@ describe("the strip under a turn (#1252)", () => {
   });
 
   it("opens the version the row shows, not the newest one", async () => {
-    const older = output({ artifactId: "figure", kind: "figure", name: "plot.png", runIds: ["run-1"], version: 3, baseVersionId: "figure-v2" });
+    const older = output({ artifactId: "figure", kind: "figure", name: "plot.png", turnId: "run-1", version: 3, baseVersionId: "figure-v2" });
     // A later run wrote v4; the strip of run-1 still points at v3.
-    const newer = output({ artifactId: "figure", kind: "figure", name: "plot.png", runIds: ["run-2"], version: 4, baseVersionId: "figure-v3" });
+    const newer = output({ artifactId: "figure", kind: "figure", name: "plot.png", turnId: "run-2", version: 4, baseVersionId: "figure-v3" });
     const opened: ComposerReference[] = [];
     let strip!: ReactTestRenderer;
     await act(async () => {
       strip = create(
         <TurnArtifactStrip
-          artifacts={turnArtifactsByRun([older, newer]).get("run-1")}
+          artifacts={turnArtifactsByRun([older, newer], LINEAGE).get("run-1")}
           onOpenArtifact={(reference) => opened.push(reference)}
         />,
       );
@@ -126,7 +132,7 @@ describe("the strip under a turn (#1252)", () => {
     await act(async () => {
       strip = create(
         <TurnArtifactStrip
-          artifacts={turnArtifactsByRun(files).get("run-1")}
+          artifacts={turnArtifactsByRun(files, LINEAGE).get("run-1")}
           onOpenArtifact={() => undefined}
           onOpenArtifactPanel={() => { panel += 1; }}
         />,
