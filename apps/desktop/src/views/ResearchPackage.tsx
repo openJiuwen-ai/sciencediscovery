@@ -121,6 +121,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [previewStalled, setPreviewStalled] = useState(false);
   /** Bumped by the manual retry so the preview effect runs again. */
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
@@ -470,8 +471,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const blockedByLimit = overLimit && !overLimitAcknowledged;
   const formatLimit = (bytes: number) => formatBytes(bytes);
   return <>
-    {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
-    {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
+    {readOnly ? <div className="research-package-resume"><div><strong>{TEXT.languageTag.startsWith("zh") ? "当前为只读快照" : "Read-only snapshot"}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
+    {branch ? <div className="research-package-source">{TEXT.languageTag.startsWith("zh") ? "上下文来自" : "Context from"} <button onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button></div> : null}
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
     {flashQueue.length ? <div className="research-toast-stack">{flashQueue.map(flash => <div className={`research-toast is-${flash.tone}`} key={flash.id} role="status">
@@ -482,11 +483,10 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     </div>)}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
-      <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
+      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
-          <p className="research-package-notice">{t.sessionScope}</p>
-          <p className="research-field-label">{t.exportTypes}</p>
+          <p className="research-field-label">{t.exportTypes} <button className="research-scope-help" aria-label={t.sessionScope} title={t.sessionScope} type="button">!</button></p>
           <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); if (value !== "complete") { setTrajectory(false); setGraph(false); } }} type="button">
             <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><strong>{value === "necessary" ? t.necessary : t.complete}</strong></span>
             <span className="research-profile-badges">{(value === "necessary"
@@ -498,7 +498,6 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {level === "complete" ? <>
             <p className="research-field-label">{t.otherContent}</p>
             <div className="research-package-options">
-              <label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.includeTrajectory}</label>
               <label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label>
             </div>
           </> : null}
@@ -517,7 +516,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {preview ? <details className="research-files-block" open>
             <summary>{t.filesWithCount(preview.files.length)}</summary>
             <label className="research-select-all"><input type="checkbox" checked={allFilesSelected} onChange={event => setFiles(event.target.checked ? preview.files.map(row => row.path) : [])} />{t.selectAll}</label>
-            <div className="research-file-grid">{preview.files.map(item => <label key={item.path} title={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} /><span>{item.path}</span></label>)}</div>
+            <div className="research-file-grid">{preview.files.map(item => <label key={item.path} title={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} /><span title={item.path}>{item.path}</span></label>)}</div>
           </details> : null}
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
@@ -539,7 +538,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
             </div>
           ) : (
-            <label className="research-package-upload"><span className="research-package-upload-trigger">{t.choose}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><span aria-hidden="true" className="research-upload-icon">⇧</span><strong>{t.choose}</strong><span>{TEXT.languageTag.startsWith("zh") ? "拖拽或选择需导入的研究包" : "Drop or choose a research package"}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
           {inspection ? <>
             <p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects}{inspection.manifest.source.title ? <> · {t.sourceTitle} <b>{inspection.manifest.source.title}</b></> : null} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
