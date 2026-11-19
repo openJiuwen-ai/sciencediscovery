@@ -40,7 +40,7 @@ def pending_reviews(
     return ok({"items": items})
 
 
-@router.post("/{asset_id}/{version}")
+@router.post("/{asset_id:path}/{version}")
 def decide(
     asset_id: str,
     version: str,
