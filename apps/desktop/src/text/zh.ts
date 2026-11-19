@@ -275,6 +275,18 @@ export const ZH = {
     },
   },
 
+  /** What one assistant turn produced, under the answer that produced it (#1252). */
+  turnArtifacts: {
+    title: "本轮产物",
+    updated: "已更新",
+    more: (count: number) => `还有 ${count} 个`,
+    openPanel: "打开产物面板",
+    version: (value: number) => `v${value}`,
+    kinds: {
+      dataset: "数据集", figure: "图表", html: "网页", json: "JSON", latex: "LaTeX",
+      markdown: "文档", notebook: "笔记本", other: "文件", report: "报告", structure: "结构",
+    },
+  },
   /** One delegated subagent. It is named by what it was asked to do, never by a
    *  role or a persona: the transcript shows a line, and the right panel shows
    *  the work. */

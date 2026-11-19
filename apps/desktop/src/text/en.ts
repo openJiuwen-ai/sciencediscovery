@@ -265,6 +265,18 @@ export const EN: Text = {
     },
   },
 
+  /** What one assistant turn produced, under the answer that produced it (#1252). */
+  turnArtifacts: {
+    title: "Produced this turn",
+    updated: "Updated",
+    more: (count: number) => `${count} more`,
+    openPanel: "Open artifact panel",
+    version: (value: number) => `v${value}`,
+    kinds: {
+      dataset: "Dataset", figure: "Figure", html: "Page", json: "JSON", latex: "LaTeX",
+      markdown: "Document", notebook: "Notebook", other: "File", report: "Report", structure: "Structure",
+    },
+  },
   subagent: {
     lineLabel: "Subagent",
     status: {

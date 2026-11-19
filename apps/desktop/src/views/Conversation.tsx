@@ -32,6 +32,7 @@ import type {
   ComposerReference,
   PermissionDecision,
   PermissionRequest,
+  SessionArtifactOutput,
   SessionDetail,
   WorkspaceFile,
 } from "../api/types.js";
@@ -45,6 +46,7 @@ import { UploadCards } from "./UploadCards.js";
 import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
+import { turnArtifactsByRun } from "../app/turn-artifacts.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
@@ -65,6 +67,11 @@ interface Props {
   /** Open one tool's input or result in the workspace panel. The card shows a
    *  clipped preview of both. */
   onOpenTool?: (detail: ToolDetail) => void;
+  /** Open the right panel's artifact group from a turn strip's overflow row. */
+  onOpenArtifactPanel?: () => void;
+  /** Every artifact version this Session holds; each turn's strip is selected
+   *  from it by run id (#1252). The right panel reads the same list. */
+  outputs?: readonly SessionArtifactOutput[];
   /** Opens the memory card behind a `[alias]` chip in an answer. The report
    *  preview and the conversation point at the same card. */
   onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
@@ -81,6 +88,8 @@ interface Props {
    *  drawn after the last turn. */
   evolve?: ReactNode;
 }
+
+const NO_OUTPUTS: readonly SessionArtifactOutput[] = [];
 
 const EMPTY_CONFIGURATION: ReturnType<typeof useConfigurationRequests> = {
   requests: [], legacyRequests: [], loading: false, error: false,
@@ -259,7 +268,9 @@ export function Conversation({
   onDecidePermission,
   onOpenSubagent,
   onOpenTool,
+  onOpenArtifactPanel,
   onReferenceClick,
+  outputs,
   pending,
   replays,
   run,
@@ -346,6 +357,11 @@ export function Conversation({
    *  own, so the id is not a per-row value. Stable so the memoised turns under
    *  it are not re-rendered — and their Markdown re-parsed — by a press that
    *  merely opens the dialog. */
+  /** One selection per run, made once per `outputs` reference: the
+   *  conversation draws a strip under every turn, and walking the whole output
+   *  list in each of them would make typing in the composer cost
+   *  O(turns × outputs). */
+  const artifactsByRun = useMemo(() => turnArtifactsByRun(outputs ?? NO_OUTPUTS), [outputs]);
   const referenceClick = useMemo(
     () => onReferenceClick === undefined
       ? undefined
@@ -450,8 +466,10 @@ export function Conversation({
                 <AssistantTurns
                   usage={usageFor(replacement.runId)}
                   answered={answeredAfter[index]}
+                  artifacts={artifactsByRun.get(replacement.runId ?? "")}
                   client={client}
                   onDecide={onDecidePermission}
+                  onOpenArtifactPanel={onOpenArtifactPanel}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
                   onReferenceClick={referenceClick}
@@ -471,9 +489,11 @@ export function Conversation({
                 <AssistantTurns
                   usage={usageFor(replay.runId)}
                   answered={answeredAfter[index]}
+                  artifacts={artifactsByRun.get(replay.runId)}
                   client={client}
                   key={replay.runId}
                   onDecide={onDecidePermission}
+                  onOpenArtifactPanel={onOpenArtifactPanel}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
                   onReferenceClick={referenceClick}
@@ -488,9 +508,11 @@ export function Conversation({
           <AssistantTurns
             usage={usageFor(replay.runId)}
             answered={pending !== undefined}
+            artifacts={artifactsByRun.get(replay.runId)}
             client={client}
             key={replay.runId}
             onDecide={onDecidePermission}
+            onOpenArtifactPanel={onOpenArtifactPanel}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
             onReferenceClick={referenceClick}
@@ -505,8 +527,10 @@ export function Conversation({
         {liveRun ? (
           <AssistantTurns
             usage={usageFor(visibleRun.runId)}
+            artifacts={artifactsByRun.get(visibleRun.runId ?? "")}
             client={client}
             onDecide={onDecidePermission}
+            onOpenArtifactPanel={onOpenArtifactPanel}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
             onReferenceClick={referenceClick}
