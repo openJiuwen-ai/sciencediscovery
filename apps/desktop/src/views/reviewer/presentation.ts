@@ -156,7 +156,7 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
  *  not paint the card amber: the rows below say what was not checked, in the
  *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
  *  N 项未检查). Amber stays for "this verdict is about something else" — a
- *  failure, or history.
+ *  failure, history, or a source check that could not support the claim.
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged
@@ -172,6 +172,13 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   // own rows say 提醒 made the card contradict itself.
   if (review.findings.some((finding) => finding.severity === "critical")) return "fail";
   if (review.findings.length > 0) return "warn";
+  // A source check is a result about the claim even when it raised no finding:
+  // a contradiction, or a passage that only partly supports what the report
+  // says, is what the reader opened the card for. Without this the card could
+  // sit grey while the row inside it was amber.
+  const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
+  if (verdicts.includes("CONTRADICTED")) return "fail";
+  if (verdicts.includes("PARTIALLY_SUPPORTED")) return "warn";
   if (unverifiedDelivery(review)) return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
   // is an absence of a verdict, not a warning about the artifact.
@@ -192,6 +199,13 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     if (problems > 0 && warnings > 0) return TEXT.reviewer.summaryMixed(problems, warnings);
     if (problems > 0) return TEXT.reviewer.summaryProblems(problems);
     if (warnings > 0) return TEXT.reviewer.summaryWarnings(warnings);
+    // A source verdict is a result even when no finding was raised, and the
+    // header has to name it: the card is amber because of it.
+    const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
+    const contradicted = verdicts.filter((verdict) => verdict === "CONTRADICTED").length;
+    if (contradicted > 0) return TEXT.reviewer.summaryContradicted(contradicted);
+    const partial = verdicts.filter((verdict) => verdict === "PARTIALLY_SUPPORTED").length;
+    if (partial > 0) return TEXT.reviewer.summaryPartlySupported(partial);
     if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
     if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;
@@ -284,6 +298,19 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       badge: completeness.status === "complete"
         ? TEXT.reviewer.summaryPass
         : completeness.status === "incomplete" ? TEXT.reviewer.finding : TEXT.reviewer.badgeUnconfirmed,
+    });
+  } else if (unverifiedDelivery(review)) {
+    // The header reports 未验证交付 whenever the review recorded no delivery
+    // verdict at all; without this row that claim had nothing under it to
+    // point at, and a reader could not tell which check was missing.
+    rows.push({
+      id: `${review.id}:completeness-unchecked`,
+      tone: "neutral",
+      label: labelFor("completeness"),
+      labelTip: labelTipFor("completeness"),
+      title: TEXT.reviewer.completeness.notChecked,
+      body: TEXT.reviewer.completeness.notCheckedBody,
+      badge: TEXT.reviewer.badgeUnconfirmed,
     });
   }
 

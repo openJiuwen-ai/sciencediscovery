@@ -320,6 +320,10 @@ export const EN: Text = {
     summaryWarnings: (count: number) => `${count} ${count === 1 ? "warning" : "warnings"}`,
     summaryMixed: (problems: number, warnings: number) =>
       `${problems} ${problems === 1 ? "issue" : "issues"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
+    summaryContradicted: (count: number) =>
+      `${count} claim${count === 1 ? "" : "s"} contradicted by the source`,
+    summaryPartlySupported: (count: number) =>
+      `${count} claim${count === 1 ? "" : "s"} only partly supported by the source`,
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
@@ -402,7 +406,7 @@ export const EN: Text = {
     } as Record<string, string>,
     /** A source check that could not conclude is not a report defect. */
     inconclusive: "Could not check this claim against its source",
-    inconclusiveBody: "The claim was not compared with its source text because the source lookup returned no result. This is not a problem with the report.",
+    inconclusiveBody: "The claim was not compared with its source text because the external source service returned no result — it may have timed out or been temporarily unavailable. This is not a problem with the report.",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "This review checked citation format only; claim support was not checked.",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -430,6 +434,8 @@ export const EN: Text = {
       sourceBrief: "Checked against the files this task named as deliverables.",
       sourceSession: "This task named none, so the session's own declarations were used.",
       sourceNone: "The task did not name the files and paths it should produce, so there was nothing to check the artifacts against. Naming the files and paths in the task is what makes this checkable.",
+      notChecked: "Delivery completeness was not checked",
+      notCheckedBody: "This review recorded no delivery check, so nothing here says the right files were delivered.",
       missing: "Missing",
       empty: "Empty",
     },
