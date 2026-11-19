@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.hub-api.db
+.hub-storage/
+.env
