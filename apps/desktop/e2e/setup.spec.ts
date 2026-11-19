@@ -29,6 +29,17 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+/** The computed values the wizard's model field and its 刷新列表 button must
+ *  share. One helper so the two evaluations cannot drift apart. */
+const boxStyle = (element: HTMLElement) => {
+  const style = getComputedStyle(element);
+  return {
+    border: style.borderColor,
+    font: style.fontSize,
+    height: element.getBoundingClientRect().height,
+  };
+};
+
 test("a workspace with no model cannot be used until the wizard's test passes", async ({ page }) => {
   const mock = await installMockApi(page, { models: [], sessions: [] });
 
@@ -58,22 +69,8 @@ test("a workspace with no model cannot be used until the wizard's test passes", 
   const modelInput = page.getByPlaceholder("例如 deepseek-chat");
   const refresh = page.getByRole("button", { name: "刷新列表" });
   const [fieldBox, buttonBox] = await Promise.all([
-    modelInput.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        border: style.borderColor,
-        font: style.fontSize,
-        height: element.getBoundingClientRect().height,
-      };
-    }),
-    refresh.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        border: style.borderColor,
-        font: style.fontSize,
-        height: element.getBoundingClientRect().height,
-      };
-    }),
+    modelInput.evaluate(boxStyle),
+    refresh.evaluate(boxStyle),
   ]);
   expect(buttonBox.height).toBeCloseTo(fieldBox.height, 0);
   expect(buttonBox.font).toBe(fieldBox.font);
