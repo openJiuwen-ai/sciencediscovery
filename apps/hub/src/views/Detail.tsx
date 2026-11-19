@@ -19,7 +19,7 @@ import { DownloadButton } from "../components/DownloadButton.js";
 import { FileIcon } from "../components/icons.js";
 import { Markdown, MarkdownFile } from "../components/Markdown.js";
 import { assetUrl, fetchTextAsset } from "../catalog/load.js";
-import { formatSize } from "../format.js";
+import { formatSize, formatTimestamp } from "../format.js";
 import {
   DOMAIN_LABELS,
   HARDWARE_LABELS,
@@ -433,16 +433,21 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
   const session = asset as SessionAsset;
   const { benchmark, contents, run } = session;
   const meta = [
-    benchmark.runAt ? `${copy("runAt")} ${benchmark.runAt}` : null,
+    benchmark.runAt ? `${copy("runAt")} ${formatTimestamp(benchmark.runAt, language)}` : null,
     benchmark.dataset ? `Dataset ${benchmark.dataset}` : null,
     benchmark.commit ? `Commit ${benchmark.commit}` : null,
   ].filter((part): part is string => Boolean(part)).join(" · ");
   const duration = formatDuration(run?.durationMs);
   const runMeta = [
-    run?.model ? `${copy("model")} ${run.model}` : null,
+    // "local-smoke" is a placeholder the export used for a local test; a
+    // session's real model comes from the sidecar, so an obvious placeholder
+    // is left out rather than presented as if it were the model.
+    run?.model && !/^local(-|$)/iu.test(run.model) ? `${copy("model")} ${run.model}` : null,
     duration ? `${copy("duration")} ${duration}` : null,
     run?.tokens !== undefined ? `${copy("tokens")} ${run.tokens.toLocaleString(language === "zh" ? "zh-CN" : "en-US")}` : null,
-    run?.productVersion ? `${copy("version")} ${run.productVersion}` : null,
+    run?.productVersion && run.productVersion !== "unknown"
+      ? `${copy("version")} ${run.productVersion}`
+      : null,
     session.download.size ? `${(session.download.size / 1024 / 1024).toFixed(1)} MB` : null,
   ].filter((part): part is string => Boolean(part)).join(" · ");
   const stats: [string, number | string][] = [

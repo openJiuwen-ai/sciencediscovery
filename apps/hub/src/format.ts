@@ -19,3 +19,19 @@ export function formatSize(bytes: number | undefined): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/**
+ * An ISO timestamp in the reader's own conventions.
+ *
+ * The catalogue carries machine timestamps (`2026-11-17T06:38:33.805Z`); a
+ * person reading a session wants `2026年11月17日 14:38` rather than the raw
+ * string. Anything unparsable is shown as-is rather than silently dropped.
+ */
+export function formatTimestamp(value: string, language: "en" | "zh"): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
