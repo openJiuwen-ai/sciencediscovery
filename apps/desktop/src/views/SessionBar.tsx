@@ -86,7 +86,7 @@ export function SessionBar({
       >
         {title}
       </span>
-      {detail && isEvidenceSessionReadOnly(detail) ? <span className="research-readonly-badge">🔒 {TEXT.languageTag.startsWith("zh") ? "只读" : "Read only"}</span> : null}
+      {detail && isEvidenceSessionReadOnly(detail) ? <span className="research-readonly-badge">🔒 {TEXT.researchPackage.readOnlyBadge}</span> : null}
       <div className="task-head-meta">
         {projectName ? (
           <>
