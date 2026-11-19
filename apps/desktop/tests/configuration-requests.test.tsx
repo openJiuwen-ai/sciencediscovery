@@ -83,6 +83,22 @@ describe("desktop configuration request lifecycle", () => {
     assert.equal(view.result.error, false); assert.equal(view.result.loading, false);
     await view.close();
   });
+  it("clears the failure banner when a retry reads back an unchanged list", async () => {
+    const { client, calls } = pendingClient(); const view = await mount(client);
+    await act(async () => calls[0]!.resolve({ items: [request()] }));
+    let retry!: Promise<void>;
+    await act(async () => { retry = view.result.refresh(); });
+    await act(async () => { calls[1]!.reject(new Error("network")); await retry; });
+    assert.equal(view.result.error, true);
+    // The retry succeeds with exactly what is already on screen. `merge` has
+    // nothing to repaint, but the banner and the cards' read-only state must
+    // still come down, or 重试 looks like it did nothing.
+    await act(async () => { retry = view.result.refresh(); });
+    await act(async () => { calls[2]!.resolve({ items: [request()] }); await retry; });
+    assert.equal(view.result.error, false);
+    assert.equal(view.result.requests.length, 1);
+    await view.close();
+  });
   it("shows initial read failure and retries when the transcript refresh key changes", async () => {
     const { client, calls } = pendingClient(); const view = await mount(client);
     assert.equal(view.result.loading, true);
