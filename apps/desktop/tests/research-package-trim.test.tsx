@@ -216,8 +216,9 @@ test("a ready copy renders no text and no open affordance", () => {
 
 test("the complete export asks the preview for the memory graph switch", async (context) => {
   // The switch used to be pure component state: the preview never saw it, so the
-  // estimate and the cap described a package without the trajectory, and the export
-  // body dropped it as well (#1235 review 2).
+  // estimate and the cap described a package without the memory graph. The complete
+  // profile now offers only that switch, so this case pins it to the preview query
+  // (#1235 review 2, still standing after the trajectory switch was removed).
   const calls: Array<{ path: string; init?: { body?: unknown; method?: string } }> = [];
   const inner = client();
   const tracking = {
@@ -237,11 +238,13 @@ test("the complete export asks the preview for the memory graph switch", async (
     assert.ok(cards.length > 0, "the complete card is rendered");
     await act(async () => { (cards[0]!.props.onClick as () => void)(); await Promise.resolve(); });
 
-    // On a complete export the two payload switches come first, before the file grid.
-    const boxes = view.root.findAllByProps({ type: "checkbox" });
-    assert.ok(boxes.length >= 2, "the payload switches are rendered for a complete export");
+    // The payload switch lives in its own block; picking it from there keeps the
+    // select-all and file checkboxes below out of this case.
+    const options = view.root.findAllByProps({ className: "research-package-options" })[0]!;
+    const switches = options.findAllByProps({ type: "checkbox" });
+    assert.equal(switches.length, 1, "the complete profile offers the memory-graph switch");
     await act(async () => {
-      (boxes[0]!.props.onChange as (event: unknown) => void)({ target: { checked: true } });
+      (switches[0]!.props.onChange as (event: unknown) => void)({ target: { checked: true } });
       await Promise.resolve();
     });
 
@@ -356,14 +359,14 @@ test("a new export request starts with the payload switches off", async (context
   }
   const options = (view: ReturnType<typeof create>) => view.root.findAllByProps({ className: "research-package-options" })[0];
   await withView(context, React.createElement(Harness), async (view) => {
-    // Open the complete profile, then tick the trajectory switch.
+    // Open the complete profile, then tick the payload switch.
     await act(async () => { (view.root.findAllByProps({ "aria-pressed": false })[0]!.props.onClick as () => void)(); await Promise.resolve(); });
     const ticked = options(view)!.findAllByProps({ type: "checkbox" })[0]!;
     await act(async () => {
       (ticked.props.onChange as (event: unknown) => void)({ target: { checked: true } });
       await Promise.resolve();
     });
-    assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, true, "the switch is on before reopening");
+    assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, true, "the memory-graph switch is on before reopening");
 
     const reopen = view.root.findAllByProps({ id: "reopen" })[0]!;
     await act(async () => { (reopen.props.onClick as () => void)(); await Promise.resolve(); });
@@ -372,6 +375,6 @@ test("a new export request starts with the payload switches off", async (context
 
     await act(async () => { (view.root.findAllByProps({ "aria-pressed": false })[0]!.props.onClick as () => void)(); await Promise.resolve(); });
     assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, false,
-      "choosing complete again shows the trajectory switch off");
+      "choosing complete again shows the memory-graph switch off");
   });
 });

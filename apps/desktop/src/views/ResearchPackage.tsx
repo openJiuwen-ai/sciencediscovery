@@ -98,9 +98,6 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const projectId = request?.kind === "import" ? importProjectId || request.projectId : request?.projectId;
   const [level, setLevel] = useState("necessary");
   // The export dialog offers both optional payloads the API understands. The
-  // trajectory details are for whoever opens the package elsewhere — this client
-  // has no trajectory view of its own.
-  const [trajectory, setTrajectory] = useState(false);
   const [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
   // Keyed by revision + size: a new selection has to be confirmed again.
@@ -275,7 +272,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setTrajectory(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
     // Every open starts a fresh bounded wait: a stalled preview from the previous
     // open must not greet the user as already exhausted (#1235 review 2, F11).
     pendingTries.current = 0; pendingScope.current = ""; setPreviewStalled(false);
@@ -322,7 +319,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     // only the size line says it is recalculating (#1057). The pending budget is
     // keyed on the whole selection, so a changed file set starts it over without
     // touching what is already on screen.
-    const scope = `${level}|${graph}|${trajectory}`;
+    const scope = `${level}|${graph}`;
     if (previewScope.current !== scope) {
       previewScope.current = scope;
       setPreview(undefined);
@@ -334,7 +331,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       setPreviewStalled(false);
     }
     setEstimating(true); setError("");
-    const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory && level === "complete", graph && level === "complete", files).then(value => {
+    const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph && level === "complete", files).then(value => {
       if (!active) return;
       pendingTries.current = 0; setPreviewStalled(false);
       setPreview(value); setEstimating(false);
@@ -350,7 +347,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       } else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
-  }, [client, dialog, detail?.id, projectId, level, graph, trajectory, files, previewNonce]);
+  }, [client, dialog, detail?.id, projectId, level, graph, files, previewNonce]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>; let failures = 0;
@@ -471,8 +468,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const blockedByLimit = overLimit && !overLimitAcknowledged;
   const formatLimit = (bytes: number) => formatBytes(bytes);
   return <>
-    {readOnly ? <div className="research-package-resume"><div><strong>{TEXT.languageTag.startsWith("zh") ? "当前为只读快照" : "Read-only snapshot"}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
-    {branch ? <div className="research-package-source">{TEXT.languageTag.startsWith("zh") ? "上下文来自" : "Context from"} <button onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button></div> : null}
+    {readOnly ? <div className="research-package-resume"><div><strong>{t.readOnlyTitle}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
+    {branch ? <div className="research-package-source">{t.contextFrom} <button onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button></div> : null}
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 ? <div className="research-package-status" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
     {flashQueue.length ? <div className="research-toast-stack">{flashQueue.map(flash => <div className={`research-toast is-${flash.tone}`} key={flash.id} role="status">
@@ -486,8 +483,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
-          <p className="research-field-label">{t.exportTypes} <button className="research-scope-help" aria-label={t.sessionScope} title={t.sessionScope} type="button">!</button></p>
-          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); if (value !== "complete") { setTrajectory(false); setGraph(false); } }} type="button">
+          <p className="research-field-label">{t.exportTypes} <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span></p>
+          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); if (value !== "complete") { setGraph(false); } }} type="button">
             <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><strong>{value === "necessary" ? t.necessary : t.complete}</strong></span>
             <span className="research-profile-badges">{(value === "necessary"
               ? [t.badgeConversation, t.badgeCurrentFiles, t.badgeDependencies]
@@ -538,7 +535,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
             </div>
           ) : (
-            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><span aria-hidden="true" className="research-upload-icon">⇧</span><strong>{t.choose}</strong><span>{TEXT.languageTag.startsWith("zh") ? "拖拽或选择需导入的研究包" : "Drop or choose a research package"}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><span aria-hidden="true" className="research-upload-icon">⇧</span><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
           {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
         </> : <p>{t.branchHint}</p>}
@@ -557,7 +554,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             if (picked.canceled || !picked.token) return;
             destinationToken = picked.token;
           }
-          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: level === "complete" && trajectory, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
+          const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: false, includeFullMemoryGraph: level === "complete" && graph, filePaths: files, allowOverCap: overLimitAcknowledged });
           const record: ExportRecord = { id: task.id, project: projectId, filename: task.filename, destinationToken, phase: "packaging", task, failures: 0, error: taskErrorMessage(task.error), level: level as "necessary" | "complete", sessionId: request?.sessionId ?? detail?.id, sessionTitle: detail?.title };
           setExports(current => [...current, record]); setDialog(undefined);
           // startExport normally returns `queued`; a terminal answer still has
