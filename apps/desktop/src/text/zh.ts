@@ -347,6 +347,8 @@ export const ZH = {
     finding: "问题",
     warning: "提醒",
     badgePass: "通过",
+    /** For a check that ran but could not conclude, or a delivery verdict no brief declared. */
+    badgeUnconfirmed: "未确认",
     deepSemantic: "语义",
     source: "来源",
     gaps: "未检查",

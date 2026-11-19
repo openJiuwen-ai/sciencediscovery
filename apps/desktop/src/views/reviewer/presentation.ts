@@ -130,11 +130,19 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
 /** The verdict's colour, in one order of precedence.
  *
  *  Red means the artifact has a problem: any finding, or a delivery verdict of
- *  `incomplete`. Amber means the verdict cannot be fully trusted: the review
- *  itself failed, the version it answered for is no longer current, or delivery
- *  was never verified. Grey means there was nothing to judge. Green means this
- *  level ran its checks, raised nothing, and delivery was confirmed or never
- *  claimed — a statement about the checks, not about the conclusions.
+ *  `incomplete`. Amber means the verdict itself cannot be taken at face value:
+ *  the review failed, or the version it answered for is no longer current.
+ *  Grey means nothing was found wrong and nothing was claimed either: the
+ *  checkpoint was skipped, or the review ran but never verified delivery or
+ *  declared a check it did not perform. Green means this level ran its checks,
+ *  raised nothing, and delivery was confirmed or never claimed — a statement
+ *  about the checks, not about the conclusions.
+ *
+ *  An unverified delivery or an unperformed check is not a finding, so it does
+ *  not paint the card amber: the rows below say what was not checked, in the
+ *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
+ *  N 项未检查). Amber stays for "this verdict is about something else" — a
+ *  failure, or history.
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged
@@ -146,10 +154,10 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.stale === true) return "warn";
   if (review.completeness?.status === "incomplete") return "fail";
   if (review.findings.length > 0) return "fail";
-  if (unverifiedDelivery(review)) return "warn";
-  // Nothing was found wrong, but part of the claim was never examined. Amber
-  // is the tone the card already uses for "cannot be trusted as it stands".
-  if (declaredGap(review)) return "warn";
+  if (unverifiedDelivery(review)) return "neutral";
+  // Nothing was found wrong, but part of the claim was never examined. That
+  // is an absence of a verdict, not a warning about the artifact.
+  if (declaredGap(review)) return "neutral";
   return "pass";
 }
 
@@ -173,13 +181,19 @@ function claimText(claim: ReviewClaim | undefined): string | undefined {
   return claim?.text?.trim() || undefined;
 }
 
+/** Where a row sits in the card: problems, then results, then absences. */
+const ROW_RANK: Record<ReviewTone, number> = { fail: 0, warn: 1, pass: 2, pending: 2, neutral: 3 };
+
 /**
  * The rows of one review, in reading order.
  *
  * Findings come first because a problem is what the reader opened the card
- * for. A passing check below them is not decoration: it is the only place the
- * card can say *which* checks ran, and "5 项检查" in the header has to have
- * something behind it.
+ * for. Then the checks that ran: that is the only place the card can say
+ * *which* checks ran, and "5 项检查" in the header has to have something
+ * behind it. What the review did not do comes last — an unverified delivery,
+ * a check it declared it did not perform, a source lookup that reached no
+ * conclusion — because those are absences, not results, and a reader who has
+ * just read what passed is the one who needs them.
  */
 export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
   const rows: ReviewRow[] = [];
@@ -217,7 +231,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:completeness`,
       tone: completeness.status === "complete"
         ? "pass"
-        : completeness.status === "incomplete" ? "fail" : "warn",
+        : completeness.status === "incomplete" ? "fail" : "neutral",
       label: labelFor("completeness"),
       labelTip: labelTipFor("completeness"),
       title: completeness.status === "complete"
@@ -226,14 +240,14 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       body: missing.length > 0 ? `${source}\n${missing.join("\n")}` : source,
       badge: completeness.status === "complete"
         ? TEXT.reviewer.summaryPass
-        : completeness.status === "incomplete" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
+        : completeness.status === "incomplete" ? TEXT.reviewer.finding : TEXT.reviewer.badgeUnconfirmed,
     });
   }
 
   for (const [index, gap] of (review.notChecked ?? []).entries()) {
     rows.push({
       id: `${review.id}:gap:${index}`,
-      tone: "warn",
+      tone: "neutral",
       label: TEXT.reviewer.gaps,
       labelTip: labelTipFor("gaps"),
       title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
@@ -250,12 +264,12 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // message stays out of the card.
     rows.push({
       id: `${review.id}:smart`,
-      tone: "warn",
+      tone: "neutral",
       label: TEXT.reviewer.deepSemantic,
       labelTip: labelTipFor("semantics"),
       title: TEXT.reviewer.inconclusive,
       body: TEXT.reviewer.inconclusiveBody,
-      badge: TEXT.reviewer.warning,
+      badge: TEXT.reviewer.badgeUnconfirmed,
     });
   }
 
@@ -298,6 +312,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     });
   }
 
+  // The groups above are built in the order the review records them, which is
+  // not the order a reader needs: an absence is read after the results, not
+  // between them. The sort is stable, so each group keeps its own order.
+  rows.sort((left, right) => ROW_RANK[left.tone] - ROW_RANK[right.tone]);
   return rows;
 }
 

@@ -219,7 +219,7 @@ test("a checkpoint over two artifacts names both, in separate sections", async (
   await expect(sections.nth(1)).toHaveClass(/is-warn/u);
 });
 
-test("a review that never verified delivery is amber, not green", async ({ page }) => {
+test("a review that never verified delivery is grey, not green", async ({ page }) => {
   await installMockApi(page, {
     reviewer: {
       // No recorded delivery verdict, and checks that were never
@@ -231,7 +231,9 @@ test("a review that never verified delivery is amber, not green", async ({ page 
   await page.goto("/");
 
   const card = page.locator(".review-card");
-  await expect(card).toHaveClass(/is-warn/u);
+  // Not a finding, and not a pass: the summary says the delivery was never
+  // verified, and the colour stays the one "nothing was found" uses.
+  await expect(card).toHaveClass(/is-neutral/u);
   await expect(card.locator(".review-summary")).toHaveText("未验证交付");
 });
 
@@ -674,7 +676,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // The same check without a delivery verdict: a citation pass is not an
   // overall pass, and the card must not imply one.
   const unverified = cards.nth(1);
-  await expect(unverified).toHaveClass(/is-warn/u);
+  await expect(unverified).toHaveClass(/is-neutral/u);
   await expect(unverified.locator(".review-summary")).toHaveText("未验证交付");
   await expect(unverified.locator(".review-summary")).not.toHaveText("未发现问题");
 
@@ -698,7 +700,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // A source service that returned no verdict is not a report defect, and the
   // service's own error text never reaches the card.
   const inconclusive = cards.nth(4);
-  await expect(inconclusive).toHaveClass(/is-warn/u);
+  await expect(inconclusive).toHaveClass(/is-neutral/u);
   await expect(inconclusive.locator(".review-summary")).toHaveText("未验证交付");
   await inconclusive.locator(".review-head").click();
   await expect(inconclusive.locator(".review-item-title")).toHaveText("来源核验没有得出结论");
