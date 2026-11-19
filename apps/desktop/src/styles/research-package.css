@@ -95,11 +95,10 @@
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
 
-/* Notices stack in the top-right corner, as in the mock: one row per state, each
-   with its own icon, an optional action and a dismiss button. */
+/* Export progress and results share one fixed position. */
 .research-toast-stack {
   display: flex; flex-direction: column; gap: 8px;
-  position: fixed; right: 16px; top: 16px; z-index: 60;
+  position: fixed; left: 16px; top: 16px; z-index: 60;
 }
 .research-toast {
   align-items: center; border-radius: 8px; box-shadow: 0 4px 16px rgba(16, 24, 40, .10);
@@ -120,6 +119,9 @@
   font-size: 14px; line-height: 1; opacity: .6; padding: 0 2px;
 }
 .research-toast-close:hover { opacity: 1; }
+.research-export-progress { flex-wrap: wrap; }
+.research-export-progress .research-package-progress-list { flex-basis: 100%; min-width: 0; }
+.research-export-progress .research-package-progress-list li { overflow-wrap: anywhere; }
 
 /* A cancel the user asked for is not a failure: it says what happened without the
    danger colour (#1024). */
