@@ -26,6 +26,17 @@ interface ModelConnectivityTestOptions {
   timeoutMs?: number;
   compatibility?: boolean;
 }
+export const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 10_000;
+const MAX_MODEL_CONNECTIVITY_TIMEOUT_MS = 60_000;
+const MODEL_CONNECTIVITY_TIMEOUT_ENV = "SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS";
+
+export function modelConnectivityTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MODEL_CONNECTIVITY_TIMEOUT_ENV]?.trim();
+  if (!raw) return DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured)) return DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS;
+  return Math.max(1, Math.min(MAX_MODEL_CONNECTIVITY_TIMEOUT_MS, Math.trunc(configured)));
+}
 const PROTOCOLS: ModelApiProtocol[] = ["openai-chat-completions", "openai-responses", "anthropic-messages"];
 const SYSTEM = "This is a synthetic model compatibility check. Follow only these instructions.";
 const HISTORY = [{ role: "user", content: "Reply with OK." }];
@@ -69,14 +80,14 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
   const selected = options.profile.apiProtocol ?? (isAnthropicEndpoint(options.profile.baseUrl) ? "anthropic-messages" : "openai-chat-completions");
   const variant = options.profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[selected];
   if (!Object.hasOwn(MODEL_API_VARIANTS, selected) || !MODEL_API_VARIANTS[selected].includes(variant)) return wrap({ category: "invalid_response", ok: false, message: "The endpoint protocol or variant is not supported" });
-  const timeout = Math.max(1, Math.min(10_000, options.timeoutMs ?? 10_000));
+  const timeout = Math.max(1, Math.min(MAX_MODEL_CONNECTIVITY_TIMEOUT_MS, options.timeoutMs ?? DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS));
   const protocols: NonNullable<ModelConnectivityTestResult["protocols"]> = [];
   for (const apiProtocol of options.compatibility ? PROTOCOLS : [selected]) {
     const endpoint: ModelEndpoint = { ...options.profile, apiProtocol, apiVariant: apiProtocol === selected ? options.profile.apiVariant : undefined,
       apiToken: options.apiToken, proxy, thinkingMode: "disabled" };
     const dispatchProfile: ModelProfile = { ...options.profile, apiProtocol, apiVariant: endpoint.apiVariant };
     const signal = AbortSignal.timeout(timeout);
-    const policy = { maxTokens: 64, maxRetries: 0, requestTimeoutMs: options.timeoutMs ?? 10_000, maxResponseBytes: 64 * 1024 };
+    const policy = { maxTokens: 64, maxRetries: 0, requestTimeoutMs: timeout, maxResponseBytes: 64 * 1024 };
     let basic = unknown(), streaming = unknown(), tools = unknown();
     let usage: "available" | "unknown" = "unknown";
     // Fields to remove from the next dispatch's body, and the body of the most

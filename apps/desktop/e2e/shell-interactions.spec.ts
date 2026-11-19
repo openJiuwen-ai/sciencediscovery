@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop shell interactions journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,7 +57,7 @@ async function upload(page: Page, name = "data.csv"): Promise<void> {
   await (await chooser).setFiles({ buffer: Buffer.from("a,b\n1,2\n"), mimeType: "text/csv", name });
 }
 
-/** 设置 › 网络 writes the sandbox policy and answers with the one info-tone
+/** 设置 › 沙箱网络 writes the sandbox policy and answers with the one info-tone
  *  notice the app still raises: an upload that lands is reported by its card,
  *  so the toast tests need a different gesture. The fixture starts on 开放网络,
  *  which makes 无网络 a change worth writing. */

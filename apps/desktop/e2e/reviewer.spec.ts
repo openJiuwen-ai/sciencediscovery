@@ -30,6 +30,22 @@
  * consumed, records staying byte-identical across a skip. Those run against
  * the real stack and cannot be reached from this file's page-level mock.
  */
+/**
+ * E2E-META
+ * Purpose: Exercise reviewer cards, review settings and artifact review actions in the Desktop UI.
+ * Steps:
+ *   1. Open a mocked session containing reviewer checkpoints and verdicts.
+ *   2. Inspect verdict cards, settings controls and artifact review actions.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: fixture access token only
+ * CostSideEffects: isolated browser state only
+ */
 import { expect, test } from "@playwright/test";
 
 import {

@@ -120,7 +120,7 @@ import {
 } from "@sciencediscovery/workspace";
 import type { AgentConfig } from "@sciencediscovery/model";
 import type { RunnerClient } from "@sciencediscovery/executor";
-import { generateSshKeyPair, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
+import { generateSshKeyPair, RunnerHttpError, SshHostKeyUntrustedError } from "@sciencediscovery/executor";
 import {
   listProviderModels,
   ModelCatalogFetchError,
@@ -383,7 +383,7 @@ import {
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import { NotificationDispatcher } from "../notification-dispatch.js";
 import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "../runner-management.js";
-import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
+import { ModelConnectivityTestCoordinator, modelConnectivityTimeoutMs, testModelConnectivity } from "../model-connectivity.js";
 import { modelDestination } from "../configuration/model-destination.js";
 import { configurationConnectorReadinessReason } from "../configuration/connector-directory.js";
 import { configurationFramework } from "../configuration/framework.js";
@@ -449,6 +449,15 @@ function usageAnalyticsFilters(url: URL) {
 function usageDisplayCurrency(url: URL): "CNY" | "USD" | undefined {
   const value = url.searchParams.get("displayCurrency");
   return value === "CNY" || value === "USD" ? value : undefined;
+}
+
+function readEnvironmentPackages(body: unknown): string[] {
+  if (typeof body !== "object" || body === null || Array.isArray(body)
+    || !Array.isArray((body as { packages?: unknown }).packages)
+    || (body as { packages: unknown[] }).packages.some((value) => typeof value !== "string")) {
+    throw new ApiStatusError(400, "packages must be an array of strings");
+  }
+  return (body as { packages: string[] }).packages;
 }
 
 function extractReplacementModelId(body: unknown): string | null | undefined {
@@ -3024,8 +3033,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const environmentInstallMatch = url.pathname.match(/^\/api\/environments\/([^/]+)\/install$/);
       if (environmentInstallMatch && request.method === "POST") {
         const body = await readJson<InstallEnvironmentRequest>(request);
+        const packages = readEnvironmentPackages(body);
         const environmentId = decodeURIComponent(environmentInstallMatch[1]!);
-        if (body.packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) {
+        if (packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) {
           return sendError(
             response,
             400,
@@ -3047,8 +3057,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const environmentUninstallMatch = url.pathname.match(/^\/api\/environments\/([^/]+)\/uninstall$/);
       if (environmentUninstallMatch && request.method === "POST") {
         const body = await readJson<UninstallEnvironmentRequest>(request);
+        const packages = readEnvironmentPackages(body);
         const environmentId = decodeURIComponent(environmentUninstallMatch[1]!);
-        const revision = await runnerClient.uninstallEnvironment(environmentId, body);
+        const revision = await runnerClient.uninstallEnvironment(environmentId, { packages });
         await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
         const environment = store.listEnvironments().find((candidate) => candidate.id === environmentId);
         if (!environment) throw new Error("Updated environment disappeared from the runner catalog");
@@ -3092,6 +3103,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
           compatibility: consent.compatibility === true,
           allowMissingToken: store.modelAllowsMissingToken(profile),
+          timeoutMs: modelConnectivityTimeoutMs(),
 
           apiToken: store.getModelApiToken(modelId),
           profile,
@@ -4560,7 +4572,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       // result carrying a `reason` so the frontend degrades without errors.
       if (request.method === "POST" && url.pathname === "/api/memory/query/match") {
         const body = await readJson<{ query: string; session_id?: string }>(request);
-        if (!body.query?.trim()) return sendError(response, 400, "query must be non-empty");
+        if (typeof body.query !== "string" || !body.query.trim()) return sendError(response, 400, "query must be non-empty");
         // Frontend search box: term-AND so typing a paper's full title returns
         // just that paper (and nodes sharing its title words), not the whole
         // corpus. The agent query_graph path pins any_term (OR) separately.
@@ -4572,7 +4584,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/memory/query/by-node-type") {
         const body = await readJson<{ node_types: MemoryGraphNodeLabel[]; session_id?: string }>(request);
-        if (!body.node_types?.length) return sendError(response, 400, "node_types must be a non-empty list");
+        if (!Array.isArray(body.node_types) || body.node_types.length === 0 || body.node_types.some((item) => typeof item !== "string" || !item.trim())) return sendError(response, 400, "node_types must be a non-empty list");
         const result = memoryGraphEnabled()
           ? await memoryGraphClient.byNodeType(body.node_types, body.session_id).catch(() => emptyMatch("memory_graph_unreachable"))
           : emptyMatch("memory_graph_disabled");
@@ -4581,7 +4593,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/memory/query/by-edge-type") {
         const body = await readJson<{ edge_types: MemoryGraphEdgeType[]; session_id?: string }>(request);
-        if (!body.edge_types?.length) return sendError(response, 400, "edge_types must be a non-empty list");
+        if (!Array.isArray(body.edge_types) || body.edge_types.length === 0 || body.edge_types.some((item) => typeof item !== "string" || !item.trim())) return sendError(response, 400, "edge_types must be a non-empty list");
         const result = memoryGraphEnabled()
           ? await memoryGraphClient.byEdgeType(body.edge_types, body.session_id).catch(() => ({
               edges: [], nodes: [], total: 0, truncated: false, reason: "memory_graph_unreachable",
@@ -4624,7 +4636,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           kinds: string[];
         }>(request);
         if (!body.node_id?.trim()) return sendError(response, 400, "node_id must be non-empty");
-        if (!Array.isArray(body.kinds) || body.kinds.length === 0) {
+        if (!Array.isArray(body.kinds) || body.kinds.length === 0 || body.kinds.some((item) => typeof item !== "string" || !item.trim())) {
           return sendError(response, 400, "kinds must be a non-empty list");
         }
         const result = memoryGraphEnabled()
@@ -4640,7 +4652,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // produces/contains/next edges (the "click to expand a scope" payload).
         // Same reverse-proxy defensive shape as query/chain — toggle off or
         // sidecar down → empty subgraph with a reason, never a 500. A 404
-        // (scope absent / not a subagent) surfaces as node_not_found so the
+        // (scope absent / not a subagent) surfaces as not_found so the
         // frontend can show "scope gone" rather than a blank expansion.
         const body = await readJson<{ scope_task_id: string; session_id: string }>(request);
         if (!body.scope_task_id?.trim()) return sendError(response, 400, "scope_task_id must be non-empty");
@@ -4660,7 +4672,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // into the real member products + one surrogate scope→member produces
         // edge each. Same defensive shape as scope-expansion — toggle off or
         // sidecar down → empty subgraph with a reason; a 404 (malformed id /
-        // absent scope) surfaces as node_not_found.
+        // absent scope) surfaces as not_found.
         const body = await readJson<{ group_id: string; session_id: string }>(request);
         if (!body.group_id?.trim()) return sendError(response, 400, "group_id must be non-empty");
         if (!body.session_id?.trim()) return sendError(response, 400, "session_id must be non-empty");
@@ -5040,6 +5052,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);
       else if (code === "SPECIALIST_RUNTIME_INVALID") sendError(response, 400, message);
+      else if (error instanceof RunnerHttpError && (error.statusCode === 401 || error.statusCode === 403)) {
+        sendError(response, 502, "Runner rejected the API server's credentials. Check the configured Runner credentials.", "RUNNER_AUTH_FAILED");
+      }
+      else if (error instanceof RunnerHttpError
+        && [400, 404, 409].includes(error.statusCode)
+        && ((request.method === "POST" && /^\/api\/environments(?:\/[^/]+\/(?:install|uninstall))?$/.test(requestPath))
+          || (request.method === "DELETE" && /^\/api\/environments\/[^/]+$/.test(requestPath)))) {
+        sendError(response, error.statusCode, message);
+      }
       else if (isKnownClientInputError(error)) sendError(response, 400, message);
       else {
         apiLog.error("unclassified_request_error", {

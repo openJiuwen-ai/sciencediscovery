@@ -203,6 +203,58 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  desktop-real:
+    name: L3 Desktop real smoke
+    needs: real-plan
+    if: ${{ success() && inputs.profile == 'merge' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: nightly-research
+    env:
+      CI_ALLOW_REAL: "1"
+      E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
+      E2E_LLM_API_VARIANT: ${{ vars.E2E_LLM_API_VARIANT || 'deepseek' }}
+      SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "30000"
+      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-desktop-real
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      - run: ln -s ../../../.e2e/node_modules apps/desktop/e2e-real/node_modules
+      - run: .e2e/node_modules/.bin/playwright install --with-deps chromium
+      - name: Provision sandbox for the real permission smoke
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev true
+      - run: pnpm --filter @sciencediscovery/api... --filter @sciencediscovery/runner... --filter @sciencediscovery/desktop^... build
+      - name: Run Desktop smoke against an isolated API and two Runners
+        run: node .ci/run-desktop-real-isolated.mjs
+      - name: Reconcile Desktop real execution
+        run: node .ci/desktop-report.mjs .ci-desktop-real real
+      - name: Upload Desktop real accounting
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-real-results
+          overwrite: true
+          path: |
+            .ci-desktop-real/desktop-real.json
+            .ci-desktop-real/desktop-runs/real/plan.json
+            .ci-desktop-real/desktop-runs/real/playwright-results.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
   real-report:
     name: Account for real cases
     needs: [real-plan, real-e2e]

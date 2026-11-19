@@ -515,3 +515,37 @@ test("skill library catalog seeds bundled skills into a stable built-in library"
     await rm(dataDir, { force: true, recursive: true });
   }
 });
+
+test("Git Skill inspect and review stay out of the run registry until publish, then pin an immutable snapshot", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    const library = await catalog.create({ id: "git-closed-loop", name: "Git Closed Loop" });
+    const proposal = await catalog.proposeUpdate(library.id, {
+      author: { kind: "self-evolution", name: "git-review" },
+      baseVersionId: undefined,
+      dryRun: true,
+      libraryId: library.id,
+      operations: [{ package: skillPackage("git-reviewed-skill"), type: "upsert" }],
+      rationale: "Import and review a Git Skill before use.",
+      sourceRefs: [{ id: "git-commit-1", kind: "run" }],
+    });
+    assert.equal(proposal.status, "pending");
+    await assert.rejects(
+      catalog.resolveEnabledRefs([{ libraryId: library.id, versionId: "head" }]),
+      /no head version/i,
+    );
+
+    const published = await catalog.publishProposal(proposal.id);
+    assert.equal(published.proposal.status, "published");
+    const version = published.result.version!;
+    const refs = await catalog.resolveEnabledRefs([{ libraryId: library.id, versionId: "head" }]);
+    assert.deepEqual(refs, [{ libraryId: library.id, versionId: version.id, contentHash: version.contentHash }]);
+    const selected = await catalog.search({ libraries: refs, query: "git-reviewed-skill", limit: 1 });
+    assert.equal(selected.candidates[0]?.skill.id, "git-reviewed-skill");
+    assert.equal(selected.skillLibraryRefs[0]?.contentHash, version.contentHash);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});

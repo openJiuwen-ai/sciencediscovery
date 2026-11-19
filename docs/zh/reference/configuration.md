@@ -28,6 +28,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | 默认提示词与工具模式下将选中技能安装给 Swarm；`ours` 改用产品加载方式。 |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
+| `SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS` | `10000` | 模型提供方连通性探测超时时间（毫秒），取值限制为 1–60000；真实 Desktop 合入门禁设置为 `30000`。 |
 | `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | 单个 Agent Step 中显式声明为并发安全的工具最大并发数；必须为正整数，`1` 表示工具串行执行 |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |
 | `SCIENCE_AGENT_RUNNER_PORT` | `4311` | Runner 监听端口 |

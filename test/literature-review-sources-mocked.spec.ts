@@ -78,16 +78,38 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
       expect(response.status).toBe("completed");
       return tool("paper_extract_pdf", { artifactJobId: response.jobId });
     });
-    if (scenario === "LR-10") steps.push(({ results }) => {
-      const extraction = find(results, "textPath");
-      expect(extraction.pageCount).toBe(1);
-      expect(extraction.textPath).not.toContain("'");
-      return tool("run_shell", { command: `cat '${extraction.textPath}'` });
-    }, ({ results }) => {
-      expect(results.at(-1)).toContain("LR_PDF_EVIDENCE");
-      expect(results.at(-1)).toContain("1.25");
-      return { text: "Read actual extracted synthetic evidence: risk ratio 1.25. Source arXiv 2401.00001." };
-    });
+    if (scenario === "LR-10") {
+      steps.push(({ results }) => {
+        const extraction = find(results, "textPath");
+        expect(extraction.pageCount).toBe(1);
+        expect(extraction.textPath).not.toContain("'");
+        return tool("run_shell", { command: `cat '${extraction.textPath}'` });
+      });
+      // run_shell may return an execution handle before stdout is available.
+      // Keep that handle while polling so a text-only execution_logs response
+      // cannot make the next round lose the execution id.
+      let shellExecutionId: string | undefined;
+      const readExtractedEvidence = ({ results }: { results: string[] }) => {
+        const latest = results.at(-1) ?? "";
+        if (latest.includes("LR_PDF_EVIDENCE")) {
+          expect(latest).toContain("1.25");
+          return { text: "Read actual extracted synthetic evidence: risk ratio 1.25. Source arXiv 2401.00001." };
+        }
+        if (shellExecutionId === undefined) shellExecutionId = find(results, "executionId").executionId;
+        const execution = objects(latest).find(o => o.executionId === shellExecutionId);
+        if (execution?.state === "completed") {
+          return tool("execution_logs", { execution_id: shellExecutionId });
+        }
+        return tool("execution_status", { execution_id: shellExecutionId, wait_ms: 10_000 });
+      };
+      steps.push(...Array.from({ length: 8 }, () => readExtractedEvidence));
+      steps.push(({ results }) => {
+        const latest = results.at(-1) ?? "";
+        expect(latest).toContain("LR_PDF_EVIDENCE");
+        expect(latest).toContain("1.25");
+        return { text: "Read actual extracted synthetic evidence: risk ratio 1.25. Source arXiv 2401.00001." };
+      });
+    }
     if (scenario.endsWith("broken")) steps.push(({ results }) => {
       expect(results.at(-1)).toMatch(/error|fail|invalid|cannot|broken|empty/i);
       expect(results.at(-1)).not.toContain("LR_PDF_EVIDENCE");

@@ -108,11 +108,16 @@ export async function sessionTrajectory(
     }
   }
   for (const invocation of await store.listMcpInvocations(sessionId)) {
-    if (archivedRuns.has(invocation.turnId)) continue;
-    const owners = children.filter(item => item.parentTurnId === invocation.turnId && item.steps.some(step => step.toolCallId === invocation.toolCallId));
+    // Swarm invokes under the child ID. Native records can carry the parent
+    // Run ID, in which case the persisted tool step must identify one owner.
+    const directOwner = children.find(item => item.id === invocation.turnId);
+    const owners = directOwner ? [directOwner] : children.filter(item => item.parentTurnId === invocation.turnId
+      && item.steps.some(step => step.toolCallId === invocation.toolCallId));
     const child = owners.length === 1 ? owners[0] : undefined;
+    const runId = child?.parentTurnId ?? invocation.turnId;
+    if (archivedRuns.has(runId)) continue;
     keep({ id: `mcp:${invocation.id}`, agentId: child ? `subagent:${child.id}` : mainId,
-      createdAt: invocation.startedAt, runId: invocation.turnId, event: { type: "mcp.invocation", ...invocation } });
+      createdAt: invocation.startedAt, runId, event: { type: "mcp.invocation", ...invocation } });
   }
   if (events.length > maxEvents) {
     const drop = events.length - maxEvents;

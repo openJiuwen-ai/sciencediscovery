@@ -11,7 +11,7 @@
  * Purpose: Launch background searches from an enabled/low Run, recover HTTP 524,
  * preserve capped-empty accounting, stop an active stream and start again.
  * Steps: Start isolated built API and source Evolve sidecar; register local model;
- * submit Agent turns; inspect frozen goals, events and published artifacts;
+ * upload a baseline; verify its Memory edge and frozen CAS hash; inspect scores and published artifacts;
  * cancel a held mutation; verify a subsequent search succeeds.
  * Environment: Linux with working bubblewrap; committed/built task worktree.
  * Type: mocked
@@ -26,7 +26,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
@@ -74,6 +74,9 @@ async function step(name, expected, work) {
   try { steps.push({ name, expected, actual: await work(), status: 'PASS' }); console.log(`${name}: PASS`); }
   catch (error) { steps.push({ name, expected, actual: redact(error.stack), status: 'FAIL' }); throw error; }
 }
+const baselinePath = 'baseline.py';
+const baselineSource = 'def solve(case):\n    return 0.4\n';
+const baselineHash = createHash('sha256').update(baselineSource).digest('hex');
 const evaluatorSource = `import os, json, traceback
 shards = os.environ['SCIENCE_AGENT_SHARDS'].split(',')
 try:
@@ -109,7 +112,7 @@ const provider = createServer(async (request, response) => {
       const call = results.length === 0 ? { name: 'get_evolve_budget', arguments: {} }
         : results.length === 1 ? { name: 'create_evolve_run', arguments: {
           algorithm: scenario.algorithm, mode: 'custom_script', statement: 'Improve deterministic bounded score',
-          howScored: 'Mean solve value on held-out cases', startingPointText: 'def solve(case):\n    return 0.4\n',
+          howScored: 'Mean solve value on held-out cases', startingPointPath: baselinePath,
           evaluatorSource, split: { gateShards: 8, rolloutShards: 4, testShards: 2, seed: 0, shardRows: 1, trainRows: null },
           expansions: 4, workers: 1,
         } } : undefined;
@@ -138,12 +141,32 @@ async function submit(current) {
     thinkingMode: 'enabled', thinkingEffort: 'low', enabledConnectorIds: [], enabledSkillIds: [], semanticReviewEnabled: false }, 'PATCH');
   await api(`/api/sessions/${session.id}`, { approvalMode: 'always_allow' }, 'PATCH');
   await api(`/api/sessions/${session.id}/reviewer-specialist/settings`, { automaticReviewEnabled: false, level: 'quick' }, 'PUT');
-  const response = await fetch(`${origin}/api/sessions/${session.id}/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ content: `Start ${current.algorithm} background search ${current.name}.` }), signal: AbortSignal.timeout(60000) });
+  const scope = `/api/sessions/${session.id}`;
+  const form = new FormData();
+  form.append('files', new Blob([baselineSource], { type: 'text/x-python' }), baselinePath);
+  const uploaded = await fetch(`${origin}${scope}/workspace/upload`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form, signal: AbortSignal.timeout(15_000),
+  });
+  assert.equal(uploaded.status, 201);
+  const upload = await uploaded.json();
+  assert.equal(upload.uploaded[0].hash, baselineHash);
+  const baseline = (await api(`${scope}/artifacts`)).find(artifact => artifact.name === baselinePath);
+  assert.ok(baseline);
+  const [baselineVersion] = await api(`${scope}/artifacts/${baseline.id}/versions`);
+  assert.equal(baselineVersion.content.hash, baselineHash);
+  const response = await fetch(`${origin}${scope}/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ content: `Start ${current.algorithm} background search ${current.name}.` }), signal: AbortSignal.timeout(60000) });
   assert.equal(response.status, 200); const stream = await response.text();
   if (providerFailure) throw providerFailure;
   assert.match(stream, /"type":"run.completed"/); assert.doesNotMatch(stream, /"type":"run.failed"/);
+  const sourceId = `source_file:session:${session.id}:${baselinePath}`;
+  await until(async () => {
+    const graph = await api('/api/memory/query/by-edge-type', { edge_types: ['feeds'], session_id: session.id });
+    return graph.edges.some(edge => edge.source === sourceId && graph.nodes.some(node => node.id === edge.target && node.label === 'ResearchGoal'))
+      && graph.nodes.some(node => node.id === sourceId && node.extra.content_hash === baselineHash);
+  });
   const run = await until(async () => (await api(`/api/evolve/runs?sessionId=${session.id}`))[0]);
   assert.equal(run.goal.thinking, 'enabled'); assert.equal(run.goal.thinkingEffort, 'low');
+  assert.equal(run.goal.baselineProgramCas, `sha256:${baselineVersion.content.hash}`);
   assert.equal(run.goal.budget.maxTokensPerCall, current.algorithm === 'puct' ? 96000 : 128000);
   return { session, run };
 }
@@ -154,11 +177,17 @@ try {
   await step('1. Start isolated services and select low effort', 'Healthy API and source sidecar; model high default, session low override; no external calls', async () => {
     const sidecar = await start(python, ['-m', 'uvicorn', 'sciencediscovery_evolve.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: data, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
     assert.equal((await fetch(sidecar + '/health')).status, 200);
+    const memory = await start(resolve(repoRoot, 'services/memory-graph/.venv/bin/python'),
+      ['-m', 'uvicorn', 'sciencediscovery_memory_graph.server:app', '--host', '127.0.0.1', '--port', '0'], {
+        SCIENCE_AGENT_MEMORY_GRAPH_BACKEND: 'local', SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR: resolve(data, 'memory-graph'),
+        SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: internal,
+      }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'memory-graph');
     const reservation = createServer(); await new Promise(done => reservation.listen(0, '127.0.0.1', done));
     const port = reservation.address().port; await new Promise(done => reservation.close(done));
     origin = await start(process.execPath, [resolve(repoRoot, 'services/api/dist/server.js')], { SCIENCE_AGENT_DATA_DIR: data, SCIENCE_AGENT_AUTH_TOKEN: token,
       SCIENCE_AGENT_PORT: String(port), SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_EVOLVE_URL: sidecar, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal,
-      SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_SAMPLE_SESSION: '0',
+      SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: memory,
+      SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: internal, SCIENCE_AGENT_SAMPLE_SESSION: '0',
       SCIENCE_AGENT_MODEL_CATALOG_PATH: resolve(root, 'absent-catalog'), SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED: '0', SCIENTIFIC_ENVS: '0',
     }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
     // Listening precedes framework initialization. Only the documented startup
@@ -166,12 +195,13 @@ try {
     await until(async () => {
       const health = await fetch(origin + '/health');
       if (health.status === 503) {
-        assert.equal((await health.json()).status, 'starting');
+        assert.equal((await health.json()).liveness, 'starting');
         return false;
       }
       assert.equal(health.status, 200);
       return true;
     });
+    assert.equal((await api('/api/memory/settings', { enabled: true, backend: 'local' }, 'PUT')).enabled, true);
     model = await api('/api/models', { name: 'Synthetic DeepSeek', model: 'synthetic', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiProtocol: 'openai-chat-completions', apiVariant: 'deepseek', apiToken: providerKey, proxyPolicy: 'none', thinkingMode: 'enabled', thinkingEffort: 'high' });
     project = await api('/api/projects', { name: 'Evolution thinking journey' });
     return 'Owned services healthy; local provider saved without calls';
@@ -180,7 +210,8 @@ try {
     const current = { name: algorithm + '-retry', algorithm, kind: 'retry', calls: 0 };
     const { session } = await submit(current); const done = await settled(session);
     assert.equal(done.status, 'succeeded', JSON.stringify(done)); assert.equal(current.calls, 5);
-    const events = await api(`/api/evolve/runs/${done.id}/events`); assert.ok(events.some(record => record.event.type === 'expanded' && record.event.valid));
+    const events = await api(`/api/evolve/runs/${done.id}/events`);
+    assert.ok(events.some(({ event }) => event.type === 'expanded' && event.valid && Number.isFinite(event.score)));
     const versions = await until(async () => {
       const artifacts = await api(`/api/sessions/${session.id}/artifacts`);
       for (const artifact of artifacts.filter(item => item.originMeta?.evolveRunId === done.id)) {
@@ -189,7 +220,12 @@ try {
       }
       return null;
     });
-    return `${done.id}: succeeded, 4 candidates/5 requests, published ${versions.length} artifact versions`;
+    for (const version of versions) {
+      const details = await api(`/api/sessions/${session.id}/artifact-versions/${version.id}/provenance`);
+      assert.equal(details.version.id, version.id);
+      assert.equal(details.version.content.hash, version.content.hash);
+    }
+    return `${done.id}: scored candidates after retry, baseline ${done.goal.baselineProgramCas}, ${versions.length} artifact versions with provenance`;
   });
   await step('3. Preserve capped-empty accounting without duplicate calls', 'Four empty expansions fail; exactly four charged requests', async () => {
     const current = { name: 'capped', algorithm: 'openevolve', kind: 'capped', calls: 0 };

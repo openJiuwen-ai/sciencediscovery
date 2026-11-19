@@ -29,6 +29,8 @@ import { randomUUID } from "node:crypto";
 
 import { expect, request, type Page, type TestInfo } from "@playwright/test";
 
+import { GUIDE_STORAGE_KEY } from "../src/state/storage.js";
+
 export const TOKEN_STORAGE_KEY = "sciencediscovery-token";
 
 export const API_ORIGIN = (
@@ -75,17 +77,27 @@ function token(): string {
 }
 
 /** Skip, with the missing names, before the first external action. */
+export function skipReal(info: TestInfo, outcome: "BLOCKED" | "CAPABILITY_NOT_PRESENT", reason: string): never {
+  info.annotations.push({ type: outcome, description: reason });
+  info.skip(true, reason);
+  throw new Error(reason);
+}
+
 export function requireEnv(info: TestInfo, ...names: string[]): Record<string, string> {
   const missing = names.filter((name) => !process.env[name]?.trim());
-  if (missing.length) info.skip(true, `requires ${missing.join(", ")}`);
+  if (missing.length) skipReal(info, "BLOCKED", `requires ${missing.join(", ")}`);
   return Object.fromEntries(names.map((name) => [name, process.env[name] ?? ""]));
 }
 
 /** Seed the same localStorage key a person sets by pasting the printed token. */
 export async function seedToken(page: Page): Promise<void> {
   await page.addInitScript(
-    ([key, value]) => localStorage.setItem(key, value),
-    [TOKEN_STORAGE_KEY, token()] as const,
+    ([key, value, guideKey]) => {
+      localStorage.setItem(key, value);
+      // The separate guide opens a draft and can replace the Session under test.
+      localStorage.setItem(guideKey, "1");
+    },
+    [TOKEN_STORAGE_KEY, token(), GUIDE_STORAGE_KEY] as const,
   );
 }
 
@@ -106,13 +118,13 @@ export async function requireStack(info: TestInfo): Promise<void> {
   try {
     health = await fetch(`${API_ORIGIN}/health`, { headers, signal: AbortSignal.timeout(3_000) });
   } catch (error) {
-    info.skip(true, `ScienceDiscovery stack is unavailable at ${API_ORIGIN}: ${String(error)}`);
+    skipReal(info, "BLOCKED", `ScienceDiscovery stack is unavailable at ${API_ORIGIN}: ${String(error)}`);
     return;
   }
   if (health.status === 401 || health.status === 403) {
     throw new Error(`${API_ORIGIN}/health rejected the configured credential (HTTP ${health.status})`);
   }
-  if (!health.ok) info.skip(true, `ScienceDiscovery stack health is HTTP ${health.status}`);
+  if (!health.ok) skipReal(info, "BLOCKED", `ScienceDiscovery stack health is HTTP ${health.status}`);
   const body = await health.json() as { liveness?: string; runner?: { status?: string }; service?: string; status?: string };
   // No detail was read: either the credential is not the one this stack was
   // started with, or it is missing. Both are a skip, and the reason says which.
@@ -126,15 +138,15 @@ export async function requireStack(info: TestInfo): Promise<void> {
     } finally {
       await context.dispose();
     }
-    info.skip(true, `ScienceDiscovery stack answered liveness only, so ${token() ? "E2E_API_TOKEN" : "no E2E_API_TOKEN"} cannot read the Runner detail this suite needs`);
+    skipReal(info, "BLOCKED", `ScienceDiscovery stack answered liveness only, so ${token() ? "E2E_API_TOKEN" : "no E2E_API_TOKEN"} cannot read the Runner detail this suite needs`);
     return;
   }
   if (body.service !== "sciencediscovery-api" || body.status !== "ok") {
-    info.skip(true, `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"})`);
+    skipReal(info, "BLOCKED", `ScienceDiscovery stack health is incomplete (service=${body.service ?? "unknown"}, status=${body.status ?? "unknown"})`);
     return;
   }
   if (body.runner.status === "unavailable") {
-    info.skip(true, "ScienceDiscovery stack health is incomplete (runner=unavailable)");
+    skipReal(info, "BLOCKED", "ScienceDiscovery stack health is incomplete (runner=unavailable)");
   }
 }
 
@@ -194,7 +206,7 @@ export async function resolveModel(
   const profile = await api<RealModel>(page, "/api/models", {
     data: {
       apiToken: llmToken,
-      apiVariant: process.env.E2E_LLM_VARIANT?.trim() || "openai",
+      apiVariant: process.env.E2E_LLM_VARIANT?.trim() || process.env.E2E_LLM_API_VARIANT?.trim() || "openai",
       baseUrl,
       model,
       name,

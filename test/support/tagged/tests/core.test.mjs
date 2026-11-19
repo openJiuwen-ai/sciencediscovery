@@ -115,6 +115,18 @@ test('skip, xfail, todo, missing and wrong-host outcomes fail the plan', () => {
   assert.equal(verifyResults(p, [pass(p.entries[0])]).exitCode, 0);
   assert.equal(verifyResults(p, [pass(p.entries[0])], ['after-hook failed']).exitCode, 1);
 });
+test('result accounting exposes collection, blocked and not-run counts separately', () => {
+  const p = plan([item(), item({ id: 'two' }), item({ id: 'three' })]);
+  const result = verifyResults(p, [pass(p.entries[0]), { ...pass(p.entries[1]), outcome: 'BLOCKED' }]);
+  assert.equal(result.planned, 3);
+  assert.equal(result.collected, 3);
+  assert.equal(result.executed, 1);
+  assert.equal(result.blocked, 1);
+  assert.equal(result.notRun, 1);
+  assert.equal(result.notExecuted, 1);
+  assert.equal(result.passed, 1);
+  assert.equal(result.failed, 0);
+});
 test('environment preflight never changes a plan', async () => {
   const p = plan();
   const snapshot = JSON.stringify(p);

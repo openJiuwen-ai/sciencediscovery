@@ -21,10 +21,15 @@
 // Run from anywhere: node test/check-e2e-meta.mjs
 
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const specDir = dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const specRoots = [
+  { directory: join(repositoryRoot, "test"), mode: "per-test" },
+  { directory: join(repositoryRoot, "apps", "desktop", "e2e"), mode: "desktop", type: "mocked" },
+  { directory: join(repositoryRoot, "apps", "desktop", "e2e-real"), mode: "desktop", type: "real" },
+];
 
 const REQUIRED_FIELDS = [
   "Purpose",
@@ -83,8 +88,43 @@ function checkJourneyFile(name, text, tests) {
   }
 }
 
-function checkFile(name) {
-  const text = readFileSync(join(specDir, name), "utf8");
+function metadataBlock(text) {
+  const normalized = text.replaceAll("\r\n", "\n");
+  const blockStart = normalized.indexOf("/**\n * E2E-META");
+  if (blockStart < 0) return null;
+  const blockEnd = normalized.indexOf("*/", blockStart);
+  return blockEnd < 0 ? null : normalized.slice(blockStart, blockEnd + 2);
+}
+
+function checkMetadataBlock(name, block, expectedType) {
+  if (!block) {
+    errors.push(name + ": no E2E-META block; every E2E spec must document its environment");
+    return;
+  }
+  const missing = REQUIRED_FIELDS.filter((field) => !new RegExp("\\b" + field + ":", "m").test(block));
+  if (missing.length) errors.push(name + ": E2E-META missing field(s): " + missing.join(", "));
+  const empty = REQUIRED_FIELDS.filter((field) => field !== "Steps" && new RegExp("\\b" + field + ":\\s*(?:\\*/|$)", "m").test(block));
+  if (empty.length) errors.push(name + ": E2E-META empty field(s): " + empty.join(", "));
+  if (!/(?:\bSteps:\s*1\.\s*\S|^\s*\*\s+1\.\s+\S)/m.test(block)) errors.push(name + ": E2E-META Steps must contain a numbered first step");
+  const type = block.match(/\bType:\s*(\S+)/m)?.[1];
+  if (type !== expectedType) errors.push(name + ": E2E-META Type must be \"" + expectedType + "\" (got \"" + (type ?? "") + "\")");
+}
+
+function checkDesktopFile(name, text, expectedType) {
+  checkMetadataBlock(name, metadataBlock(text), expectedType);
+  if (expectedType === "real") {
+    if (!/\brequireEnv\s*\(/.test(text)) errors.push(name + ": real Desktop spec needs requireEnv(...) before external actions");
+    if (!/\brequireStack\s*\(/.test(text)) errors.push(name + ": real Desktop spec needs requireStack(...) before external actions");
+  }
+}
+
+function checkFile(name, root = specRoots[0]) {
+  const filePath = join(root.directory, name);
+  const text = readFileSync(filePath, "utf8");
+  if (root.mode === "desktop") {
+    checkDesktopFile(relative(repositoryRoot, filePath).replaceAll("\\", "/"), text, root.type);
+    return;
+  }
   const tests = [...text.matchAll(/^\s*test(?:\.(?:only|skip|fixme|fail))?\s*\(/gm)];
   const hasMeta = text.includes("E2E-META");
   const hasMocked = /^\s*\*\s*Type:\s*mocked\s*$/m.test(text);
@@ -176,9 +216,13 @@ function checkFile(name) {
   }
 }
 
-const specs = readdirSync(specDir).filter((name) => name.endsWith(".spec.ts")).sort();
-specs.forEach(checkFile);
-
+const specs = [];
+for (const root of specRoots) {
+  for (const name of readdirSync(root.directory).filter((entry) => entry.endsWith(".spec.ts")).sort()) {
+    specs.push(relative(repositoryRoot, join(root.directory, name)).replaceAll("\\", "/"));
+    checkFile(name, root);
+  }
+}
 for (const error of errors) console.error(`ERROR ${error}`);
 console.log(`check-e2e-meta: ${specs.length} spec file(s), ${errors.length} error(s)`);
 process.exit(errors.length ? 1 : 0);

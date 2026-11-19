@@ -14,13 +14,13 @@
 
 /**
  * E2E-META
- * Purpose: The first-run wizard against a real endpoint: 测试并继续 must reach
- *          the provider before 开始使用 exists, and the shell opens afterwards.
+ * Purpose: The first-run custom-model entry against a real endpoint: 测试并
+ *          继续 must reach the provider before 保存并进入工作台 exists.
  * Steps:
  *   1. Require an installation with no model profiles.
- *   2. Enter the real base URL, key and model in the wizard.
+ *   2. Enter the real base URL, key and model in the custom-model entry.
  *   3. Press 测试并继续 and wait for the real success reading.
- *   4. Press 开始使用 and wait for the shell.
+ *   4. Press 保存并进入工作台 and wait for the shell.
  * Environment: A throwaway stack selected by E2E_BASE_URL (empty model catalog),
  *              plus the desktop Vite entry on 4176. This test writes the first
  *              model and makes it the default, so it must not target a stack
@@ -37,7 +37,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { REAL_TAGS, api, requireEnv, requireStack, seedToken } from "./support.js";
+import { REAL_TAGS, api, requireEnv, requireStack, seedToken, skipReal } from "./support.js";
 
 test.beforeEach(async ({ page }, info) => {
   requireEnv(info, "E2E_API_TOKEN", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
@@ -45,16 +45,22 @@ test.beforeEach(async ({ page }, info) => {
   await seedToken(page);
 });
 
-test("the first-run wizard tests a real provider before unlocking the workspace", { tag: [...REAL_TAGS] }, async ({ page }, info) => {
+test("the first-run entry tests a real provider before unlocking the workspace", { tag: [...REAL_TAGS] }, async ({ page }, info) => {
   const models = await api<unknown[]>(page, "/api/models");
   if (models.length > 0) {
-    info.skip(true, "needs an installation with no model profiles; point E2E_BASE_URL at a fresh stack");
+    skipReal(info, "BLOCKED", "needs an installation with no model profiles; point E2E_BASE_URL at a fresh stack");
   }
 
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "选择一个模型提供方" })).toBeVisible();
-  const finish = page.getByRole("button", { name: "开始使用" });
+  await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+  await expect(page.locator(".app-shell")).toHaveCount(0);
+  await page.getByRole("tab", { name: "自定义模型" }).click();
+  await expect(page.getByRole("heading", { name: "配置你的模型" })).toBeVisible();
+  await expect(page.getByLabel("基础URL")).toBeVisible();
+  await expect(page.getByPlaceholder("请输入 API key")).toBeVisible();
+  await expect(page.getByPlaceholder("例如 deepseek-chat")).toBeVisible();
+  const finish = page.getByRole("button", { name: "保存并进入工作台" });
   await expect(finish).toHaveCount(0);
 
   await page.getByLabel("基础URL").fill(process.env.E2E_LLM_BASE_URL ?? "");

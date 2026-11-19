@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop failure cards journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,7 +50,7 @@ const test = base.extend<{ journey: JourneyReporter }>({
  * live SSE rendering and persisted replay, not backend timeout enforcement.
  * No backend, Runner, model server, credentials or timeout-setting writes.
  */
-test("failure cards merge timeout records and remain readable after reload", async ({ page, journey }) => {
+test("failure cards merge timeout records and remain readable after reload", { tag: "@ui-st" }, async ({ page, journey }) => {
   let recover = false;
   let turn = 0;
   const session = makeSession();

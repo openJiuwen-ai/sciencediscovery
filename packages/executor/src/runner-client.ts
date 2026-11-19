@@ -67,6 +67,13 @@ const RUNNER_ERROR_CODE_MESSAGES: Readonly<Record<string, string>> = {
   EXECUTION_ID_CONFLICT: "Runner execution identity conflict",
 };
 
+export class RunnerHttpError extends Error {
+  constructor(message: string, readonly statusCode: number, readonly code?: string) {
+    super(message);
+    this.name = "RunnerHttpError";
+  }
+}
+
 /** HTTP adapter for the isolated execution service. */
 export class RunnerClient {
   #clockOffsetMs = 0;
@@ -344,8 +351,8 @@ export class RunnerClient {
       // or logs through this error. `Object.hasOwn` (not `in`) keeps prototype
       // keys such as constructor/toString/__proto__ from being accepted.
       const code = typeof body.code === "string" && Object.hasOwn(RUNNER_ERROR_CODE_MESSAGES, body.code) ? body.code : undefined;
-      const message = code ? RUNNER_ERROR_CODE_MESSAGES[code] : `Runner request failed (${response.status})`;
-      throw Object.assign(new Error(message), { statusCode: response.status, ...(code ? { code } : {}) });
+      const message = (code ? RUNNER_ERROR_CODE_MESSAGES[code] : undefined) ?? `Runner request failed (${response.status})`;
+      throw new RunnerHttpError(message, response.status, code);
     }
     return await response.json() as T;
   }
