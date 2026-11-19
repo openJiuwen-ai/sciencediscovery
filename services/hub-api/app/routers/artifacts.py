@@ -10,6 +10,12 @@ from ..models import Asset, AssetVersion, User, utcnow
 from ..serializers import ok
 from ..storage import Storage, StorageError
 
+
+def content_disposition(filename: str) -> str:
+    """Quote a filename for a header without letting it break the header."""
+    safe = filename.replace("\\", "_").replace('"', "").replace("\r", "").replace("\n", "")
+    return f'attachment; filename="{safe or "download"}"'
+
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 
@@ -77,7 +83,7 @@ def download_content(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="object missing")
     asset.download_count += 1
     asset.updated_at = utcnow()
-    headers = {"Content-Disposition": f'attachment; filename="{row.filename}"'}
+    headers = {"Content-Disposition": content_disposition(row.filename)}
     if size:
         headers["Content-Length"] = str(size)
     return StreamingResponse(

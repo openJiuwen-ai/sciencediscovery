@@ -154,8 +154,8 @@ never reads them.
 | Uncompressed-size ceiling | A 1 MiB zip can expand to gigabytes; refuse before writing |
 | Per-entry sha256 in the manifest | The client can verify a single file without trusting the server |
 | Scrypt password hashing, HMAC tokens | No native crypto dependency, no session table |
-| The development byte route is signed too | A guessed key must not bypass approval or visibility; the local backend signs a short-lived URL with the session secret |
-| Uploads and previews are bounded while reading | A declared `Content-Length` is advisory; the running total enforces the cap, and a preview is refused above `HUB_PREVIEW_MAX_BYTES` |
+| The development byte route is signed too | A guessed key must not bypass approval or visibility; the local backend signs a short-lived URL with the session secret, and refuses to start while the secret is the committed default |
+| Uploads and previews are bounded | A declared `Content-Length` above the cap is rejected before multipart parsing; the route still counts while reading, because a chunked body carries no length and is spooled first; a preview above `HUB_PREVIEW_MAX_BYTES` is refused before extraction |
 | Registration closed after the first account | The first account is the administrator; later accounts come from the administrator |
 | Every review and upload in `audit_log` | Who published, who approved, when |
 

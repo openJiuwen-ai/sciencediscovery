@@ -238,3 +238,17 @@ def test_preview_is_capped(client, register):
         params={"with_content": "big.txt"},
     )
     assert response.status_code == 413
+
+
+def test_an_oversized_declared_body_is_refused_before_parsing(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers)
+    # The fixture caps a package at 2 MiB; multipart overhead is 1 MiB.
+    body = b"x" * (4 * 1024 * 1024)
+    response = client.post(
+        f"/api/v1/assets/{asset['id']}/versions",
+        headers={**headers, "Content-Type": "application/octet-stream"},
+        content=body,
+    )
+    assert response.status_code == 413

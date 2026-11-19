@@ -19,7 +19,10 @@ uv pip install -e '.[dev]'
 ```
 
 Defaults are the development profile: SQLite at `./.hub-api.db`, packages in
-`./.hub-storage`, downloads served by the API itself. Open
+`./.hub-storage`, downloads served by the API itself. That profile refuses to
+start with the committed default `HUB_SESSION_SECRET`, because the signed
+development download URL would otherwise be forgeable; set a real secret (or
+use `HUB_STORAGE_BACKEND=s3`). Open
 <http://127.0.0.1:8100/docs> for the OpenAPI page.
 
 The first account to register becomes an administrator. After that,
@@ -47,11 +50,12 @@ a server must enforce (size, traversal, zip bombs).
 | `HUB_S3_BUCKET` | — | The private bucket |
 | `HUB_S3_ACCESS_KEY` / `HUB_S3_SECRET_KEY` | — | IAM sub-user credentials; never commit them |
 | `HUB_PRESIGN_SECONDS` | `600` | Download link lifetime |
-| `HUB_SESSION_SECRET` | dev value | HMAC key for session tokens; set this in production |
+| `HUB_SESSION_SECRET` | dev value | HMAC key for session tokens and development download URLs; the service refuses to start on an empty or default value unless `HUB_ALLOW_DEV_SECRET=1` |
 | `HUB_SESSION_TTL_SECONDS` | `604800` | Login lifetime |
-| `HUB_MAX_PACKAGE_BYTES` | `52428800` | Upload cap (50 MiB) |
+| `HUB_MAX_PACKAGE_BYTES` | `52428800` | Upload cap (50 MiB). A declared `Content-Length` above it is rejected before the multipart parser runs; a chunked body is still spooled and stopped by the running limit |
 | `HUB_MAX_UNCOMPRESSED_BYTES` | `536870912` | Archive-expansion ceiling |
 | `HUB_PREVIEW_MAX_BYTES` | `2097152` | Largest single file the Files tab previews |
+| `HUB_ALLOW_DEV_SECRET` | `false` | Explicit opt-in for running with the default/empty session secret |
 | `HUB_ALLOW_REGISTRATION` | `false` | Whether anyone may create an account |
 | `HUB_ADMIN_USERNAME` / `HUB_ADMIN_PASSWORD` | — | Optional administrator created at startup |
 | `VITE_HUB_API_BASE` | — | Build-time, site only: API prefix (e.g. `/api/v1`) so downloads resolve through the service |

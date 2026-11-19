@@ -16,6 +16,9 @@ import os
 from dataclasses import dataclass, field
 
 
+DEFAULT_SESSION_SECRET = "dev-only-change-me"
+
+
 def _int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if not raw:
@@ -68,7 +71,7 @@ class Settings:
     )
 
     session_secret: str = field(
-        default_factory=lambda: os.getenv("HUB_SESSION_SECRET", "dev-only-change-me")
+        default_factory=lambda: os.getenv("HUB_SESSION_SECRET", DEFAULT_SESSION_SECRET)
     )
     session_ttl_seconds: int = field(
         default_factory=lambda: _int("HUB_SESSION_TTL_SECONDS", 7 * 24 * 3600)
@@ -85,6 +88,12 @@ class Settings:
     # than a token amount of text and the server should not inflate more.
     preview_max_bytes: int = field(
         default_factory=lambda: _int("HUB_PREVIEW_MAX_BYTES", 2 * 1024 * 1024)
+    )
+
+    # Explicit opt-in for running with the committed default/empty session
+    # secret. Only a development machine should set this.
+    allow_dev_secret: bool = field(
+        default_factory=lambda: _bool("HUB_ALLOW_DEV_SECRET", False)
     )
 
     # Off by default: a public server should not let anyone create an account.

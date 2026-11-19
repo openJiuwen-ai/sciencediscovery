@@ -54,6 +54,7 @@ def _entries(data: bytes):
             raise PackageError("the uploaded file is not a readable archive") from exc
         with archive:
             for member in archive.getmembers():
+                _safe_member(member.name)
                 if member.isdir():
                     continue
                 if not member.isfile():
@@ -128,7 +129,11 @@ def read_member(data: bytes, name: str, *, max_bytes: int = 2 * 1024 * 1024) -> 
     """Read one entry for the Files tab, with the same traversal rules and a cap."""
     _safe_member(name)
     if data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data)):
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+        try:
+            archive = tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
+        except tarfile.TarError as exc:
+            raise PackageError("the stored package is not a readable archive") from exc
+        with archive:
             for entry in archive.getmembers():
                 if entry.name == name and entry.isfile():
                     if entry.size > max_bytes:
