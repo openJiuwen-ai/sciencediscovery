@@ -524,8 +524,10 @@ export function SessionSettingsMenu({
               />
             )}
           </div>
-          {/* The master switch is somewhere else entirely; a row that still
-              offered a working switch would be lying about the outcome. */}
+          {/* This window offers no way to switch the reviewer back on: the
+              system-wide switch is another client's or an older
+              configuration's. A row that still offered a working switch
+              would be lying about the outcome. */}
           {reviewerEnabled === false ? (
             <p className="session-menu-note" role="status">{TEXT.reviewer.unavailable}</p>
           ) : null}

@@ -17,9 +17,10 @@
  *
  * Reading is what this window does: reviews are written by the service — a
  * checkpoint tool call during a run, or the audit coordinator's own quiet
- * window afterwards — and the desktop only ever asks what exists. The two
- * writes here are the session's own preferences, which the server accepts on
- * their own just like the approval mode.
+ * window afterwards — and the desktop only ever asks what exists. The writes
+ * here are the session's own preferences, which the server accepts on their
+ * own just like the approval mode. The system-wide switch is read and not
+ * written: the desktop always has its reviewer, so it never turns it off.
  */
 
 import type { ApiClient } from "./client.js";
@@ -33,23 +34,11 @@ import type {
 
 const base = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}`;
 
-/** The system-wide master switch. Off means no Reviewer anywhere, including
- *  the automatic audits a session would otherwise get. */
+/** The system-wide switch. Off means no Reviewer anywhere, including the
+ *  automatic audits a session would otherwise get; the desktop reads it so a
+ *  session whose reviewer another client turned off can say why it is idle. */
 export function getReviewerSettings(client: ApiClient): Promise<ReviewerSpecialistSettings> {
   return client.request<ReviewerSpecialistSettings>("/api/reviewer-specialist/settings");
-}
-
-/** Only `enabled` is written; the legacy `feedbackPolicy` field is echoed back
- *  unchanged, so callers send the record they last read. */
-export function updateReviewerSettings(
-  client: ApiClient,
-  settings: ReviewerSpecialistSettings,
-): Promise<ReviewerSpecialistSettings> {
-  return client.request<ReviewerSpecialistSettings>("/api/reviewer-specialist/settings", {
-    body: JSON.stringify({ enabled: settings.enabled }),
-    headers: { "content-type": "application/json" },
-    method: "PUT",
-  });
 }
 
 /** The open session's layer: whether it reviews automatically, and at which

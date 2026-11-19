@@ -183,9 +183,12 @@ export interface MockOptions {
   skillBatchFailures?: string[];
   specialists?: JsonRecord[];
   /** The Reviewer Specialist. `reviews` are the saved verdicts and `tasks` the
-   *  durable audit queue; the settings are the system-wide master switch and
-   *  each Session's own layer. A Session with no `sessionSettings` entry reads
-   *  the product default: automatic review on, Quick. */
+   *  durable audit queue; the settings are the server's system-wide switch and
+   *  each Session's own layer. The desktop never writes the system-wide one —
+   *  its expert is always listed and always on — but it reads it, so a page
+   *  can show a Session whose reviewer another client switched off. A Session
+   *  with no `sessionSettings` entry reads the product default: automatic
+   *  review on, Quick. */
   reviewer?: {
     reviews?: JsonRecord[];
     settings?: JsonRecord;

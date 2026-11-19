@@ -299,38 +299,39 @@ test("a verdict on a replaced version says it is history, and offers a re-run", 
   await expect(card.locator(".review-rerun")).toBeVisible();
 });
 
-test("the system-wide Reviewer switch is written and survives a reload", async ({ page }) => {
+test("the built-in Review Specialist is always listed and carries no switch", async ({ page }) => {
   const mock = await installMockApi(page, { sessions: [] });
   await page.goto("/");
 
-  const openReviewer = async () => {
+  const openSpecialists = async () => {
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByTitle("可复用的指令与工具组合").click();
     return dialog;
   };
 
-  const dialog = await openReviewer();
-  const toggle = dialog.getByRole("switch", { name: "启用审查专家" });
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  const dialog = await openSpecialists();
+  const builtIn = dialog.getByTestId("built-in-reviewer");
+  // The card names the specialist and says what uses it — nothing else. It is
+  // part of the application, like the reference client's built-in row, so the
+  // page offers no way to switch it off.
+  await expect(builtIn).toContainText("审查");
+  await expect(builtIn).toContainText("由自动审阅使用");
+  await expect(builtIn.getByRole("switch")).toHaveCount(0);
+  await expect(builtIn.locator("button")).toHaveCount(0);
   expect(
-    mock.calls.some(
-      (call) => call.method === "PUT" && call.path === "/api/reviewer-specialist/settings"
-        && call.body === '{"enabled":false}',
-    ),
-  ).toBe(true);
-  expect(mock.state.reviewer.settings.enabled).toBe(false);
+    mock.calls.some((call) => call.path === "/api/reviewer-specialist/settings" && call.method === "PUT"),
+  ).toBe(false);
 
   await page.keyboard.press("Escape");
   await page.reload();
 
-  // The master switch is the server's, not the device's: the next boot has to
-  // read the same value back.
-  const reopened = await openReviewer();
-  await expect(reopened.getByRole("switch", { name: "启用审查专家" }))
-    .toHaveAttribute("aria-checked", "false");
+  // It is the application's, not the server's list: it is still there after a
+  // reload, with no switch added once the list has been read again.
+  const reopened = await openSpecialists();
+  const again = reopened.getByTestId("built-in-reviewer");
+  await expect(again).toContainText("由自动审阅使用");
+  await expect(again.getByRole("switch")).toHaveCount(0);
 });
 
 test("the session's automatic review and level are written and survive a reload", async ({ page }) => {
@@ -724,7 +725,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
     await card.locator(".review-head").click();
   }
   await expect(skipped.locator(".review-empty"))
-    .toHaveText("系统设置 › 专家 中的审查专家已关闭，本次没有产生审查结论。");
+    .toHaveText("审查专家已关闭，本次没有产生审查结论。");
   await expect(skippedSession.locator(".review-empty"))
     .toHaveText("此会话已关闭自动审阅，本次没有产生审查结论。");
   await expect(skipped).not.toContainText("未发现问题");
@@ -739,7 +740,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(cards.nth(7)).toHaveClass(/is-neutral/u);
 });
 
-test("with the master switch off, the session's automatic review says why it cannot run", async ({ page }) => {
+test("a reviewer switched off on the server still says why the session cannot review", async ({ page }) => {
   await installMockApi(page, {
     reviewer: { settings: { enabled: false, feedbackPolicy: "record" } },
     sessions: [makeSession()],
@@ -749,9 +750,11 @@ test("with the master switch off, the session's automatic review says why it can
 
   await page.getByRole("button", { name: "会话设置" }).click();
   const menu = page.locator(".session-menu");
-  // The switch belongs to a capability that is off elsewhere, so it is shown
-  // but not offered, and the row below it explains where to turn it on.
+  // The desktop does not offer a way to switch the reviewer off, but the
+  // server setting can be off from another client or an older configuration.
+  // The switch then belongs to a capability that stays off, so it is shown
+  // but not offered, and the note says why.
   await expect(menu.locator(".session-menu-note"))
-    .toHaveText("系统设置中的审查专家已关闭，此会话的自动审阅不会生效。");
+    .toHaveText("审查专家已关闭，此会话的自动审阅不会生效。");
   await expect(menu.getByRole("switch", { name: "自动审阅" })).toBeDisabled();
 });
