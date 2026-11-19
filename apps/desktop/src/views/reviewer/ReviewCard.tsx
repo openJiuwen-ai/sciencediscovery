@@ -257,6 +257,26 @@ export function ReviewArtifactBody({
               <span className="review-item-title">{row.title}</span>
             </div>
             {row.body ? <p className="review-item-body">{row.body}</p> : null}
+            {/* "Why only part of it" and "what does that passage say" are
+                questions a reader asks on purpose, so the evidence stays
+                folded: the verdict is the card's default reading, not a wall
+                of quoted source. */}
+            {row.evidence === undefined ? null : (
+              <details className="review-evidence">
+                <summary>{TEXT.reviewer.locators(row.evidence.length)}</summary>
+                {row.rationale === undefined ? null : (
+                  <p className="review-evidence-reason">{row.rationale}</p>
+                )}
+                {row.evidence.map((entry, index) => (
+                  <blockquote key={index}>
+                    <p className="review-excerpt">{entry.excerpt}</p>
+                    {entry.where === undefined ? null : (
+                      <span className="review-where">{entry.where}</span>
+                    )}
+                  </blockquote>
+                ))}
+              </details>
+            )}
             <div className="review-item-foot">
               <span
                 className="review-pill"

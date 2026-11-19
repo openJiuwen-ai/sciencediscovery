@@ -338,6 +338,52 @@
   line-height: 1.5;
 }
 
+/* The source passages behind one verdict, folded under it. The count is the
+   only thing the card shows by default; the quotes and the reviewer's own
+   account are one press away. */
+.review-evidence {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.review-evidence summary {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.review-evidence-reason {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.review-evidence blockquote {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-soft);
+}
+
+.review-excerpt {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.review-where {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
 .review-item-body {
   margin: 8px 0 0;
   overflow-wrap: anywhere;
