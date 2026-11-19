@@ -326,7 +326,7 @@ describe("a review's rows", () => {
     // Found one passage, not enough to check the claim: that is the whole
     // message. "E3" and "locator" are the policy's words, not the reader's.
     assert.equal(row.tone, "neutral");
-    assert.equal(row.body, TEXT.reviewer.sourceInconclusiveWith(1));
+    assert.equal(row.body, TEXT.reviewer.sourceInconclusiveSome);
     assert.ok(!(row.body ?? "").includes("E3"));
     assert.ok(!/locator/u.test(row.body ?? ""));
     assert.equal(row.badge, TEXT.reviewer.assessments.INCONCLUSIVE);
@@ -357,6 +357,57 @@ describe("a review's rows", () => {
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
     assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveNone);
     assert.equal(row?.tone, "neutral");
+  });
+
+  it("folds the quoted passages, and why a verdict was only partial, under the row", () => {
+    const checked = review({
+      sourceAssessments: [{
+        assessment: {
+          assessment: "PARTIALLY_SUPPORTED",
+          claimId: "claim-1",
+          locatorIds: ["locator-1"],
+          policyVersion: "1",
+          rationale: "The excerpt supports the first half of the claim, not the second.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: ["doi:10.1000/example"],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E3",
+          text: "代表工作",
+        },
+        locators: [{
+          excerpt: "an abstract sentence",
+          excerptHash: "abc",
+          id: "locator-1",
+          locator: { paragraph: 2 },
+          snapshotId: "snapshot-1",
+        }],
+        snapshots: [{
+          availability: "available",
+          evidenceLevel: "E2",
+          id: "snapshot-1",
+          retrievedAt: "2026-01-01T00:00:00.000Z",
+          snapshot: { hash: "h", size: 1 },
+          sourceId: "pubmed",
+          sourceType: "abstract",
+        }],
+      }],
+    });
+    const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
+    assert.equal(row?.evidence?.length, 1);
+    assert.equal(
+      row?.evidence?.[0]?.where,
+      `${TEXT.reviewer.sourceTypes.abstract} · ${TEXT.reviewer.locatorAt.paragraph(2)}`,
+    );
+    // The reviewer's account is what answers "why only part of it", and it is
+    // model output: folded, not printed under every partial verdict.
+    assert.equal(row?.rationale, "The excerpt supports the first half of the claim, not the second.");
+    const markup = renderToStaticMarkup(<ReviewArtifactBody review={checked} showName={false} />);
+    assert.ok(markup.includes(TEXT.reviewer.locators(1)));
+    assert.ok(markup.includes("an abstract sentence"));
+    assert.ok(markup.includes("supports the first half"));
   });
 
   it("puts the checks that ran above what the review never looked at", () => {

@@ -54,6 +54,20 @@ export interface ReviewRow {
   body?: string;
   /** The badge's word, when it is not simply the tone. */
   badge: string;
+  /** Source passages the check relied on. The card keeps them folded: the
+   *  verdict has to be readable at a glance, and "why only part of it" is a
+   *  question the reader asks on purpose. */
+  evidence?: ReviewEvidence[];
+  /** The reviewer's own account of the evidence. Folded with it — this is
+   *  model output, so it is opt-in, not the card's default copy. */
+  rationale?: string;
+}
+
+/** One passage quoted from a locked source snapshot. */
+export interface ReviewEvidence {
+  excerpt: string;
+  /** "Abstract · paragraph 2": what kind of source, and where in it. */
+  where?: string;
 }
 
 const DELIVERY_CODES = new Set(["DELIVERABLE_MISSING", "DELIVERABLE_EMPTY"]);
@@ -191,6 +205,25 @@ function claimText(claim: ReviewClaim | undefined): string | undefined {
   return claim?.text?.trim() || undefined;
 }
 
+/** "paragraph 2 · page 4": where a quoted passage sits, in the UI's language. */
+function locatorWhere(locator: {
+  column?: string; field?: string; line?: number; outputPath?: string; page?: number;
+  paragraph?: number; row?: string; section?: string; table?: string;
+}): string | undefined {
+  const at = TEXT.reviewer.locatorAt;
+  const parts: string[] = [];
+  if (locator.page !== undefined) parts.push(at.page(locator.page));
+  if (locator.paragraph !== undefined) parts.push(at.paragraph(locator.paragraph));
+  if (locator.line !== undefined) parts.push(at.line(locator.line));
+  if (locator.section !== undefined) parts.push(at.section(locator.section));
+  if (locator.table !== undefined) parts.push(at.table(locator.table));
+  if (locator.row !== undefined) parts.push(at.row(locator.row));
+  if (locator.column !== undefined) parts.push(at.column(locator.column));
+  if (locator.field !== undefined) parts.push(at.field(locator.field));
+  if (locator.outputPath !== undefined) parts.push(at.output(locator.outputPath));
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
 /** Where a row sits in the card: problems, then results, then absences. */
 const ROW_RANK: Record<ReviewTone, number> = { fail: 0, warn: 1, pass: 2, pending: 2, neutral: 3 };
 
@@ -289,6 +322,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
 
   for (const assessment of review.sourceAssessments ?? []) {
     const verdict = assessment.assessment.assessment;
+    const snapshots = new Map((assessment.snapshots ?? []).map((snapshot) => [snapshot.id, snapshot]));
     // An assessment that reached no conclusion is an absence again, not a
     // warning, and its rationale is the policy's own words — "No issued E3
     // source locator is available for this claim." names an evidence level
@@ -300,18 +334,21 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // Only a contradiction quotes the reviewer's own account of the source —
     // that is the evidence for a claim about the report. A supported or partly
     // supported check says what it found in the card's language: its rationale
-    // is model output and arrived in whichever language the source did.
+    // is model output and arrived in whichever language the source did, so it
+    // goes inside the evidence fold with the passages it talks about.
     const body = inconclusive
       ? assessment.locators.length > 0
-        ? TEXT.reviewer.sourceInconclusiveWith(assessment.locators.length)
+        ? TEXT.reviewer.sourceInconclusiveSome
         : TEXT.reviewer.sourceInconclusiveNone
       : verdict === "CONTRADICTED"
-        ? assessment.locators.length > 0
-          ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
-          : assessment.assessment.rationale
-        : `${verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly}${
-          assessment.locators.length > 0 ? `\n${TEXT.reviewer.locators(assessment.locators.length)}` : ""
-        }`;
+        ? assessment.assessment.rationale
+        : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;
+    const evidence = assessment.locators.map((locator) => {
+      const kind = TEXT.reviewer.sourceTypes[snapshots.get(locator.snapshotId)?.sourceType ?? ""];
+      const where = locatorWhere(locator.locator);
+      const label = [kind, where].filter((part) => part !== undefined && part !== "").join(" · ");
+      return { excerpt: locator.excerpt, where: label === "" ? undefined : label };
+    });
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
       tone: inconclusive
@@ -321,6 +358,13 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       labelTip: labelTipFor("source"),
       title: claimText(assessment.claim) ?? TEXT.reviewer.source,
       body,
+      evidence: evidence.length > 0 ? evidence : undefined,
+      // A contradiction is printed inline; the other verdicts keep the
+      // reviewer's account folded, so the "why only part of it" question has
+      // an answer without an English paragraph in every card.
+      rationale: verdict === "CONTRADICTED" || inconclusive
+        ? undefined
+        : assessment.assessment.rationale || undefined,
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
     });
   }
