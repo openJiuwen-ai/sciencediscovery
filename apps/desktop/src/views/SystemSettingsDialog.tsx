@@ -239,28 +239,23 @@ export function SystemSettingsDialog({
               <SidebarToggle onClick={() => setNavOpen(true)} open={false} />
             </div>
           )}
-          <div className="settings-group-detail" key={group}>
-            {/* 技能 draws its own title row: 添加技能 swaps the page under it,
-                so the header has to name the page the pane is showing rather
-                than the group whose list it started on. */}
-            {group === "skills" ? pane : (
-              <>
-                <header className="settings-detail-header">
-                  <div>
-                    <h3>{meta.label}</h3>
-                    <p>{meta.description}</p>
-                  </div>
-                  {group === "models" ? (
-                    <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
-                      {TEXT.settings.model.add}
-                    </button>
-                  ) : null}
-                </header>
+          {group === "skills" ? pane : (
+            <div className="settings-group-detail" key={group}>
+              <header className="settings-detail-header">
+                <div>
+                  <h3>{meta.label}</h3>
+                  <p>{meta.description}</p>
+                </div>
+                {group === "models" ? (
+                  <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
+                    {TEXT.settings.model.add}
+                  </button>
+                ) : null}
+              </header>
 
-                {pane}
-              </>
-            )}
-          </div>
+              {pane}
+            </div>
+          )}
         </div>
       </section>
     </div>

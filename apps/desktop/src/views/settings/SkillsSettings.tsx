@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import {
   deleteSkill,
   exportSkillPackage,
@@ -36,7 +36,6 @@ import { SkillEditorView } from "./SkillEditorView.js";
 import { SkillForm } from "./SkillForm.js";
 import { SkillGitImportView } from "./SkillGitImportView.js";
 import { SkillRowMenu, type SkillRowAction } from "./SkillRowMenu.js";
-import { skillMeta } from "./skill-meta.js";
 import { SkillUploadView } from "./SkillUploadView.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
@@ -118,6 +117,11 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [exportStatus, setExportStatus] = useState<{
+    error?: boolean;
+    id: string;
+    message: string;
+  }>();
   const [view, setView] = useState<SkillView>({ kind: "list" });
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -186,41 +190,25 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     }
   };
 
-  /**
-   * Switch an installed package on or off from its own page.
-   *
-   * The list owns the enabled set, so the page writes through the same route
-   * and the list re-reads: what the switch shows is what JiuwenSwarm stored,
-   * not a local guess.
-   */
-  const toggleInstalled = async (id: string, name: string, next: boolean) => {
-    const page = loaded.value;
-    if (!page?.switchesAvailable) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await setJiuwenSwarmSkillEnabledById(client, id, next);
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-      loaded.reload();
-    }
-  };
-
   /** Save the package as a ZIP under a name the user picks. A cancelled save
    *  is not a failure, and the pane says nothing about it. */
   const exportSkill = async (skill: SkillDescriptor) => {
     setBusy(true);
     setFailure(undefined);
     setNotice(undefined);
+    setExportStatus(undefined);
     try {
       const bytes = await exportSkillPackage(client, skill.id);
       if (await saveSkillPackage(skill.name, bytes)) {
-        setNotice(TEXT.settings.skills.rowMenu.exported(skill.name));
+        setExportStatus({ id: skill.id, message: TEXT.settings.skills.rowMenu.exported(skill.name) });
       }
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.exportFailed);
+      // The row says what went wrong: the page's own notice sits above the
+      // list, and a reader who scrolled to a row would not see it.
+      const message = reason instanceof ApiRequestError && reason.status === 404
+        ? TEXT.settings.skills.rowMenu.exportUnsupported
+        : reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.exportFailed;
+      setExportStatus({ error: true, id: skill.id, message });
     } finally {
       setBusy(false);
     }
@@ -317,13 +305,8 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     : undefined;
   const copy = view.kind === "list" ? undefined : subviewCopy(view);
   const back = () => setView({ kind: "list" });
-  /** The list already read this Skill; the page's header says where it came
-   *  from and at which revision without asking the detail request again. */
-  const listed = view.kind === "detail"
-    ? loaded.value?.skills.find((skill) => skill.id === view.id)
-    : undefined;
 
-  const header = copy === undefined ? (
+  const header = view.kind === "list" ? (
     <header className="settings-detail-header">
       <div>
         <h3>
@@ -338,64 +321,47 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       </div>
       <SkillAddMenu onChoose={(choice) => setView({ kind: choice })} />
     </header>
-  ) : view.kind === "detail" ? (
-    <header className="settings-detail-header skill-subview-head skill-detail-page-head">
-      <div className="skill-subview-title">
-        <button
-          aria-label={TEXT.settings.skills.backToList}
-          className="skill-back"
-          onClick={back}
-          type="button"
-        >
-          <svg fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="15">
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-        </button>
+  ) : view.kind === "detail" || view.kind === "edit" ? null : (() => {
+    const pageCopy = subviewCopy(view);
+    return (
+      <header className="settings-detail-header skill-subview-head">
         <div className="skill-subview-copy">
-          {/* The trail names the list the page came from, and it goes back
-              there: the arrow alone would make 技能 the only unlabeled step. */}
-          <div className="skill-breadcrumb">
-            <button onClick={back} type="button">{TEXT.settings.system.groups.skills.label}</button>
-            <span aria-hidden="true">›</span>
-            <span>{view.name}</span>
-          </div>
-          <div className="skill-detail-title">
-            <span aria-hidden="true" className="skill-detail-mark">{skillMark(view)}</span>
-            <h3>{view.name}</h3>
-            {listed === undefined ? null : (
-              <span className={`skill-source-badge ${listed.source === "built-in" ? "is-sd" : "is-managed"}`}>
-                {sourceLabel(listed.source)}
-              </span>
-            )}
-          </div>
-          <p>{view.description}</p>
-          {listed === undefined ? null : <p className="skill-detail-facts">{skillMeta(listed)}</p>}
+          <h3>{pageCopy.title}</h3>
+          <p>{pageCopy.description}</p>
         </div>
-      </div>
-    </header>
-  ) : (
-    <header className="settings-detail-header skill-subview-head">
-      <div className="skill-subview-title">
-        <button
-          aria-label={TEXT.settings.skills.backToList}
-          className="skill-back"
-          onClick={back}
-          type="button"
-        >
-          <svg fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="15">
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-        </button>
-        <div className="skill-subview-copy">
-          <h3>{copy.title}</h3>
-          <p>{copy.description}</p>
-        </div>
-      </div>
-    </header>
+      </header>
+    );
+  })();
+
+  // The way out sits in a bar across the pane's top, as it does in the settings
+  // shell this pane imitates: outside the scrolling content, so a long SKILL.md
+  // cannot carry the trail away, and out of the page's own column, so the name
+  // and description start where 文件 does.
+  const trail = copy === undefined ? null : (
+    <div className="skill-pane-bar">
+      <button
+        aria-label={TEXT.settings.skills.backToList}
+        className="skill-pane-back"
+        onClick={back}
+        type="button"
+      >
+        <svg fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="15">
+          <path d="M15 5l-7 7 7 7" />
+        </svg>
+      </button>
+      <span aria-hidden="true" className="skill-pane-divider" />
+      <nav aria-label={TEXT.settings.system.groups.skills.label} className="skill-breadcrumb">
+        <button onClick={back} type="button">{TEXT.settings.system.groups.skills.label}</button>
+        <span aria-hidden="true">›</span>
+        <span className="skill-breadcrumb-current">{copy.title}</span>
+      </nav>
+    </div>
   );
 
   return (
-    <>
+    <div className="skill-pane">
+      {trail}
+      <div className={`settings-group-detail${view.kind === "edit" ? " is-skill-editor" : ""}`}>
       {header}
       {view.kind === "list" ? (
       <Group>
@@ -442,6 +408,14 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                           {sourceLabel(skill.source)}
                         </span>
                       </button>
+                      {exportStatus?.id === skill.id ? (
+                        <span
+                          className={`skill-export-status${exportStatus.error ? " is-error" : ""}`}
+                          role={exportStatus.error ? "alert" : "status"}
+                        >
+                          {exportStatus.message}
+                        </span>
+                      ) : null}
                       <div className="settings-card-actions">
                         {skill.source === "managed" ? (
                           <SkillRowMenu
@@ -512,24 +486,18 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       ) : null}
 
       {view.kind === "detail" ? (
-        <SkillDetailView
-          busy={busy}
-          client={client}
-          enabled={loaded.value?.enabled.includes(view.id) ?? false}
-          onToggle={(next) => void toggleInstalled(view.id, view.name, next)}
-          skillId={view.id}
-          skillName={view.name}
-          switchesAvailable={loaded.value?.switchesAvailable ?? false}
-        />
+        <SkillDetailView client={client} skillId={view.id} />
       ) : null}
 
       {view.kind === "edit" ? (
         <SkillEditorView
           client={client}
+          onCancel={back}
           onSaved={() => loaded.reload()}
           skillId={view.id}
         />
       ) : null}
-    </>
+      </div>
+    </div>
   );
 }

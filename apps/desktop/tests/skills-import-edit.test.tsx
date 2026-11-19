@@ -263,6 +263,26 @@ test("loading more does not re-tick what the user unticked", async () => {
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a checkout that cannot reach the repository names the network and the proxy", async () => {
+  const stub = new StubClient().fail(
+    new Error("Git skill checkout timed out; retry, or narrow the import with a Ref or subdirectory"),
+  );
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
+  try {
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: "https://github.com/org/skills" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    await settle();
+
+    const rendered = JSON.stringify(view.toJSON());
+    assert.ok(rendered.includes(TEXT.settings.skills.git.inspectTimeout),
+      "a network timeout is not explained in the reader's language");
+    assert.ok(!rendered.includes("Git skill checkout timed out"));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("a slow inspection says what it is doing and can be cancelled", async () => {
   // A clone of a large repository is the one request in this pane that takes
   // long enough for a user to wonder whether the page is alive.
@@ -358,7 +378,7 @@ test("a resource file is read and written through its own route", async () => {
   try {
     await act(async () => {
       view.root.findAllByType("button")
-        .find((node) => node.children.includes("references/guide.md"))?.props.onClick();
+        .find((node) => node.props["aria-label"] === "references/guide.md")?.props.onClick();
     });
     await settle();
     assert.equal(stub.calls[1]?.path, "/api/skills/review/resources/references%2Fguide.md");
@@ -392,7 +412,7 @@ test("a resource that is not UTF-8 is shown as uneditable rather than decoded", 
   try {
     await act(async () => {
       view.root.findAllByType("button")
-        .find((node) => node.children.includes("assets/logo.png"))?.props.onClick();
+        .find((node) => node.props["aria-label"] === "assets/logo.png")?.props.onClick();
     });
     await settle();
     assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.binary));
@@ -553,8 +573,9 @@ test("编辑 in the row menu opens the editor for that package", async () => {
     await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
     await settle();
     assert.equal(stub.calls[2]?.path, "/api/skills/review");
-    const headings = view.root.findAllByType("h3").map((node) => JSON.stringify(node.children));
-    assert.ok(headings.some((heading) => heading.includes(TEXT.settings.skills.editor.title("review"))));
+    // The editor is named in the trail bar; the reference editor has no
+    // second title under it.
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.title("review")));
   } finally { await act(async () => { view.unmount() }); }
 });
 
@@ -622,12 +643,16 @@ test("导出 reads the package route and hands the ZIP to the save dialog", asyn
     .reply({ backend: "jiuwenswarm", skills: [] })
     .stream("PK\u0003\u0004package");
   const written: number[] = [];
+  const dialogs: unknown[][] = [];
   const previous = (globalThis as { window?: unknown }).window;
   Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: {
     sdShell: {
       exportFile: {
         downloadsDir: async () => "/tmp",
-        saveDialog: async () => ({ canceled: false, token: "destination" }),
+        saveDialog: async (...args: unknown[]) => {
+          dialogs.push(args);
+          return { canceled: false, token: "destination" };
+        },
         showInFolder: async () => ({ ok: true }),
         write: async (token: string, data: ArrayBuffer) => {
           assert.equal(token, "destination");
@@ -644,6 +669,13 @@ test("导出 reads the package route and hands the ZIP to the save dialog", asyn
     await settle();
 
     assert.equal(stub.calls[2]?.path, "/api/skills/review/package");
+    // A Skill is a ZIP; the save dialog must not offer the research package's
+    // .sdresearch filter when a Skill is what is being written.
+    assert.deepEqual(dialogs[0]?.[1], {
+      buttonLabel: TEXT.settings.skills.exportDialog.buttonLabel,
+      filters: [{ extensions: ["zip"], name: TEXT.settings.skills.exportDialog.filterName }],
+      title: TEXT.settings.skills.exportDialog.title,
+    });
     assert.ok((written[0] ?? 0) > 0, "the archive was not written");
     assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.rowMenu.exported("review")));
   } finally {

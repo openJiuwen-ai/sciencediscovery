@@ -37,8 +37,24 @@ const STATUS_LABEL: Record<GitSkillImportCandidate["status"], () => string> = {
   update: () => TEXT.settings.skills.git.update,
 };
 
+/** What the server said, in the reader's language where the cause is one the
+ *  reader can act on. The checkout runs in the API process, so its own proxy
+ *  and network are what matter — a browser proxy setting does not travel with
+ *  the git child, and the message has to say so. */
 function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : TEXT.settings.skills.importFailed;
+  const message = reason instanceof Error ? reason.message : "";
+  if (/timed out|timeout/i.test(message)) return TEXT.settings.skills.git.inspectTimeout;
+  if (/failed to fetch|networkerror|network error|could not reach/i.test(message)) {
+    return TEXT.settings.skills.git.inspectNetwork;
+  }
+  if (/lost its connection|connection reset|early eof|rpc failed|operation too slow|could not read from remote|gnutls|ssl|could not resolve|network is unreachable|connection refused|failed to connect|proxy/i
+    .test(message)) {
+    return TEXT.settings.skills.git.inspectNetwork;
+  }
+  if (/checkout failed|internal server error|request failed \(5\d\d\)/i.test(message)) {
+    return TEXT.settings.skills.git.checkoutFailed;
+  }
+  return message || TEXT.settings.skills.importFailed;
 }
 
 /**

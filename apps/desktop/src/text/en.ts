@@ -656,6 +656,12 @@ export const EN: Text = {
       scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       installedCount: (count: number) => `${count} installed`,
+      /** The native save dialog a Skill export opens. */
+      exportDialog: {
+        title: "Export Skill",
+        filterName: "Skill ZIP",
+        buttonLabel: "Save",
+      },
       /** The one press that adds a Skill, and the three ways to do it. The
        *  hint is the second line of each entry: the three labels are short
        *  enough to look alike, and what differs is where the package comes
@@ -700,12 +706,9 @@ export const EN: Text = {
         managed: "managed",
       },
       instructionsLoading: "Reading the instructions…",
-      /** 技能 › one package: what it tells the model, where it came from,
-       *  and whether it is available. */
+      /** 技能 › one package: the instructions' section heading. */
       detailView: {
-        availability: "Availability",
         files: "Files",
-        source: "Source",
       },
       /** The chevron on a managed Skill's row. */
       rowMenu: {
@@ -714,6 +717,7 @@ export const EN: Text = {
         edit: "Edit",
         delete: "Delete",
         exported: (name: string) => `Exported "${name}".`,
+        exportUnsupported: "The backend could not find this Skill package. Make sure it runs the current build with the Skill export route, then retry.",
         exportFailed: "This Skill could not be exported.",
         deleteTitle: (name: string) => `Delete ${name}`,
         deleteBody: (name: string) =>
@@ -757,6 +761,9 @@ export const EN: Text = {
         inspecting: "Inspecting…",
         inspectHint: "Cloning the repository and reading every SKILL.md. Usually seconds; a slow connection takes longer.",
         cancelInspect: "Cancel",
+        inspectNetwork: "Could not reach GitHub. Check the network, proxy or VPN and try again.",
+        inspectTimeout: "Connecting to GitHub timed out. Check the network, proxy or VPN and try again.",
+        checkoutFailed: "The repository could not be checked out. Check its URL, the network and the proxy settings, then retry.",
         inspectFailed: "The repository could not be inspected.",
         commit: (commit: string) => `commit ${commit.slice(0, 12)}`,
         new: "New",
@@ -780,11 +787,6 @@ export const EN: Text = {
         title: (name: string) => `Edit ${name}`,
         hint: "Change the fields and files; a save applies to new sessions.",
         files: "Files",
-        skillFile: "SKILL.md",
-        newFile: "New file",
-        newFilePath: "Path",
-        newFilePathPlaceholder: "For example references/guide.md",
-        addFile: "Add file",
         save: "Save",
         saving: "Saving…",
         saved: "Saved.",
@@ -792,12 +794,29 @@ export const EN: Text = {
         binary: "This file is not UTF-8 text and cannot be edited here.",
         readOnly: "Built-in skills are read-only.",
         conflict: "This skill changed while you were editing. Reopen it and try again.",
-        resourcesHint: "Resources can be added or overwritten here; deleting a file is not supported.",
         name: "Name",
         description: "Description",
+        descriptionHint: "This is how the agent decides when to use the skill — be specific.",
         instructions: "Instructions",
         license: "License",
         compatibility: "Compatibility",
+        cancel: "Cancel",
+        content: "Content",
+        contentHint: "Markdown shown to the agent when the skill is invoked.",
+        write: "Write",
+        upload: "Upload",
+        uploadTitle: "Upload a SKILL.md or text file",
+        uploadHint: "Its contents fill the editor; switch back to Write to tweak.",
+        contentReadFailed: "The selected file could not be read.",
+        pasteHint: "Paste a full SKILL.md — if it has a --- metadata block at the top, the fields above auto-fill.",
+        advanced: "Advanced settings",
+        references: "References",
+        referencesHint: "Supporting files (scripts, templates, data) the skill can read at runtime.",
+        referencesUsage: (count: number, total: number, size: string, limit: string) =>
+          `References: ${count} / ${total}; package: ${size} / ${limit}`,
+        referencesDrop: "Drop reference files or click to browse",
+        referencesDropHint: "Saved under references/ in the skill.",
+        addReferenceFailed: "The reference file could not be read.",
       },
     },
     network: {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -27,7 +27,6 @@ const copy = {
   back: "返回技能列表",
   delete: "删除",
   detail: "详情",
-  detailAvailability: "可用范围",
   detailFiles: "文件",
   edit: "编辑",
   export: "导出",
@@ -96,7 +95,7 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
    * Steps:
    *   1. Open 设置 › 技能 on the desktop entry; the Skill about to be imported is not listed.
    *   2. 添加技能 › 上传技能: hand the view one file; the import reports the package by name.
-   *   3. Open the card: the Skill's own page names it, states 可用范围 and renders SKILL.md under 文件.
+   *   3. Open the card: the bar names 技能 › Skill, the page names and describes it, and renders SKILL.md under 文件.
    *   4. From the row's chevron menu, open 编辑 and rewrite 指令; 保存 reports the save.
    *   5. 导出 from the same menu downloads `<name>.zip`.
    *   6. Read the package back through the API: the new instructions are installed and `license` survived the save.
@@ -127,6 +126,31 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
 
     await seedDesktopOrigin(page);
     await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-desktop:locale", "zh-CN"));
+    // The desktop entry has no Electron bridge, so saving a Skill uses the
+    // browser's own save picker. There is no native dialog to drive from a
+    // test, so the picker is replaced with one that records what it was asked
+    // to write; the export still has to produce a real ZIP for that write.
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "showSaveFilePicker", {
+        configurable: true,
+        value: async (options?: { suggestedName?: string }) => {
+          const written: { bytes?: number; head?: string; name?: string } = {
+            name: options?.suggestedName,
+          };
+          (window as unknown as { __exportedSkill?: typeof written }).__exportedSkill = written;
+          return {
+            createWritable: async () => ({
+              close: async () => undefined,
+              write: async (blob: Blob) => {
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                written.bytes = bytes.byteLength;
+                written.head = String.fromCharCode(...bytes.slice(0, 2));
+              },
+            }),
+          };
+        },
+      });
+    });
     await page.setViewportSize({ width: 1440, height: 900 });
 
     // An empty model catalog is the setup wizard, and 技能 lives in the shell
@@ -195,16 +219,19 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
 
       await journey.step(
         "打开这张技能卡片的详情页",
-        "页面以技能名命名、沿用 SKILL.md 里的描述，分开「可用范围」与「文件」，SKILL.md 正文就渲染在「文件」下。",
+        "页面以技能名命名、沿用 SKILL.md 里的描述，顶部栏标出「技能 › 技能名」，SKILL.md 正文就渲染在「文件」下。",
         async () => {
           const card = settings.locator(".settings-card").filter({ hasText: name });
           await expect(card).toHaveCount(1, { timeout: 30_000 });
           await expect(card).toContainText(description);
           await card.locator(".settings-card-main").click();
-          const subview = settings.locator(".skill-subview-copy");
+          // The way out names the page it leaves, in a bar across the pane's
+          // top rather than beside the title, as the settings shell does.
+          await expect(settings.locator(".skill-pane-bar .skill-breadcrumb")).toContainText(copy.skills);
+          await expect(settings.locator(".skill-pane-bar .skill-breadcrumb")).toContainText(name);
+          const subview = settings.locator(".skill-detail-head");
           await expect(subview.getByRole("heading", { name, exact: true })).toBeVisible();
           await expect(subview).toContainText(description);
-          await expect(subview.locator(".skill-breadcrumb")).toContainText(copy.skills);
           // The page is a document in the pane's own column. A wide table or a
           // long path inside a SKILL.md must scroll inside the prose; before
           // the column was measured, one such line pushed the whole page
@@ -213,7 +240,6 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
             (element) => element.scrollWidth - element.clientWidth,
           );
           expect(overflow, "the Skill page overflows the settings pane horizontally").toBe(0);
-          await expect(settings.getByRole("heading", { name: copy.detailAvailability, exact: true })).toBeVisible();
           await expect(settings.getByRole("heading", { name: copy.detailFiles, exact: true })).toBeVisible();
           await expect(settings.locator(".skill-detail-file")).toContainText(firstInstructions);
           await expect(settings.getByRole("heading", { name: copy.detail, exact: true })).toBeVisible();
@@ -229,7 +255,10 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           await openRowMenu(settings, name);
           await expect(settings.getByRole("menuitem", { name: copy.delete, exact: true })).toBeVisible();
           await chooseMenuItem(settings, copy.edit);
-          await expect(settings.getByRole("heading", { name: `编辑「${name}」`, exact: true })).toBeVisible();
+          // The trail bar names the editor; the page itself opens on 名称.
+          await expect(settings.locator(".skill-pane-bar .skill-breadcrumb"))
+            .toContainText(`编辑 ${name}`);
+          await expect(settings.getByRole("button", { name: copy.save, exact: true })).toBeVisible();
         },
       );
 
@@ -251,14 +280,18 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
         "导出的 ZIP 以技能名命名并且确实是压缩包。",
         async () => {
           await openRowMenu(settings, name);
-          const download = page.waitForEvent("download");
           await chooseMenuItem(settings, copy.export);
-          const file = await download;
-          expect(file.suggestedFilename()).toBe(`${name}.zip`);
-          const archive = await readFile(await file.path());
+          await page.waitForFunction(
+            () => Boolean((window as unknown as { __exportedSkill?: unknown }).__exportedSkill),
+          );
+          const exported = await page.evaluate(
+            () => (window as unknown as { __exportedSkill?: { bytes?: number; head?: string; name?: string } }).__exportedSkill,
+          );
+          expect(exported?.name).toBe(`${name}.zip`);
           // A ZIP starts with "PK": the save produced the archive itself, not
           // an empty or HTML error page.
-          expect(archive.subarray(0, 2).toString()).toBe("PK");
+          expect(exported?.head).toBe("PK");
+          expect(exported?.bytes ?? 0).toBeGreaterThan(0);
           await expect(settings.getByRole("status")).toContainText(`已导出「${name}」`);
         },
       );

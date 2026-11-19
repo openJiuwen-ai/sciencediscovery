@@ -682,6 +682,12 @@ export const ZH = {
       scope: "这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。",
       toggle: (name: string) => `启用或停用「${name}」`,
       installedCount: (count: number) => `已安装 ${count}`,
+      /** The native save dialog a Skill export opens. */
+      exportDialog: {
+        title: "导出技能",
+        filterName: "技能包",
+        buttonLabel: "保存",
+      },
       /** The one press that adds a Skill, and the three ways to do it. The
        *  hint is the second line of each entry: the three labels are short
        *  enough to look alike, and what differs is where the package comes
@@ -726,12 +732,9 @@ export const ZH = {
         managed: "自建",
       },
       instructionsLoading: "正在读取指令…",
-      /** 技能 › one package: what it tells the model, where it came from,
-       *  and whether it is available. */
+      /** 技能 › one package: the instructions' section heading. */
       detailView: {
-        availability: "可用范围",
         files: "文件",
-        source: "来源",
       },
       /** The chevron on a managed Skill's row. */
       rowMenu: {
@@ -740,6 +743,7 @@ export const ZH = {
         edit: "编辑",
         delete: "删除",
         exported: (name: string) => `已导出「${name}」。`,
+        exportUnsupported: "后端没有找到这个技能包。请确认后端是最新构建并包含技能导出接口，然后重试。",
         exportFailed: "没能导出这个技能。",
         deleteTitle: (name: string) => `删除「${name}」`,
         deleteBody: (name: string) =>
@@ -780,6 +784,9 @@ export const ZH = {
         inspecting: "正在检查…",
         inspectHint: "正在克隆仓库并读取所有 SKILL.md；通常只需几秒，网络较慢时会更久。",
         cancelInspect: "取消",
+        inspectNetwork: "无法连接 GitHub。请检查网络、代理或 VPN 后重试。",
+        inspectTimeout: "连接 GitHub 超时。请检查网络、代理或 VPN 后重试。",
+        checkoutFailed: "拉取仓库失败。请检查仓库地址、网络与代理设置后重试。",
         inspectFailed: "无法检查这个仓库。",
         commit: (commit: string) => `commit ${commit.slice(0, 12)}`,
         new: "新技能",
@@ -799,14 +806,9 @@ export const ZH = {
       },
       editor: {
         edit: "编辑",
-        title: (name: string) => `编辑「${name}」`,
+        title: (name: string) => `编辑 ${name}`,
         hint: "修改字段与文件；保存后对新的会话生效。",
         files: "文件",
-        skillFile: "SKILL.md",
-        newFile: "新增文件",
-        newFilePath: "路径",
-        newFilePathPlaceholder: "例如 references/guide.md",
-        addFile: "添加文件",
         save: "保存",
         saving: "正在保存…",
         saved: "已保存。",
@@ -814,12 +816,29 @@ export const ZH = {
         binary: "这个文件不是 UTF-8 文本，无法在这里编辑。",
         readOnly: "内置技能只读。",
         conflict: "编辑期间技能已被修改。请重新打开后再试。",
-        resourcesHint: "这里可以新增或覆盖资源文件；暂不支持删除文件。",
         name: "名称",
         description: "描述",
+        descriptionHint: "智能体依据这句话判断何时使用该技能——写具体些。",
         instructions: "指令",
         license: "许可证",
         compatibility: "兼容性",
+        cancel: "取消",
+        content: "内容",
+        contentHint: "技能被调用时展示给智能体的 Markdown。",
+        write: "撰写",
+        upload: "上传",
+        uploadTitle: "上传 SKILL.md 或文本文件",
+        uploadHint: "其内容会填入编辑器；切回「撰写」即可调整。",
+        contentReadFailed: "没有读入这个文件。",
+        pasteHint: "粘贴完整的 SKILL.md——如果开头有 --- 元数据块，上面的字段会自动填充。",
+        advanced: "高级设置",
+        references: "参考文件",
+        referencesHint: "技能在运行时读取的辅助文件（脚本、模板、数据）。",
+        referencesUsage: (count: number, total: number, size: string, limit: string) =>
+          `参考文件: ${count} / ${total}；包大小: ${size} / ${limit}`,
+        referencesDrop: "拖入参考文件，或点击浏览",
+        referencesDropHint: "保存在技能的 references/ 下。",
+        addReferenceFailed: "没有读入这个参考文件。",
       },
     },
     network: {
