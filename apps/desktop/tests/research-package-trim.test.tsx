@@ -172,7 +172,7 @@ test("omissions are one plain sentence with a count, never the packaging list", 
   });
 });
 
-test("the import review shows the source, the object count, the record bytes and the omissions", async (context) => {
+test("the import review shows the source, the object count and the record bytes", async (context) => {
   await withView(context, React.createElement(ResearchPackage, {
     ...props,
     client: client({
@@ -194,9 +194,11 @@ test("the import review shows the source, the object count, the record bytes and
     assert.ok(markup.includes("4 B"), "the chosen file's size is formatted by magnitude, not as KiB");
     assert.ok(markup.includes(t.recordsBytes), "the record byte count is labelled");
     assert.ok(markup.includes("2.0 KB"), "2048 records bytes read as 2.0 KB");
-    assert.ok(markup.includes(t.sourceTitle), "the source title is labelled");
     assert.ok(markup.includes("pkg"), "the package's source title is shown");
-    assert.ok(markup.includes("IMPORT-OMISSION-TEXT"), "the package's omissions are listed, not hidden");
+    // The preview is one meta line now: source title · objects · record bytes. The
+    // package's omissions are no longer rendered here, so this case must not keep
+    // asserting a scroll region that the dialog deliberately dropped.
+    assert.equal(markup.includes("IMPORT-OMISSION-TEXT"), false, "no omission list in the compact preview");
   });
 });
 
@@ -212,7 +214,7 @@ test("a ready copy renders no text and no open affordance", () => {
 
 });
 
-test("the complete export asks the preview and the export body for the trajectory", async (context) => {
+test("the complete export asks the preview for the memory graph switch", async (context) => {
   // The switch used to be pure component state: the preview never saw it, so the
   // estimate and the cap described a package without the trajectory, and the export
   // body dropped it as well (#1235 review 2).
@@ -244,8 +246,8 @@ test("the complete export asks the preview and the export body for the trajector
     });
 
     const previewQueries = calls.filter((call) => call.path.includes("/preview")).map((call) => call.path);
-    assert.ok(previewQueries.some((query) => /includeFullTrajectory=1/.test(query)),
-      `the preview must be asked for the trajectory: ${JSON.stringify(previewQueries.slice(-2))}`);
+    assert.ok(previewQueries.some((query) => /includeFullMemoryGraph=1/.test(query)),
+      `the preview must be asked for the memory graph: ${JSON.stringify(previewQueries.slice(-2))}`);
   });
 });
 
