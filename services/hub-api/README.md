@@ -53,6 +53,22 @@ a server must enforce (size, traversal, zip bombs).
 | `HUB_MAX_UNCOMPRESSED_BYTES` | `536870912` | Zip-bomb ceiling |
 | `HUB_ALLOW_REGISTRATION` | `false` | Whether anyone may create an account |
 | `HUB_ADMIN_USERNAME` / `HUB_ADMIN_PASSWORD` | — | Optional administrator created at startup |
+| `VITE_HUB_API_BASE` | — | Build-time, site only: API prefix (e.g. `/api/v1`) so downloads resolve through the service |
+
+## Import the existing catalogue
+
+```bash
+.venv/bin/python -m scripts.import_catalog \
+  --catalog ../../apps/hub/public/catalog.json \
+  --assets-root ../../apps/hub/public \
+  --sessions-root /srv/hub/sessions \
+  --publisher hub-publisher \
+  --dry-run
+```
+
+Drop `--dry-run` to write. The importer preserves catalogue ids, verifies each
+artifact's sha256, wraps single-file assets (specialists, connectors) in a
+zip, marks every imported version approved and is safe to re-run.
 
 ## Deploy
 

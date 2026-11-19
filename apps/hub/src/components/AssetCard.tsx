@@ -140,7 +140,14 @@ export function AssetCard({ asset, basePath, copy, language, onOpen }: AssetCard
             </span>
           ))}
         </span>
-        <DownloadButton basePath={basePath} label={copy("download")} url={asset.download.url} variant="ghost" />
+        <DownloadButton
+          assetId={asset.id}
+          basePath={basePath}
+          label={copy("download")}
+          url={asset.download.url}
+          variant="ghost"
+          version={asset.version}
+        />
       </footer>
     </article>
   );
