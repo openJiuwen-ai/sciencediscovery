@@ -76,11 +76,26 @@ function rank(kind: ScientificArtifactKind): number {
   return index === -1 ? KIND_ORDER.length : index;
 }
 
-/** Negative when `a` is the newer version: ordinal, then time, then id. */
+/** Negative when `a` is the newer version: ordinal, then time, then id.
+ *
+ * The id tiebreak makes picking one file's newest version deterministic when two
+ * of its versions share an ordinal. It must not be used to order *different*
+ * files — their ids always differ, so it would always fire and decide the whole
+ * list. See `compareRows`. */
 function compareVersion(a: ScientificArtifactVersion, b: ScientificArtifactVersion): number {
   if (a.version !== b.version) return b.version - a.version;
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** The same order without the id, so a tie reaches the name. */
+function compareRows(a: TurnArtifact, b: TurnArtifact): number {
+  if (a.version.version !== b.version.version) return b.version.version - a.version.version;
+  if (a.version.createdAt !== b.version.createdAt) return a.version.createdAt < b.version.createdAt ? 1 : -1;
+  const byName = a.artifact.name.localeCompare(b.artifact.name);
+  if (byName !== 0) return byName;
+  // Two artifacts can share a name; only then does the id settle the order.
+  return a.artifact.id < b.artifact.id ? -1 : a.artifact.id > b.artifact.id ? 1 : 0;
 }
 
 /**
@@ -104,13 +119,8 @@ export function turnArtifacts(
     byArtifact.set(artifact.id, { artifact, updated: Boolean(version.baseVersionId), version });
   }
 
-  const rows = [...byArtifact.values()].sort((a, b) => {
-    const byKind = rank(a.artifact.kind) - rank(b.artifact.kind);
-    if (byKind !== 0) return byKind;
-    const byVersion = compareVersion(a.version, b.version);
-    if (byVersion !== 0) return byVersion;
-    return a.artifact.name.localeCompare(b.artifact.name);
-  });
+  const rows = [...byArtifact.values()].sort((a, b) =>
+    rank(a.artifact.kind) - rank(b.artifact.kind) || compareRows(a, b));
 
   const important = rows.filter((row) => !FOLDED.has(row.artifact.kind));
   const folded = rows.filter((row) => FOLDED.has(row.artifact.kind));

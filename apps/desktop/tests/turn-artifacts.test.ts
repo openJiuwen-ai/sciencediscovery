@@ -125,3 +125,17 @@ test("the strip shows five rows and counts the rest", () => {
   // Newest first within one kind.
   assert.deepEqual(result.visible.map((row) => row.version.version), [8, 7, 6, 5, 4]);
 });
+
+test("files of one kind and one version are listed by name, not by id", () => {
+  // Seven reports written in one turn: same kind, same ordinal, same time. Only
+  // the name can order them, and a reader expects 1 before 7.
+  const rows = [7, 3, 1, 5, 2, 6, 4].map((index) =>
+    output({ artifactId: `report-${index}`, kind: "report", name: `report-${index}.md`, version: 1 }));
+
+  const result = turnArtifacts(rows as never, "run-1");
+  assert.deepEqual(
+    result.visible.map((row) => row.artifact.name),
+    ["report-1.md", "report-2.md", "report-3.md", "report-4.md", "report-5.md"],
+  );
+  assert.equal(result.hidden, 2);
+});
