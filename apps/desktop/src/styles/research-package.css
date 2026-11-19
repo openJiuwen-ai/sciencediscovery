@@ -89,7 +89,6 @@
 .research-package-error { color:var(--danger); font-size:13px; overflow-wrap:anywhere; }
 .research-import-review { border:1px solid var(--border); border-radius:var(--radius-s); padding:14px 16px; }
 .research-import-meta { color:var(--text-secondary); font-size:13px; margin-bottom:8px; }
-.research-import-omissions { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:12px; line-height:1.7; }
 @media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } }
 .research-package-progress-toggle { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; }
 .research-package-progress-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
@@ -133,8 +132,7 @@
 /* The import dialog's one-line explanation sits under its title. */
 .research-dialog-lede { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 4px 0 16px; }
 
-/* Import: the destination picker, the chosen package as a card, and the package's
-   own omissions in a scrollable region (the mock's three bands). */
+/* Import: destination, upload area, and selected package. */
 .research-import-select {
   width: 100%; min-height: 38px; padding: 8px 12px; appearance: none;
   border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface);
@@ -156,14 +154,6 @@
   padding: 5px 12px; position: relative;
 }
 .research-file-card-reselect:hover { background: var(--surface-subtle); }
-.research-import-scroll {
-  background: var(--surface-sunk); border-radius: 8px; margin-top: 10px;
-  max-height: 180px; overflow: auto; padding: 12px 14px;
-}
-.research-import-scroll p { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
-
-/* The package's own omission list: the reader compares it against what they expect
-   to carry, so it is a scrollable list rather than one long sentence. */
 
 /* The preview never settles: the dialog says so and offers the retry instead of
    leaving the primary action dead (#1024). */
@@ -202,3 +192,11 @@
 .research-scope-help { width: 16px; height: 16px; margin-left: 4px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font-size: 11px; line-height: 14px; cursor: help; }
 .research-package-resume { margin: 0 28px 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-1); }
 .research-package-resume strong { font-size: 15px; }
+.research-package-dialog.is-import { width: min(700px, calc(100vw - 32px)); }
+.research-package-dialog.is-import .modal-body { padding-bottom: 24px; }
+.research-package-dialog.is-import .research-dialog-lede { font-size: 13px; margin-bottom: 20px; }
+.research-package-dialog.is-import .research-field-label { margin-top: 20px; }
+.research-package-dialog.is-import .research-import-select { min-height: 42px; }
+.research-package-dialog.is-import .research-package-upload { min-height: 208px; border-radius: 8px; }
+.research-package-dialog.is-import .research-file-card { min-height: 86px; background: var(--surface-subtle); padding: 16px 20px; }
+.research-package-dialog.is-import .research-import-meta { margin: 12px 0 0; }

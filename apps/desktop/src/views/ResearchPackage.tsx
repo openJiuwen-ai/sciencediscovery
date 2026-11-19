@@ -482,7 +482,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       <button aria-label={t.close} className="research-toast-close" onClick={() => dismissFlash(flash.id)} type="button">×</button>
     </div>)}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
-    {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
+    {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
       <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools">{dialog === "export" ? <button aria-label={t.savedExports} className="modal-tool" onClick={() => savedRef.current?.scrollIntoView({ block: "nearest" })} title={t.savedExports} type="button"><svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></button> : null}<button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
@@ -540,12 +540,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           ) : (
             <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><span aria-hidden="true" className="research-upload-icon">⇧</span><strong>{t.choose}</strong><span>{TEXT.languageTag.startsWith("zh") ? "拖拽或选择需导入的研究包" : "Drop or choose a research package"}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
-          {inspection ? <>
-            <p className="research-import-meta">{file?.name} · {inspection.objectCount} {t.objects}{inspection.manifest.source.title ? <> · {t.sourceTitle} <b>{inspection.manifest.source.title}</b></> : null} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
-            <div className="research-import-scroll" role="region" aria-label={t.omissions}>
-              {inspection.manifest.omissions.length ? <ul className="research-import-omissions">{inspection.manifest.omissions.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul> : null}
-            </div>
-          </> : null}
+          {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
