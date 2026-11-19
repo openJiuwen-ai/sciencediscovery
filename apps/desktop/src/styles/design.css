@@ -475,6 +475,10 @@ body.is-resizing {
 /* ── the task column ──────────────────────────────────────────────────────────── */
 
 .main-area {
+  /* Positioned so the research-package notice stack can anchor to this
+     column: the rail and the sidebar sit to its left, and a window-corner
+     notice would paint over both. */
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;

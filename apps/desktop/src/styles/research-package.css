@@ -8,8 +8,6 @@
    top-right corner rather than sitting in that flow. */
 .research-package-dialog .modal-header { position: relative; }
 .research-dialog-tools { position: absolute; top: 14px; right: 14px; display: flex; align-items: center; gap: 4px; }
-.modal-tool { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
-.modal-tool:hover { background: var(--surface-sunk); color: var(--text); }
 .research-package-profiles { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:20px 0; }
 .research-package-profiles button {
   display: flex;
@@ -95,10 +93,13 @@
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
 
-/* Export progress and results share one fixed position. */
+/* Export progress and results share one position, anchored to the conversation
+   column (`.main-area` is the positioned ancestor) rather than to the window:
+   the rail and the sidebar are to its left, and this stack stays up for a whole
+   export, so a window-corner notice would cover the navigation while it ran. */
 .research-toast-stack {
   display: flex; flex-direction: column; gap: 8px;
-  position: fixed; left: 16px; top: 16px; z-index: 60;
+  position: absolute; left: 16px; top: 16px; z-index: 60;
 }
 .research-toast {
   align-items: center; border-radius: 8px; box-shadow: 0 4px 16px rgba(16, 24, 40, .10);
@@ -189,7 +190,6 @@
 
 .research-package-upload.is-dragging { border-color: #1677ff; background: #eff6ff; }
 .research-scope-help { width: 16px; height: 16px; margin-left: 4px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font-size: 11px; line-height: 14px; cursor: help; }
-.research-package-dialog .modal-header h2 { display: flex; align-items: center; gap: 6px; }
 .research-package-resume { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 28px 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-1); }
 .research-package-resume strong { font-size: 15px; }
 .research-package-dialog.is-import { width: min(700px, calc(100vw - 32px)); }
