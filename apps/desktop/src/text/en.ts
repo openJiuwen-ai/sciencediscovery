@@ -222,6 +222,8 @@ export const EN: Text = {
     finding: "Issue",
     warning: "Warning",
     badgePass: "Pass",
+    /** For a check that ran but could not conclude, or a delivery verdict no brief declared. */
+    badgeUnconfirmed: "Unconfirmed",
     deepSemantic: "Semantics",
     source: "Source",
     gaps: "Not checked",
