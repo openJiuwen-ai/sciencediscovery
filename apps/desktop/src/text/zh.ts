@@ -1182,6 +1182,8 @@ export const ZH = {
         authorize: "授权",
         cancelAuthorization: "取消授权",
         clearAuthorization: "清除授权",
+        nameRequired: "名称不能为空。",
+        openAuthorization: "打开授权页面",
       },
       web: {
         searchHeading: "搜索",

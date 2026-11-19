@@ -22,6 +22,11 @@
 
 import type { ApiClient } from "./client.js";
 import type {
+  McpAuthorizationStart,
+  McpInspectorRequest,
+  McpInspectorResult,
+} from "@sciencediscovery/schema";
+import type {
   CreateEnvironmentRequest,
   CreateProxyServerRequest,
   Environment,
@@ -32,9 +37,6 @@ import type {
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
   ResolvedProxy,
-  McpAuthorizationStart,
-  McpInspectorRequest,
-  McpInspectorResult,
   ConnectorManifest,
   CreateSkillPackageRequest,
   JiuwenSwarmSkillsResponse,

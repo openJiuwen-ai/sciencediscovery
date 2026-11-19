@@ -234,13 +234,20 @@ function readSpec(text: string): { entries: ImportEntry[]; error?: string } {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       return { entries: [], error: text_.importBadEntry(name) };
     }
-    const config = raw as { command?: unknown; transport?: unknown; url?: unknown };
-    const transport = typeof config.transport === "string"
+    const config = raw as { command?: unknown; transport?: unknown; type?: unknown; url?: unknown };
+    // The route decides the transport as `transport ?? type ?? (url ? http : stdio)`
+    // and folds the streamable-HTTP aliases onto http; the preview has to read the
+    // spec the same way, or it describes a different server than the one written.
+    const declared = typeof config.transport === "string"
       ? config.transport
-      : typeof config.command === "string" ? "stdio" : "http";
-    const target = typeof config.command === "string"
-      ? config.command
-      : typeof config.url === "string" ? config.url : "";
+      : typeof config.type === "string" ? config.type : undefined;
+    const alias = declared === "streamable_http" || declared === "streamable-http" ? "http" : declared;
+    const transport = alias ?? (typeof config.url === "string" && config.url !== "" ? "http" : "stdio");
+    // The address shown is the one the resolved transport uses: a stdio entry
+    // launches its command, anything else is reached at its URL.
+    const command = typeof config.command === "string" ? config.command : "";
+    const url = typeof config.url === "string" ? config.url : "";
+    const target = transport === "stdio" ? command : url;
     entries.push({ name, target, transport });
   }
   if (entries.length === 0) return { entries: [], error: text_.importNoServers };
@@ -297,6 +304,9 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   }, { client, key: "mcp-servers" });
   const [draft, setDraft] = useState<Draft>();
   const [openId, setOpenId] = useState<string>();
+  /** The provider URL minted for the row now waiting on consent; kept so a
+   *  blocked popup still leaves a way to reach the provider. */
+  const [authorizingUrl, setAuthorizingUrl] = useState<{ id: string; url: string }>();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [discovery, setDiscovery] = useState<{ base: Page; servers: CustomMcpServerDetails[] }>();
@@ -327,10 +337,20 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   const [outcomes, setOutcomes] = useState<ImportOutcome[]>();
   const [toolsOpen, setToolsOpen] = useState<string>();
 
+  /** A new server starts switched off, as an imported one does: it is reached by
+   *  agents only once the user has read its test result and turned it on. */
   const openCreate = () => {
     setCreated(undefined);
     setFailure(undefined);
-    setDraft(emptyDraft());
+    setDraft({ ...emptyDraft(), enabled: false });
+  };
+
+  /** Edit opens the record's own form: a creation result left on screen belongs
+   *  to the server that was just created, not to the row being edited. */
+  const openEdit = (server: CustomMcpServerDetails) => {
+    setCreated(undefined);
+    setFailure(undefined);
+    setDraft(draftOf(server));
   };
 
   const openImport = () => {
@@ -391,16 +411,22 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     loaded.reload();
   };
 
-  /** Open the provider's page and hand it the URL the route minted. */
+  /** Open the provider's page and hand it the URL the route minted.
+   *
+   *  The minted URL is kept for the row as well: a blocked popup would otherwise
+   *  leave an `authorizing` state the user has no way to finish, and the page it
+   *  points at must not be able to navigate this window (`opener` cleared). */
   const authorize = async (server: CustomMcpServerDetails) => {
     setBusy(true);
     setFailure(undefined);
     const popup = typeof window === "undefined" || typeof window.open !== "function"
       ? null
       : window.open("about:blank", "_blank", "popup,width=620,height=760");
+    if (popup !== null) popup.opener = null;
     try {
       const started = await startMcpAuthorization(client, server.id, `${window.location.origin}/api/mcp/oauth/callback`);
       if (popup !== null && !popup.closed) popup.location.replace(started.authorizationUrl);
+      setAuthorizingUrl({ id: server.id, url: started.authorizationUrl });
       loaded.reload();
     } catch (reason) {
       if (popup !== null) popup.close();
@@ -430,7 +456,10 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   const change = (patch: Partial<Draft>) =>
     setDraft((previous) => ({ ...(previous ?? emptyDraft()), ...patch }));
 
-  const closeForm = () => setDraft(undefined);
+  const closeForm = () => {
+    setCreated(undefined);
+    setDraft(undefined);
+  };
 
   /** Toggle whether a data source is selected by default for new sessions. */
   const toggleDefaultUse = async (id: string) => {
@@ -484,8 +513,50 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
+  /** A server waiting on its consent page settles in the browser, not here: the
+   *  callback flips its state and nothing tells this page. Polling only while a
+   *  row is `authorizing` is what turns it into `authorized` when the user comes
+   *  back, and it stops the moment the state settles.
+   *
+   *  A grant that lands is tested straight away, the way the web client does it:
+   *  the tool list the row shows is what tells the user the connection works. */
+  const authorizingIds = (servers ?? [])
+    .filter((server) => server.authorization?.state === "authorizing")
+    .map((server) => server.id);
+  const authorizingKey = authorizingIds.join(",");
+  useEffect(() => {
+    if (authorizingKey === "") return undefined;
+    const waiting = authorizingKey.split(",");
+    let active = true;
+    const poll = async () => {
+      try {
+        const items = await listMcpServers(client);
+        if (!active) return;
+        const granted = items.filter((item) => waiting.includes(item.id) && item.authorization?.state === "authorized");
+        for (const item of granted) {
+          await testMcpServer(client, item.id).catch(() => undefined);
+          if (!active) return;
+        }
+        loaded.reload();
+      } catch {
+        // The next tick retries; a failed read must not stop the watch.
+      }
+    };
+    const timer = globalThis.setInterval(() => void poll(), 1_500);
+    return () => {
+      active = false;
+      globalThis.clearInterval(timer);
+    };
+  }, [authorizingKey, client, loaded]);
+
   const submit = async () => {
-    if (!current || current.name.trim() === "") return;
+    if (!current) return;
+    // The create form opens with an empty name; saving it says why nothing
+    // happened instead of looking unresponsive.
+    if (current.name.trim() === "") {
+      setFailure(TEXT.settings.system.mcp.nameRequired);
+      return;
+    }
     const problem = current.transport === "stdio"
       ? secretProblem(current.envRows)
       : secretProblem(current.headerRows);
@@ -625,7 +696,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                       <button
                         className="link-button"
                         disabled={busy}
-                        onClick={() => setDraft(draftOf(server))}
+                        onClick={() => openEdit(server)}
                         type="button"
                       >
                         {TEXT.settings.edit}
@@ -644,14 +715,27 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                             {TEXT.settings.system.mcp.authorize}
                           </button>
                           {server.authorization.state === "authorizing" ? (
-                            <button
-                              className="link-button"
-                              disabled={busy}
-                              onClick={() => void endAuthorization(server, "cancel")}
-                              type="button"
-                            >
-                              {TEXT.settings.system.mcp.cancelAuthorization}
-                            </button>
+                            <>
+                              <button
+                                className="link-button"
+                                disabled={busy}
+                                onClick={() => void endAuthorization(server, "cancel")}
+                                type="button"
+                              >
+                                {TEXT.settings.system.mcp.cancelAuthorization}
+                              </button>
+                              {/* A blocked popup leaves the minted URL only here. */}
+                              {authorizingUrl?.id === server.id ? (
+                                <a
+                                  className="link-button"
+                                  href={authorizingUrl.url}
+                                  rel="noopener noreferrer"
+                                  target="_blank"
+                                >
+                                  {TEXT.settings.system.mcp.openAuthorization}
+                                </a>
+                              ) : null}
+                            </>
                           ) : null}
                           <button
                             className="link-button is-danger"

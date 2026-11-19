@@ -20,7 +20,11 @@ Object.assign(globalThis, {
     },
     removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
   },
-  window: Object.assign(new EventTarget(), { location: { origin: "http://127.0.0.1:5173" } }),
+  window: Object.assign(new EventTarget(), {
+    clearInterval: (timer: ReturnType<typeof setInterval>) => clearInterval(timer),
+    location: { origin: "http://127.0.0.1:5173" },
+    setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
+  }),
 });
 
 const t = TEXT.settings.system.mcp;
@@ -184,5 +188,153 @@ test("a stored env secret is never rendered back", async () => {
   assert.equal(secret.props.value, "", "the stored value is not in the form");
   assert.equal(secret.props.placeholder, t.secretSaved);
   assert.equal(JSON.stringify(renderer.toJSON()).includes("TOKEN=null"), false);
+  renderer.unmount();
+});
+
+test("Edit after a create opens the record's own fields, not the creation result", async () => {
+  const api = fakeClient({ servers: [server()] });
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
+  await act(async () => { await flush(); });
+  const name = textInputs(renderer.root)[0]!;
+  await act(async () => { name.props.onChange({ target: { value: "Files" } }); });
+  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.match(JSON.stringify(renderer.toJSON()), /read_file/, "the creation result is on screen");
+  await act(async () => { button(renderer.root, t.done).props.onClick(); });
+  await act(async () => { await flush(); });
+
+  await act(async () => { button(renderer.root, TEXT.settings.edit).props.onClick(); });
+  await act(async () => { await flush(); });
+  const inputs = textInputs(renderer.root);
+  assert.ok(inputs.length > 0, "the edit form renders its fields");
+  assert.equal(inputs[0]!.props.value, "Files", "and shows the row being edited");
+  assert.equal(JSON.stringify(renderer.toJSON()).includes("read_file"), false, "the previous result is gone");
+  renderer.unmount();
+});
+
+test("a row waiting on its consent page is re-read until the grant lands, then tested and unlocked", async () => {
+  // The fake list answers `authorizing` until the third read, as the route does
+  // once the provider callback has run.
+  let reads = 0;
+  const base = fakeClient();
+  const api = Object.assign(Object.create(null), base, {
+    request: async (path: string, init?: { body?: string; method?: string }) => {
+      if (path === "/api/mcp/servers" && (init?.method ?? "GET") === "GET") {
+        reads += 1;
+        base.calls.push({ method: "GET", path });
+        return [server({ authorization: { state: reads >= 3 ? "authorized" : "authorizing" } })];
+      }
+      return base.request(path, init);
+    },
+  }) as ApiClient & { calls: Call[] };
+  const renderer = await mount(api);
+  try {
+    assert.equal(button(renderer.root, t.authorize).props.disabled, true, "授权 is locked while consent is pending");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 3_400)); });
+    await act(async () => { await flush(); });
+    assert.ok(reads >= 3, `the page re-read the list while authorizing (${reads} reads)`);
+    assert.ok(base.calls.some((call) => call.path === `/api/mcp/servers/${SERVER_ID}/test`), "the landed grant is tested");
+    assert.equal(button(renderer.root, t.authorize).props.disabled, false, "授权 is usable again once the state settles");
+    assert.equal(renderer.root.findAll((node) => node.type === "button" && text(node).trim() === t.cancelAuthorization).length, 0);
+    const settled = reads;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_700)); });
+    assert.equal(reads, settled, "polling stops once nothing is authorizing");
+  } finally {
+    // The watch is a live interval: the renderer must go even when an assertion
+    // above throws, or the runner never reaches an empty event loop.
+    renderer.unmount();
+  }
+});
+
+test("添加服务器 starts the new server switched off, as import does", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
+  await act(async () => { await flush(); });
+  await act(async () => { textInputs(renderer.root)[0]!.props.onChange({ target: { value: "Files" } }); });
+  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { await flush(); });
+  const post = api.calls.find((call) => call.method === "POST" && call.path === "/api/mcp/servers");
+  assert.equal((post!.body as { enabled: boolean }).enabled, false);
+  renderer.unmount();
+});
+
+test("saving the create form without a name says so instead of doing nothing", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
+  await act(async () => { await flush(); });
+  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { await flush(); });
+  assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
+  assert.match(JSON.stringify(renderer.toJSON()), new RegExp(t.nameRequired));
+  renderer.unmount();
+});
+
+test("授权 detaches the popup from this window, and a blocked popup still leaves a link", async () => {
+  const opened: Array<{ opener: unknown }> = [];
+  const win = globalThis.window as unknown as { open?: (...args: unknown[]) => unknown };
+  try {
+    win.open = () => {
+      const popup = { close: () => {}, closed: false, location: { replace: () => {} }, opener: {} as unknown };
+      opened.push(popup);
+      return popup;
+    };
+    const api = fakeClient({ servers: [server({ authorization: { state: "required" } })] });
+    const renderer = await mount(api);
+    await act(async () => { button(renderer.root, t.authorize).props.onClick(); });
+    await act(async () => { await flush(); });
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0]!.opener, null, "the provider page cannot navigate the settings window");
+    renderer.unmount();
+
+    win.open = () => null;
+    let reads = 0;
+    const blocked = fakeClient();
+    const api2 = Object.assign(Object.create(null), blocked, {
+      request: async (path: string, init?: { body?: string; method?: string }) => {
+        if (path === "/api/mcp/servers" && (init?.method ?? "GET") === "GET") {
+          reads += 1;
+          return [server({ authorization: { state: reads > 1 ? "authorizing" : "required" } })];
+        }
+        return blocked.request(path, init);
+      },
+    }) as ApiClient;
+    const renderer2 = await mount(api2);
+    try {
+      await act(async () => { button(renderer2.root, t.authorize).props.onClick(); });
+      await act(async () => { await flush(); });
+      const links = renderer2.root.findAll((node) => node.type === "a" && node.props.href === "https://provider.test/authorize");
+      assert.equal(links.length, 1, "the minted URL is reachable from the row");
+      assert.equal(links[0]!.props.rel, "noopener noreferrer");
+    } finally {
+      renderer2.unmount();
+    }
+  } finally {
+    delete win.open;
+  }
+});
+
+test("the import preview reads the transport the way the route does", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, t.importServers).props.onClick(); });
+  await act(async () => { await flush(); });
+  const area = renderer.root.findAll((node) => node.type === "textarea")[0]!;
+  const spec = JSON.stringify({
+    mcpServers: {
+      aliased: { type: "streamable_http", url: "https://mcp.test/a" },
+      both: { command: "node", url: "https://mcp.test/b" },
+      sse: { type: "sse", url: "https://mcp.test/c" },
+    },
+  });
+  await act(async () => { area.props.onChange({ target: { value: spec } }); });
+  await act(async () => { button(renderer.root, t.importPreview).props.onClick(); });
+  await act(async () => { await flush(); });
+  const rows = renderer.root.findAll((node) => node.type === "li").map((node) => text(node).replace(/\s+/g, " ").trim());
+  assert.ok(rows.some((row) => row.includes("aliased") && row.includes("http · https://mcp.test/a")), JSON.stringify(rows));
+  assert.ok(rows.some((row) => row.includes("both") && row.includes("http · https://mcp.test/b")), "url wins over command, as the route decides");
+  assert.ok(rows.some((row) => row.includes("sse") && row.includes("sse · https://mcp.test/c")), JSON.stringify(rows));
   renderer.unmount();
 });
