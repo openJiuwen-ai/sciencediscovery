@@ -10,7 +10,8 @@ import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, fileDigest, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { hostPlatform, hostArch } from '../test/support/tagged/environment.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
-import { PROVIDER_FAULT, detectProviderFault, detectProviderFaultFromErrors, retryableProviderFaults, providerFaultRepeatFailed, providerFaultRepeatReportMissing } from '../test/support/tagged/provider-fault.mjs';
+import { PROVIDER_FAULT, detectProviderFault, detectProviderFaultFromErrors, isProviderFaultOnlyWorkerFailure } from '../test/support/tagged/provider-fault.mjs';
+import { retryableCaseFailures, retryFailed, retryReportMissing, shouldRetryFailedCases } from '../test/support/tagged/retry.mjs';
 import TaggedReporter from '../test/support/tagged/playwright-reporter.mjs';
 import { reconcile } from './real-report.mjs';
 
@@ -310,6 +311,13 @@ test('a job whose cases all faulted stays a provider fault and still fails', () 
   }
 });
 
+test('a provider-fault-only worker exit stays out of product accounting', () => {
+  const providerFault = { outcome: PROVIDER_FAULT };
+  assert.equal(isProviderFaultOnlyWorkerFailure(1, [providerFault]), true);
+  assert.equal(isProviderFaultOnlyWorkerFailure(2, [providerFault]), false);
+  assert.equal(isProviderFaultOnlyWorkerFailure(1, [{ outcome: 'FAIL' }, providerFault]), false);
+});
+
 test('a mixed job keeps its passes as passes and still fails on a product failure', () => {
   const plan = createPlan([identity('case-a', realTags), identity('case-b', realTags)], {
     revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
@@ -349,7 +357,7 @@ test('the reconcile keeps a provider fault visible and does not pass the suite',
   const root = directory(t);
   const [first, second] = plan.entries;
   for (const shard of realShards(plan)) {
-    const directory = join(root, `real-e2e-results-${shard.name}`, 'e2e-real/tagged');
+    const directory = join(root, 'real-e2e-results-' + shard.name, 'e2e-real/tagged');
     mkdirSync(directory, { recursive: true });
     const worker = subplan(plan, plan.entries.filter(entry => shard.keys.includes(entry.key)));
     writeFileSync(join(directory, 'plan.json'), JSON.stringify(worker));
@@ -399,6 +407,28 @@ test('the reconcile fails a suite whose cases all faulted, and keeps their rows'
   assert.ok(!verdict.problems.some(problem => problem.includes('SHARD_FAILED')));
 });
 
+test('reconcile keeps retry audit codes as provider faults', t => {
+  const plan = createPlan([identity('case-a', realTags)], {
+    revision: 'candidate', profile: 'daily', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
+  });
+  const root = directory(t);
+  for (const shard of realShards(plan)) {
+    const directory = join(root, 'real-e2e-results-' + shard.name, 'e2e-real/tagged');
+    mkdirSync(directory, { recursive: true });
+    const worker = subplan(plan, plan.entries.filter(entry => shard.keys.includes(entry.key)));
+    writeFileSync(join(directory, 'plan.json'), JSON.stringify(worker));
+    const results = worker.entries.map(entry => ({
+      key: entry.key, outcome: 'PASS', actualTarget: entry.target, actualBackend: entry.backend,
+    }));
+    writeFileSync(join(directory, 'summary.json'), JSON.stringify(verifyResults(worker, results, [retryReportMissing])));
+  }
+  const verdict = reconcile(plan, root);
+  assert.equal(verdict.status, 'PROVIDER_FAULT');
+  assert.equal(verdict.exitCode, 1);
+  assert.ok(verdict.problems.some(problem => problem.startsWith('PROVIDER_FAULT:')));
+  assert.ok(!verdict.problems.some(problem => problem.includes('SHARD_FAILED')));
+});
+
 test('the reconcile passes a suite whose cases all passed', t => {
   const plan = createPlan([identity('case-a', realTags), identity('case-b', realTags)], {
     revision: 'candidate', profile: 'daily', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
@@ -440,38 +470,11 @@ test('the daily reconcile still fails the suite on a product failure', t => {
   assert.equal(verdict.exitCode, 1);
 });
 
-test('only an early gateway fault is worth repeating', () => {
-  const early = { outcome: PROVIDER_FAULT, durationMs: 9_300 };
-  const late = { outcome: PROVIDER_FAULT, durationMs: 2_400_000 };
-  const product = { outcome: 'FAIL', durationMs: 9_300 };
-  assert.deepEqual(retryableProviderFaults([early]), [early]);
-  assert.deepEqual(retryableProviderFaults([late]), []);
-  assert.deepEqual(retryableProviderFaults([product]), []);
-  assert.deepEqual(retryableProviderFaults([early, late, product]), [early]);
-});
-
-test('a status-less transport break is not re-run by the harness repeat', () => {
-  // A break after a 200 is a provider fault for the accounting, but the early
-  // repeat must not deliver the retry the issue's in-client change will own.
-  const transport = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-transport', status: null }, durationMs: 9_300 };
-  const serverError = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-server-error', status: 503 }, durationMs: 9_300 };
-  assert.deepEqual(retryableProviderFaults([transport]), []);
-  assert.deepEqual(retryableProviderFaults([serverError]), [serverError]);
-});
-
-test('a failed repeat is audited and stays a provider fault, not a product failure', () => {
-  const plan = createPlan([identity('case-a', realTags)], {
-    revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
-  });
-  const entry = plan.entries[0];
-  const passed = { key: entry.key, outcome: 'PASS', actualTarget: entry.target, actualBackend: entry.backend };
-  for (const problem of [providerFaultRepeatFailed(1), providerFaultRepeatReportMissing]) {
-    const verdict = verifyResults(plan, [passed], [problem]);
-    assert.equal(verdict.status, 'PROVIDER_FAULT');
-    assert.equal(verdict.exitCode, 1);
-    assert.ok(verdict.problems.includes(problem));
-    assert.ok(!verdict.problems.some(item => item.startsWith('FAIL:')));
-  }
+test('only daily and release profiles enable failed-case retries', () => {
+  assert.equal(shouldRetryFailedCases('daily'), true);
+  assert.equal(shouldRetryFailedCases('release'), true);
+  assert.equal(shouldRetryFailedCases('merge'), false);
+  assert.equal(shouldRetryFailedCases('pr'), false);
 });
 
 test('the shared-plan summary does not report a faulted layer as green', t => {
@@ -494,7 +497,74 @@ test('the shared-plan summary does not report a faulted layer as green', t => {
   assert.equal(faulted.status, 1);
   assert.match(faulted.stdout, /provider fault/);
   assert.match(faulted.stdout, /\| 1 \|/);
-  // A layer whose cases all passed is still green.
-  const clean = report({ ...summary, status: 'PASS', exitCode: 0, passed: 2, providerFaults: 0 });
-  assert.equal(clean.status, 0);
+  // A recovered case is visible in the summary while the final layer remains green.
+  const recovered = report({ ...summary, status: 'PASS', exitCode: 0, passed: 2, providerFaults: 0,
+    retriedCases: 1, recoveredAfterRetry: 1, passed_after_retry: 1 });
+  assert.equal(recovered.status, 0);
+  assert.match(recovered.stdout, /passed after retry/);
+  assert.match(recovered.stdout, /\| 1 \| 0 \| 0 \|/);
+});
+test('every executed failure is eligible for one complete retry', () => {
+  const transport = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-transport', status: null } };
+  const serverError = { outcome: PROVIDER_FAULT, providerFault: { code: 'provider-server-error', status: 503 } };
+  const product = { outcome: 'FAIL' };
+  const skipped = { outcome: 'SKIPPED' };
+  const passed = { outcome: 'PASS' };
+  assert.deepEqual(retryableCaseFailures([transport, serverError, product, skipped, passed]), [transport, serverError, product]);
+});
+
+test('a retry pass gates green while retaining the first failure record', () => {
+  const plan = createPlan([identity('case-a', realTags)], {
+    revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
+  });
+  const entry = plan.entries[0];
+  const verdict = verifyResults(plan, [{
+    key: entry.key,
+    outcome: 'PASS',
+    actualTarget: entry.target,
+    actualBackend: entry.backend,
+    retriedAfterRetry: true,
+    passed_after_retry: true,
+    firstAttempt: { outcome: 'FAIL' },
+  }]);
+  assert.equal(verdict.status, 'PASS');
+  assert.equal(verdict.exitCode, 0);
+  assert.equal(verdict.passed, 1);
+  assert.equal(verdict.failed, 0);
+  assert.equal(verdict.recoveredAfterRetry, 1);
+  assert.equal(verdict.passed_after_retry, 1);
+});
+
+test('a failed retry remains a failed gate result', () => {
+  const plan = createPlan([identity('case-a', realTags)], {
+    revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
+  });
+  const entry = plan.entries[0];
+  const verdict = verifyResults(plan, [{
+    key: entry.key,
+    outcome: 'FAIL',
+    actualTarget: entry.target,
+    actualBackend: entry.backend,
+    retriedAfterRetry: true,
+    firstAttempt: { outcome: 'FAIL' },
+  }]);
+  assert.equal(verdict.status, 'FAIL');
+  assert.equal(verdict.exitCode, 1);
+  assert.equal(verdict.passed, 0);
+  assert.equal(verdict.failed, 1);
+});
+
+test('retry audit codes remain provider faults', () => {
+  const plan = createPlan([identity('case-a', realTags)], {
+    revision: 'candidate', targets: [target], execution: { backend: 'jiuwenswarm', model: 'generator', judge: null },
+  });
+  const entry = plan.entries[0];
+  const passed = { key: entry.key, outcome: 'PASS', actualTarget: entry.target, actualBackend: entry.backend };
+  for (const problem of [retryReportMissing, retryFailed(1)]) {
+    const verdict = verifyResults(plan, [passed], [problem]);
+    assert.equal(verdict.status, 'PROVIDER_FAULT');
+    assert.equal(verdict.exitCode, 1);
+    assert.ok(verdict.problems.includes(problem));
+    assert.ok(!verdict.problems.some(item => item.startsWith('FAIL:')));
+  }
 });

@@ -158,6 +158,8 @@ export interface ModelWireDiagnostics {
   truncated: boolean;
   /** Classification of each attempt that was retried before the final one. */
   retryErrors: ModelWireErrorClass[];
+  /** The provider sent a terminal completion marker before a transport reset. */
+  recoveredAfterCompletion?: boolean;
   error?: { classification: ModelWireErrorClass; httpStatus?: number };
 }
 
@@ -428,6 +430,7 @@ class ModelWireRecorder {
   private toolSeen = false;
   private finish?: string;
   private truncated = false;
+  private recoveredAfterCompletion = false;
 
   constructor(
     endpoint: ModelEndpoint,
@@ -472,6 +475,8 @@ class ModelWireRecorder {
   }
 
   markTruncated(): void { this.truncated = true; }
+
+  markRecoveredAfterCompletion(): void { this.recoveredAfterCompletion = true; }
 
   final(parts: { hasText: boolean; hasToolCalls: boolean; truncated?: boolean; hasReasoning?: boolean }): void {
     this.textSeen ||= parts.hasText;
@@ -518,6 +523,7 @@ class ModelWireRecorder {
       ...(this.finish === undefined ? {} : { finishReason: this.finish }),
       truncated: this.truncated,
       retryErrors: [...this.retryErrors],
+      ...(this.recoveredAfterCompletion ? { recoveredAfterCompletion: true } : {}),
       ...(errorClass === undefined ? {} : {
         error: { classification: errorClass, ...(errorClass === "provider_http" && this.httpStatus !== undefined ? { httpStatus: this.httpStatus } : {}) },
       }),
@@ -995,6 +1001,20 @@ function streamErrorDetail(value: unknown, endpoint: ModelEndpoint): string {
   return detail.slice(0, 2_000);
 }
 
+function canRecoverAfterCompletion(
+  error: unknown,
+  completionReason: string | undefined,
+  completionObserved: boolean,
+  truncated: boolean,
+  parseErrors: number,
+): boolean {
+  return completionObserved
+    && !truncated
+    && parseErrors === 0
+    && ["stop", "tool_calls", "function_call"].includes(completionReason ?? "")
+    && ["network", "timeout"].includes(classifyModelWireError(error));
+}
+
 async function streamOpenAiTurn(
   endpoint: ModelEndpoint,
   systemPrompt: string,
@@ -1040,87 +1060,96 @@ async function streamOpenAiTurn(
   let usage: AgentModelUsage | undefined;
   let truncated = false;
   let completionObserved = false;
+  let completionReason: string | undefined;
+  let recoveredAfterCompletion = false;
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
   const streamDiagnostics = { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 };
-  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
-    let chunk: Record<string, unknown>;
-    try {
-      chunk = JSON.parse(payload) as Record<string, unknown>;
-    } catch {
-      streamDiagnostics.unparseableSsePayloads += 1;
-      recorder.parseError();
-      continue;
-    }
-    if (chunk.error) throw new Error(`Chat API error: ${streamErrorDetail(chunk.error, endpoint)}`);
-    const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
-    if (chunkUsage) usage = chunkUsage;
-    const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
-    if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") {
-      completionObserved = true;
-      recorder.finishReason(choices[0].finish_reason);
-    }
-    // Read before the `delta` guard below: the chunk that carries
-    // `finish_reason` is the closing one, and it has no delta.
-    if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
-      truncated = true;
-      recorder.markTruncated();
-    }
-    const delta = choices.length && isRecord(choices[0]) && isRecord(choices[0].delta)
-      ? choices[0].delta
-      : undefined;
-    if (!delta) continue;
-
-    if ((variant === "deepseek" || variant === "kimi-k3") && typeof delta.reasoning_content === "string") {
-      deepseekReasoning += delta.reasoning_content;
-      callbacks.onThinkingDelta?.(delta.reasoning_content);
-    } else if (variant === "qwen" && delta.reasoning !== undefined) {
-      if (typeof delta.reasoning === "string") {
-        qwenReasoning = `${typeof qwenReasoning === "string" ? qwenReasoning : ""}${delta.reasoning}`;
-      } else {
-        qwenReasoning = structuredClone(delta.reasoning);
+  try {
+    for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
+      let chunk: Record<string, unknown>;
+      try {
+        chunk = JSON.parse(payload) as Record<string, unknown>;
+      } catch {
+        streamDiagnostics.unparseableSsePayloads += 1;
+        recorder.parseError();
+        continue;
       }
-      const thought = reasoningText(delta.reasoning);
-      if (thought) callbacks.onThinkingDelta?.(thought);
-    } else if (variant === "minimax" && Array.isArray(delta.reasoning_details)) {
-      minimaxReasoning.push(...structuredClone(delta.reasoning_details));
-      const thought = reasoningText(delta.reasoning_details);
-      if (thought) callbacks.onThinkingDelta?.(thought);
-    } else if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
-      // A gateway that serves a reasoning model under the plain `openai`
-      // dialect still streams the thought in `reasoning_content` — Volcengine
-      // Ark, SiliconFlow and vLLM all do. Dropping it left the user watching an
-      // idle screen for the whole reasoning phase while the text was on the
-      // wire. Only display: the variants whose contract requires the thought to
-      // come back in the next request echo it in `assistantMessage` below, and
-      // an endpoint that never asked for it must not receive an unknown field.
-      callbacks.onThinkingDelta?.(delta.reasoning_content);
-    }
+      if (chunk.error) throw new Error(`Chat API error: ${streamErrorDetail(chunk.error, endpoint)}`);
+      const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
+      if (chunkUsage) usage = chunkUsage;
+      const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+      if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") {
+        completionObserved = true;
+        completionReason = choices[0].finish_reason;
+        recorder.finishReason(completionReason);
+      }
+      // Read before the `delta` guard below: the chunk that carries
+      // `finish_reason` is the closing one, and it has no delta.
+      if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
+        truncated = true;
+        recorder.markTruncated();
+      }
+      const delta = choices.length && isRecord(choices[0]) && isRecord(choices[0].delta)
+        ? choices[0].delta
+        : undefined;
+      if (!delta) continue;
 
-    if (typeof delta.content === "string" && delta.content) {
-      text += delta.content;
-      if (!buffersInlineThinking) callbacks.onTextDelta?.(delta.content);
-    }
-    if (Array.isArray(delta.tool_calls)) {
-      for (const raw of delta.tool_calls) {
-        if (!isRecord(raw)) continue;
-        if (typeof raw.index !== "number") streamDiagnostics.toolCallDeltasWithoutIndex += 1;
-        const index = typeof raw.index === "number" ? raw.index : fragments.size;
-        const existing = fragments.get(index) ?? { function: { arguments: "", name: "" } };
-        for (const [key, value] of Object.entries(raw)) {
-          if (key === "index" || key === "function") continue;
-          if (value !== undefined && value !== null) existing[key] = value;
+      if ((variant === "deepseek" || variant === "kimi-k3") && typeof delta.reasoning_content === "string") {
+        deepseekReasoning += delta.reasoning_content;
+        callbacks.onThinkingDelta?.(delta.reasoning_content);
+      } else if (variant === "qwen" && delta.reasoning !== undefined) {
+        if (typeof delta.reasoning === "string") {
+          qwenReasoning = `${typeof qwenReasoning === "string" ? qwenReasoning : ""}${delta.reasoning}`;
+        } else {
+          qwenReasoning = structuredClone(delta.reasoning);
         }
-        if (isRecord(raw.function)) {
-          const fn = existing.function ?? { arguments: "", name: "" };
-          if (typeof raw.function.name === "string" && raw.function.name) fn.name = raw.function.name;
-          if (typeof raw.function.arguments === "string") fn.arguments = (fn.arguments ?? "") + raw.function.arguments;
-          existing.function = fn;
+        const thought = reasoningText(delta.reasoning);
+        if (thought) callbacks.onThinkingDelta?.(thought);
+      } else if (variant === "minimax" && Array.isArray(delta.reasoning_details)) {
+        minimaxReasoning.push(...structuredClone(delta.reasoning_details));
+        const thought = reasoningText(delta.reasoning_details);
+        if (thought) callbacks.onThinkingDelta?.(thought);
+      } else if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+        // A gateway that serves a reasoning model under the plain `openai`
+        // dialect still streams the thought in `reasoning_content` — Volcengine
+        // Ark, SiliconFlow and vLLM all do. Dropping it left the user watching an
+        // idle screen for the whole reasoning phase while the text was on the
+        // wire. Only display: the variants whose contract requires the thought to
+        // come back in the next request echo it in `assistantMessage` below, and
+        // an endpoint that never asked for it must not receive an unknown field.
+        callbacks.onThinkingDelta?.(delta.reasoning_content);
+      }
+
+      if (typeof delta.content === "string" && delta.content) {
+        text += delta.content;
+        if (!buffersInlineThinking) callbacks.onTextDelta?.(delta.content);
+      }
+      if (Array.isArray(delta.tool_calls)) {
+        for (const raw of delta.tool_calls) {
+          if (!isRecord(raw)) continue;
+          if (typeof raw.index !== "number") streamDiagnostics.toolCallDeltasWithoutIndex += 1;
+          const index = typeof raw.index === "number" ? raw.index : fragments.size;
+          const existing = fragments.get(index) ?? { function: { arguments: "", name: "" } };
+          for (const [key, value] of Object.entries(raw)) {
+            if (key === "index" || key === "function") continue;
+            if (value !== undefined && value !== null) existing[key] = value;
+          }
+          if (isRecord(raw.function)) {
+            const fn = existing.function ?? { arguments: "", name: "" };
+            if (typeof raw.function.name === "string" && raw.function.name) fn.name = raw.function.name;
+            if (typeof raw.function.arguments === "string") fn.arguments = (fn.arguments ?? "") + raw.function.arguments;
+            existing.function = fn;
+          }
+          fragments.set(index, existing);
+          emitTool(index, existing.id, existing.function?.name, existing.function?.arguments ?? "");
         }
-        fragments.set(index, existing);
-        emitTool(index, existing.id, existing.function?.name, existing.function?.arguments ?? "");
       }
     }
+  } catch (error) {
+    if (!canRecoverAfterCompletion(error, completionReason, completionObserved, truncated, streamDiagnostics.unparseableSsePayloads)) throw error;
+    recoveredAfterCompletion = true;
+    recorder.markRecoveredAfterCompletion();
   }
 
   if (buffersInlineThinking) {
@@ -1143,6 +1172,9 @@ async function streamOpenAiTurn(
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
   });
+  if (recoveredAfterCompletion && (wireToolCalls.some((call) => !call.function.name) || toolCalls.some((call) => call.argsParseError))) {
+    throw new Error("Model stream ended after completion with incomplete tool arguments");
+  }
   const assistantMessage: AgentHistoryMessage = {
     role: "assistant",
     content: text,

@@ -54,21 +54,16 @@ export const PROVIDER_FAULT = 'PROVIDER_FAULT';
 
 /** The distinct problem code the accounting shows, never a plain `FAIL:`. */
 export const providerFaultProblem = key => `${PROVIDER_FAULT}: ${key}`;
-/**
- * The audit codes a failed early repeat leaves behind. The repeat did not
- * work because the same provider was still failing, so these belong to the
- * provider-fault family and never read as a product failure.
- */
-export const providerFaultRepeatFailed = code => `${PROVIDER_FAULT}_REPEAT_FAILED: ${code}`;
-export const providerFaultRepeatReportMissing = `${PROVIDER_FAULT}_REPEAT_REPORT_MISSING`;
-/**
- * Whether a problem belongs to the provider-fault family: the soft class
- * itself, and the audit codes a failed early repeat leaves behind. Both
- * describe the gateway's outage, never the product's own failure.
- */
+/** Whether a problem belongs to the provider-fault family. */
 export const isProviderFaultProblem = problem =>
   typeof problem === 'string'
   && (problem.startsWith(`${PROVIDER_FAULT}: `) || problem.startsWith(`${PROVIDER_FAULT}_`));
+
+/** A worker can exit 1 when every executed case failed at the provider gateway. */
+export const isProviderFaultOnlyWorkerFailure = (code, results = []) =>
+  code === 1
+  && !results.some(result => result?.outcome === 'FAIL')
+  && results.some(result => result?.outcome === PROVIDER_FAULT);
 
 /**
  * Server statuses, in the order they are recognised. A number only counts in
@@ -250,24 +245,4 @@ export function detectProviderFaultFromErrors(errors = []) {
   if (texts.some(vetoesCase)) return null;
   const detected = texts.map(text => detectProviderFault(text)).filter(Boolean);
   return detected.length ? detected[0] : null;
-}
-
-/**
- * How long an attempt may run and still be worth repeating. A journey that
- * died within this budget never reached the expensive part of its work, so
- * running it again costs little; one that got further is not repeated.
- */
-export const PROVIDER_FAULT_RETRY_BUDGET_MS = 300_000;
-
-/** The cases a first attempt may repeat: an early transient gateway fault
- *  that is not a status-less transport break. A break after a 200 (`read
- *  ECONNRESET`) is a provider fault for the accounting, but it must not earn
- *  the harness's early repeat: that repeat re-runs a whole journey, while the
- *  bounded restream the issue asks for has not landed yet, so repeating here
- *  would deliver the retry this PR says it does not contain. */
-export function retryableProviderFaults(results = [], budgetMs = PROVIDER_FAULT_RETRY_BUDGET_MS) {
-  return (Array.isArray(results) ? results : []).filter(result =>
-    result?.outcome === PROVIDER_FAULT
-    && result?.providerFault?.code !== 'provider-transport'
-    && typeof result.durationMs === 'number' && result.durationMs <= budgetMs);
 }

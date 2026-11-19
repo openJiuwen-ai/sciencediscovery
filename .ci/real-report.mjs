@@ -37,7 +37,7 @@ export function reconcile(plan, root) {
       // case results, so the suite's accounting takes them over: a repeat
       // that did not work is still an unverified case.
       for (const problem of summary.problems ?? []) {
-        if (isProviderFaultProblem(problem) && !problem.startsWith(`${PROVIDER_FAULT}: `)) errors.push(`${shard.name}: ${problem}`);
+        if (isProviderFaultProblem(problem) && !problem.startsWith(`${PROVIDER_FAULT}: `)) errors.push(`${PROVIDER_FAULT}: ${shard.name}: ${problem}`);
       }
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }
   }

@@ -70,6 +70,10 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       await requireRealStack(testInfo);
       test.setTimeout(600_000);
       const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
+      await testInfo.attach("environment-setup-diagnostics", {
+        body: JSON.stringify(setup, null, 2),
+        contentType: "application/json",
+      });
       testInfo.skip(
         setup.state !== "ready",
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
