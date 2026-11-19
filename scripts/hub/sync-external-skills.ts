@@ -113,16 +113,23 @@ export function parseReadmeTables(markdown: string, warnings: string[] = []): Ma
   for (const line of markdown.split(/\r?\n/)) {
     const match = ROW.exec(line);
     if (!match) continue;
-    const [, name, rawPath, rawSubdomain, rawType, rawHardware] = match;
-    const segments = rawPath!.trim().replace(/\/+$/, "").split("/");
+    const [, rawName, rawPath, rawSubdomain, rawType, rawHardware] = match;
+    const name = rawName?.trim() ?? "";
+    const pathText = rawPath?.trim() ?? "";
+    if (!name || !pathText || !rawSubdomain) continue;
+    const segments = pathText.replace(/\/+$/, "").split("/");
+    if (segments.length !== 3) continue;
+    const [domain, directory, leaf] = segments;
+    if (!domain || !directory || !leaf) continue;
     // Links elsewhere in the README also look like table cells; only a
     // domain/subdomain/name row with a matching subdomain column is a skill.
     // Real rows use both `astronomical-analysis` and `general_tools` for the
     // same directory, so compare and key by the underscore form.
-    const subdomain = rawSubdomain!.trim().replace(/-/g, "_");
-    if (segments.length !== 3 || segments[1]!.replace(/-/g, "_") !== subdomain) continue;
+    const subdomainSegment = directory.replace(/-/g, "_");
+    const subdomain = rawSubdomain.trim().replace(/-/g, "_");
+    if (subdomainSegment !== subdomain) continue;
     if (segments.some((segment) => !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(segment))) continue;
-    const skillPath = `${segments[0]}/${segments[1]!.replace(/-/g, "_")}/${segments[2]}`;
+    const skillPath = `${domain}/${subdomainSegment}/${leaf}`;
     const type = normalizeSkillType(rawType);
     const hardware = normalizeHardware(rawHardware);
     if (!type && rawType?.trim()) warnings.push(`${skillPath}: unknown skill type "${rawType.trim()}"`);
@@ -133,10 +140,10 @@ export function parseReadmeTables(markdown: string, warnings: string[] = []): Ma
       warnings.push(`${skillPath}: listed more than once in README_ZH.md; keeping the first row`);
       continue;
     }
-    if (name!.trim() !== segments[2]) {
-      warnings.push(`${skillPath}: README_ZH.md labels the skill "${name!.trim()}"; the directory name wins`);
+    if (name !== leaf) {
+      warnings.push(`${skillPath}: README_ZH.md labels the skill "${name}"; the directory name wins`);
     }
-    rows.set(skillPath, { hardware, name: name!.trim(), path: skillPath, type });
+    rows.set(skillPath, { hardware, name, path: skillPath, type });
   }
   return rows;
 }
@@ -183,7 +190,7 @@ export async function buildSnapshot(source: SnapshotSource, now: () => Date = ()
     skills: entries,
   };
   // Fixed mtime and sorted entries keep repeated syncs of the same commit byte-identical.
-  const tarGz = gzipSync(packTar(tarEntries), { level: 9, mtime: 0 });
+  const tarGz = gzipSync(await packTar(tarEntries), { level: 9, mtime: 0 });
   return { index, tarGz, warnings };
 }
 

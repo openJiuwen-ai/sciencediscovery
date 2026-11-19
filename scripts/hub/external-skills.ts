@@ -115,7 +115,7 @@ export async function loadExternalSnapshot(
     tarGz = new Uint8Array(await tarResponse.arrayBuffer());
   }
   const index = validateIndex(new TextDecoder("utf-8", { fatal: true }).decode(indexBytes));
-  return { files: unpackTar(gunzipSync(tarGz)), index };
+  return { files: await unpackTar(gunzipSync(tarGz)), index };
 }
 
 /** `<subdomain>-<name>.zip`, disambiguated by domain only if two skills collide. */

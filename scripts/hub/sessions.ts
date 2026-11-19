@@ -306,7 +306,7 @@ async function scanPackage(bytes: Uint8Array): Promise<ScanResult> {
   let manifestBytes: Uint8Array | null = null;
   let readmeBytes: Uint8Array | null = null;
   try {
-    for (;;) {
+    while (true) {
       const header = await reader.read(512);
       if (!header) throw new Error("the tar stream ends without an end-of-archive block");
       if (header.every((byte) => byte === 0)) break;
@@ -371,7 +371,7 @@ function parseManifest(bytes: Uint8Array): PackageManifest {
 
 function validateInventory(manifest: PackageManifest, scanned: Map<string, ScannedEntry>): void {
   const listed = new Set<string>();
-  for (const entry of manifest.inventory as PackageInventoryEntry[]) {
+  for (const entry of manifest.inventory) {
     if (!isRecord(entry) || typeof entry.path !== "string" || typeof entry.checksum !== "string" || !Number.isSafeInteger(entry.sizeBytes)) {
       throw new Error("manifest.json has an invalid inventory entry");
     }

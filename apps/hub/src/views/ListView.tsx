@@ -124,7 +124,7 @@ export function ListView(props: ListViewProps): JSX.Element {
   // can actually narrow the list.
   const hasFilters = type.length > 0 || hardware.length > 0 || sourceOptions.length > 1;
 
-  const cards = visible.map((asset) => (
+  const card = (asset: (typeof visible)[number]) => (
     <AssetCard
       asset={asset}
       basePath={props.basePath}
@@ -133,20 +133,12 @@ export function ListView(props: ListViewProps): JSX.Element {
       language={language}
       onOpen={() => props.onOpen(asset)}
     />
-  ));
+  );
+  const cards = visible.map(card);
 
   const groups = props.groupByCategory && !route.params.get("function") && categories
     ? categories.map((category) => ({
-      cards: visible.filter((asset) => categoryFields(asset).function === category.id).map((asset) => (
-        <AssetCard
-          asset={asset}
-          basePath={props.basePath}
-          copy={copy}
-          key={asset.id}
-          language={language}
-          onOpen={() => props.onOpen(asset)}
-        />
-      )),
+      cards: visible.filter((asset) => categoryFields(asset).function === category.id).map(card),
       id: category.id,
       label: category.label[language],
     })).filter((group) => group.cards.length)
