@@ -3039,6 +3039,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const selectedSettingsRunner = settingsRunners.find((item) => item.id === selectedSettingsRunnerId);
   function updateSettingsRunners(items: RemoteHostTarget[]): void {
     setSettingsRunners(items);
+    setRemoteHosts(items.filter(item => item.id !== "local"));
     setSystemSettingsGroup((current) => current.startsWith("runner:") && !items.some((item) => item.id === current.slice(7)) ? "runner:local" : current);
   }
 
@@ -4612,7 +4613,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
-  const selectedRunnerIds = activeProject && session ? effectiveRunnerIds(activeProject, session) : [];
+  const selectedRunnerIds = activeProject && session ? effectiveRunnerIds(activeProject, session, ["local", ...remoteHosts.map(host => host.id)]) : [];
   const selectedRunnerNames = selectedRunnerIds.map((id) => id === "local" ? t("remote.localRunner")
     : remoteHosts.find((host) => host.id === id)?.runnerName ?? remoteHosts.find((host) => host.id === id)?.alias ?? id);
   // The Project/Session behind the scoped settings dialog, for the remote-compute sections.

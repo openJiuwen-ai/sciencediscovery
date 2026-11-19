@@ -17,18 +17,72 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { RemoteHostTarget, RemoteJob, RegisterRemoteHostRequest } from "@sciencediscovery/schema";
+import type { Project, Session, UpdateSessionRequest, UpdateProjectRequest, RemoteHostTarget, RemoteJob, RegisterRemoteHostRequest } from "@sciencediscovery/schema";
+import { DEFAULT_REVIEWER_SPECIALIST_LEVEL } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
-import type { ApiClient } from "../src/api.js";
+import { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
-import { ConnectLogPanel, NpuDeviceSelector, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
+import { ConnectLogPanel, NpuDeviceSelector, ProjectRemoteSettings, SessionRemoteSettings, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
+
+test("a default Project uses the complete Runner catalog and toggling one preserves other registered Runners", async () => {
+  const project: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
+  const hosts = [buildHost({ id: "local" }), buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }), buildHost({ id: "gpu-b", capabilities: { platform: "Linux" } }),
+    buildHost({ id: "offline", status: "disconnected", runnerStatus: { hostId: "offline", state: "disconnected" } })];
+  const client = new ApiClient("");
+  client.listRunners = async () => hosts;
+  const updates: UpdateProjectRequest[] = [];
+  client.updateProject = async (_id, body) => { updates.push(body); return { ...project, ...body }; };
+  let view: ReactTestRenderer | undefined;
+  await act(async () => { view = create(createElement(ProjectRemoteSettings, { client, project, onError: error => { throw error; }, onProjectChange() {} })); });
+  assert.ok(view); const renderer = view;
+  try {
+    const boxes = renderer.root.findAllByType("input");
+    assert.equal(boxes.length, 3);
+    assert.ok(boxes.every(box => box.props.checked));
+    const gpuA = boxes[1]; assert.ok(gpuA);
+    await act(async () => { gpuA.props.onChange(); });
+    assert.deepEqual(updates, [{ runnerIds: ["local", "gpu-b", "offline"] }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("inherit to override waits for the catalog and preserves default or explicit Runner selections", async () => {
+  const base: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
+  const hosts = [buildHost({ id: "local" }), buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }), buildHost({ id: "gpu-b", capabilities: { platform: "Linux" } }),
+    buildHost({ id: "offline", status: "disconnected", runnerStatus: { hostId: "offline", state: "disconnected" } })];
+  for (const selection of [undefined, [], ["gpu-a"]]) {
+    const project: Project = { ...base, ...(selection === undefined ? {} : { runnerIds: selection }) };
+    const session: Session = { id: "session", projectId: project.id, title: "Session", createdAt: timestamp, updatedAt: timestamp,
+      approvalMode: "ask_for_dangerous", permissionEpochId: "epoch", enabledConnectorIds: [], enabledSkillIds: [],
+      reviewerAutomaticReviewEnabled: true, reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+      reviewCriteria: [], reviewMode: "auto", semanticReviewEnabled: true, settingsOverrides: {} };
+    let complete: ((value: RemoteHostTarget[]) => void) | undefined;
+    const client = new ApiClient("");
+    client.listRunners = () => new Promise(resolve => { complete = resolve; });
+    const updates: UpdateSessionRequest[] = [];
+    client.updateSession = async (_id, body) => { updates.push(body); return session; };
+    let view: ReactTestRenderer | undefined;
+    await act(async () => { view = create(createElement(SessionRemoteSettings, { client, project, session, onError: error => { throw error; }, onSessionChange() {} })); });
+    assert.ok(view); const renderer = view;
+    try {
+      assert.equal(renderer.root.findByType("select").props.disabled, true);
+      await act(async () => { complete?.(hosts); });
+      const select = renderer.root.findByType("select");
+      assert.equal(select.props.disabled, false);
+      const expected = selection ?? ["local", "gpu-a", "gpu-b", "offline"];
+      const inherited = renderer.root.findAllByType("option").find(option => option.props.value === "inherit");
+      assert.ok(inherited); assert.ok(inherited.children.join("").includes(String(expected.length)));
+      await act(async () => { select.props.onChange({ target: { value: "override" } }); });
+      assert.deepEqual(updates, [{ runnerIds: expected }]);
+    } finally { await act(async () => renderer.unmount()); }
+  }
+});
 test("resource cards distinguish available workspace disk, low space, and unavailable readings", () => {
   const host = buildHost({ runnerStatus: { hostId: "host-1", state: "ready", resources: {
     capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
