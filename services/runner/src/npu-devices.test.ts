@@ -753,8 +753,8 @@ describe("an execution request drives the sandbox's cards", () => {
   test("an immediate bubblewrap failure is reported instead of leaving the execution pending", { timeout: 5_000 }, async (context) => {
     // Hold the seccomp fd close while the shim exits. Observing the child must
     // not wait for that close: this test releases the gate only after
-    // executePython settles, so an awaited close keeps the execution pending
-    // until execTimeoutMs and fails the stderr assertion below.
+    // executePython settles, so an awaited close would instead reject at
+    // execTimeoutMs (1 500 ms) before the shim's stderr can be asserted.
     const { config, request } = await fixture(context, inventory([
       { chipName: "910B3", health: "OK", hostIndex: 1_000_000, sandboxUsable: true },
     ]));
