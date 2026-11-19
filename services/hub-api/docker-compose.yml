@@ -1,0 +1,53 @@
+# One-host deployment: the API beside MySQL, with packages in OBS.
+#
+#   cp .env.example .env   # fill in the bucket and the secrets
+#   docker compose --env-file .env up -d --build
+#
+# The bucket stays private; the API issues presigned URLs. TLS terminates in
+# front of this stack (reverse proxy or load balancer), which is also what
+# serves the static site.
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hub}
+      MYSQL_USER: ${MYSQL_USER:-hub}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment:
+      HUB_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-hub}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-hub}
+      HUB_STORAGE_BACKEND: s3
+      HUB_S3_ENDPOINT: ${HUB_S3_ENDPOINT:?set HUB_S3_ENDPOINT}
+      HUB_S3_REGION: ${HUB_S3_REGION:?set HUB_S3_REGION}
+      HUB_S3_BUCKET: ${HUB_S3_BUCKET:?set HUB_S3_BUCKET}
+      HUB_S3_ACCESS_KEY: ${HUB_S3_ACCESS_KEY:?set HUB_S3_ACCESS_KEY}
+      HUB_S3_SECRET_KEY: ${HUB_S3_SECRET_KEY:?set HUB_S3_SECRET_KEY}
+      HUB_SESSION_SECRET: ${HUB_SESSION_SECRET:?set HUB_SESSION_SECRET}
+      HUB_ALLOW_REGISTRATION: ${HUB_ALLOW_REGISTRATION:-false}
+      HUB_ADMIN_USERNAME: ${HUB_ADMIN_USERNAME:-}
+      HUB_ADMIN_PASSWORD: ${HUB_ADMIN_PASSWORD:-}
+      HUB_PRESIGN_SECONDS: ${HUB_PRESIGN_SECONDS:-600}
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
