@@ -1133,16 +1133,6 @@ export function App({ initialToken }: Props) {
             actions={actions}
             detail={state.detail}
             onExpandSidebar={expandSidebar}
-            onExport={state.detail ? () => {
-              // Same guard as the sidebar's row menu: a session whose project is gone
-              // cannot be exported, and the click has to say so rather than fail later.
-              const target = state.detail!;
-              if (!canExportSession(target, state.projects, state.inboxProject?.id)) {
-                actions.toast(TEXT.researchPackage.sourceUnavailable, "error");
-                return;
-              }
-              setPackageRequest({ kind: "export", sessionId: target.id, projectId: target.projectId });
-            } : undefined}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
             // A Session outside every Project is not "in 会话": that is
             // the column's name for the list, not a place to print beside the

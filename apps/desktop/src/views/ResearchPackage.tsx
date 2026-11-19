@@ -489,7 +489,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       {flash.savedToken ? <button className="research-toast-action" onClick={() => void openLocation(flash.savedToken!)} type="button">{t.openLocation}</button> : null}
       <button aria-label={t.close} className="research-toast-close" onClick={() => dismissFlash(flash.id)} type="button">×</button>
     </div>)}</div> : null}
-    {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
+    {!dialog && (error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
       <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}{dialog === "export" ? <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span> : null}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
@@ -541,14 +541,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           <p className="research-field-label">{t.chooseFile}</p>
           {file ? (
             <div className="research-file-card">
-              <span aria-hidden="true" className="research-file-card-icon"><svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="20"><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h4" /></svg></span>
-              <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
-              <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+              <div className="research-file-card-header">
+                <span aria-hidden="true" className="research-file-card-icon"><svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="20"><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h4" /></svg></span>
+                <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
+                <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+              </div>
+              {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
             </div>
           ) : (
             <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
-          {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
