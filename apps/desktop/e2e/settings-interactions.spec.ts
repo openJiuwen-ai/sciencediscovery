@@ -854,6 +854,16 @@ test.describe("模型", () => {
     await expect(listbox).toHaveCount(0);
     await caret.click();
     await expect(listbox).toBeVisible();
+
+    // Escape still belongs to the list when focus is not in the input: a click
+    // on the list's own padding leaves focus on the page, where the input's
+    // keydown handler never sees the key. Only the list may close.
+    const menuBox = await page.locator(".field-combo-menu").boundingBox();
+    if (!menuBox) throw new Error("the listing has no box");
+    await page.mouse.click(menuBox.x + 2, menuBox.y + 2);
+    await page.keyboard.press("Escape");
+    await expect(listbox).toHaveCount(0);
+    await expect(modal).toBeVisible();
   });
 
   test("the provider chooser picks a preset and closes one Escape at a time", async ({ page }) => {
