@@ -15,7 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
@@ -616,6 +616,54 @@ test("consolidates legacy duplicate drafts into one review with a proposal diff"
     assert.equal(detail?.baseFiles[0]?.content, "first proposal");
     assert.equal(detail?.files[0]?.content, "latest proposal");
     assert.deepEqual(await readdir(draftRoot), [`${latestId}.json`]);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("an imported script that declares an interpreter stays executable", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const archive = Buffer.from(zipSync({
+      "shebang-skill/SKILL.md": strToU8(markdown("shebang-skill").toString("utf8")),
+      "shebang-skill/scripts/run.py": strToU8("#!/usr/bin/env python3\nprint('run')\n"),
+      "shebang-skill/scripts/plain.py": strToU8("print('plain')\n"),
+    }));
+    const imported = await catalog.import("shebang-skill.zip", archive);
+    const packageRoot = resolve(dataDir, "skills", imported.id, "revisions", "1", "package");
+    const runMode = (await stat(resolve(packageRoot, "scripts/run.py"))).mode;
+    const plainMode = (await stat(resolve(packageRoot, "scripts/plain.py"))).mode;
+    assert.ok(runMode & 0o100, "the shebang script is not executable");
+    assert.equal(plainMode & 0o100, 0, "a script without a shebang was made executable");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("an imported name that is taken installs under the next free name", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const archive = Buffer.from(zipSync({
+      "portable-skill/SKILL.md": strToU8(markdown().toString("utf8")),
+      "portable-skill/references/guide.md": strToU8("one"),
+    }));
+
+    const first = await catalog.import("portable-skill.zip", archive);
+    assert.equal(first.id, "portable-skill");
+    const second = await catalog.import("portable-skill.zip", archive);
+    assert.equal(second.id, "portable-skill-2");
+    assert.equal(second.name, "portable-skill-2");
+    assert.equal(second.frontmatter.name, "portable-skill-2");
+    assert.deepEqual(second.resources.map((resource) => resource.path), ["references/guide.md"]);
+
+    const reloaded = new SkillCatalog(dataDir, repositoryRoot);
+    await reloaded.load();
+    assert.equal(reloaded.get("portable-skill")?.currentRevision, 1);
+    assert.equal(reloaded.get("portable-skill-2")?.currentRevision, 1);
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

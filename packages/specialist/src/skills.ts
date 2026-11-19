@@ -15,6 +15,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
+  chmod,
   lstat,
   mkdir,
   readFile,
@@ -871,12 +872,22 @@ async function readPackageDirectory(root: string, directory = root, prefix = "",
   return files;
 }
 
+/** A script that declares its own interpreter (`#!`) is meant to be run
+ *  directly. The catalog stores bytes, not Unix modes, so the shebang is the
+ *  one piece of the source package's executable intent that survives; without
+ *  it an imported `scripts/run.py` would be refused with "permission denied"
+ *  where the repository's copy runs. */
+function isExecutableScript(bytes: Buffer): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x23 && bytes[1] === 0x21;
+}
+
 async function writePackageDirectory(root: string, files: ReadonlyMap<string, Buffer>): Promise<void> {
   for (const [path, bytes] of files) {
     const normalized = normalizedPackagePath(path);
     const target = resolve(root, ...normalized.split("/"));
     await mkdir(resolve(target, ".."), { recursive: true });
     await writeFile(target, bytes, { flag: "wx" });
+    if (isExecutableScript(bytes)) await chmod(target, 0o755);
   }
 }
 
@@ -975,6 +986,23 @@ export function packageFromUpload(filename: string, bytes: Buffer): LoadedPackag
   if (!zip) return validateSkillPackage(new Map([["SKILL.md", bytes]]));
   const rooted = stripArchiveRoot(extractZip(bytes));
   return validateSkillPackage(rooted.files, { directoryName: rooted.directoryName });
+}
+
+/** The same package under another name: the SKILL.md `name` line is the only
+ *  place the identity is stored, so rewriting that line re-validates the whole
+ *  package under the new directory the catalog will write it to. */
+function renameSkillPackage(loaded: LoadedPackage, name: string): LoadedPackage {
+  const markdown = loaded.files.get("SKILL.md");
+  if (!markdown) throw validationError("Skill package must contain SKILL.md at its root");
+  const text = markdown.toString("utf8");
+  const close = text.indexOf("\n---", 3);
+  if (close === -1) throw validationError("SKILL.md frontmatter is invalid");
+  const block = text.slice(0, close);
+  const renamed = block.replace(/^name\s*:.*$/m, `name: ${name}`);
+  if (renamed === block) throw validationError("SKILL.md name is missing");
+  const files = new Map(loaded.files);
+  files.set("SKILL.md", Buffer.from(renamed + text.slice(close), "utf8"));
+  return validateSkillPackage(files, { revision: loaded.detail.currentRevision });
 }
 
 function resourceContent(detail: SkillDetail, files: ReadonlyMap<string, Buffer>, rawPath: string): SkillResourceContent {
@@ -1772,13 +1800,32 @@ export class SkillCatalog {
     });
   }
 
+  /** The next free name for an import whose own name is taken: `name-2`,
+   *  `name-3`, … The suffix must still fit the 64-character rule and the
+   *  result must not end in a hyphen after truncation. */
+  private availableSkillName(base: string): string {
+    const taken = (candidate: string) =>
+      this.builtIns.has(candidate) || this.managed.has(candidate);
+    if (!taken(base)) return base;
+    for (let index = 2; index < 10_000; index += 1) {
+      const suffix = `-${index}`;
+      const stem = base.slice(0, Math.max(1, 64 - suffix.length)).replace(/-+$/, "") || "skill";
+      const candidate = `${stem}${suffix}`;
+      if (!taken(candidate)) return candidate;
+    }
+    throw new SkillCatalogError("SKILL_CONFLICT", `No available name for imported Skill: ${base}`);
+  }
+
   async import(filename: string, bytes: Buffer): Promise<SkillDetail> {
     return await this.mutate(async () => {
       this.assertLoaded();
-      const loaded = packageFromUpload(filename, bytes);
-      if (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id)) {
-        throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
-      }
+      // A second package with the same name is not a mistake to refuse: the
+      // reader chose a file, and the catalog can hold both. The import gets
+      // the next free name rather than making the reader rename the source.
+      const uploaded = packageFromUpload(filename, bytes);
+      const loaded = this.builtIns.has(uploaded.detail.id) || this.managed.has(uploaded.detail.id)
+        ? renameSkillPackage(uploaded, this.availableSkillName(uploaded.detail.id))
+        : uploaded;
       const committed = await this.commitManaged(loaded, 1, new Date().toISOString(), { source: "local-import" });
       this.index.managed[loaded.detail.id] = { currentRevision: 1 };
       try {
