@@ -214,7 +214,7 @@ test("a checkpoint over two artifacts names both, in separate sections", async (
   // Each section carries its own verdict, not the card's: the passing file
   // behind a failing one still has to read as a pass.
   await expect(sections.nth(0).locator(".review-artifact-verdict")).toHaveText("未发现问题");
-  await expect(sections.nth(1).locator(".review-artifact-verdict")).toHaveText("1 个问题（已过期）");
+  await expect(sections.nth(1).locator(".review-artifact-verdict")).toHaveText("1 项提醒（已过期）");
   await expect(sections.nth(0)).toHaveClass(/is-pass/u);
   await expect(sections.nth(1)).toHaveClass(/is-warn/u);
 });
@@ -681,8 +681,10 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(unverified.locator(".review-summary")).not.toHaveText("未发现问题");
 
   const warning = cards.nth(2);
-  await expect(warning).toHaveClass(/is-fail/u);
-  await expect(warning.locator(".review-summary")).toHaveText("1 个问题");
+  // A warning is not a problem: the card wears the warning tone and counts
+  // 提醒, the same word its row uses.
+  await expect(warning).toHaveClass(/is-warn/u);
+  await expect(warning.locator(".review-summary")).toHaveText("1 项提醒");
   await warning.locator(".review-head").click();
   await expect(warning.locator(".review-item-title")).toHaveText("缺少可识别的引文标识符。");
   await expect(warning.locator(".review-item-label")).toHaveText("引用");
@@ -703,8 +705,8 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(inconclusive).toHaveClass(/is-neutral/u);
   await expect(inconclusive.locator(".review-summary")).toHaveText("未验证交付");
   await inconclusive.locator(".review-head").click();
-  await expect(inconclusive.locator(".review-item-title")).toHaveText("来源核验没有得出结论");
-  await expect(inconclusive.locator(".review-item-body")).toHaveText("来源服务未返回结论，这不代表报告有问题。");
+  await expect(inconclusive.locator(".review-item-title")).toHaveText("没能核对结论来源");
+  await expect(inconclusive.locator(".review-item-body")).toHaveText("这次没能把结论与来源原文对照：查来源的服务没有返回结果。这不代表报告有问题。");
   await expect(inconclusive).not.toContainText("Paper Reader timeout");
 
   // A failed checkpoint is the Reviewer's failure, not a verdict on the
@@ -737,7 +739,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await page.reload();
   await expect(cards).toHaveCount(8);
   await expect(cards.nth(0)).toHaveClass(/is-pass/u);
-  await expect(cards.nth(2)).toHaveClass(/is-fail/u);
+  await expect(cards.nth(2)).toHaveClass(/is-warn/u);
   await expect(cards.nth(6).locator(".review-summary")).toHaveText("已跳过审查");
   await expect(cards.nth(7)).toHaveClass(/is-neutral/u);
 });

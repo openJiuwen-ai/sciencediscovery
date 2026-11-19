@@ -119,8 +119,8 @@ describe("a review's verdict", () => {
     assert.equal(reviewSummary(skipped), TEXT.reviewer.summarySkipped);
   });
 
-  it("turns red on any finding: the artifact itself needs a fix", () => {
-    const flagged = review({
+  it("calls a warning a warning, and keeps red for a critical finding", () => {
+    const warned = review({
       decision: "REVISE_AND_RETRY",
       findings: [{
         code: "CITATION_FORMAT_INVALID",
@@ -131,8 +131,49 @@ describe("a review's verdict", () => {
         status: "open",
       }],
     });
-    assert.equal(reviewTone(flagged), "fail");
-    assert.equal(reviewSummary(flagged), TEXT.reviewer.summaryFindings(1));
+    // The row below the header says 提醒; the header has to use the same word
+    // and the same tone, or the card promises a problem it cannot show.
+    assert.equal(reviewTone(warned), "warn");
+    assert.equal(reviewSummary(warned), TEXT.reviewer.summaryWarnings(1));
+
+    const critical = review({
+      decision: "REVISE_AND_RETRY",
+      findings: [{
+        code: "CITATION_FORMAT_INVALID",
+        evidenceRefs: [],
+        id: "finding-1",
+        message: "[3] is not listed",
+        severity: "critical",
+        status: "open",
+      }],
+    });
+    assert.equal(reviewTone(critical), "fail");
+    assert.equal(reviewSummary(critical), TEXT.reviewer.summaryProblems(1));
+  });
+
+  it("counts problems and warnings apart when a review raised both", () => {
+    const both = review({
+      decision: "REVISE_AND_RETRY",
+      findings: [
+        {
+          code: "COMPUTATION_EVIDENCE_VALUE_MISMATCH",
+          evidenceRefs: [],
+          id: "finding-critical",
+          message: "Value mismatch",
+          severity: "critical",
+          status: "open",
+        },
+        {
+          code: "CITATION_FORMAT_INVALID",
+          evidenceRefs: [],
+          id: "finding-warning",
+          message: "[3] is not listed",
+          severity: "warning",
+          status: "open",
+        },
+      ],
+    });
+    assert.equal(reviewSummary(both), TEXT.reviewer.summaryMixed(1, 1));
   });
 
   it("does not call it a pass when the review itself says a check was not run", () => {
@@ -233,7 +274,9 @@ describe("a review's rows", () => {
     const row = reviewRows(gapped).find((candidate) => candidate.id === "review-1:gap:0");
     assert.ok(row);
     assert.equal(row.label, TEXT.reviewer.gaps);
-    assert.equal(row.body, "no source text");
+    // The server's own reason stays in the record; the card says the same
+    // thing in the UI's language, and in words a reader can act on.
+    assert.equal(row.body, TEXT.reviewer.gapBodies.claim_support);
     // An absence is not a warning about the artifact, and it is not a pass.
     assert.equal(row.tone, "neutral");
   });
@@ -390,8 +433,8 @@ describe("a checkpoint's card", () => {
       }],
       id: "review-2",
     });
-    assert.equal(checkpointTone([review(), flagged], "completed"), "fail");
-    assert.equal(checkpointSummary([review(), flagged], "completed"), TEXT.reviewer.summaryFindings(1));
+    assert.equal(checkpointTone([review(), flagged], "completed"), "warn");
+    assert.equal(checkpointSummary([review(), flagged], "completed"), TEXT.reviewer.summaryWarnings(1));
   });
 
   it("draws a one-line header that folds out into the items", () => {

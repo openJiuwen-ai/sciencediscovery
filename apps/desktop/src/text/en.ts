@@ -185,7 +185,13 @@ export const EN: Text = {
       citation: "Checking the citations",
     } as Record<string, string>,
     summaryPass: "No issues found",
-    summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+    /** The count uses the same nouns as the rows: Issue for a critical
+     *  finding, Warning for a warning. Counting both as issues promised a
+     *  problem the reader could not find below. */
+    summaryProblems: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+    summaryWarnings: (count: number) => `${count} ${count === 1 ? "warning" : "warnings"}`,
+    summaryMixed: (problems: number, warnings: number) =>
+      `${problems} ${problems === 1 ? "issue" : "issues"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
@@ -232,9 +238,20 @@ export const EN: Text = {
       citation_identity: "Citation identity",
       computation: "Computation",
     } as Record<string, string>,
+    /** What the unperformed check would have covered, and what to do next.
+     *  The server's own reason is an English template; the card keeps its
+     *  language and says the same thing in the reader's words. */
+    gapBodies: {
+      claim_support: "This review did not check the claims against their sources. Use Deep review to check that.",
+      citation_identity: "This review did not check the papers' identity (authors, journal, year).",
+      computation: "This review did not check the numbers against the computation evidence.",
+    } as Record<string, string>,
+    gapBodyUnknown: "This review did not run this check.",
+    sourceSupported: "The source text supports this claim.",
+    sourcePartly: "The source text supports only part of this claim.",
     /** A source check that could not conclude is not a report defect. */
-    inconclusive: "Source verification reached no conclusion",
-    inconclusiveBody: "The source service returned no verdict; this is not a problem with the report.",
+    inconclusive: "Could not check this claim against its source",
+    inconclusiveBody: "The claim was not compared with its source text because the source lookup returned no result. This is not a problem with the report.",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "This review checked citation format only; claim support was not checked.",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -258,10 +275,10 @@ export const EN: Text = {
     completeness: {
       complete: "Delivery complete",
       incomplete: "Delivery incomplete",
-      unconfirmed: "No deliverable list declared",
-      sourceBrief: "Checked against the deliverables this task declared.",
-      sourceSession: "This task declared nothing; checked against the session's own declarations.",
-      sourceNone: "No deliverable declaration was available, so delivery could not be confirmed.",
+      unconfirmed: "The task did not name its deliverables",
+      sourceBrief: "Checked against the files this task named as deliverables.",
+      sourceSession: "This task named none, so the session's own declarations were used.",
+      sourceNone: "This task did not say which files it should produce, so there is no way to confirm they are all there. Naming them in the task is what makes this checkable.",
       missing: "Missing",
       empty: "Empty",
     },

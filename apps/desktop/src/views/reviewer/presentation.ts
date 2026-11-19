@@ -153,7 +153,11 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.decision === "SKIPPED") return "neutral";
   if (review.stale === true) return "warn";
   if (review.completeness?.status === "incomplete") return "fail";
-  if (review.findings.length > 0) return "fail";
+  // A problem is a critical finding. A warning is something to look at, not a
+  // failure, and the row for it says 提醒; colouring the card red while its
+  // own rows say 提醒 made the card contradict itself.
+  if (review.findings.some((finding) => finding.severity === "critical")) return "fail";
+  if (review.findings.length > 0) return "warn";
   if (unverifiedDelivery(review)) return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
   // is an absence of a verdict, not a warning about the artifact.
@@ -166,8 +170,14 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     if (review.status === "failed") return TEXT.reviewer.summaryFailed;
     if (review.decision === "SKIPPED") return TEXT.reviewer.summarySkipped;
     if (review.completeness?.status === "incomplete") return TEXT.reviewer.summaryIncomplete;
-    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code)).length;
-    if (raised > 0) return TEXT.reviewer.summaryFindings(raised);
+    // Say what the rows say: 问题 for a critical finding, 提醒 for a warning.
+    // Counting both as 问题 promised a problem the reader could not find.
+    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code));
+    const problems = raised.filter((finding) => finding.severity === "critical").length;
+    const warnings = raised.length - problems;
+    if (problems > 0 && warnings > 0) return TEXT.reviewer.summaryMixed(problems, warnings);
+    if (problems > 0) return TEXT.reviewer.summaryProblems(problems);
+    if (warnings > 0) return TEXT.reviewer.summaryWarnings(warnings);
     if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
     if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;
@@ -249,9 +259,13 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       id: `${review.id}:gap:${index}`,
       tone: "neutral",
       label: TEXT.reviewer.gaps,
+      // The server's `gap.reason` is an English template ("Quick review parses
+      // citation format and provenance only; ..."). Printing it put an English
+      // paragraph in a Chinese card and told the reader nothing they could act
+      // on. The record keeps it; the card names the check and the next step.
       labelTip: labelTipFor("gaps"),
       title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
-      body: gap.reason,
+      body: TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
       badge: TEXT.reviewer.gaps,
     });
   }
@@ -283,6 +297,21 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // found, and that it was not enough to check the claim. The raw reason
     // stays in the review record.
     const inconclusive = verdict === "INCONCLUSIVE";
+    // Only a contradiction quotes the reviewer's own account of the source —
+    // that is the evidence for a claim about the report. A supported or partly
+    // supported check says what it found in the card's language: its rationale
+    // is model output and arrived in whichever language the source did.
+    const body = inconclusive
+      ? assessment.locators.length > 0
+        ? TEXT.reviewer.sourceInconclusiveWith(assessment.locators.length)
+        : TEXT.reviewer.sourceInconclusiveNone
+      : verdict === "CONTRADICTED"
+        ? assessment.locators.length > 0
+          ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
+          : assessment.assessment.rationale
+        : `${verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly}${
+          assessment.locators.length > 0 ? `\n${TEXT.reviewer.locators(assessment.locators.length)}` : ""
+        }`;
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
       tone: inconclusive
@@ -291,13 +320,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       label: TEXT.reviewer.source,
       labelTip: labelTipFor("source"),
       title: claimText(assessment.claim) ?? TEXT.reviewer.source,
-      body: inconclusive
-        ? assessment.locators.length > 0
-          ? TEXT.reviewer.sourceInconclusiveWith(assessment.locators.length)
-          : TEXT.reviewer.sourceInconclusiveNone
-        : assessment.locators.length > 0
-          ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
-          : assessment.assessment.rationale,
+      body,
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
     });
   }
