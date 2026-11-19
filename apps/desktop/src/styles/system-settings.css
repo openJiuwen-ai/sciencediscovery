@@ -397,6 +397,33 @@
 .mcp-secret-row .field-input { flex: 1; min-width: 0; }
 .mcp-secret-fields > .secondary-button { justify-self: start; }
 
+/* The two ways in for a server this machine has never seen, above the list they
+   add to. */
+.mcp-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+/* What an import spec will add, and what each write did. */
+.mcp-import-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-import-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.mcp-import-list li small { color: var(--text-secondary); }
+.mcp-import-list li small.is-error { color: var(--danger); }
+
 /* The tool list a built-in card expands to. It lives inside the card's main
    button, so every part is phrasing content. */
 .settings-builtin-tools {
