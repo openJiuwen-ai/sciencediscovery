@@ -490,11 +490,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     </div>)}</div> : null}
     {(error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
-      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
+      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}{dialog === "export" ? <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span> : null}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
           <p className="research-dialog-lede">{t.evidenceOnly}</p>
-          <p className="research-field-label">{t.exportTypes} <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span></p>
+          <p className="research-field-label">{t.exportTypes}</p>
           <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); if (value !== "complete") { setGraph(false); } }} type="button">
             <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><strong>{value === "necessary" ? t.necessary : t.complete}</strong></span>
             <span className="research-profile-badges">{(value === "necessary"

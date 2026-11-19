@@ -189,6 +189,7 @@
 
 .research-package-upload.is-dragging { border-color: #1677ff; background: #eff6ff; }
 .research-scope-help { width: 16px; height: 16px; margin-left: 4px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font-size: 11px; line-height: 14px; cursor: help; }
+.research-package-dialog .modal-header h2 { display: flex; align-items: center; gap: 6px; }
 .research-package-resume { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 28px 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-1); }
 .research-package-resume strong { font-size: 15px; }
 .research-package-dialog.is-import { width: min(700px, calc(100vw - 32px)); }
