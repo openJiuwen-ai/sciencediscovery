@@ -89,10 +89,11 @@ export interface DeletionImpact {
  * A Project with no selection uses the live registered catalog. Legacy remote
  * selections keep the built-in Runner; an explicit empty Session legacy list
  * still means built-in only.
+ * Callers must supply the catalog so clients cannot silently fall back to local only.
  */
 export function effectiveRunnerIds(project: Pick<Project, "runnerIds" | "remoteRunnerHostIds">,
-  session?: Pick<Session, "runnerIds" | "remoteRunnerHostIds">,
-  registeredRunnerIds: readonly string[] = ["local"]): string[] {
+  session: Pick<Session, "runnerIds" | "remoteRunnerHostIds"> | undefined,
+  registeredRunnerIds: readonly string[]): string[] {
   if (session?.runnerIds !== undefined) return [...session.runnerIds];
   if (session?.remoteRunnerHostIds !== undefined) return ["local", ...session.remoteRunnerHostIds];
   if (project.runnerIds !== undefined) return [...project.runnerIds];

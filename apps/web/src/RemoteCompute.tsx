@@ -43,8 +43,8 @@ import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
  * Remote machines a Session may use: its own `remoteRunnerHostIds` override
  * (`[]` forbids every remote machine), else the Project allowlist. Local execution is controlled by the unified selection when present.
  */
-export function effectiveRemoteRunnerHostIds(project: Project | undefined, session: Session | undefined): string[] {
-  return project ? effectiveRunnerIds(project, session).filter((id) => id !== "local") : [];
+export function effectiveRemoteRunnerHostIds(project: Project | undefined, session: Session | undefined, registeredRunnerIds: readonly string[]): string[] {
+  return project ? effectiveRunnerIds(project, session, registeredRunnerIds).filter((id) => id !== "local") : [];
 }
 
 function resourceBytes(bytes: number): string {
@@ -1018,13 +1018,15 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
   const hosts = useRemoteHosts(client, onError);
   const [busyId, setBusyId] = useState<string>();
   const usable = (hosts ?? []).filter(runnerUsable);
+  const registeredRunnerIds = [...new Set(["local", ...(hosts ?? []).map(host => host.id)])];
+  const selectedIds = effectiveRunnerIds(project, undefined, registeredRunnerIds);
 
   async function toggle(host: RemoteHostTarget): Promise<void> {
     setBusyId(host.id);
     try {
-      const ids = effectiveRunnerIds(project).includes(host.id)
-        ? effectiveRunnerIds(project).filter((id) => id !== host.id)
-        : [...effectiveRunnerIds(project), host.id];
+      const ids = selectedIds.includes(host.id)
+        ? selectedIds.filter((id) => id !== host.id)
+        : [...selectedIds, host.id];
       onProjectChange(await client.updateProject(project.id, { runnerIds: ids }));
     } catch (error) {
       onError(error instanceof Error ? error : t("remote.errorUpdateProjectAllowlist"));
@@ -1037,7 +1039,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
     <div className="editor-heading"><strong>{t("remote.scopedTitle")}</strong><small>{t("remote.projectHelp")}</small></div>
     {!hosts ? <p className="muted">{t("remote.loading")}</p>
       : usable.length ? <div className="settings-choices">{usable.map((host) => <label key={host.id}>
-        <input checked={effectiveRunnerIds(project).includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
+        <input checked={selectedIds.includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
         <span>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host, t)}</small></span>
       </label>)}</div>
       : <p className="settings-choice-empty">{t("remote.noUsable", { title: t("remote.scopedTitle") })}</p>}
@@ -1065,7 +1067,9 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   const override = session.runnerIds ?? (session.remoteRunnerHostIds === undefined ? undefined : ["local", ...session.remoteRunnerHostIds]);
   const mode = override == null ? "inherit" : "override";
   const availableHosts = (hosts ?? []).filter(runnerUsable);
-  const effectiveIds = effectiveRunnerIds(project, session);
+  const registeredRunnerIds = [...new Set(["local", ...(hosts ?? []).map(host => host.id)])];
+  const projectIds = effectiveRunnerIds(project, undefined, registeredRunnerIds);
+  const effectiveIds = effectiveRunnerIds(project, session, registeredRunnerIds);
 
   async function update(body: UpdateSessionRequest, fallback: string): Promise<void> {
     setBusyId("session-remote");
@@ -1086,7 +1090,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   }
 
   async function toggle(host: RemoteHostTarget): Promise<void> {
-    const selected = override ?? effectiveRunnerIds(project);
+    const selected = override ?? projectIds;
     const ids = selected.includes(host.id)
       ? selected.filter((id) => id !== host.id)
       : [...selected, host.id];
@@ -1097,8 +1101,8 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
     <div className="editor-heading"><strong>{t("remote.scopedTitle")}</strong><small>{t("remote.sessionHelp")}</small></div>
     <label className="settings-field">
       <span>{t("remote.allowedRunners")}</span>
-      <select disabled={disabled || Boolean(busyId)} value={mode} onChange={(event) => void setMode(event.target.value as "inherit" | "override")}>
-        <option value="inherit">{t("remote.inheritOption", { count: effectiveRunnerIds(project).length })}</option>
+      <select disabled={disabled || Boolean(busyId) || !hosts} value={mode} onChange={(event) => void setMode(event.target.value as "inherit" | "override")}>
+        <option value="inherit">{t("remote.inheritOption", { count: projectIds.length })}</option>
         <option value="override">{t("remote.overrideOption", { count: mode === "override" ? (override?.length ?? 0) : effectiveIds.length })}</option>
       </select>
     </label>
