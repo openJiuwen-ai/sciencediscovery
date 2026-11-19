@@ -95,6 +95,22 @@ describe("desktop configuration request lifecycle", () => {
     assert.equal(view.result.error, false); assert.equal(view.result.requests.length, 1);
     await view.close();
   });
+  it("does not turn the connecting state back on for a read behind a running turn", async () => {
+    const { client, calls } = pendingClient(); const view = await mount(client, true);
+    assert.equal(view.result.loading, true);
+    await act(async () => calls[0]!.resolve({ items: [] }));
+    assert.equal(view.result.loading, false);
+    // A live run changes the refresh key on nearly every event, and the poll
+    // re-reads every two seconds as well. Each of those used to set `loading`
+    // again, blinking a "connecting" strip in and out under the run's own
+    // line and resizing the transcript — the flicker while it planned.
+    await act(async () => view.trigger("run-event"));
+    assert.equal(calls.length, 2);
+    assert.equal(view.result.loading, false);
+    await act(async () => calls[1]!.resolve({ items: [] }));
+    assert.equal(view.result.loading, false);
+    await view.close();
+  });
   it("ignores a superseded same-session read", async () => {
     const { client, calls } = pendingClient(); const view = await mount(client);
     let retry!: Promise<void>;

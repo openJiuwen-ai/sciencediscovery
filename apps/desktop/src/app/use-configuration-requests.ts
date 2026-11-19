@@ -19,7 +19,17 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
   const [, render] = useReducer((value: number) => value + 1, 0);
   // A distinct scope for every visit also rejects A → B → A responses.
   const scope = useMemo(() => ({
-    requests: [] as ConfigurationRequestView[], legacyRequests: [] as ConnectorConfigurationRequest[], loading: Boolean(sessionId), error: false,
+    requests: [] as ConfigurationRequestView[], legacyRequests: [] as ConnectorConfigurationRequest[], error: false,
+    // `loading` is the first read of this scope still being out, and the only
+    // state that may draw a "connecting" line. A refresh behind a running turn
+    // re-reads the same list every couple of seconds; turning this on for it
+    // blinked that line in and out under the run's own line, and every blink
+    // resized the transcript — the flicker the reader saw while the model was
+    // still planning.
+    loading: Boolean(sessionId),
+    // A read is in flight at all. Kept apart from `loading` so the poll can
+    // avoid stacking reads without claiming the connection is new.
+    reading: false,
     alive: true, sequence: 0, controller: undefined as AbortController | undefined,
     removed: new Set<string>(),
   }), [client, sessionId]);
@@ -35,10 +45,13 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
     const merged = mergeConfigurationRequests(scope.requests, incoming.filter(isConfigurationRequestView).filter(request =>
       request.sessionId === sessionId && !scope.removed.has(request.id)));
     // Equal snapshots must not reset a card's in-progress field edits.
-    scope.requests = merged.map(request => {
+    const nextRequests = merged.map(request => {
       const old = previous.get(request.id);
       return old && JSON.stringify(old) === JSON.stringify(request) ? old : request;
     });
+    const requestsChanged = nextRequests.length !== scope.requests.length
+      || nextRequests.some((request, index) => request !== scope.requests[index]);
+    scope.requests = nextRequests;
     const previousLegacy = new Map(scope.legacyRequests.map(request => [request.id, request]));
     const genericIds = new Set(scope.requests.map(request => request.id));
     const legacy = new Map(previousLegacy);
@@ -53,8 +66,13 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
         || (old.continuationRunId && !request.continuationRunId && request.updatedAt === old.updatedAt))) continue;
       legacy.set(request.id, old && JSON.stringify(old) === JSON.stringify(request) ? old : request);
     }
-    scope.legacyRequests = [...legacy.values()].filter(request => !genericIds.has(request.id));
-    render();
+    const nextLegacy = [...legacy.values()].filter(request => !genericIds.has(request.id));
+    const legacyChanged = nextLegacy.length !== scope.legacyRequests.length
+      || nextLegacy.some((request, index) => request !== scope.legacyRequests[index]);
+    scope.legacyRequests = nextLegacy;
+    // A poll that read the same list says nothing new; painting for it would
+    // re-render the whole transcript every two seconds for no visible reason.
+    if (requestsChanged || legacyChanged) render();
     for (const request of scope.legacyRequests) {
       if (request !== previousLegacy.get(request.id)) changed.current?.(request);
     }
@@ -69,8 +87,7 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
     const controller = new AbortController();
     scope.controller = controller;
     const sequence = ++scope.sequence;
-    scope.loading = true;
-    render();
+    scope.reading = true;
     try {
       const response = await listConfigurationRequests(client, sessionId, controller.signal);
       if (!valid() || sequence !== scope.sequence || controller.signal.aborted) return;
@@ -79,11 +96,21 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
     } catch {
       if (!valid() || sequence !== scope.sequence || controller.signal.aborted) return;
       // Keep the last good cards; do not expose transport/backend error text.
-      scope.error = true;
+      // A failed refresh changes what the transcript says (the retry line), so
+      // it has to paint even though `loading` was already down.
+      if (!scope.error) {
+        scope.error = true;
+        render();
+      }
     } finally {
       if (valid() && sequence === scope.sequence) {
-        scope.loading = false;
-        render();
+        scope.reading = false;
+        // Only the first answer ends the "connecting" state; later reads are
+        // refreshes of a list already on screen and have nothing to announce.
+        if (scope.loading) {
+          scope.loading = false;
+          render();
+        }
       }
     }
   }, [client, sessionId, scope, merge, valid]);
@@ -99,7 +126,7 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
     if (!sessionId || !polling) return;
     const timer = setInterval(() => {
       // Slow reads are allowed to finish instead of being aborted every tick.
-      if (!scope.loading) void refresh();
+      if (!scope.reading) void refresh();
     }, 2_000);
     return () => clearInterval(timer);
   }, [sessionId, polling, scope, refresh]);
