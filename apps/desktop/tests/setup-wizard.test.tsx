@@ -129,10 +129,10 @@ describe("the first-run setup wizard", () => {
     assert.ok(markup.includes(TEXT.wizard.testAndContinue));
     assert.ok(markup.includes('data-step="model"'));
     assert.ok(markup.includes(TEXT.wizard.back));
-    // 返回上一步 belongs to the action row, after the continue button — not on
-    // a line of its own below the form.
+    // 返回上一步 belongs to the action row, in the demoted group ahead of the
+    // continue button — not on a line of its own below the form.
     const actions = markup.slice(markup.indexOf('class="form-actions"'));
-    assert.ok(actions.indexOf(TEXT.wizard.testAndContinue) < actions.indexOf(TEXT.wizard.back));
+    assert.ok(actions.indexOf(TEXT.wizard.back) < actions.indexOf(TEXT.wizard.testAndContinue));
     assert.ok(actions.indexOf(TEXT.wizard.back) < actions.indexOf("</div>"));
     // 开始使用 is the continuation, not a second save: it must stay hidden until
     // the connectivity test in this form passes.

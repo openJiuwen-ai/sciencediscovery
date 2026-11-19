@@ -567,6 +567,11 @@ export const ZH = {
       modelPlaceholder: "例如 deepseek-chat",
       fetch: "刷新列表",
       fetching: "正在刷新…",
+      /** What the refresh button does, and that the field is also free text. */
+      fetchHint: "从服务商读取可用模型；也可以直接填写模型名。",
+      /** The name of the combobox's caret, for a screen reader. */
+      choose: "选择模型",
+      noMatch: (query: string) => `没有匹配「${query}」的模型，可直接输入该名称。`,
       empty: "这个服务商没有返回任何模型，请确认基础 URL 与密钥。",
       preset: "服务商类型",
       tokenOptional: "本地服务，可不填",
@@ -636,6 +641,7 @@ export const ZH = {
     cancel: "取消",
     model: {
       add: "添加模型",
+      addHint: "选择服务商，填入地址与密钥，再从服务商返回的列表中选择模型。",
       save: "保存",
       default: "主模型",
       empty: "还没有配置模型。没有模型就无法发送消息。",

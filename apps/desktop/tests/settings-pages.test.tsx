@@ -149,7 +149,7 @@ describe("the add-model form", () => {
     assert.ok(!markup.includes("预设覆盖常见的国内外提供方"), "the preset hint is back");
   });
 
-  it("puts 测试连接, 保存 and 取消 side by side, in that order", () => {
+  it("puts 取消 on the far side, with 测试连接 and 保存 together on the right", () => {
     const markup = form(noConfirm);
     const test = markup.indexOf(`>${TEXT.settings.model.test}</button>`);
     const save = markup.indexOf(`>${TEXT.settings.model.save}</button>`);
@@ -157,7 +157,9 @@ describe("the add-model form", () => {
     assert.ok(test >= 0, "no 测试连接 button");
     assert.ok(save >= 0, "no 保存 button");
     assert.ok(cancel >= 0, "no 取消 button");
-    assert.ok(test < save && save < cancel, "the buttons are out of order");
+    // 取消 is the way out, so it does not sit between the two actions that
+    // commit the form; the primary stays rightmost.
+    assert.ok(cancel < test && test < save, "the buttons are out of order");
   });
 
   it("omits 取消 where the caller has its own way back", () => {
