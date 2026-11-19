@@ -33,6 +33,8 @@ import { CheckpointAnsweredProvider } from "./CheckpointCard.js";
 import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
+import { TurnArtifactStrip } from "./TurnArtifactStrip.js";
+import type { TurnArtifacts } from "../app/turn-artifacts.js";
 import { ToolCard } from "./ToolCard.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
 
@@ -510,10 +512,12 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
  */
 export const AssistantTurns = memo(function AssistantTurns({
   usage,
+  artifacts,
   onBranch,
   answered,
   client,
   onDecide,
+  onOpenArtifactPanel,
   onOpenSubagent,
   onOpenTool,
   onReferenceClick,
@@ -539,6 +543,11 @@ export const AssistantTurns = memo(function AssistantTurns({
    *  (from `run.completed`); this is the stored message's copy, which is what
    *  survives a record whose completion event was pruned. */
   references?: ComposerReference[];
+  /** The artifacts this turn wrote, already selected per run (#1252). The
+   *  strip is only drawn once the run is terminal. */
+  artifacts?: TurnArtifacts;
+  /** Open the right panel's artifact group — the strip's route to the rest. */
+  onOpenArtifactPanel?: () => void;
   run: RunStreamState;
   sessionId?: string;
 }) {
@@ -601,6 +610,13 @@ export const AssistantTurns = memo(function AssistantTurns({
       <>
         <RunStatusLine run={run} />
         {!live && usage ? <div className="answer-tools">{usage}</div> : null}
+        {run.terminal ? (
+          <TurnArtifactStrip
+            artifacts={artifacts}
+            onOpenArtifact={onReferenceClick}
+            onOpenArtifactPanel={onOpenArtifactPanel}
+          />
+        ) : null}
         <PendingCards context={tools} requests={pending} />
       </>
     );
@@ -675,6 +691,13 @@ export const AssistantTurns = memo(function AssistantTurns({
       </div>
       <RunStatusLine run={run} />
       {!live && shown === undefined && !showFinal && usage ? <div className="answer-tools">{usage}</div> : null}
+      {run.terminal ? (
+        <TurnArtifactStrip
+          artifacts={artifacts}
+          onOpenArtifact={onReferenceClick}
+          onOpenArtifactPanel={onOpenArtifactPanel}
+        />
+      ) : null}
       <PendingCards context={tools} requests={pending} />
     </>
   );

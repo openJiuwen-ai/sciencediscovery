@@ -605,6 +605,18 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(true);
   }, []);
 
+  /**
+   * A turn strip's overflow row (#1252): the files the strip does not list are
+   * in the panel's artifact group, so that is where it goes. Any record the
+   * panel was showing steps aside, as it does for a dependency link.
+   */
+  const openArtifactPanel = useCallback(() => {
+    setOpenSubagentId(undefined);
+    setOpenTool(undefined);
+    setPanelGroup("artifacts");
+    setWorkspaceOpen(true);
+  }, []);
+
   /** Back from a child's record or a tool's text to the panel's own groups. */
   const closePanelDetail = useCallback(() => {
     setOpenSubagentId(undefined);
@@ -1212,10 +1224,12 @@ export function App({ initialToken }: Props) {
                   evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
                   loading={state.loadingSession}
                   onDecidePermission={decidePermission}
+                  onOpenArtifactPanel={openArtifactPanel}
                   onOpenSubagent={openSubagentDetails}
                   onOpenTool={openToolDetails}
                   onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
                   onReferenceClick={openReference}
+                  outputs={state.outputs}
                   pending={state.pendingMessage}
                   replays={state.replays}
                   run={state.run}
