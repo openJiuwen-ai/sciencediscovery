@@ -25,13 +25,12 @@ import { Group, LoadGate } from "./rows.js";
 interface Props {
   client: ApiClient;
   onConfirm: (request: ConfirmRequest) => void;
-  initialRunnerId?: string;
 }
 
 /** One catalog, with machine connections and environments scoped to a Runner's detail. */
-export function RuntimeSettings({ client, onConfirm, initialRunnerId }: Props) {
+export function RuntimeSettings({ client, onConfirm }: Props) {
   const loaded = useLoaded(() => listRunners(client));
-  const [runnerId, setRunnerId] = useState(initialRunnerId);
+  const [runnerId, setRunnerId] = useState<string>();
   useEffect(() => {
     if (loaded.value && runnerId && !loaded.value.some(runner => runner.id === runnerId)) setRunnerId(undefined);
   }, [loaded.value, runnerId]);

@@ -175,8 +175,9 @@ test("Runner changes discard late local answers and keep source preferences glob
     if (call.path.endsWith("environments")) return [environment(call.path.includes("remote") ? "remote-env" : "local-env")];
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} initialRunnerId="local" />);
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
   try {
+    await act(async () => { handler(button(view, TEXT.settings.system.migrated.environments.local), "onClick"); });
     await act(async () => { handler(button(view, TEXT.settings.system.migrated.environments.back), "onClick"); });
     await act(async () => { handler(button(view, "GPU"), "onClick"); });
     assert.match(markup(view), /remote-env/);
@@ -187,9 +188,13 @@ test("Runner changes discard late local answers and keep source preferences glob
 });
 
 test("a disconnected Runner offers guidance without environment requests", async () => {
-  const client = new Client(call => call.path === "/api/runners" ? [runner("remote", "GPU", false)] : { selections: {} });
-  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} initialRunnerId="remote" />);
-  try { assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.unavailable)); assert.equal(client.calls.some(call => call.path.includes("/remote/")), false); }
+  const client = new Client(call => call.path === "/api/runners" ? [runner("remote", "GPU", false)]
+    : call.path === "/api/environment-source-settings" ? { condaSource: "upstream", pipSource: "upstream" } : { selections: {} });
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
+  try {
+    await act(async () => { handler(button(view, "GPU"), "onClick"); });
+    assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.unavailable)); assert.equal(client.calls.some(call => call.path.includes("/remote/")), false);
+  }
   finally { await close(view); }
 });
 
@@ -552,12 +557,14 @@ test("remote connection actions stay scoped to the selected Runner", async () =>
     if (call.path === "/api/runners/npu") return { selections: {} };
     if (call.path === "/api/runners/remote/connect") { connected = true; return {}; }
     if (call.path === "/api/runners/remote/disconnect") { connected = false; return {}; }
+    if (call.path === "/api/environment-source-settings") return { condaSource: "upstream", pipSource: "upstream" };
     if (call.path.endsWith("environment-setup")) return setup;
     if (call.path.endsWith("environments") || call.path.endsWith("environment-revisions")) return [];
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<RuntimeSettings client={client} initialRunnerId="remote" onConfirm={noConfirm} />);
+  const view = await mount(<RuntimeSettings client={client} onConfirm={noConfirm} />);
   try {
+    await act(async () => { handler(button(view, "GPU"), "onClick"); });
     await act(async () => { await handler(button(view, TEXT.settings.runtime.runner.connect), "onClick"); });
     assert.equal(writes(client)[0]?.path, "/api/runners/remote/connect");
     assert.ok(markup(view).includes(TEXT.settings.system.migrated.environments.heading));
@@ -578,8 +585,9 @@ test("deleting a remote Runner returns to the overview and leaves built-in envir
     if (call.path.endsWith("environments") || call.path.endsWith("environment-revisions")) return [];
     throw new Error(`Unexpected ${call.path}`);
   });
-  const view = await mount(<RuntimeSettings client={client} initialRunnerId="remote" onConfirm={request => { confirmation = request; }} />);
+  const view = await mount(<RuntimeSettings client={client} onConfirm={request => { confirmation = request; }} />);
   try {
+    await act(async () => { handler(button(view, "GPU"), "onClick"); });
     await act(async () => { handler(button(view, TEXT.settings.runtime.runner.delete), "onClick"); });
     assert.ok(confirmation); await act(async () => { await confirmation?.onAccept(); });
     assert.equal(writes(client).length, 1);
