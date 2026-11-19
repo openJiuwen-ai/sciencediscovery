@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { assetUrl } from "../catalog/load.js";
+import { fetchTextAsset } from "../catalog/load.js";
 
 import type { JSX } from "react";
 
@@ -42,11 +42,7 @@ export function MarkdownFile({ basePath, url }: { basePath: string; url: string 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading", text: "" });
-    fetch(assetUrl(basePath, url))
-      .then(async (response) => {
-        if (!response.ok) throw new Error(String(response.status));
-        return await response.text();
-      })
+    fetchTextAsset(basePath, url)
       .then((text) => {
         if (!cancelled) setState({ status: "ready", text });
       })

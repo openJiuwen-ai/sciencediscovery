@@ -18,7 +18,7 @@ import { AssetTile } from "../components/AssetCard.js";
 import { DownloadButton } from "../components/DownloadButton.js";
 import { FileIcon } from "../components/icons.js";
 import { Markdown, MarkdownFile } from "../components/Markdown.js";
-import { assetUrl } from "../catalog/load.js";
+import { assetUrl, fetchTextAsset } from "../catalog/load.js";
 import { formatSize } from "../format.js";
 import {
   DOMAIN_LABELS,
@@ -118,11 +118,7 @@ function FilePreview({ basePath, copy, row }: { basePath: string; copy: (key: Co
     if (!row.url || !row.preview) return;
     let cancelled = false;
     setState({ status: "loading", text: "" });
-    fetch(assetUrl(basePath, row.url))
-      .then(async (response) => {
-        if (!response.ok) throw new Error(String(response.status));
-        return await response.text();
-      })
+    fetchTextAsset(basePath, row.url)
       .then((text) => {
         if (!cancelled) setState({ status: "ready", text });
       })
