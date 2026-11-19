@@ -19,7 +19,6 @@ import { MarkdownProse } from "../../MarkdownProse.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
 import { LoadGate, Switch } from "./rows.js";
-import { skillMeta } from "./skill-meta.js";
 
 interface Props {
   /** A write is already in flight; the switch waits for it. */
@@ -35,13 +34,46 @@ interface Props {
   switchesAvailable: boolean;
 }
 
-function frontmatterString(detail: SkillDetail, key: string): string {
-  const value = detail.frontmatter[key];
-  return typeof value === "string" ? value.trim() : "";
+/** Frontmatter keys that are already on the page: the name and description in
+ *  the header, the version beside them, and the resource list in 文件. */
+const SHOWN_ELSEWHERE = new Set(["name", "description", "version"]);
+
+/** One frontmatter value as a reader can read it, or nothing.
+ *
+ *  A SKILL.md may declare any key it likes — `category`, `requirements`, a
+ *  licence — and the package keeps them. A key whose value is a nested object
+ *  or an empty string has nothing to say on a fact line, so it is left out
+ *  rather than printed as `[object Object]` or a blank. */
+function factValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value) && value.every((item) => typeof item === "string" || typeof item === "number")) {
+    const text = value.map(String).filter((item) => item.trim().length > 0);
+    return text.length === 0 ? undefined : text.join(", ");
+  }
+  return undefined;
 }
 
-function sourceLabel(source: SkillDetail["source"]): string {
-  return source === "built-in" ? TEXT.settings.skills.source.builtIn : TEXT.settings.skills.source.managed;
+/** A fact's label: the two canonical fields the app names itself, and the
+ *  package's own key for everything else, with punctuation turned back into
+ *  words (`allowed-tools` → `Allowed tools`). */
+function factLabel(key: string): string {
+  if (key === "license") return TEXT.settings.skills.license;
+  if (key === "compatibility") return TEXT.settings.skills.compatibility;
+  const words = key.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function detailFacts(detail: SkillDetail): Array<{ label: string; value: string }> {
+  const entries = Object.entries(detail.frontmatter)
+    .filter(([key]) => !SHOWN_ELSEWHERE.has(key))
+    .flatMap(([key, raw]) => {
+      const value = factValue(raw);
+      return value === undefined ? [] : [{ key, label: factLabel(key), value }];
+    });
+  // The licence leads, as it does in the package's own frontmatter; the rest
+  // keep the order the author wrote them in.
+  return entries.toSorted((left, right) => Number(right.key === "license") - Number(left.key === "license"));
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
@@ -80,8 +112,7 @@ export function SkillDetailView({
   return (
     <LoadGate loaded={loaded}>
       {(detail) => {
-        const license = frontmatterString(detail, "license");
-        const compatibility = frontmatterString(detail, "compatibility");
+        const facts = detailFacts(detail);
         return (
           <div className="skill-detail">
             <section className="skill-detail-section">
@@ -106,17 +137,14 @@ export function SkillDetailView({
               </article>
             </section>
 
-            <section className="skill-detail-section">
-              <h4>{TEXT.settings.skills.detail}</h4>
-              <div className="skill-detail-meta-card">
-                <DetailRow label={TEXT.settings.skills.detailView.source} value={sourceLabel(detail.source)} />
-                <DetailRow label={TEXT.settings.skills.version} value={skillMeta(detail)} />
-                {license ? <DetailRow label={TEXT.settings.skills.license} value={license} /> : null}
-                {compatibility
-                  ? <DetailRow label={TEXT.settings.skills.compatibility} value={compatibility} />
-                  : null}
-              </div>
-            </section>
+            {facts.length === 0 ? null : (
+              <section className="skill-detail-section">
+                <h4>{TEXT.settings.skills.detail}</h4>
+                <div className="skill-detail-meta-card">
+                  {facts.map((fact) => <DetailRow key={fact.label} label={fact.label} value={fact.value} />)}
+                </div>
+              </section>
+            )}
           </div>
         );
       }}
