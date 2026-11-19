@@ -286,6 +286,7 @@ function exactArtifactDownloads(workflow) {
 
 /** The text of each job of a workflow, by job id. */
 function workflowJobs(workflow) {
+  workflow = workflow.replaceAll("\r\n", "\n");
   const body = workflow.slice(workflow.search(/^jobs:\s*$/m));
   return Object.fromEntries(body.split(/\n(?= {2}[\w-]+:\s*$)/m).slice(1).map((job) => [job.match(/^ {2}([\w-]+):/)[1], job]));
 }

@@ -52,6 +52,7 @@ export function defaultProviderRegistry(): ExecutionProviderRegistry {
 export class ExecutionRouter {
   readonly registry: ExecutionProviderRegistry;
   private readonly probe: ExecutionProbe;
+  private refreshing?: Promise<ExecutionCapability>;
   private readonly onProviderDowngrade?: (event: ProviderDowngradeEvent) => void | Promise<void>;
 
   constructor(options: ExecutionRouterOptions) {
@@ -70,9 +71,16 @@ export class ExecutionRouter {
    * sandboxed true→false 的降级，触发钩子。
    */
   async capability(refresh = false): Promise<ExecutionCapability> {
+    if (this.refreshing) return this.refreshing;
+    if (!refresh) return this.probe.get();
+    this.refreshing = this.refreshCapability().finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+
+  private async refreshCapability(): Promise<ExecutionCapability> {
     const previous = this.probe.last;
-    const next = await this.probe.get(refresh);
-    if (refresh && previous && previous.sandboxed && !next.sandboxed && this.onProviderDowngrade) {
+    const next = await this.probe.get(true);
+    if (previous?.sandboxed && !next.sandboxed && this.onProviderDowngrade) {
       const event: ProviderDowngradeEvent = { from: previous, forcedSessions: 0, to: next };
       await this.onProviderDowngrade(event);
     }

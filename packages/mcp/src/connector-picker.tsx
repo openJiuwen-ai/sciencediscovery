@@ -80,17 +80,22 @@ export function ConnectorPicker({
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current && event.target instanceof Node && !rootRef.current.contains(event.target)) setOpen(false);
+    const documentRef = (globalThis as unknown as { document: {
+      addEventListener(type: string, listener: (event: unknown) => void): void;
+      removeEventListener(type: string, listener: (event: unknown) => void): void;
+    } }).document;
+    const onPointerDown = (event: unknown) => {
+      const target = (event as { target?: unknown }).target;
+      if (rootRef.current && target && !((rootRef.current as unknown as { contains(value: unknown): boolean }).contains(target))) setOpen(false);
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+    const onKeyDown = (event: unknown) => {
+      if ((event as { key?: string }).key === "Escape") setOpen(false);
     };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    documentRef.addEventListener("pointerdown", onPointerDown);
+    documentRef.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      documentRef.removeEventListener("pointerdown", onPointerDown);
+      documentRef.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
 

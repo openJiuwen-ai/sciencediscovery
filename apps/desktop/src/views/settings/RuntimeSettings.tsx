@@ -25,6 +25,7 @@ import { Group, LoadGate } from "./rows.js";
 interface Props {
   client: ApiClient;
   onConfirm: (request: ConfirmRequest) => void;
+  onProjectRunnerAllowlistSaved: (project: Project) => void;
   /** The Project the open Session is in. Absent before the workspace has
    *  loaded one, in which case there is nothing to scope the allowlist to.
    *  It is the whole Project rather than an id because the allowlist has to
@@ -54,7 +55,7 @@ interface RuntimePage {
  * the catalog: this page reads it and hands it down, so a machine registered
  * above reaches the allowlist below in the same reload.
  */
-export function RuntimeSettings({ client, onConfirm, project }: Props) {
+export function RuntimeSettings({ client, onConfirm, onProjectRunnerAllowlistSaved, project }: Props) {
   const loaded = useLoaded<RuntimePage>(async () => {
     const runners = await listRunners(client);
     // The local entry is left out once, here: it always exists, needs no
@@ -75,7 +76,12 @@ export function RuntimeSettings({ client, onConfirm, project }: Props) {
       <LoadGate loaded={loaded}>
         {(page) =>
           project ? (
-            <ProjectRunnerAllowlist client={client} hosts={page.remote} onReload={loaded.reload} project={project} />
+            <ProjectRunnerAllowlist
+              client={client}
+              hosts={page.remote}
+              onSaved={onProjectRunnerAllowlistSaved}
+              project={project}
+            />
           ) : null
         }
       </LoadGate>

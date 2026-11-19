@@ -10,7 +10,7 @@ import { createTest } from '../test/support/tagged/compat.mjs';
 import { gate, route } from './tier-policy.mjs';
 
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
-const readWorkflow = name => readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8');
+const readWorkflow = name => readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const workflow = readWorkflow('ci');
 const realWorkflow = readWorkflow('real-e2e');
 const jobs = Object.fromEntries([workflow, realWorkflow].flatMap(text =>
@@ -18,7 +18,7 @@ const jobs = Object.fromEntries([workflow, realWorkflow].flatMap(text =>
     .map(block => [block.match(/^  ([\w-]+):/)[1], block])));
 const condition = block => block.match(/\bif: (?:>-\s*)?\$\{\{([\s\S]*?)\}\}/)?.[1].trim();
 const dependencies = name => (jobs[name].match(/^    needs: (.+)/m)?.[1] ?? '').replace(/[\[\]]/g, '').split(', ').filter(Boolean);
-const hermetic = ['l1', 'ut', 'st', 'e2e-plan', 'e2e'];
+const hermetic = ['l1', 'ut', 'st', 'e2e-plan', 'e2e', 'desktop-mocked'];
 const required = dependencies('merge-gate');
 function results(profile, event = 'workflow_dispatch') {
   const needs = Object.fromEntries(required.map(name => [name, { result: 'success', outputs: {} }]));
@@ -30,6 +30,7 @@ function results(profile, event = 'workflow_dispatch') {
   if (!policy.distribution) for (const name of ['binary', 'docker']) needs[name].result = 'skipped';
   if (!policy.windows_desktop) needs['windows-desktop'].result = 'skipped';
   if (!policy.mocked) for (const name of ['e2e-plan', 'e2e']) needs[name].result = 'skipped';
+  if (policy.desktop_specs === 'none') needs['desktop-mocked'].result = 'skipped';
   return needs;
 }
 
@@ -86,6 +87,18 @@ test('L3 starts only after all L1/L2 jobs succeed, including a one-PR merge grou
     }
   }
   assert.equal(runnable('real-merge', results('merge'), { cancelled: true }), false);
+});
+
+test('Desktop real smoke runs and reconciles only for L3 after the frozen plan', () => {
+  assert.deepEqual(dependencies('desktop-real'), ['real-plan']);
+  const needs = { 'real-plan': { result: 'success' } };
+  for (const profile of ['pr', 'merge', 'daily', 'release']) {
+    assert.equal(runnable('desktop-real', needs, { profile }), profile === 'merge');
+  }
+  assert.equal(runnable('desktop-real', needs, { profile: 'merge', event: 'pull_request' }), false);
+  assert.equal(runnable('desktop-real', { 'real-plan': { result: 'failure' } }, { profile: 'merge' }), false);
+  assert.match(jobs['desktop-real'], /run: node \.ci\/run-desktop-real-isolated\.mjs/);
+  assert.match(jobs['desktop-real'], /run: node \.ci\/desktop-report\.mjs \.ci-desktop-real real/);
 });
 
 test('both entry points reuse the same suite, profile, backend and inherited secrets', () => {

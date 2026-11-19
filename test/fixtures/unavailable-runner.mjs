@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,8 +14,9 @@ export async function unavailableRunner() {
   const root = await mkdtemp(join(tmpdir(), 'sd-e2e-unavailable-runner-'));
   const token = randomUUID();
   const requests = [];
+  const bwrapPath = join(root, 'missing-bwrap');
   const server = createRunnerServer({ ...loadRunnerConfig(), dataDir: root, authToken: token,
-    sandboxProvider: 'bubblewrap', bwrapPath: join(root, 'missing-bwrap'),
+    sandboxProvider: 'bubblewrap', bwrapPath,
     scientificEnvsEnabled: false, npuBrokerEnabled: false });
   server.prependListener('request', (request) => requests.push({method:request.method, path:request.url, at:Date.now()}));
   try {
@@ -22,6 +24,10 @@ export async function unavailableRunner() {
   } catch (error) { await rm(root, {recursive:true, force:true}); throw error; }
   return {
     endpoint: { host:'127.0.0.1', port:server.address().port, protocol:'http' }, token, requests,
+    async repair() {
+      const executable = execFileSync('which', ['bwrap'], { encoding: 'utf8' }).trim();
+      await symlink(executable, bwrapPath);
+    },
     async stop() {
       server.closeAllConnections();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

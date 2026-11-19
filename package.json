@@ -54,7 +54,11 @@
     "test:policy": "node test/support/tagged/shared.mjs policy",
     "test:tagged:selftest": "node test/support/tagged/selftest.mjs",
     "test:tagged:list": "node test/support/tagged/cli.mjs list",
-    "test:tagged:run": "node test/support/tagged/cli.mjs run"
+    "test:tagged:run": "node test/support/tagged/cli.mjs run",
+    "ci:overlap": "node .ci/overlap-report.mjs",
+    "ci:inventory": "node .ci/source-inventory.mjs",
+    "ci:plan:stability": "node .ci/plan-stability.mjs",
+    "overlap-report": "node .ci/overlap-report.mjs"
   },
   "devDependencies": {
     "@babel/parser": "7.28.5",

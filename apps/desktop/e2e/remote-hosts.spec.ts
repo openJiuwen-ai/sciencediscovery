@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop remote hosts journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -404,7 +420,7 @@ test.describe("删除", () => {
 });
 
 test.describe("允许的机器", () => {
-  test("the allowlist is written whole, and this machine is not one of its boxes", async ({ page }) => {
+  test("the allowlist applies each server response before the next toggle and survives reload", { tag: "@ui-st" }, async ({ page }) => {
     const mock = await installMockApi(page, {
       projects: [{ ...DEFAULT_PROJECT, runnerIds: ["local", "runner-1"] }],
       runners: [localRunner(), runner()],
@@ -423,7 +439,15 @@ test.describe("允许的机器", () => {
 
     // The whole list goes on every toggle, and the implicit local entry it was
     // stored with stays in it: only the machine the reader unticked left.
-    expect(calls(mock, "PATCH", "/api/projects/project-1")).toEqual([{ runnerIds: ["local"] }]);
+    await expect(remote).not.toBeChecked();
+    await remote.click();
+    await expect(remote).toBeChecked();
+    expect(calls(mock, "PATCH", "/api/projects/project-1")).toEqual([
+      { runnerIds: ["local"] },
+      { runnerIds: ["local", "runner-1"] },
+    ]);
+    const reopened = await openRemote(page);
+    await expect(reopened.getByRole("checkbox", { name: /gpu-01/u })).toBeChecked();
   });
 });
 

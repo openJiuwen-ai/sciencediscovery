@@ -224,6 +224,7 @@ export interface WorkspaceActions {
    *  later writes under it before the Session read comes back. */
   openSession: (sessionId: string, projectId?: string) => Promise<void>;
   renameProject: (project: Project, name: string) => Promise<void>;
+  acceptProjectRunnerAllowlist: (updated: Project) => void;
   renameSession: (session: Session, title: string) => Promise<void>;
   /** Re-read the model catalog after the wizard or settings changed it. */
   refreshCatalog: () => Promise<void>;
@@ -2144,6 +2145,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             });
           },
         }),
+      acceptProjectRunnerAllowlist: ({ id, runnerIds, remoteRunnerHostIds }) => {
+        const apply = (project: Project) => project.id === id ? { ...project, runnerIds, remoteRunnerHostIds } : project;
+        setProjects(current => current.map(apply));
+        setInboxProject(current => current && apply(current));
+      },
       refreshCatalog,
       refreshConfiguration,
       refreshSessions: async () => { await refreshSessionLists(); },

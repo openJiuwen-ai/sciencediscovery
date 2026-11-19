@@ -116,3 +116,20 @@ test("home-directory identities never enter operational log files", (context) =>
   assert.match(contents, /\[REDACTED\]/);
   assert.match(contents, /\/var\/log\/service\.log/);
 });
+
+test("redaction remains effective in rotated operational logs", (context) => {
+  const logger = createOperationalLogger({
+    category: "rotation-redaction",
+    dataDir: withTempDataDir(context),
+    env: { SCIENCE_AGENT_LOG_BACKUP_COUNT: "2", SCIENCE_AGENT_LOG_MAX_BYTES: "180" },
+    service: "api",
+  });
+  for (let index = 0; index < 12; index += 1) {
+    logger.error("credential_probe", { apiKey: `secret-${index}`, prompt: "private prompt" });
+  }
+  for (const suffix of ["", ".1", ".2"]) {
+    const contents = readFileSync(`${logger.path}${suffix}`, "utf8");
+    assert.doesNotMatch(contents, /secret-/);
+    assert.doesNotMatch(contents, /private prompt/);
+  }
+});

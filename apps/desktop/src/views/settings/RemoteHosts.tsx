@@ -981,19 +981,18 @@ function CredentialsForm({
  * The local Runner has no checkbox for the same reason it has no card: it is
  * always there, and this page manages machines other than this one.
  *
- * The list on screen comes back from the server on every toggle rather than
- * being updated in place — the page re-reads, which is how the box the API
- * refused cannot linger as if it had been accepted.
+ * The server response updates the Project shared by Settings and the workspace.
+ * A rejected write leaves the previous allowlist in place.
  */
 export function ProjectRunnerAllowlist({
   client,
   hosts,
-  onReload,
+  onSaved,
   project,
 }: {
   client: ApiClient;
   hosts: RunnerTarget[];
-  onReload: () => void;
+  onSaved: (project: Project) => void;
   project: Project;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1005,12 +1004,12 @@ export function ProjectRunnerAllowlist({
     setBusy(true);
     setFailure(undefined);
     try {
-      await setProjectRunnerIds(client, project.id, toggleRunnerId(allowed, host.id));
+      const updated = await setProjectRunnerIds(client, project.id, toggleRunnerId(allowed, host.id));
+      onSaved(updated);
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
       setBusy(false);
-      onReload();
     }
   };
 

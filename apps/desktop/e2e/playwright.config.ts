@@ -43,8 +43,11 @@ export default defineConfig({
   workers: 2,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  reporter: process.env.CI_RESULT_FILE
+    ? [["list"], ["json", { outputFile: process.env.CI_RESULT_FILE }]]
+    : [["list"]],
   outputDir: resolve(here, "test-results"),
+  ...(process.env.PLAYWRIGHT_GREP ? { grep: new RegExp(process.env.PLAYWRIGHT_GREP) } : {}),
   use: {
     baseURL: "http://127.0.0.1:4175",
     trace: "retain-on-failure",

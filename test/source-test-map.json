@@ -1,0 +1,3415 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "source": "apps/web/src/MemoryGraphCanvas.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/MemoryGraphCanvas.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/IdeaTreeCanvas.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/IdeaTreeCanvas.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "test/journey-idea-tree-fixture.spec.ts",
+          "identity": "playwright:test/journey-idea-tree-fixture.spec.ts::mocked/journey-idea-tree-fixture.spec.ts/journey-idea-tree-fixture.spec/Idea%20Tree%20autonomous%20research%20can%20pause%2C%20resume%20and%20iterate",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/McpInspector.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/mcp-readiness.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "test/journey-mcp-oauth.spec.ts",
+          "identity": "playwright:test/journey-mcp-oauth.spec.ts::mocked/journey-mcp-oauth.spec.ts/journey-mcp-oauth.spec/Authorize%20MCP%2C%20inspect%20tools%20and%20recover%20from%20denied%20consent",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/SkillReviewDialog.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/SkillReviewDialog.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/research-package/ContinueResearchButton.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/ResearchPackageActions.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ResearchPackage.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/research-package.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/e2e/research-package.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/SetupWizard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/setup-wizard.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/index.ts",
+      "risk": "P0",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "memory-query-http-validation",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "memory-query-http-forwarding",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "session-isolation-artifact-version-chain",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "gj02-run-sse-resume",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "gj03-artifact-registration-retry",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
+          "identity": "git-skill-review-ref-conflict",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/artifacts/index.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/artifacts/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/agent-run/jiuwenswarm-skills.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/agent-run/jiuwenswarm-skills.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/research-package/src/index.ts",
+      "risk": "P1",
+      "owner": "research-package",
+      "tests": [
+        {
+          "source": "packages/research-package/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "packages/research-package/src/stream-import.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/index.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "services/api/src/provenance.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/artifact-json/src/manifest.ts",
+      "risk": "P1",
+      "owner": "artifact-json",
+      "tests": [
+        {
+          "source": "packages/artifact-json/src/manifest.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/configuration-ui/src/presentation.ts",
+      "risk": "P1",
+      "owner": "configuration-ui",
+      "tests": [
+        {
+          "source": "packages/configuration-ui/src/configuration.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/configuration-ui/src/compatibility.ts",
+      "risk": "P1",
+      "owner": "configuration-ui",
+      "tests": [
+        {
+          "source": "packages/configuration-ui/src/configuration.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/schema/src/session.ts",
+      "risk": "P1",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/session.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/idea-tree/src/contract.ts",
+      "risk": "P1",
+      "owner": "idea-tree",
+      "tests": [
+        {
+          "source": "packages/idea-tree/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/review-policy.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "packages/provenance/src/review-policy.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/research-package/src/json.ts",
+      "risk": "P1",
+      "owner": "research-package",
+      "tests": [
+        {
+          "source": "packages/research-package/src/json.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/broker.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/broker.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        },
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/execution-router/src/router.ts",
+      "risk": "P1",
+      "owner": "execution-router",
+      "tests": [
+        {
+          "source": "packages/execution-router/src/probe.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        },
+        {
+          "source": "packages/execution-router/src/registry.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp/src/plugin.ts",
+      "risk": "P1",
+      "owner": "mcp",
+      "tests": [
+        {
+          "source": "packages/mcp/src/plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/operational-logging/src/index.ts",
+      "risk": "P1",
+      "owner": "operational-logging",
+      "tests": [
+        {
+          "source": "packages/operational-logging/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        },
+        {
+          "source": "packages/operational-logging/src/diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/WorkspacePanel.tsx",
+      "risk": "P0",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C4"
+        },
+        {
+          "source": "apps/desktop/e2e/panel-interactions.spec.ts",
+          "layer": "e2e",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/SystemSettingsDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C4"
+        },
+        {
+          "source": "apps/desktop/e2e/settings.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/artifact-manager/src/manager.ts",
+      "risk": "P1",
+      "owner": "artifact-manager",
+      "tests": [
+        {
+          "source": "packages/artifact-manager/src/manager.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/artifact-manager/src/mcp-workspace-tools.ts",
+      "risk": "P1",
+      "owner": "artifact-manager",
+      "tests": [
+        {
+          "source": "packages/artifact-manager/src/mcp-workspace-tools.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/index.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/platform/posix.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/platform/posix.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/platform/win32.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/platform/win32.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/versioning.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/versioning.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/workspace-lease.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/workspace-lease.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/workspace-lifecycle.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/workspace-lifecycle.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/cas/src/workspace-snapshot.ts",
+      "risk": "P2",
+      "owner": "cas",
+      "tests": [
+        {
+          "source": "packages/cas/src/workspace-snapshot.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/budget.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/budget.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/compaction.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/compaction.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/contributor.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/contributor.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/durable-state.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/durable-state.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/dynamic-assembler.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/dynamic-assembler.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/history-compactor.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/history-compactor.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/history-window.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/history-window.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/message-composer.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/message-composer.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/prompt-renderer.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/prompt-renderer.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/state-coordinator.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/state-coordinator.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/state-view.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/state-view.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/trace.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/trace.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/context/src/validator.ts",
+      "risk": "P2",
+      "owner": "context",
+      "tests": [
+        {
+          "source": "packages/context/src/validator.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/evolve/src/command.ts",
+      "risk": "P2",
+      "owner": "evolve",
+      "tests": [
+        {
+          "source": "packages/evolve/src/command.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/evolve/src/index.ts",
+      "risk": "P2",
+      "owner": "evolve",
+      "tests": [
+        {
+          "source": "packages/evolve/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/execution-router/src/platform/win32.ts",
+      "risk": "P1",
+      "owner": "execution-router",
+      "tests": [
+        {
+          "source": "packages/execution-router/src/platform/win32.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/execution-router/src/probe.ts",
+      "risk": "P1",
+      "owner": "execution-router",
+      "tests": [
+        {
+          "source": "packages/execution-router/src/probe.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/execution-router/src/registry.ts",
+      "risk": "P1",
+      "owner": "execution-router",
+      "tests": [
+        {
+          "source": "packages/execution-router/src/registry.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/environment.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/environment.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/remote-provisioner.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/remote-provisioner.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/runner-bundle.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/runner-bundle.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/runner-client.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/runner-client.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/ssh-connection.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/ssh-connection.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/executor/src/ssh-keys.ts",
+      "risk": "P2",
+      "owner": "executor",
+      "tests": [
+        {
+          "source": "packages/executor/src/ssh-keys.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/feedback-worker/src/index.ts",
+      "risk": "P2",
+      "owner": "feedback-worker",
+      "tests": [
+        {
+          "source": "packages/feedback-worker/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/governance/src/decision-queue.ts",
+      "risk": "P1",
+      "owner": "governance",
+      "tests": [
+        {
+          "source": "packages/governance/src/decision-queue.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/governance/src/execution-blocks.ts",
+      "risk": "P1",
+      "owner": "governance",
+      "tests": [
+        {
+          "source": "packages/governance/src/execution-blocks.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/governance/src/permission-runtime.ts",
+      "risk": "P1",
+      "owner": "governance",
+      "tests": [
+        {
+          "source": "packages/governance/src/permission-runtime.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/idea-tree/src/authority.ts",
+      "risk": "P2",
+      "owner": "idea-tree",
+      "tests": [
+        {
+          "source": "packages/idea-tree/src/authority.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/idea-tree/src/composition.ts",
+      "risk": "P2",
+      "owner": "idea-tree",
+      "tests": [
+        {
+          "source": "packages/idea-tree/src/composition.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/llm-wiki.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/llm-wiki.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/plugin.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/public-biomed.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/public-biomed.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/selection.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/selection.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/uniprot-plugin.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/uniprot-plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp-sources/src/uniprot.ts",
+      "risk": "P2",
+      "owner": "mcp-sources",
+      "tests": [
+        {
+          "source": "packages/mcp-sources/src/uniprot.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/memory/src/memory-graph.ts",
+      "risk": "P1",
+      "owner": "memory",
+      "tests": [
+        {
+          "source": "packages/memory/src/memory-graph.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/model/src/client.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/client.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/model/src/completion.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/completion.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/model/src/discovery.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/discovery.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/model/src/runtime-client.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/runtime-client.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/model/src/usage.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/usage.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/operational-logging/src/diagnostics.ts",
+      "risk": "P1",
+      "owner": "operational-logging",
+      "tests": [
+        {
+          "source": "packages/operational-logging/src/diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/operational-logging/src/feedback.ts",
+      "risk": "P1",
+      "owner": "operational-logging",
+      "tests": [
+        {
+          "source": "packages/operational-logging/src/feedback.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/orchestration/src/run-profile.ts",
+      "risk": "P2",
+      "owner": "orchestration",
+      "tests": [
+        {
+          "source": "packages/orchestration/src/run-profile.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/orchestration/src/subagent-pool.ts",
+      "risk": "P2",
+      "owner": "orchestration",
+      "tests": [
+        {
+          "source": "packages/orchestration/src/subagent-pool.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/orchestration/src/subagents.ts",
+      "risk": "P2",
+      "owner": "orchestration",
+      "tests": [
+        {
+          "source": "packages/orchestration/src/subagents.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/plan/src/index.ts",
+      "risk": "P2",
+      "owner": "plan",
+      "tests": [
+        {
+          "source": "packages/plan/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/plan/src/plugin.ts",
+      "risk": "P2",
+      "owner": "plan",
+      "tests": [
+        {
+          "source": "packages/plan/src/plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/plugin-sdk/src/index.ts",
+      "risk": "P2",
+      "owner": "plugin-sdk",
+      "tests": [
+        {
+          "source": "packages/plugin-sdk/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/plugin-sdk/src/views.ts",
+      "risk": "P2",
+      "owner": "plugin-sdk",
+      "tests": [
+        {
+          "source": "packages/plugin-sdk/src/views.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/execution-outcome.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "packages/provenance/src/execution-outcome.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/recorder.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "packages/provenance/src/recorder.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/runtime-core/src/runtime.ts",
+      "risk": "P2",
+      "owner": "runtime-core",
+      "tests": [
+        {
+          "source": "packages/runtime-core/src/runtime.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/runtime-core/src/tool-scheduler.ts",
+      "risk": "P2",
+      "owner": "runtime-core",
+      "tests": [
+        {
+          "source": "packages/runtime-core/src/tool-scheduler.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/sandbox-capability/src/index.ts",
+      "risk": "P2",
+      "owner": "sandbox-capability",
+      "tests": [
+        {
+          "source": "packages/sandbox-capability/src/index.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/scheduler/src/plugin.ts",
+      "risk": "P2",
+      "owner": "scheduler",
+      "tests": [
+        {
+          "source": "packages/scheduler/src/plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/schema/src/evolve-direction.ts",
+      "risk": "P2",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/evolve-direction.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/schema/src/model-catalog.ts",
+      "risk": "P2",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/model-catalog.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/schema/src/recovery.ts",
+      "risk": "P2",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/recovery.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/schema/src/tool-graph-registry.ts",
+      "risk": "P2",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/tool-graph-registry.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/skill/src/plugin.ts",
+      "risk": "P1",
+      "owner": "skill",
+      "tests": [
+        {
+          "source": "packages/skill/src/plugin.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/specialist/src/builtins.ts",
+      "risk": "P1",
+      "owner": "specialist",
+      "tests": [
+        {
+          "source": "packages/specialist/src/builtins.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/specialist/src/skills.ts",
+      "risk": "P1",
+      "owner": "specialist",
+      "tests": [
+        {
+          "source": "packages/specialist/src/skills.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/arguments.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/arguments.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/bounded-output.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/bounded-output.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/registry.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/registry.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/retired-tools.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/retired-tools.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/sanitize.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/sanitize.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/tools/src/tool-output-store.ts",
+      "risk": "P2",
+      "owner": "tools",
+      "tests": [
+        {
+          "source": "packages/tools/src/tool-output-store.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/trajectory/src/input-presentation.ts",
+      "risk": "P2",
+      "owner": "trajectory",
+      "tests": [
+        {
+          "source": "packages/trajectory/src/input-presentation.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/trajectory/src/presentation.ts",
+      "risk": "P2",
+      "owner": "trajectory",
+      "tests": [
+        {
+          "source": "packages/trajectory/src/presentation.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/workspace/src/artifact-read.ts",
+      "risk": "P2",
+      "owner": "workspace",
+      "tests": [
+        {
+          "source": "packages/workspace/src/artifact-read.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/workspace/src/file-page.ts",
+      "risk": "P2",
+      "owner": "workspace",
+      "tests": [
+        {
+          "source": "packages/workspace/src/file-page.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/workspace/src/mcp-result-view.ts",
+      "risk": "P2",
+      "owner": "workspace",
+      "tests": [
+        {
+          "source": "packages/workspace/src/mcp-result-view.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/workspace/src/prompt.ts",
+      "risk": "P2",
+      "owner": "workspace",
+      "tests": [
+        {
+          "source": "packages/workspace/src/prompt.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/workspace/src/workspace.ts",
+      "risk": "P2",
+      "owner": "workspace",
+      "tests": [
+        {
+          "source": "packages/workspace/src/workspace.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/bootstrap-tokens.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/bootstrap-tokens.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/error-classification.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/error-classification.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/error-diagnostics.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/error-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/execution-readiness.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/execution-readiness.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/static.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/static.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/agent-execution.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/agent-execution.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/egress-gateway.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/egress-gateway.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/egress-proxy.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/egress-proxy.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/egress-socket-root.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/egress-socket-root.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/environment-access.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/environment-access.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/environment-paths.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/environment-paths.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/environment-store.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/environment-store.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/execution-manager.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/execution-manager.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/execution-recovery.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/execution-recovery.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/npu-devices.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/npu-devices.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/platform/posix.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/platform/posix.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/platform/win32.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/platform/win32.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/readiness.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/readiness.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/request-auth.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/request-auth.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/resources.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/resources.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/seatbelt.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/seatbelt.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/seccomp.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/seccomp.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/server.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/shell-diagnostics.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/shell-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/skill-packages.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/skill-packages.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/specialist-launch.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/specialist-launch.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/version.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/version.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/AssistantTurn.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/assistant-turn.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/AttachmentTray.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/attachments.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/AuthScreen.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/boot-screens.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/CheckpointCard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/checkpoint-card.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Composer.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/composer.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ConfirmDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/dialogs.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Conversation.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/conversation.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/DocumentPreview.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/document-preview.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ExportHistoryList.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/export-history-list.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Guide.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/guide.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Landing.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/landing.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/LegacyConnectorConfigurationCard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/legacy-configuration.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ModelForm.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/model-form-combo.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/OfflineScreen.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/boot-screens.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/PermissionCard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/tool-cards.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ProjectPicker.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/project-picker.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/PromptDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/dialogs.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/RowMenu.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/row-menu.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/SessionBar.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-bar.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Sidebar.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/sidebar.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/SubagentDetail.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/subagent-detail.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ThinkingBlock.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ToolCard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/tool-cards.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ToolDetail.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/tool-cards.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/dialog-escape.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/dialog-escape.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/CandidateInspector.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveCreateDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveDetail.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/evolve.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveNodeList.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveRuns.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveRuntimeDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/EvolveTree.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/ScoreChart.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-ui.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/GeneralSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/ListSelect.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/ModelSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/NetworkSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/RemoteHosts.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/remote-hosts.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/RunnerResources.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/runner-resources.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/remote-hosts.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/RuntimeSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillForm.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-settings.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillsSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-settings.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/rows.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-cache.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/AbilityPicker.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/ExportHistory.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/export-history-settings.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/McpServers.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/MemorySettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/ui-st-smoke.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/SpecialistForm.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/Specialists.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/Timeouts.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/catalog.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "packages/data-source/src/source-outage.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/resource-rate-limiter.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/resource-rate-limiter.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/source-health.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/source-outage.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/source-outage.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/transport.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "packages/data-source/src/broker.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/operational-logging/src/redaction.ts",
+      "risk": "P1",
+      "owner": "operational-logging",
+      "tests": [
+        {
+          "source": "packages/operational-logging/src/diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/artifact-json/src/web.tsx",
+      "risk": "P1",
+      "owner": "artifact-json",
+      "tests": [
+        {
+          "source": "packages/artifact-json/src/manifest.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/api-status-error.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/research-export-previews.test.ts",
+          "layer": "st",
+          "complexity": "C2"
+        },
+        {
+          "source": "services/api/src/research-package-http.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/skill-libraries.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/skill-library-api.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/egress-bridge.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/sandbox-network.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/kernel-manager.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/scientific-execution.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/npu-broker.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/session-env-profile.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/runner/src/shell-session.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/shell-session-manager.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/runner/src/shell-session.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Toasts.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/dialogs.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/expert-catalog.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/composer.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/model-brand.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/composer.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/provider-name.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/composer.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/research-package-copy-poll.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/research-package-copy-poll.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/research-package-poll.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/research-package-poll.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/uploads.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/uploads.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/proxy/env.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/proxy/resolve.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/proxy/resolve.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/proxy/resolve.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/proxy/system.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/proxy/resolve.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/broker.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/broker.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "packages/data-source/src/source-health.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/html.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/html.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/free-engines.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/providers.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/url-guard.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/providers.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/auth.ts",
+      "risk": "P0",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/body.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/research-package-http.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/custom-mcp.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/configuration/mcp-availability.integration.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/configuration/mcp-delete.integration.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/manual-model-destination.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/response.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ArtifactDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/MemoryCardDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/MemoryStatus.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/RunFailureCard.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/e2e/failure-cards.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/ToolIoBlock.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/UploadCards.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SettingsModal.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/DirectionInput.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/result-cache.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/cache.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/cache.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/cache.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/governance/src/permission-policy.ts",
+      "risk": "P1",
+      "owner": "governance",
+      "tests": [
+        {
+          "source": "packages/governance/src/permission-policy.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp/src/connector-picker.tsx",
+      "risk": "P1",
+      "owner": "mcp",
+      "tests": [
+        {
+          "source": "packages/mcp/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp/src/manifest.ts",
+      "risk": "P1",
+      "owner": "mcp",
+      "tests": [
+        {
+          "source": "packages/mcp/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/citation-review.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "packages/provenance/src/quality-metrics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/review-quality-metrics.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "packages/provenance/src/quality-metrics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/FileBadge.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/Rail.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/SidebarToggle.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/collapse-hint.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/evolve/glyphs.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/operational-logging/src/feedback-client.ts",
+      "risk": "P1",
+      "owner": "operational-logging",
+      "tests": [
+        {
+          "source": "packages/operational-logging/src/feedback-client.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/specialist/src/lifecycle.ts",
+      "risk": "P1",
+      "owner": "specialist",
+      "tests": [
+        {
+          "source": "packages/specialist/src/lifecycle.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/deepseek.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/provider-contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/fetch.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/provider-contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/http.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/provider-contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/native/search.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/web/native/provider-contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/artifact-manager/src/governed-download-manager.ts",
+      "risk": "P1",
+      "owner": "artifact-manager",
+      "tests": [
+        {
+          "source": "services/api/src/mcp/governed-download-manager.test.ts",
+          "layer": "st",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/web/workspace-tools.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "services/api/src/web-providers/deepseek.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/computation-review.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "services/api/src/reviewer-specialist/computation-review.test.ts",
+          "layer": "ut",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/review-checkpoint.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "services/api/src/reviewer-specialist/review-checkpoint.test.ts",
+          "layer": "st",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/provenance/src/review-log.ts",
+      "risk": "P1",
+      "owner": "provenance",
+      "tests": [
+        {
+          "source": "services/api/src/reviewer-specialist/review-log.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/execution-router/src/platform/posix.ts",
+      "risk": "P1",
+      "owner": "execution-router",
+      "tests": [
+        {
+          "source": "services/runner/src/platform/posix.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "services/runner/src/executor.ts",
+      "risk": "P1",
+      "owner": "runner",
+      "tests": [
+        {
+          "source": "services/runner/src/scientific-execution.test.ts",
+          "layer": "st",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/data-source/src/proxy/dispatcher.ts",
+      "risk": "P1",
+      "owner": "data-source",
+      "tests": [
+        {
+          "source": "packages/data-source/src/proxy/dispatcher.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/memory/src/log.ts",
+      "risk": "P1",
+      "owner": "memory",
+      "tests": [
+        {
+          "source": "packages/memory/src/log.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/skill/src/manifest.ts",
+      "risk": "P1",
+      "owner": "skill",
+      "tests": [
+        {
+          "source": "packages/skill/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "packages/skill/src/web.tsx",
+      "risk": "P1",
+      "owner": "skill",
+      "tests": [
+        {
+          "source": "packages/skill/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "packages/specialist/src/review-agent.ts",
+      "risk": "P1",
+      "owner": "specialist",
+      "tests": [
+        {
+          "source": "packages/specialist/src/review-agent.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/use-dialog-escape.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/use-dialog-escape.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/StructureViewer.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/e2e/structure-viewer.spec.ts",
+          "layer": "st",
+          "complexity": "C4"
+        }
+      ]
+    },
+    {
+      "source": "packages/mcp/src/web.tsx",
+      "risk": "P1",
+      "owner": "mcp",
+      "tests": [
+        {
+          "source": "packages/mcp/src/contract.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/evolve/EvolveSetup.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "test/journey-evolve-initialization.spec.ts",
+          "identity": "playwright:test/journey-evolve-initialization.spec.ts::mocked/journey-evolve-initialization.spec.ts/Evolve%20initialization/explicit%20Init%20and%20retry%20preserve%20the%20draft%20(en)",
+          "layer": "ui-st",
+          "complexity": "C3"
+        },
+        {
+          "source": "test/journey-evolve-initialization.spec.ts",
+          "identity": "playwright:test/journey-evolve-initialization.spec.ts::mocked/journey-evolve-initialization.spec.ts/Evolve%20initialization/explicit%20Init%20and%20retry%20preserve%20the%20draft%20(zh-CN)",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/use-workspace.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/workspace-model-setup.test.ts",
+          "identity": "apps/desktop/tests/workspace-model-setup.test.ts::losing%20the%20last%20model%20returns%20to%20mandatory%20setup%20and%20configuration%20unlocks%20the%20workspace",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/workspace-settle-order.test.ts",
+          "identity": "apps/desktop/tests/workspace-settle-order.test.ts::a%20settle%20that%20lands%20after%20a%20newer%20one%20does%20not%20put%20its%20older%20transcript%20back",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    }
+  ]
+}

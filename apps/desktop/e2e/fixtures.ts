@@ -194,6 +194,8 @@ export interface MockOptions {
   connectError?: string;
   /** Make one write fail, for the "the reason stays on screen" cases. */
   fail?: { method: string; path: string | RegExp; status?: number; message?: string };
+  /** Fail the first matching request and then allow the real stateful route. */
+  failOnce?: { method: string; path: string | RegExp; status?: number; message?: string };
   /** Hold one route's answer until `mock.release()`. For a spec that has to
    *  look at the screen while a read it is waiting for is still outstanding —
    *  the write that came before it has already landed, and what the page shows
@@ -395,6 +397,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   // One gate for the route `hold` names, resolved by the spec through
   // `release`. Everything else answers immediately.
   let released = false;
+  let failOnceUsed = false;
   let resolveHeld: () => void = () => {};
   const held = new Promise<void>((resolve) => {
     resolveHeld = resolve;
@@ -431,6 +434,18 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       ) {
         return json(route, options.fail.status ?? 500, {
           error: options.fail.message ?? "the server refused this write",
+        });
+      }
+
+      if (
+        options.failOnce !== undefined
+        && !failOnceUsed
+        && options.failOnce.method === method
+        && (typeof options.failOnce.path === "string" ? options.failOnce.path === path : options.failOnce.path.test(path))
+      ) {
+        failOnceUsed = true;
+        return json(route, options.failOnce.status ?? 500, {
+          error: options.failOnce.message ?? "the server refused this request once",
         });
       }
 

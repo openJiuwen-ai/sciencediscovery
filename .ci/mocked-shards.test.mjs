@@ -76,6 +76,18 @@ test('complete mocked browser and supplemental evidence passes for both backends
   }
 });
 
+test('Web UI-ST requires browser results without the full mocked suite supplemental checks', t => {
+  const full = plan();
+  const web = subplan({ ...full, suite: 'web-ui-st' }, full.entries.filter(entry => entry.id === 'settings'));
+  assert.deepEqual(mockedShards(web).flatMap(shard => shard.checks), []);
+  assert.deepEqual(mockedShards(full).flatMap(shard => shard.checks), swarmChecks);
+  const root = evidence(t, web);
+  assert.equal(reconcileMocked(web, root).status, 'PASS');
+  const wrongSuite = subplan(full, web.entries);
+  writeFileSync(file(root, 'e2e/tagged/plan.json'), JSON.stringify(wrongSuite));
+  assert.ok(reconcileMocked(web, root).problems.some(problem => problem.includes('SHARD_IDENTITY_MISMATCH')));
+});
+
 test('missing worker, skipped case, duplicate result and failed driver cannot produce a green suite', t => {
   for (const mutation of ['missing', 'skipped', 'duplicate', 'driver']) {
     const p = plan(), root = evidence(t, p), path = file(root, 'e2e/tagged/summary.json');
@@ -146,7 +158,7 @@ test('supplemental checks must run once, in order, on their designated stack', t
 });
 
 test('workflow freezes before dispatch and reconciles before L3 paid calls and the merge gate', () => {
-  const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const job = name => workflow.split(`  ${name}:\n`)[1].split(/\n  [a-z][a-z-]*:\n/)[0];
   assert.match(job('e2e'), /needs: \[policy, l1, e2e-plan\]/);
   assert.match(job('e2e'), /max-parallel: 4/);
@@ -156,7 +168,7 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   // the same batch key the run writes under.
   const checkKey = mockedBatches(plan()).find(batch => batch.checks.length).key;
   assert.ok(job('e2e').includes(`checks=.ci-results/${checkKey}/e2e/jiuwenswarm-checks.log`));
-  const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
+  const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   for (const block of [real, job('merge-gate')]) {
     assert.match(block, /path: \.ci-mocked-results\n/);
     assert.match(block, /node \.ci\/mocked-report.mjs \.ci-mocked-plan\/plan.json \.ci-mocked-results/);

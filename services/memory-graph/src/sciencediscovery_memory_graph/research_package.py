@@ -23,6 +23,8 @@ def _key(labels: list[str], props: dict[str, Any]) -> str:
 
 
 def export_snapshot(session_ids: list[str]) -> dict[str, Any]:
+    # Equality on each source scope lets the local backend use its property index.
+    scopes = list(dict.fromkeys(session_ids))
     driver = handle()
     if not driver.is_reachable():
         raise RuntimeError("Memory graph is unavailable")
@@ -30,15 +32,15 @@ def export_snapshot(session_ids: list[str]) -> dict[str, Any]:
         nodes = [{"id": _key(row["labels"], dict(row["node"])),
                   "labels": row["labels"], "properties": _json_safe(dict(row["node"]))}
                  for row in session.run(
-                     "MATCH (n) WHERE n.session_id IN $ids RETURN labels(n) AS labels, n AS node",
-                     ids=session_ids)]
+                     "UNWIND $ids AS sid MATCH (n {session_id: sid}) RETURN labels(n) AS labels, n AS node",
+                     ids=scopes)]
         edges = [{"source": _key(row["src_labels"], dict(row["src"])),
                   "target": _key(row["dst_labels"], dict(row["dst"])),
                   "type": row["type"], "properties": _json_safe(dict(row["rel"]))}
                  for row in session.run(
-                     "MATCH (a)-[r]->(b) WHERE a.session_id IN $ids AND b.session_id IN $ids "
+                     "UNWIND $ids AS sid MATCH (a {session_id: sid})-[r]->(b) WHERE b.session_id IN $ids "
                      "RETURN a AS src, b AS dst, labels(a) AS src_labels, labels(b) AS dst_labels, "
-                     "type(r) AS type, r AS rel", ids=session_ids)]
+                     "type(r) AS type, r AS rel", ids=scopes)]
     validate_snapshot(session_ids, nodes, edges)
     return {"nodes": nodes, "edges": edges}
 
@@ -89,7 +91,7 @@ def import_snapshot(session_ids: list[str], nodes: list[dict[str, Any]],
         raise RuntimeError("Memory graph is unavailable")
     token = str(uuid4())
     with driver.session() as session:
-        if session.run("MATCH (n) WHERE n.session_id IN $ids RETURN n LIMIT 1", ids=session_ids).single():
+        if session.run("UNWIND $ids AS sid MATCH (n {session_id: sid}) RETURN n LIMIT 1", ids=list(dict.fromkeys(session_ids))).single():
             raise ValueError("Target memory graph must be empty")
         try:
             for labels, rows in grouped_nodes.items():
@@ -116,5 +118,5 @@ def discard_snapshot(session_ids: list[str]) -> None:
     if not driver.is_reachable():
         raise RuntimeError("Memory graph is unavailable")
     with driver.session() as session:
-        session.run("MATCH (n) WHERE n.session_id IN $ids DETACH DELETE n",
-                    ids=session_ids).consume()
+        session.run("UNWIND $ids AS sid MATCH (n {session_id: sid}) DETACH DELETE n",
+                    ids=list(dict.fromkeys(session_ids))).consume()

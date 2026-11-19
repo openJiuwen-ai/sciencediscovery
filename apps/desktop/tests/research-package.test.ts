@@ -1,9 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import { test } from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
 import assert from "node:assert/strict";
 import { ApiClient } from "../src/api/client.js";
 import { cancelExport, importPackage, packagePreview, readExportBlob, startCopy, startExport } from "../src/api/research-package.js";
+
+const { test } = createTest(import.meta.url, {
+  tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"],
+});
 
 test("package preview preserves scope, options, selected files and authentication", async () => {
   const previous = globalThis.fetch;

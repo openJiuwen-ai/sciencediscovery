@@ -33,7 +33,7 @@ t:(key:"settings.connectors" | "scopedSettings.connectorModeAria" | "scopedSetti
 
 return <>      <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t("settings.connectors")}</legend>
-        {allowInheritance ? <select aria-label={t("scopedSettings.connectorModeAria")} value={connectorOverride ? "override" : "inherit"} onChange={(event) => setArrayMode("enabledConnectorIds", event.target.value === "override")}>
+        {allowInheritance ? <select aria-label={t("scopedSettings.connectorModeAria")} value={connectorOverride ? "override" : "inherit"} onChange={(event) => setArrayMode("enabledConnectorIds", (event.currentTarget as unknown as { value: string }).value === "override")}>
           <option value="inherit">{t("scopedSettings.inheritCount", { count: details.effective.enabledConnectorIds.length })}</option>
           <option value="override">{t("scopedSettings.overrideCount", { count: draft.enabledConnectorIds?.length ?? 0 })}</option>
         </select> : null}

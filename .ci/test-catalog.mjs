@@ -149,6 +149,15 @@ export const testCases = [
     ],
   },
   {
+    id: "st.combination-journeys",
+    description: "Cross-feature journey evidence and recovery contract for GJ-01 through GJ-06",
+    command: ["node", ".ci/run-combination-journeys.mjs"],
+    resultPath: "st-combination-journeys",
+    tags: [
+      "arch:amd64", "arch:arm64", "container:supported", "layer:st",
+      "llm:stub", "network:local", "npu:none", "sandbox:none",
+    ],
+  },  {
     id: "st.agent-loop-real",
     description: "Node-native agent loop against an explicitly authorized live model",
     command: ["pnpm", "ci:st:real"],
@@ -177,6 +186,35 @@ export const testCases = [
     ],
   },
   {
+    id: "e2e.desktop-mocked",
+    description: "Desktop Playwright journeys with an isolated deterministic API mock",
+    command: ["node", ".ci/run-desktop-e2e.mjs", "mocked"],
+    resultPath: "e2e-desktop-mocked",
+    tags: [
+      "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
+      "llm:stub", "network:local", "npu:none", "sandbox:none",
+    ],
+  },
+  {
+    id: "e2e.ui-st",
+    description: "Desktop deterministic Chromium UI system tests for cross-feature state transitions",
+    command: ["node", ".ci/run-desktop-e2e.mjs", "ui-st"],
+    resultPath: "e2e-ui-st",
+    tags: [
+      "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
+      "llm:stub", "network:local", "npu:none", "sandbox:none",
+    ],
+  },
+  {
+    id: "e2e.web-ui-st",
+    description: "Web Chromium journeys for MCP OAuth, Idea Tree recovery and Evolve retry",
+    command: ["node", "test/support/tagged/shared.mjs", "run", "--profile", "pr", "--slice", "e2e", "--web-ui-st"],
+    resultPath: "e2e-web-ui-st",
+    tags: [
+      "arch:amd64", "container:conditional", "layer:e2e", "llm:stub", "network:local", "npu:none", "sandbox:bubblewrap",
+    ],
+  },
+  {
     id: "e2e.real",
     description: "Opt-in Playwright real-user smoke against a live model",
     command: ["pnpm", "ci:e2e:real"],
@@ -188,6 +226,20 @@ export const testCases = [
     tags: [
       "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
       "llm:real", "network:external", "npu:none", "sandbox:bubblewrap",
+    ],
+  },
+  {
+    id: "e2e.desktop-real",
+    description: "Desktop Playwright smoke journeys against the real API and model",
+    command: ["node", ".ci/run-desktop-e2e.mjs", "real"],
+    gates: {
+      allowEnv: "CI_ALLOW_REAL",
+      requiredEnv: ["E2E_API_TOKEN", "E2E_BASE_URL", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN"],
+    },
+    resultPath: "e2e-desktop-real",
+    tags: [
+      "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
+      "llm:real", "network:external", "npu:none", "sandbox:none",
     ],
   },
   {

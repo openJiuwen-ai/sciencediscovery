@@ -169,6 +169,7 @@ export function SystemSettingsDialog({
           <RuntimeSettings
             client={client}
             onConfirm={actions.confirmAction}
+            onProjectRunnerAllowlistSaved={actions.acceptProjectRunnerAllowlist}
             project={state.activeProject}
           />
         );

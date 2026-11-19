@@ -178,7 +178,12 @@ export async function artifactVersionProvenance(
   const graph = memoryGraphClient
     ? await memoryGraphClient.getArtifactProvenance(version.artifactId, version.version, version.sessionId).catch(() => null)
     : null;
-  if (graph && !graph.reason) {
+  // The graph is a derived index. Ignore a result that identifies different
+  // content before reading any of its execution or dependency references.
+  if (graph && !graph.reason
+    && (graph.artifactId == null || graph.artifactId === version.artifactId)
+    && (graph.version == null || graph.version === version.version)
+    && (graph.contentHash == null || graph.contentHash === version.content.hash)) {
     return artifactVersionProvenanceFromGraph(store, recorder, graph, sessionId, sourceSessionId, version);
   }
   return artifactVersionProvenanceFromStore(store, recorder, sessionId, sourceSessionId, version);

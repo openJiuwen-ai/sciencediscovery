@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop settings interactions journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -389,7 +405,7 @@ test.describe("MCP 服务器", () => {
     expect(mock.state.mcpServers[0]?.enabled).toBe(true);
   });
 
-  test("a rejected default selection keeps the saved value and allows retry", async ({ page }) => {
+  test("a rejected default selection keeps the saved value and allows retry", { tag: "@ui-st" }, async ({ page }) => {
     const options = {
       mcpSources: sources,
       fail: { message: "selection save refused", method: "PUT", path: "/api/settings" },
@@ -696,7 +712,8 @@ test.describe("技能", () => {
     await card.locator(".settings-card-main").click();
     // The count is the package's own files plus its SKILL.md, and the version
     // is the one the package declared rather than the revision number.
-    await expect(card.locator(".settings-detail")).toContainText("内置 · v1.0.0 · 4 个文件");
+    await expect(card.locator(".skill-source-badge")).toContainText("内置");
+    await expect(card.locator(".settings-detail-meta")).toHaveText("v1.0.0 · 4 个文件");
   });
 
   test("switching back paints the remembered list before the refresh answers", async ({ page }) => {

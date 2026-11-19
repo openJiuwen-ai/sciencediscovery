@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const kind of ["continuation", "branch"] as const) {
-  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, async ({ page }, info) => {
+  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, { tag: "@ui-st" }, async ({ page }, info) => {
     const source = Object.assign(makeSession({ messages }), kind === "continuation" ? { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } } : {});
     const mock = await installMockApi(page, { sessions: [source] });
     const keys: string[] = [];
@@ -222,7 +222,8 @@ test("hover import defaults to no project and allows an existing project", async
     await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeHidden();
     await expect(page.getByRole("button", { name: "在「默认项目」中导入会话" })).toHaveCount(0);
     await page.getByRole("button", { name: "新建会话", exact: true }).click();
-    await expect(page.locator(".landing")).toBeVisible();
+    await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
+    await expect(page.locator("#composer-textarea")).toBeVisible();
     expect(targets).toEqual([]);
   });
   for (const project of ["inbox-1", "project-1"]) {
@@ -274,7 +275,7 @@ test("reply menu branches at the selected reply without its later conversation",
     await page.getByRole("button", { name: "回复菜单" }).first().click();
     await page.getByRole("menuitem", { name: "创建新分支聊天" }).click();
     const dialog = page.getByRole("dialog", { name: "创建新分支聊天" });
-    await expect(dialog.locator("blockquote")).toHaveText("中间回复");
+    await expect(dialog).toContainText("新分支保留所选回复及之前的对话与可恢复研究证据");
     await dialog.getByRole("button", { name: "创建新分支聊天" }).click();
   });
   await test.step("2. Verify the prefix, writable composer and unchanged source", async () => {

@@ -704,7 +704,7 @@ describe("each settings page", () => {
   });
 
   it("远程 renders and asks for its data", () => {
-    asksForItsData("远程", <RuntimeSettings client={client} onConfirm={noConfirm} />);
+    asksForItsData("远程", <RuntimeSettings client={client} onConfirm={noConfirm} onProjectRunnerAllowlistSaved={() => {}} />);
   });
 
   it("专家 renders and asks for its data", () => {

@@ -23,6 +23,10 @@ test("remote environment management forwards every operation without writing int
   assert.equal(install.workspaceRoot, undefined);
   assert.equal(install.runnerWorkspaceKey, undefined);
   await assert.rejects(manageRunnerEnvironment(runner, store, "environments/env/install", "POST", { packages: ["local.whl"] }), /Session workspace/);
+  for (const body of [{}, { packages: ["numpy", 2] }, { packages: "numpy" }]) {
+    await assert.rejects(manageRunnerEnvironment(runner, store, "environments/env/install", "POST", body), /packages must be an array of strings/);
+    await assert.rejects(manageRunnerEnvironment(runner, store, "environments/env/uninstall", "POST", body), /packages must be an array of strings/);
+  }
   await assert.rejects(manageRunnerEnvironment(runner, store, "environments", "PUT", {}), /Unsupported/);
 });
 
