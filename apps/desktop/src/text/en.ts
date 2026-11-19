@@ -192,17 +192,16 @@ export const EN: Text = {
     summaryWarnings: (count: number) => `${count} ${count === 1 ? "warning" : "warnings"}`,
     summaryMixed: (problems: number, warnings: number) =>
       `${problems} ${problems === 1 ? "issue" : "issues"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
-    summaryContradicted: (count: number) =>
-      `${count} claim${count === 1 ? "" : "s"} contradicted by the source`,
-    summaryPartlySupported: (count: number) =>
-      `${count} claim${count === 1 ? "" : "s"} only partly supported by the source`,
+    /** Short verdict words, the same ones the rows use. */
+    summaryContradicted: "Contradicted",
+    summaryPartlySupported: "Partly supported",
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
     summarySkipped: "Review skipped",
     /** Nothing was raised, but the review itself said part of the claim was
      *  never examined. "No issues found" alone would read as a pass. */
-    summaryPartial: (count: number) => `No issues found, but ${count} ${count === 1 ? "check was" : "checks were"} not run`,
+    summaryPartial: (count: number) => `${count} ${count === 1 ? "check" : "checks"} not run`,
     checks: (count: number) => `${count} ${count === 1 ? "check" : "checks"}`,
     /** One checkpoint can cover several artifacts; when their verdicts differ,
      *  the header's worst-of phrase would hide the clean ones. */
