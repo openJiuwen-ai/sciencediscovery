@@ -27,7 +27,7 @@ export const checks = [
   { id: 'check:e2e-metadata', command: ['node', 'test/check-e2e-meta.mjs'], tags: [...host, 'tier:l1'] },
   // The hub's exporter and site are not another project's suite; without
   // these, `pnpm hub:test` ran nowhere in CI.
-  { id: 'check:hub-tests', command: ['pnpm', 'hub:test'], tags: [...host, 'tier:l1'] },
+  { id: 'check:hub-tests', command: ['pnpm', 'hub:test:ci'], tags: [...host, 'tier:l1'] },
   { id: 'check:hub-typecheck', command: ['pnpm', 'hub:typecheck'], tags: [...host, 'tier:l1'] },
   { id: 'check:hub-build', command: ['pnpm', 'hub:build'], tags: [...host, 'tier:l1'] },
   // The harness decides what every other case is, so its own regression suite
