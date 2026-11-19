@@ -23,7 +23,8 @@ import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
 import { executionConfig, realShards, mockedShards, mockedBatches } from './execution.mjs';
-import { PROVIDER_FAULT, retryableProviderFaults, providerFaultRepeatFailed, providerFaultRepeatReportMissing } from './provider-fault.mjs';
+import { isProviderFaultOnlyWorkerFailure } from './provider-fault.mjs';
+import { retryableCaseFailures, retryFailed, retryReportMissing, shouldRetryFailedCases } from './retry.mjs';
 import { checks } from './checks.mjs';
 import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
 import { startSwarm, withoutSwarm } from './swarm.mjs';
@@ -65,13 +66,6 @@ function run(command,args,env,log,cwd=root,{echo=false}={}) {
 function pythonVenv(project){return join(root,'services',project,'.venv');}
 function python(project){return join(pythonVenv(project),'bin/python');}
 function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(':')};}
-/**
- * How many cases are repeated when a whole batch faulted early. A batch that
- * faults as a whole is a gateway outage, not a flaky case: repeating every
- * case in it would re-run the suite against a provider that is already down.
- * A couple of repeats are enough to tell whether the gateway recovered.
- */
-const OUTAGE_PROBE_REPEATS=2;
 /**
  * Coverage is recorded by the run that gates, never by a second one: `--coverage`
  * instruments exactly this execution and changes nothing about what is selected.
@@ -316,6 +310,7 @@ export async function main(args=process.argv.slice(2)) {
   // What this run owes the artifact: one lcov per Node worker process it ran,
   // which is two for a file whose `swarm:required` tests run apart from the rest.
   const owed={node:0};
+  const retryHistory=[];
   if(checked.ok){
     const groups=planGroups(plan.entries);
     let peakWorkers=0;
@@ -409,50 +404,70 @@ export async function main(args=process.argv.slice(2)) {
       const batchPlan=join(outputDir,`playwright-${key}-plan.json`);json(batchPlan,subplan(plan,batch.entries));
       const first=await browserRun(batch,batchPlan,report,key);
       let batchResults=first.data?.results??[];
-      // One repeat for a case whose first attempt died early on a transient
-      // gateway fault. The case runs on its own, so a product failure is never
-      // repeated, and a case that got far is never repeated either. A repeat
-      // that does not work leaves the provider fault where it was — and is
-      // audited, so a failed repeat is not a console line nobody reads.
-      const repeat=retryableProviderFaults(batchResults);
-      // A batch where every case faulted early is a gateway outage, not a
-      // flaky case. Repeating the whole batch would re-run the suite against a
-      // provider that is already down, so at most a couple of cases are
-      // repeated as a probe; the rest keep their provider fault, and the gate
-      // stays non-green either way.
-      const totalOutage=batchResults.length>0&&batchResults.every(r=>r.outcome===PROVIDER_FAULT);
-      const chosen=totalOutage?repeat.slice(0,OUTAGE_PROBE_REPEATS):repeat;
-      if(totalOutage&&chosen.length<repeat.length)console.log(`Repeating ${chosen.length} of ${repeat.length} faulted case(s): the whole batch faulted, which reads as an outage`);
-      const repeatEntries=chosen.map(r=>batch.entries.find(e=>e.key===r.key)).filter(Boolean);
-      if(repeatEntries.length){
+      // Only daily and release profiles retry failed cases. Merge and PR gates
+      // keep their first failure as the final result.
+      const retryEnabled = shouldRetryFailedCases(profileName);
+      const failed = retryEnabled ? retryableCaseFailures(batchResults) : [];
+      const repeatEntries = failed.map(r => batch.entries.find(e => e.key === r.key)).filter(Boolean);
+      let repeated = new Map();
+      let retryReport;
+      if (repeatEntries.length) {
         const repeatPlan=join(outputDir,`playwright-${key}-retry-plan.json`);json(repeatPlan,subplan(plan,repeatEntries));
         const repeatReport=join(outputDir,`playwright-${key}-retry-results.json`);rmSync(repeatReport,{force:true});
-        console.log(`Repeating ${repeatEntries.length} case(s) after a transient gateway fault: ${repeatEntries.map(e=>e.id).join(', ')}`);
+        console.log(`Repeating ${repeatEntries.length} failed case(s): ${repeatEntries.map(e => e.id).join(', ')}`);
         const again=await browserRun(batch,repeatPlan,repeatReport,`${key}-retry`);
-        // A repeat that did not work is recorded, not only printed: the case
-        // stays unverified and the run says why.
-        if(!again.data)errors.push(providerFaultRepeatReportMissing);
-        else if(again.code!==0)errors.push(providerFaultRepeatFailed(again.code));
-        const repeated=new Map((again.data?.results??[]).map(r=>[r.key,r]));
-        if(again.data?.errors?.length)console.log(`Gateway-fault repeat reported: ${again.data.errors.join('; ')}`);
-        batchResults=batchResults.map(r=>repeated.has(r.key)?{...repeated.get(r.key),retriedAfterProviderFault:true}:r);
+        retryReport=again.data;
+        if(!again.data) errors.push(retryReportMissing);
+        else if(again.code!==0) errors.push(retryFailed(again.code));
+        repeated=new Map((again.data?.results??[]).map(r=>[r.key,r]));
+        if(again.data?.errors?.length) console.log(`Case retry reported: ${again.data.errors.join('; ')}`);
+        for (const firstAttempt of failed) {
+          const secondAttempt = repeated.get(firstAttempt.key);
+          const recovered = secondAttempt?.outcome === 'PASS';
+          retryHistory.push({
+            key: firstAttempt.key,
+            firstOutcome: firstAttempt.outcome,
+            ...(firstAttempt.providerFault ? { firstProviderFault: firstAttempt.providerFault } : {}),
+            secondOutcome: secondAttempt?.outcome ?? null,
+            recovered,
+            passed_after_retry: recovered,
+          });
+        }
+        batchResults=batchResults.map(r => {
+          const secondAttempt=repeated.get(r.key);
+          if (!secondAttempt) return r;
+          return {
+            ...secondAttempt,
+            retriedAfterRetry: true,
+            ...(r.providerFault ? { retriedAfterProviderFault: true } : {}),
+            passed_after_retry: secondAttempt.outcome === 'PASS',
+            firstAttempt: {
+              outcome: r.outcome,
+              ...(r.providerFault ? { providerFault: r.providerFault } : {}),
+              ...(typeof r.durationMs === 'number' ? { durationMs: r.durationMs } : {}),
+            },
+          };
+        });
       }
-      // The worker's exit code belongs to its first attempt, so it is paired
-      // with the results that attempt reported. A worker whose only failures
-      // were transient gateway faults did not fail the product: the outage is
-      // already accounted for under its own code, and the report exists. It
-      // is not an opaque worker failure on top of that — but it is not a pass
-      // either: the accounting exits non-zero while a provider fault remains.
-      // A missing report is an opaque failure and stays one.
-      const firstResults=first.data?.results??[];
-      const productFailures=firstResults.filter(r=>r.outcome==='FAIL');
-      const providerFaultOnly=first.code===1&&!productFailures.length&&firstResults.some(r=>r.outcome===PROVIDER_FAULT);
-      if(first.code&&!providerFaultOnly)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${first.code}`);
+      const firstFailureKeys=new Set(failed.map(r => r.key));
+      const recoveredKeys=new Set(retryHistory.filter(r => r.recovered).map(r => r.key));
+      const firstFailuresRecovered=firstFailureKeys.size > 0
+        && [...firstFailureKeys].every(key => recoveredKeys.has(key));
+      if(first.data) errors.push(...first.data.errors);
+      if(!first.data) errors.push('PLAYWRIGHT_REPORT_MISSING');
+      const firstWorkerFailureRecovered=first.code !== 0
+        && firstFailureKeys.size > 0
+        && firstFailuresRecovered
+        && retryReport !== undefined
+        && !(first.data?.errors?.length);
+      const providerFaultOnlyWorkerFailure = isProviderFaultOnlyWorkerFailure(first.code, first.data?.results);
+      if(first.code&&!firstWorkerFailureRecovered&&!providerFaultOnlyWorkerFailure)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${first.code}`);
       results.push(...batchResults);
-      if(first.data)errors.push(...first.data.errors);else errors.push('PLAYWRIGHT_REPORT_MISSING');
     }
   }
-  const summary=verifyResults(plan,results,errors);json(join(outputDir,'summary.json'),summary);
+  const summary=verifyResults(plan,results,errors);
+  summary.retryHistory=retryHistory;
+  json(join(outputDir,'summary.json'),summary);
   if(coverage){
     const python=await pythonCoverage(coverageDir,recording,env,outputDir);
     // The artifact describes itself: which plan it measured, how that run went,

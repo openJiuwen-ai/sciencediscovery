@@ -241,6 +241,66 @@ test("a mid-stream transport failure remains retryable after 2xx headers", async
   }
 });
 
+test("a completed Chat stream survives a transport reset after the finish marker", async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) {}
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "completed" } }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+    setImmediate(() => res.destroy(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server did not expose a TCP address");
+    let diagnostics: any;
+    const turn = await streamModelTurn(
+      { baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "synthetic", proxy: { mode: "direct" as const } },
+      "synthetic system", [{ role: "user", content: "synthetic" }], [], policy, AbortSignal.timeout(2_000),
+      { onWireDiagnostics: value => { diagnostics = value; } },
+    );
+    assert.equal(turn.assistantMessage.content, "completed");
+    assert.equal(turn.completionObserved, true);
+    assert.equal(diagnostics.recoveredAfterCompletion, true);
+    assert.equal(diagnostics.error, undefined);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test("a completed tool-call stream survives a transport reset without replaying tool deltas", async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) {}
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-0", type: "function", function: { name: "compatibility_echo", arguments: '{"value":"OK"}' } }] } }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    setImmediate(() => res.destroy(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server did not expose a TCP address");
+    let diagnostics: any;
+    const deltas: string[] = [];
+    const turn = await streamModelTurn(
+      { baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "synthetic", proxy: { mode: "direct" as const } },
+      "synthetic system", [{ role: "user", content: "synthetic" }], tools, policy, AbortSignal.timeout(2_000),
+      { onToolCallDelta: delta => { deltas.push(delta.arguments); }, onWireDiagnostics: value => { diagnostics = value; } },
+    );
+    assert.equal(turn.completionObserved, true);
+    assert.deepEqual(turn.toolCalls.map(call => ({ id: call.id, name: call.name, args: call.args })), [
+      { id: "call-0", name: "compatibility_echo", args: { value: "OK" } },
+    ]);
+    assert.deepEqual(deltas, ['{"value":"OK"}']);
+    assert.equal(diagnostics.recoveredAfterCompletion, true);
+    assert.equal(diagnostics.error, undefined);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test('canonical Chat assistant parallel history maps to Responses without losing content, IDs or args', () => {
   const calls = ['a', 'b'].map(id => ({ id, type: 'function', function: { name: 'echo', arguments: JSON.stringify({ id }) } }));
   const endpoint = { apiProtocol: 'openai-responses' as const, model: 'synthetic', baseUrl: 'http://fixture/v1' };

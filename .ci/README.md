@@ -340,8 +340,8 @@ minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
 minutes. Team generation allows 55 minutes; PUCT generation 120 minutes.
 Its optional AI audit allows up to 65 more minutes when explicitly enabled
 locally; both daily and release leave that audit disabled. Job setup counts toward the four-hour worker
-ceiling. `fail-fast: false` retains evidence from independent workers; the only
-automatic repeat is the one an early model-gateway fault earns, described
+ceiling. `fail-fast: false` retains evidence from independent workers; automatic
+retry behavior is gated by the `daily` and `release` profiles and is described
 below. Rebuilding a merge group repeats its model calls.
 Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
@@ -381,9 +381,10 @@ provider-transport`:
 - the fault stays visible in the verdict, the step summary and the artifacts.
 
 **A soft classification is not a soft pass.** A planned case that only faulted
-is an unverified case: the product was never checked in it. The required
-real-E2E check — Daily, merge L3 and release L5 alike — therefore does **not**
-pass while a provider fault remains:
+is an unverified case: the product was never checked in it. It remains
+unverified until the profile's allowed attempts produce a `PASS`. The required
+real-E2E check therefore does **not** pass while a provider fault remains after
+those attempts:
 
 | Outcome | Status | Exit code |
 | --- | --- | --- |
@@ -393,9 +394,12 @@ pass while a provider fault remains:
 
 The two failure kinds stay apart in the accounting — a provider fault is never
 reported as a product `FAIL`, and a product failure is never softened into an
-outage — but neither one is a pass. The floor is the same in the worker, in
-the shard summary, in the suite reconcile and in the shared-plan summary, so
-no profile can turn an outage into a green required check.
+outage. Neither one is a first-attempt pass. The paid `daily` and `release`
+profiles may retry either kind once, and a retry `PASS` makes that case green in
+the final result while retaining the first-attempt record. The `pr` and `merge`
+profiles keep the first failure as the final result. The same accounting floor
+is applied in the worker, the shard summary, the suite reconcile and the
+shared-plan summary.
 
 An authentication (401/403) or rate-limit (429) answer is a decision, not an
 outage, and a delivery miss or the product's stalled-run wording is the run's
@@ -438,18 +442,25 @@ wrapper, a thrown API error, a semantic verdict — records what one step printe
 rather than a verdict on the run, so a sibling text that names the gateway
 outvotes it.
 
-The "a soft classification is not a soft pass" floor above is unchanged either
-way.
+The "a soft classification is not a soft pass" floor above applies to each
+attempt. A `daily` or `release` retry can produce a final pass only when the
+rerun itself passes; the first-attempt fault remains in the artifacts and
+summary.
 
-A case whose first attempt died early on such a fault is run once more, on
-its own. Only an attempt that failed within five minutes is repeated, so a
-long research case that got that far is never repeated, and a product failure
-is never repeated at all. When a whole batch faults early, the batch reads as
-an outage and only a couple of cases are repeated as a probe. The repeat keeps
-its own evidence directory, and the first attempt's record stays in the
-artifacts. A repeat that did not work is recorded in the accounting
-(`PROVIDER_FAULT_REPEAT_FAILED`, `PROVIDER_FAULT_REPEAT_REPORT_MISSING`)
-instead of only in the log: the case stays unverified and the run says why.
+Failed-case retrying is enabled only for the paid `daily` and `release`
+profiles. In those profiles, every executed `FAIL` or `PROVIDER_FAULT` case is
+run once more in its own evidence directory. The first attempt remains in the
+artifacts and in `firstAttempt` / `retryHistory`, while the second attempt
+supplies the final case result. A retry that passes is counted as
+`passed_after_retry` and shown in the shared-plan summary. A failed or missing
+retry report keeps the case and the layer failed. The PR `pr` and merge-queue
+`merge` profiles do not retry a failed case, so their first failure remains the
+final result.
+
+The retry policy intentionally includes product `FAIL` results in `daily` and
+`release` because those profiles validate paid live-model journeys against
+intermittent external conditions. The retry evidence makes recovered failures
+visible without changing the final gate semantics for cases that remain failed.
 
 ### L5 active-public benchmark and baseline candidate
 

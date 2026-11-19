@@ -143,6 +143,7 @@ export function verifyResults(plan, results, errors = []) {
   const productProblems = problems.filter(problem => !isProviderFaultProblem(problem));
   const providerFaultProblems = problems.filter(problem => isProviderFaultProblem(problem));
   const providerFaults = [...seen.values()].filter(r => r.outcome === PROVIDER_FAULT).length;
+  const recoveredAfterRetry = results.filter(r => r.retriedAfterRetry && r.outcome === 'PASS').length;
   return {
     status: productProblems.length ? 'FAIL' : providerFaultProblems.length ? 'PROVIDER_FAULT' : 'PASS',
     exitCode: productProblems.length || providerFaultProblems.length ? 1 : 0,
@@ -154,7 +155,10 @@ export function verifyResults(plan, results, errors = []) {
       && (!expected.get(r.key).backend || r.actualBackend === expected.get(r.key).backend)).map(r => r.key)).size,
     skipped: results.filter(r => ['SKIPPED', 'XFAIL', 'XPASS', 'TODO'].includes(r.outcome)).length,
     providerFaults,
-    providerFaultRetries: results.filter(r => r.retriedAfterProviderFault).length,
+    providerFaultRetries: results.filter(r => r.retriedAfterProviderFault || r.firstAttempt?.providerFault).length,
+    retriedCases: results.filter(r => r.retriedAfterRetry).length,
+    recoveredAfterRetry,
+    passed_after_retry: recoveredAfterRetry,
     results, problems,
   };
 }

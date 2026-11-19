@@ -416,7 +416,7 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       metrics.search_id = latestSearch(searches).id;
     });
 
-    await journey.step("Watch the search reach three expansions", "The tree expands past the starting program, and each candidate is readable by its hash.", async () => {
+    await journey.step("Watch the search reach three expansions or the target reward", "The tree expands past the starting program, and each candidate is readable by its hash. A successful search may finish early after reaching the target reward.", async () => {
       const target = positiveNumber("E2E_SRBENCH_MIN_EXPANSIONS", 3);
       const search = latestSearch(searches);
       const eventsPath = `/api/evolve/runs/${encodeURIComponent(search.id)}/events`;
@@ -446,10 +446,27 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       }).toBe(true);
 
       await save("evolve-events.json", events);
-      expect(expanded.length, `The search must record at least ${target} expansions`).toBeGreaterThanOrEqual(target);
 
+      const finished = [...events]
+        .reverse()
+        .find((record) => record.event.type === "search_finished")?.event;
+      // The server stops with target_reward only after applying the run's own
+      // scorecard threshold. Trust that terminal decision instead of
+      // reconstructing a threshold from the client-side goal snapshot.
+      const reachedTargetReward =
+        expanded.length < target
+        && finished?.status === "succeeded"
+        && finished?.stopReason === "target_reward";
+
+      if (!reachedTargetReward) {
+        expect(expanded.length, `The search must record at least ${target} expansions`).toBeGreaterThanOrEqual(target);
+      }
+
+      const recordsToCheck = expanded.length >= target
+        ? expanded.slice(0, target)
+        : expanded;
       const recorded: any[] = [];
-      for (const record of expanded.slice(0, target)) {
+      for (const record of recordsToCheck) {
         const hash = String(record.event.codeHash);
         const candidate = await api<{ hash: string; source: string }>(
           page,
@@ -470,7 +487,7 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
 
       // The acceptance figures from the problem statement are recorded beside
       // the search's own numbers, never turned into a pass gate: three
-      // expansions is the bar, and the digits are what a reader checks later.
+      // expansions or an explicit target-reward stop is the bar, and the digits are what a reader checks later.
       const current = latestSearch(await api<any[]>(page, searchList()));
       expect(current.algorithm, "The desktop command must select PUCT").toBe("puct");
       const scorecard = evolutionScorecard(current, events);
