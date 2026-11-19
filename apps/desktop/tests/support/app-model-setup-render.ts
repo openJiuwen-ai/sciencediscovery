@@ -6,7 +6,7 @@ import { register } from "node:module";
 import React from "react";
 import { DEFAULT_REVIEWER_SPECIALIST_LEVEL } from "@sciencediscovery/schema";
 import { act, create, type ReactTestInstance } from "./dom-renderer.js";
-import type { ModelProfile, Project, Session } from "../../src/api/types.js";
+import type { ModelProfile, ModelUsageBucket, Project, Session, SessionUsageSummary } from "../../src/api/types.js";
 import { GUIDE_STORAGE_KEY, LOCALE_STORAGE_KEY } from "../../src/state/storage.js";
 
 const [language, scenario] = process.argv.slice(2);
@@ -54,6 +54,13 @@ const unexpected: string[] = [];
 let globalModel: string | undefined;
 function settings(session?: Session) {
   return { overrides: session?.settingsOverrides ?? {}, effective: { modelId: session?.modelId ?? globalModel }, sources: {} };
+}
+function sessionUsage(sessionId: string): SessionUsageSummary {
+  const totals: ModelUsageBucket = {
+    key: "total", label: "Total", invocationCount: 0, reportedInvocationCount: 0, unreportedInvocationCount: 0,
+    inputTokens: null, outputTokens: null, totalTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null,
+  };
+  return { sessionId, totals, byRun: [], byModel: [], byInvocationKind: [], invocations: [] };
 }
 function newSession(projectId: string): Session {
   const session: Session = {
@@ -104,6 +111,11 @@ globalThis.fetch = async (input, init = {}) => {
   // still falls through to the unexpected list.
   else if (method === "GET" && /^\/api\/sessions\/[^/]+\/idea-tree\/research$/u.test(path)) result = { items: [] };
   else if (method === "GET" && /^\/api\/sessions\/[^/]+\/idea-tree\/graph$/u.test(path)) result = { graph: null, hasIdeaTreeRun: false, treeIds: [] };
+  else if (/^\/api\/sessions\/[^/]+\/usage$/u.test(path)) {
+    const sessionId = path.split("/")[3];
+    assert.ok(sessionId);
+    result = sessionUsage(sessionId);
+  }
   else if (method === "GET" && /^\/api\/sessions\/[^/]+\/configuration-requests$/u.test(path)) result = { items: [] };
   else if (/^\/api\/sessions\/[^/]+\/settings$/u.test(path)) result = settings(data.sessions.find(session => path.includes(session.id)));
   else if (/^\/api\/sessions\/[^/]+$/u.test(path)) result = { ...data.sessions.find(session => path.endsWith(session.id)), messages: [] };

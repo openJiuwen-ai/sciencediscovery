@@ -472,7 +472,7 @@ test("analytics reports missing and partial token fields separately from reporte
     usage({ id: "zero", inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
     usage({ id: "missing", inputTokens: null, outputTokens: null, totalTokens: null, usageStatus: "provider-not-reported" }),
     usage({ id: "partial", inputTokens: 25, outputTokens: null, totalTokens: null }),
-  ], {});
+  ], { projectNameById: new Map(), projectIdBySessionId: new Map(), sessionTitleById: new Map() });
   const expected = { invocationCount: 3, reportedInputCount: 2, reportedOutputCount: 1, reportedTotalCount: 1 };
   assert.deepEqual(summary.overview.reporting, expected);
   assert.deepEqual(summary.dailyByModel[0]?.reporting, expected);
@@ -485,7 +485,8 @@ test("analytics reporting metadata respects model/date filters and includes unkn
     usage({ modelProfileId: "unreported", startedAt: "2026-11-18T00:00:00Z", inputTokens: null, outputTokens: null, totalTokens: null, usageStatus: "provider-not-reported" }),
     usage({ modelProfileId: "other", startedAt: "2026-11-18T00:00:00Z" }),
     usage({ modelProfileId: "unreported", startedAt: "2026-11-17T00:00:00Z" }),
-  ], {}, { from: "2026-11-18", to: "2026-11-18", modelProfileId: "unreported" });
+  ], { projectNameById: new Map(), projectIdBySessionId: new Map(), sessionTitleById: new Map() },
+  { from: "2026-11-18", to: "2026-11-18", modelProfileId: "unreported" });
   assert.deepEqual(summary.overview.reporting, { invocationCount: 1, reportedInputCount: 0, reportedOutputCount: 0, reportedTotalCount: 0 });
   assert.equal(summary.dailyByModel.length, 1);
   assert.equal(summary.dailyByModel[0]?.modelProfileId, "unreported");
