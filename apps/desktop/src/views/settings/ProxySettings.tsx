@@ -117,10 +117,10 @@ function ProxyBypass({ value, disabled, onSave }: { value: string; disabled: boo
   const text = TEXT.settings.system.migrated.proxy;
   return (
     <Row title={text.noProxy} hint={text.noProxyHint} tone="stack">
-      <form className="allowlist-editor" onSubmit={event => { event.preventDefault(); void onSave(draft.trim()); }}>
+      <form className="proxy-bypass-editor" onSubmit={event => { event.preventDefault(); void onSave(draft.trim()); }}>
         <input className="field-input" aria-label={text.noProxy} value={draft} maxLength={4000}
           disabled={disabled} onChange={event => setDraft(event.target.value)} />
-        <div className="allowlist-actions"><button className="secondary-button" type="submit" disabled={disabled || draft.trim() === value}>{TEXT.settings.system.migrated.common.save}</button></div>
+        <button className="secondary-button" type="submit" disabled={disabled || draft.trim() === value}>{TEXT.settings.system.migrated.common.save}</button>
       </form>
     </Row>
   );
