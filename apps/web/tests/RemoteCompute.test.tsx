@@ -52,6 +52,29 @@ test("a default Project uses the usable Runner catalog and toggling one preserve
   } finally { await act(async () => renderer.unmount()); }
 });
 
+test("a ready direct Runner on a non-Linux platform is excluded from seeded selections", async () => {
+  const project: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
+  const hosts = [
+    buildHost({ id: "local" }),
+    buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }),
+    buildHost({ id: "mac-runner", connectionKind: "direct", endpoint: { host: "::1", port: 4311, protocol: "http" }, hasToken: true, capabilities: { platform: "Darwin" } }),
+  ];
+  const client = new ApiClient("");
+  client.listRunners = async () => hosts;
+  const updates: UpdateProjectRequest[] = [];
+  client.updateProject = async (_id, body) => { updates.push(body); return { ...project, ...body }; };
+  let view: ReactTestRenderer | undefined;
+  await act(async () => { view = create(createElement(ProjectRemoteSettings, { client, project, onError: error => { throw error; }, onProjectChange() {} })); });
+  assert.ok(view); const renderer = view;
+  try {
+    const boxes = renderer.root.findAllByType("input");
+    assert.equal(boxes.length, 2);
+    const gpuA = boxes[1]; assert.ok(gpuA);
+    await act(async () => { gpuA.props.onChange(); });
+    assert.deepEqual(updates, [{ runnerIds: ["local"] }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
 test("inherit to override waits for the catalog and preserves default or explicit Runner selections", async () => {
   const base: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
   const hosts = [buildHost({ id: "local" }), buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }), buildHost({ id: "gpu-b", capabilities: { platform: "Linux" } }),
