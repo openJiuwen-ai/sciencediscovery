@@ -86,8 +86,15 @@ const wizard = {
  *  package is never held as one ArrayBuffer; `streamEnd` carries the same
  *  metadata and records the same history row. */
 const exportFile = {
-  saveDialog: (suggestedName: string): Promise<{ canceled: boolean; token: string | null }> =>
-    ipcRenderer.invoke("sd-shell:export-save-dialog", { suggestedName }),
+  saveDialog: (
+    suggestedName: string,
+    options?: {
+      buttonLabel?: string;
+      filters?: Array<{ extensions: string[]; name: string }>;
+      title?: string;
+    },
+  ): Promise<{ canceled: boolean; token: string | null }> =>
+    ipcRenderer.invoke("sd-shell:export-save-dialog", { options, suggestedName }),
   write: (token: string, data: ArrayBuffer, meta?: {
     recordId?: string;
     projectId?: string;

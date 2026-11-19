@@ -1642,16 +1642,47 @@ function defaultExportDir(): string {
 }
 
 ipcMain.handle("sd-shell:export-save-dialog", async (_event, args: unknown) => {
-  const { suggestedName } = (args ?? {}) as { suggestedName?: unknown };
+  const { options, suggestedName } = (args ?? {}) as {
+    options?: {
+      buttonLabel?: unknown;
+      filters?: unknown;
+      title?: unknown;
+    };
+    suggestedName?: unknown;
+  };
   const name = typeof suggestedName === "string" && suggestedName.trim()
     ? suggestedName.trim()
     : "research.sdresearch";
+  // A caller may name its own file kind (a Skill export saves a ZIP beside a
+  // research package's .sdresearch); without one the research defaults stay.
+  const title = typeof options?.title === "string" && options.title.trim()
+    ? options.title.trim()
+    : "导出研究包";
+  const buttonLabel = typeof options?.buttonLabel === "string" && options.buttonLabel.trim()
+    ? options.buttonLabel.trim()
+    : "保存";
+  const filters = Array.isArray(options?.filters)
+    ? (options.filters as unknown[]).flatMap((filter: unknown) => {
+      if (!filter || typeof filter !== "object") return [];
+      const value = filter as { extensions?: unknown; name?: unknown };
+      const extensions = Array.isArray(value.extensions)
+        ? value.extensions.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+        : [];
+      if (extensions.length === 0) return [];
+      return [{
+        name: typeof value.name === "string" && value.name.trim() ? value.name.trim() : extensions[0]!,
+        extensions,
+      }];
+    })
+    : [];
   if (!mainWindow) return { canceled: true, token: null };
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: "导出研究包",
+    title,
     defaultPath: join(defaultExportDir(), name),
-    buttonLabel: "保存",
-    filters: [{ name: "ScienceDiscovery 研究包", extensions: ["sdresearch"] }],
+    buttonLabel,
+    filters: filters.length > 0
+      ? filters
+      : [{ name: "ScienceDiscovery 研究包", extensions: ["sdresearch"] }],
     properties: ["showOverwriteConfirmation", "createDirectory"],
   });
   if (result.canceled || !result.filePath) return { canceled: true, token: null };

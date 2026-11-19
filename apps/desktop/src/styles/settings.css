@@ -109,6 +109,17 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   line-height: 1.5;
 }
 .settings-card-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* A Skill export's own outcome, beside the row that produced it: the page's
+   notice is above the list and out of view once the reader has scrolled. */
+.skill-export-status {
+  flex: 0 0 auto;
+  max-width: 220px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: right;
+}
+.skill-export-status.is-error { color: var(--danger); }
 .skill-source-badge {
   display: inline-flex;
   max-width: 100%;
@@ -742,45 +753,61 @@ a.secondary-button {
 .skill-add-copy strong { color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
 .skill-add-copy small { color: var(--text-secondary); font-size: 11.5px; line-height: 1.45; }
 
-/* 技能's sub-pages: 上传技能, 从 GitHub 导入 and 编辑. The back control sits
-   level with the title it leaves, so the eye finds the way out where the page
-   was entered. */
-.skill-subview-title { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
-.skill-subview-copy { min-width: 0; }
-.skill-back {
+/* 技能's pages replace the pane's scroll area: the trail bar is pinned across
+   the top, and the page below scrolls under it. */
+.skill-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+/* The trail lives in a bar across the pane's top, as the settings shell this
+   pane imitates draws it: the way out is found where the directory names the
+   page, and the page's own column starts at the content's left edge instead of
+   being indented by a control that is not its own. */
+.skill-pane-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.skill-pane-back {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin-top: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-secondary);
 }
-.skill-back:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-strong); }
-
-/* 技能 › one Skill's header: the trail, the identity row and the one-line
-   description. The mark is the same letter the list draws, enlarged to the
-   size of the name it introduces; the source badge sits beside the name
-   rather than in the description, where the reader looks for the page's own
-   facts. */
+.skill-pane-back:hover { background: var(--surface-hover); color: var(--text-strong); }
+.skill-pane-divider { flex: 0 0 auto; width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
 .skill-breadcrumb {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
-  color: #999;
-  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
 }
-/* The arrow belongs to the trail, so it sits level with it rather than with
-   the name two lines below. */
-.skill-detail-page-head .skill-back { margin-top: 0; }
-.skill-breadcrumb button { color: inherit; font-size: inherit; }
-.skill-breadcrumb button:hover { color: #191919; }
-.skill-detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.skill-breadcrumb button { color: inherit; font-size: inherit; font-weight: inherit; }
+.skill-breadcrumb button:hover { color: var(--text-strong); }
+.skill-breadcrumb > span[aria-hidden] { color: var(--text-faint); font-weight: 400; }
+.skill-breadcrumb-current { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
+
+/* 技能 › one Skill's header: the identity row and the one-line description.
+   The mark is the same letter the list draws, enlarged to the size of the name
+   it introduces; the source badge sits beside the name rather than in the
+   description, where the reader looks for the page's own facts.
+   The header is a stack, not the pane's usual title/control row: with no
+   control on the right, a flex row would put the description beside the name
+   instead of under it. Block flow keeps both at the pane's left edge, where
+   文件 below starts. */
+.skill-subview-copy { min-width: 0; }
+.skill-detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.skill-detail-title h3 { min-width: 0; overflow-wrap: anywhere; }
 .skill-detail-mark {
   display: inline-flex;
   align-items: center;
@@ -793,11 +820,6 @@ a.secondary-button {
   color: var(--text-strong);
   font-size: 15px;
   font-weight: 650;
-}
-.settings-detail-header p.skill-detail-facts {
-  margin-top: 6px;
-  color: #a3a3a3;
-  font-size: 12.5px;
 }
 /* The three add pages share one measure, so moving between them does not move
    the fields under the pointer. */
@@ -960,37 +982,180 @@ a.secondary-button {
 }
 .skill-git-more .row-note { color: var(--text-secondary); margin: 0; }
 
-/* 技能 › 编辑. A file rail beside one pane: which file is being edited is the
-   question the editor asks before anything else. */
-.skill-editor { display: flex; align-items: flex-start; gap: 20px; }
-.skill-editor-files {
-  display: grid;
-  flex: 0 0 190px;
-  gap: 3px;
-  align-content: start;
-  padding-right: 16px;
-  border-right: 1px solid var(--border);
+/* 技能 › 编辑. One column of fields, the way the reference editor reads: the
+   identity at the top, one content editor, and everything the reader rarely
+   changes folded into 高级设置. The footer is the page's only pair of exits.
+   The editor owns the pane's height: the form scrolls, the footer does not,
+   so 取消 / 保存 never float over the 高级设置 the reader is looking at. */
+.settings-group-detail.is-skill-editor {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.skill-editor-file {
-  padding: 6px 9px;
-  border-radius: var(--radius-s);
+.skill-editor-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  max-width: 820px;
+  min-height: 0;
+  margin: 0 auto;
+}
+.skill-editor-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4px 12px 0;
+  border: 0;
+  overflow-y: auto;
+}
+.skill-editor-form .settings-field { margin: 0; }
+/* The name is the package's identity: shown, never edited. A disabled field
+   that still looked editable was the one thing on the page inviting a press. */
+.skill-editor-form .field-input:disabled {
+  background: var(--surface-subtle);
   color: var(--text-secondary);
+}
+.skill-editor-description { resize: vertical; }
+.skill-editor-content { display: flex; flex-direction: column; gap: 8px; }
+.skill-editor-content-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.skill-editor-content-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
+/* 撰写 / 上传: one choice about the content below, drawn as one control. */
+.skill-editor-mode {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--surface-subtle);
+}
+.skill-editor-mode button {
+  padding: 4px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+}
+.skill-editor-mode button.is-active {
+  background: var(--surface);
+  color: var(--text-strong);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(24, 24, 24, .10);
+}
+.skill-editor-body {
+  min-height: 280px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+/* The two uploads share one dashed target: both open a file picker, and both
+   fill something the reader then reviews. */
+.skill-editor-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 28px 20px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.skill-editor-drop:hover:not(:disabled) { border-color: var(--primary-border-soft); background: var(--surface-hover); }
+.skill-editor-drop:disabled { opacity: .6; cursor: default; }
+.skill-editor-drop.is-reference { padding: 22px 20px; }
+.skill-editor-drop-title { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.skill-editor-drop-hint { color: var(--text-secondary); font-size: 11.5px; line-height: 1.55; }
+.skill-editor-hidden-input { display: none; }
+/* 高级设置: one fold for the package's optional fields and its files. */
+.skill-editor-advanced { border-top: 1px solid var(--border-soft); padding-top: 14px; }
+.skill-editor-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.skill-editor-advanced-toggle:hover { color: var(--primary-strong); }
+.skill-editor-chev { color: var(--text-faint); transition: transform .15s ease; }
+.skill-editor-chev.is-closed { transform: rotate(-90deg); }
+.skill-editor-advanced-body { display: grid; gap: 12px; margin-top: 14px; }
+.skill-editor-references-head { display: flex; justify-content: space-between; gap: 16px; }
+.skill-editor-references-head > div { display: grid; gap: 2px; }
+.skill-editor-usage { color: var(--text-faint); font-size: 11.5px; }
+.skill-editor-resources { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.skill-editor-resource {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+}
+.skill-editor-resource:hover { background: var(--surface-hover); color: var(--text-strong); }
+.skill-editor-resource.is-active { background: var(--primary-tint); color: var(--primary-strong); }
+.skill-editor-resource-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  text-align: left;
-  word-break: break-all;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.skill-editor-file:hover { background: var(--surface-hover); color: var(--text-strong); }
-.skill-editor-file.is-active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
-.skill-editor-pane { display: grid; flex: 1; gap: 14px; min-width: 0; }
-.skill-editor-pane .settings-field { margin: 0; }
-.skill-editor-new-file { display: flex; gap: 8px; }
-.skill-editor-new-file .field-input { flex: 1; min-width: 0; }
-.field-textarea.is-tall { min-height: 240px; font-family: var(--font-mono); font-size: 12px; }
+.skill-editor-resource-size { flex: 0 0 auto; color: var(--text-faint); font-size: 11px; }
+/* The footer is outside the form's scroll: 取消 and 保存 are the two ways the
+   page ends, and neither should be scrolled away or laid over the fields. */
+.skill-editor-footer {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-soft);
+  background: #fff;
+}
+/* 取消 is the quiet exit beside 保存: a border would make the two look like
+   equal choices when only one writes. */
+.skill-editor-footer .skill-editor-cancel {
+  min-height: 34px;
+  padding: 6px 16px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.skill-editor-footer .skill-editor-cancel:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
 
 /* 技能 › one package. The page is the document the model is told, laid out in
    the pane's own column: identity and description in the header above, then
-   availability, the instructions, and where the package came from. Sections
+   the instructions and the package's own frontmatter as 详情. Sections
    are separated by a hairline rather than boxed in cards, because a second
    edge between the reader and a long instruction is one edge too many.
    `minmax(0, 1fr)` is load-bearing: a grid column defaults to the widest
@@ -999,28 +1164,47 @@ a.secondary-button {
 .skill-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  max-width: 860px;
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+}
+/* The page opens with the package's identity: mark, name and source badge on
+   one line, then its own description. The description sits below the whole
+   line rather than beside the mark, where it reads as the page's introduction
+   instead of a caption on the icon. */
+.skill-detail-head { display: grid; gap: 2px; }
+.skill-detail-head .skill-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.skill-detail-head .skill-detail-title .skill-source-badge { margin-top: 0; }
+.skill-detail-head .skill-detail-title h3 {
+  min-width: 0;
+  color: #191919;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.skill-detail-description {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 .skill-detail-section { padding: 22px 0; border-top: 1px solid var(--border-soft); }
+.skill-detail-head + .skill-detail-section { margin-top: 18px; }
 .skill-detail-section:first-child { padding-top: 0; border-top: 0; }
 .skill-detail-section > h4 {
   margin: 0 0 10px;
   color: var(--text-strong);
   font-size: 14px;
   font-weight: 650;
-}
-.skill-detail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-.skill-detail-head p {
-  margin: 4px 0 0;
-  max-width: 640px;
-  color: var(--text-faint);
-  font-size: 12.5px;
-  line-height: 1.6;
 }
 .skill-detail-file {
   min-width: 0;
@@ -1039,9 +1223,9 @@ a.secondary-button {
 .skill-detail-row > span { color: var(--text-faint); font-size: 12.5px; }
 .skill-detail-row > strong {
   color: #191919;
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.4;
+  font-size: 14.5px;
+  font-weight: 400;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 

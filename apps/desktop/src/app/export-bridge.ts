@@ -39,8 +39,17 @@ export interface ExportSaveResult {
   token: string | null;
 }
 
+/** What the save dialog shows. A research package and a Skill ZIP are
+ *  different files, so the caller names its own title and filter; without
+ *  this the dialog offered the research filter for a `.zip`. */
+export interface ExportSaveOptions {
+  buttonLabel?: string;
+  filters?: Array<{ extensions: string[]; name: string }>;
+  title?: string;
+}
+
 export interface ExportShellBridge {
-  saveDialog: (suggestedName: string) => Promise<ExportSaveResult>;
+  saveDialog: (suggestedName: string, options?: ExportSaveOptions) => Promise<ExportSaveResult>;
   write: (token: string, data: ArrayBuffer, meta?: ExportWriteMeta) => Promise<{ ok: boolean }>;
   /** Streaming write (a 5 GiB archive must not arrive as one ArrayBuffer).
    *  Missing on an older shell: callers fall back to `write`. */

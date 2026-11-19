@@ -16,22 +16,14 @@ import type { ApiClient } from "../../api/client.js";
 import { getSkill } from "../../api/settings.js";
 import type { SkillDetail } from "../../api/types.js";
 import { MarkdownProse } from "../../MarkdownProse.js";
+import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
-import { LoadGate, Switch } from "./rows.js";
+import { LoadGate } from "./rows.js";
 
 interface Props {
-  /** A write is already in flight; the switch waits for it. */
-  busy?: boolean;
   client: ApiClient;
-  /** Whether this Skill is switched on, read from JiuwenSwarm by the list. */
-  enabled: boolean;
-  onToggle: (next: boolean) => void;
   skillId: string;
-  skillName: string;
-  /** Writes to the switch are not possible while a write is in flight, or
-   *  when the active backend has no skill store to write to. */
-  switchesAvailable: boolean;
 }
 
 /** Frontmatter keys that are already on the page: the name and description in
@@ -91,19 +83,12 @@ function DetailRow({ label, value }: { label: string; value: string }) {
  * The row used to open SKILL.md in place, which made the instructions a
  * squeezed box inside a list item. A Skill is a package — a document and the
  * files beside it — so it gets a page of its own, laid out as the document it
- * is: the instructions run down a measured column at the page's own width,
- * with availability above and provenance below. Nothing is wrapped in a card,
+ * is: the identity sits at the top of the page (mark, name, source and the
+ * package's own description), then the instructions run down a measured column
+ * with the package's own frontmatter as 详情. Nothing is wrapped in a card,
  * because a card would put a second edge between the reader and the text.
  */
-export function SkillDetailView({
-  busy,
-  client,
-  enabled,
-  onToggle,
-  skillId,
-  skillName,
-  switchesAvailable,
-}: Props) {
+export function SkillDetailView({ client, skillId }: Props) {
   const loaded = useLoaded(async () => getSkill(client, skillId), {
     client,
     key: `skills:detail:${skillId}`,
@@ -113,22 +98,23 @@ export function SkillDetailView({
     <LoadGate loaded={loaded}>
       {(detail) => {
         const facts = detailFacts(detail);
+        const source = detail.source === "built-in"
+          ? TEXT.settings.skills.source.builtIn
+          : TEXT.settings.skills.source.managed;
         return (
           <div className="skill-detail">
-            <section className="skill-detail-section">
-              <div className="skill-detail-head">
-                <div>
-                  <h4>{TEXT.settings.skills.detailView.availability}</h4>
-                  <p>{TEXT.settings.skills.scope}</p>
-                </div>
-                <Switch
-                  disabled={busy || !switchesAvailable}
-                  label={TEXT.settings.skills.toggle(skillName)}
-                  onChange={onToggle}
-                  value={enabled}
-                />
+            <header className="skill-detail-head">
+              <div className="skill-detail-title">
+                <span aria-hidden="true" className="skill-detail-mark">{skillMark(detail)}</span>
+                <h3>{detail.name}</h3>
+                <span className={`skill-source-badge ${detail.source === "built-in" ? "is-sd" : "is-managed"}`}>
+                  {source}
+                </span>
               </div>
-            </section>
+              {detail.description ? (
+                <p className="skill-detail-description">{detail.description}</p>
+              ) : null}
+            </header>
 
             <section className="skill-detail-section">
               <h4>{TEXT.settings.skills.detailView.files}</h4>
