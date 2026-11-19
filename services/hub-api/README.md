@@ -96,6 +96,12 @@ set -a; . ./.env; set +a
 It uploads a few bytes, presigns a URL, downloads it anonymously, checks the
 digest, confirms an unsigned GET is refused, and deletes the object.
 
+The site's save dialog (`showSaveFilePicker`, Chrome and Edge) writes from
+`GET /api/v1/artifacts/{id}/content`, not from the presigned bucket URL: a
+cross-origin read needs a bucket CORS rule, and the same-origin endpoint needs
+none. Direct downloads still navigate to the presigned URL, so the bucket's
+bandwidth stays off the server for the common case.
+
 The host clock must be within fifteen minutes of real time: SigV4 rejects a
 signature dated further ahead (`RequestTimeTooSkewed`). Run NTP on the server.
 The smoke script measures and compensates for a drifting development host; the
@@ -125,5 +131,6 @@ the same shape the reference marketplace returns.
 | POST | `/api/v1/assets/{id}/versions` | owner/admin | Upload a package (multipart) |
 | GET | `/api/v1/assets/{id}/versions/{v}/files` | optional | Inventory; `with_content=<path>` for text |
 | GET | `/api/v1/artifacts/{id}?version=` | optional | Signed download URL + digest |
+| GET | `/api/v1/artifacts/{id}/content?version=` | optional | Streams the bytes same-origin, for the browser's save dialog |
 | GET | `/api/v1/admin/reviews?state=` | admin | Review queue |
 | POST | `/api/v1/admin/reviews/{id}/{version}` | admin | Approve or reject |

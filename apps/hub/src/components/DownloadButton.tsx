@@ -16,7 +16,7 @@ import { useState } from "react";
 
 import { DownloadIcon } from "./icons.js";
 import { assetUrl } from "../catalog/load.js";
-import { hubApiConfigured, resolveDownloadUrl } from "../catalog/api.js";
+import { downloadContentPath, hubApiConfigured, resolveDownload } from "../catalog/api.js";
 
 import type { JSX, MouseEvent } from "react";
 
@@ -29,16 +29,24 @@ interface DownloadButtonProps {
   /** When set and the API is configured, the URL is resolved by the backend. */
   assetId?: string;
   version?: string | null;
+  /** Name offered in the save dialog; defaults to the catalogue file name. */
+  suggestedName?: string;
 }
 
 /**
- * A plain same-origin anchor by default: the browser saves the file and stays
- * on the page.
+ * Downloads the artifact.
  *
- * In a deployment whose bucket is private, the catalogue's URL would 404, so
- * the click first asks the API for a short-lived URL. If that call fails, the
- * anchor still points at the static URL, which leaves the static deployment
- * working exactly as before.
+ * Two things can change the click:
+ *
+ * - A deployment whose bucket is private serves no static URL, so the click
+ *   first asks the API for a short-lived one.
+ * - Where the browser has a save dialog (`showSaveFilePicker`, Chrome and
+ *   Edge), the file goes through it so the person picks the folder and name.
+ *   The dialog is opened while the click is still a user gesture; resolving a
+ *   URL afterwards does not need one.
+ *
+ * Without that API, or when the person cancels the dialog, the anchor's normal
+ * download behaviour is the fallback.
  */
 export function DownloadButton({
   basePath,
@@ -47,22 +55,40 @@ export function DownloadButton({
   variant = "button",
   assetId,
   version = null,
+  suggestedName,
 }: DownloadButtonProps): JSX.Element {
   const href = assetUrl(basePath, url);
-  const filename = url.split("/").pop() ?? "download";
+  const filename = suggestedName ?? url.split("/").pop() ?? "download";
   const [busy, setBusy] = useState(false);
   const viaApi = hubApiConfigured && Boolean(assetId);
+  const canPick = typeof window !== "undefined" && typeof window.showSaveFilePicker === "function";
 
-  async function resolveAndGo(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
+  async function startDownload(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
     event.stopPropagation();
-    if (!viaApi || !assetId) return;
+    if (!canPick && !viaApi) return; // the anchor handles a plain download
     event.preventDefault();
     setBusy(true);
+    let target = href;
     try {
-      const target = await resolveDownloadUrl(assetId, version);
+      if (canPick) {
+        const handle = await window.showSaveFilePicker!({ suggestedName: filename });
+        // Same-origin, so the page may read the bytes for the file handle
+        // without a bucket CORS rule.
+        target = viaApi && assetId ? downloadContentPath(assetId, version) : href;
+        const response = await fetch(target);
+        if (!response.ok || !response.body) throw new Error(String(response.status));
+        await response.body.pipeTo(await handle.createWritable());
+        return;
+      }
+      if (viaApi && assetId) {
+        target = (await resolveDownload(assetId, version)).url;
+      }
       window.location.assign(target);
-    } catch {
-      window.location.assign(href);
+    } catch (error) {
+      // A cancelled dialog is not an error; anything else (an expired URL, a
+      // bucket without CORS) falls back to the browser's own download.
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      window.location.assign(target);
     } finally {
       setBusy(false);
     }
@@ -74,7 +100,7 @@ export function DownloadButton({
       className={`button${variant === "ghost" ? " button-ghost" : ""}`}
       download={filename}
       href={href}
-      onClick={(event) => { void resolveAndGo(event); }}
+      onClick={(event) => { void startDownload(event); }}
     >
       {variant === "ghost" ? <DownloadIcon size={15} /> : null}
       {label}

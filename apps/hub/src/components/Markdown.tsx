@@ -36,7 +36,7 @@ export function Markdown({ source }: { source: string }): JSX.Element {
 }
 
 /** Renders a Markdown file published by the exporter, e.g. a skill's SKILL.md. */
-export function MarkdownFile({ basePath, url }: { basePath: string; url: string }): JSX.Element {
+export function MarkdownFile({ basePath, fallback, url }: { basePath: string; fallback?: string; url: string }): JSX.Element {
   const [state, setState] = useState<{ status: "error" | "loading" | "ready"; text: string }>({ status: "loading", text: "" });
 
   useEffect(() => {
@@ -55,6 +55,6 @@ export function MarkdownFile({ basePath, url }: { basePath: string; url: string 
   }, [basePath, url]);
 
   if (state.status === "loading") return <p className="muted">…</p>;
-  if (state.status === "error") return <p className="muted">{url}</p>;
+  if (state.status === "error") return <p className="muted">{fallback ?? ""}</p>;
   return <Markdown source={state.text} />;
 }

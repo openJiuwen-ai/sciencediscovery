@@ -296,7 +296,7 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
               </>
             )}
             key={skill.id}
-            readme={<MarkdownFile basePath={basePath} url={skill.readme} />}
+            readme={<MarkdownFile basePath={basePath} fallback={copy("readmeUnavailable")} url={skill.readme} />}
           />
         </div>
         <InfoCard
@@ -364,7 +364,7 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
       <DetailHeader
         actions={(
           <>
-            <DownloadButton assetId={specialist.id} basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} version={specialist.version} />
+            <DownloadButton assetId={specialist.id} basePath={basePath} label={copy("downloadJson")} suggestedName={`${specialist.id.split("/").pop()}.zip`} url={specialist.download.url} version={specialist.version} />
             <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} variant="ghost" />
           </>
         )}
@@ -433,9 +433,6 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
   const session = asset as SessionAsset;
   const { benchmark, contents, run } = session;
   const meta = [
-    `${copy("benchmark")} ${benchmark.name}`,
-    `${copy("caseId")} ${benchmark.caseId}`,
-    `${copy("score")} ${benchmark.score ?? "—"}`,
     benchmark.runAt ? `${copy("runAt")} ${benchmark.runAt}` : null,
     benchmark.dataset ? `Dataset ${benchmark.dataset}` : null,
     benchmark.commit ? `Commit ${benchmark.commit}` : null,
@@ -459,11 +456,11 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
   return (
     <article className="detail">
       <DetailHeader
-        actions={<DownloadButton assetId={session.id} basePath={basePath} label={copy("downloadPackage")} url={session.download.url} version={session.version} />}
+        actions={<DownloadButton assetId={session.id} basePath={basePath} label={copy("downloadPackage")} suggestedName={`${session.id.split("/").pop()}.sdresearch`} url={session.download.url} version={session.version} />}
         asset={session}
       >
         <h1>{session.name}</h1>
-        <p className="muted">{meta}</p>
+        {meta ? <p className="muted">{meta}</p> : null}
         {runMeta ? <p className="muted">{runMeta}</p> : null}
       </DetailHeader>
       <p>{session.description}</p>
@@ -475,7 +472,7 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
           </div>
         ))}
       </section>
-      <MarkdownFile basePath={basePath} url={session.readme} />
+      <MarkdownFile basePath={basePath} fallback={copy("readmeUnavailable")} url={session.readme} />
       <Links catalog={catalog} ids={session.related?.specialists ?? []} label={copy("specialists")} onNavigate={onNavigate} />
       <Links catalog={catalog} ids={session.related?.skills ?? []} label={copy("skills")} onNavigate={onNavigate} />
       <Links catalog={catalog} ids={session.related?.connectors ?? []} label={copy("connectors")} onNavigate={onNavigate} />
@@ -488,7 +485,7 @@ export function ConnectorDetail({ asset, basePath, copy }: DetailProps): JSX.Ele
   return (
     <article className="detail">
       <DetailHeader
-        actions={<DownloadButton assetId={connector.id} basePath={basePath} label={copy("downloadJson")} url={connector.download.url} version={connector.version} />}
+        actions={<DownloadButton assetId={connector.id} basePath={basePath} label={copy("downloadJson")} suggestedName={`${connector.id.split("/").pop()}.zip`} url={connector.download.url} version={connector.version} />}
         asset={connector}
       >
         <h1>{connector.name}</h1>

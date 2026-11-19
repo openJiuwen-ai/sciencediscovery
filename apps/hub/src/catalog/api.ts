@@ -33,13 +33,24 @@ export const hubApiConfigured = hubApiBase.length > 0;
 
 interface ArtifactResponse {
   code: number;
-  data: { url: string };
+  data: { filename?: string; url: string };
 }
 
-export async function resolveDownloadUrl(
+export interface ResolvedDownload {
+  filename?: string;
+  url: string;
+}
+
+/** A same-origin URL that streams the artifact; used by the save dialog. */
+export function downloadContentPath(assetId: string, version: string | null): string {
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  return `${hubApiBase}/artifacts/${encodeURIComponent(assetId)}/content${query}`;
+}
+
+export async function resolveDownload(
   assetId: string,
   version: string | null,
-): Promise<string> {
+): Promise<ResolvedDownload> {
   const query = version ? `?version=${encodeURIComponent(version)}` : "";
   const path = `${hubApiBase}/artifacts/${encodeURIComponent(assetId)}${query}`;
   const response = await fetch(path);
@@ -47,5 +58,5 @@ export async function resolveDownloadUrl(
     throw new Error(`Failed to resolve a download URL: ${response.status}`);
   }
   const body = await response.json() as ArtifactResponse;
-  return body.data.url;
+  return { url: body.data.url, filename: body.data.filename };
 }
