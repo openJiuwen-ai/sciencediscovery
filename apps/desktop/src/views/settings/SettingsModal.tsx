@@ -30,6 +30,9 @@ const modalStack: symbol[] = [];
 
 interface Props {
   children: ReactNode;
+  /** One line under the title that says what the form is for. Optional: a
+   *  dialog whose title already says it renders without one. */
+  hint?: ReactNode;
   /** The dialog's title, and what a screen reader announces it as. */
   label: string;
   onClose: () => void;
@@ -47,7 +50,7 @@ interface Props {
  * key here first is what keeps only the modal from closing. Between two
  * settings modals the stack above decides which one is on top.
  */
-export function SettingsModal({ children, label, onClose, wide = false }: Props) {
+export function SettingsModal({ children, hint, label, onClose, wide = false }: Props) {
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback
   // through a ref and registers once.
@@ -89,7 +92,10 @@ export function SettingsModal({ children, label, onClose, wide = false }: Props)
         role="dialog"
       >
         <div className="settings-modal-head">
-          <h2>{label}</h2>
+          <div className="settings-modal-heading">
+            <h2>{label}</h2>
+            {hint ? <p className="settings-modal-hint">{hint}</p> : null}
+          </div>
           <button
             aria-label={TEXT.settings.close}
             className="settings-modal-close"

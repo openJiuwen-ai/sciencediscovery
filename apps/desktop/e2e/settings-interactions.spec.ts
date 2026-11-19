@@ -795,6 +795,98 @@ test.describe("模型", () => {
     expect(writeCall(mock, "PUT", "/api/settings")).toMatchObject({ modelId: "model-2" });
   });
 
+  test("a fetched model list opens over the dialog and scrolls to every entry", async ({ page }) => {
+    const listed = Array.from({ length: 30 }, (_, index) => ({
+      displayName: `Model ${index}`,
+      id: `model-${index}`,
+    }));
+    await installMockApi(page, { models: MODELS });
+    // Registered after the fixture, so it answers first for this one route: a
+    // provider that reports a listing long enough to need scrolling.
+    await page.route("**/api/providers/preview-models", (route) => route.fulfill({
+      body: JSON.stringify({ models: listed }),
+      contentType: "application/json",
+      status: 200,
+    }));
+
+    const dialog = await openSettings(page, "模型");
+    await dialog.getByRole("button", { name: "添加模型" }).click();
+    const modal = page.getByRole("dialog", { name: "添加模型" });
+    await modal.getByLabel("基础URL").fill("https://gateway.example/v1");
+    await modal.getByLabel("API key").fill("sk-test");
+    await modal.getByRole("button", { name: "刷新列表" }).click();
+
+    // The click asked for the listing, so it opens without another click.
+    const listbox = page.getByRole("listbox", { name: "模型名称" });
+    await expect(listbox).toBeVisible();
+    // Portalled to <body> (through the square anchor that backs its rounded
+    // corners): the dialog's `overflow-y: auto` used to clip the menu after
+    // its first row, which is what made the list hard to use.
+    const anchor = page.locator(".field-combo-anchor");
+    expect(await anchor.evaluate((element) => element.parentElement === document.body)).toBe(true);
+    const box = await page.locator(".field-combo-menu").boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThan(200);
+
+    // Scrolling the list — including a wheel over it — must not close the
+    // menu the way the old input `onBlur` did.
+    await listbox.hover();
+    await page.mouse.wheel(0, 900);
+    await expect(listbox).toBeVisible();
+    await listbox.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(listbox.locator(".field-combo-option").last()).toContainText("model-29");
+
+    // The last entry is reachable and choosing it fills the field.
+    await listbox.locator(".field-combo-option").last().click();
+    await expect(modal.getByPlaceholder("例如 deepseek-chat")).toHaveValue("model-29");
+    await expect(listbox).toHaveCount(0);
+
+    // A click on the field itself reopens the listing (not only the caret).
+    await modal.getByPlaceholder("例如 deepseek-chat").click();
+    await expect(listbox).toBeVisible();
+  });
+
+  test("the provider chooser picks a preset and closes one Escape at a time", async ({ page }) => {
+    const presets = [
+      { baseUrl: "https://api.deepseek.com", id: "deepseek", name: "DeepSeek" },
+      { baseUrl: "https://api.moonshot.cn/v1", id: "kimi", name: "Moonshot Kimi" },
+    ];
+    await installMockApi(page, { models: MODELS });
+    await page.route("**/api/providers", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        body: JSON.stringify({ presets, providers: [] }),
+        contentType: "application/json",
+        status: 200,
+      });
+    });
+
+    const dialog = await openSettings(page, "模型");
+    await dialog.getByRole("button", { name: "添加模型" }).click();
+    const modal = page.getByRole("dialog", { name: "添加模型" });
+    const trigger = modal.getByRole("button", { name: "服务商类型" });
+    await trigger.click();
+    const listbox = page.getByRole("listbox", { name: "服务商类型" });
+    await expect(listbox).toBeVisible();
+
+    // The list is drawn by the app, not by the OS, so it can carry the same
+    // rows as the model listing: a check on the current value and no native
+    // blue selection bar.
+    await page.getByRole("option", { name: "DeepSeek" }).click();
+    await expect(modal.getByLabel("基础URL")).toHaveValue("https://api.deepseek.com");
+
+    // Escape closes the list only. The dialog and the settings surface both
+    // listen for the key; the list claims it in the capture phase so only the
+    // list closes.
+    await trigger.click();
+    await expect(listbox).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(listbox).toHaveCount(0);
+    await expect(modal).toBeVisible();
+    await expect(dialog).toBeVisible();
+  });
+
   test("a profile that fails its test is saved but never becomes the default", async ({ page }) => {
     const mock = await installMockApi(page, {
       modelTest: { category: "authorization", message: "key rejected", ok: false },

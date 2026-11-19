@@ -542,6 +542,10 @@ export const EN: Text = {
       modelPlaceholder: "e.g. deepseek-chat",
       fetch: "Refresh list",
       fetching: "Refreshing…",
+      fetchHint: "Read the provider's model list. You can also type a model name yourself.",
+      choose: "Choose a model",
+      noMatch: (query: string) =>
+        `No model matches "${query}". You can still type the name yourself.`,
       empty: "The provider returned no models. Check the base URL and the key.",
       preset: "Provider type",
       tokenOptional: "Local service; optional",
@@ -610,6 +614,7 @@ export const EN: Text = {
     cancel: "Cancel",
     model: {
       add: "Add model",
+      addHint: "Pick a provider, enter its address and key, then choose a model from the list it reports.",
       save: "Save",
       default: "Primary",
       empty: "No models yet. Without a model you cannot send messages.",

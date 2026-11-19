@@ -41,7 +41,7 @@ interface Props {
  *  edges of the window. */
 const GAP = 6;
 const EDGE = 12;
-const MENU_MAX = 264;
+const MENU_MAX = 300;
 /** Below this the menu is not worth opening downwards; it flips above. */
 const ROOM_MIN = 140;
 
@@ -111,9 +111,10 @@ export function ListSelect({
     };
     const escape = (event: globalThis.KeyboardEvent) => {
       if (!claimsEscape(event)) return;
-      // The settings surface below listens for Escape on `window`; claiming the
-      // key on `document` is what keeps one Escape to one layer — the list,
-      // not the whole page.
+      // Claimed in the capture phase: a settings dialog listens on `document`
+      // in the bubble phase and was mounted first, so an ordinary document
+      // listener here would fire too late to keep one Escape to one layer —
+      // the whole 添加模型 dialog would close instead of just the list.
       event.preventDefault();
       setOpen(false);
       trigger.current?.focus();
@@ -135,12 +136,12 @@ export function ListSelect({
       if (next) setSeat(next);
     };
     document.addEventListener("pointerdown", dismiss);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", escape, true);
     window.addEventListener("scroll", follow, true);
     window.addEventListener("resize", follow);
     return () => {
       document.removeEventListener("pointerdown", dismiss);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", escape, true);
       window.removeEventListener("scroll", follow, true);
       window.removeEventListener("resize", follow);
     };
@@ -149,6 +150,14 @@ export function ListSelect({
   useEffect(() => {
     if (open) menu.current?.focus();
   }, [open]);
+
+  /** Keep the highlighted row — and on open, the saved value — inside the
+   *  menu's own scrollport; a long provider list otherwise opens at its first
+   *  row with the selection out of sight. */
+  useEffect(() => {
+    if (!open || active < 0) return;
+    menu.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
 
   /** The next row in a direction that can actually be picked. */
   const step = (from: number, direction: number) => {
@@ -217,54 +226,62 @@ export function ListSelect({
       </button>
       {open && seat
         ? createPortal(
+            // The anchor is the list's square footprint in the surface colour.
+            // The list inside it is rounded; opened upward over the form, the
+            // rounded corner would otherwise leave a sliver of the label behind
+            // visible in the corner notch.
             <div
-              aria-activedescendant={`${id}-option-${active}`}
-              aria-label={label}
-              className="list-select-menu"
-              onKeyDown={onMenuKey}
-              ref={menu}
-              role="listbox"
+              className="list-select-anchor"
               style={{ left: seat.left, top: seat.top, width: seat.width }}
-              tabIndex={-1}
             >
-              {choices.map((choice, index) => (
-                <div
-                  aria-disabled={choice.disabled === true}
-                  aria-selected={choice.value === value}
-                  className={[
-                    "list-select-option",
-                    choice.value === value ? "is-selected" : "",
-                    choice.disabled ? "is-disabled" : "",
-                    index === active ? "is-active" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  id={`${id}-option-${index}`}
-                  key={choice.value}
-                  onClick={() => pick(choice)}
-                  onMouseEnter={() => setActive(index)}
-                  role="option"
-                >
-                  <span className="list-select-option-label">{choice.label}</span>
-                  {choice.badge ? <small className="list-select-badge">{choice.badge}</small> : null}
-                  {choice.value === value ? (
-                    <svg
-                      aria-hidden="true"
-                      className="list-select-check"
-                      fill="none"
-                      height="14"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      viewBox="0 0 24 24"
-                      width="14"
-                    >
-                      <path d="m5 12.5 4.5 4.5L19 7" />
-                    </svg>
-                  ) : null}
-                </div>
-              ))}
+              <div
+                aria-activedescendant={`${id}-option-${active}`}
+                aria-label={label}
+                className="list-select-menu"
+                onKeyDown={onMenuKey}
+                ref={menu}
+                role="listbox"
+                tabIndex={-1}
+              >
+                {choices.map((choice, index) => (
+                  <div
+                    aria-disabled={choice.disabled === true}
+                    aria-selected={choice.value === value}
+                    className={[
+                      "list-select-option",
+                      choice.value === value ? "is-selected" : "",
+                      choice.disabled ? "is-disabled" : "",
+                      index === active ? "is-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    id={`${id}-option-${index}`}
+                    key={choice.value}
+                    onClick={() => pick(choice)}
+                    onMouseEnter={() => setActive(index)}
+                    role="option"
+                  >
+                    <span className="list-select-option-label">{choice.label}</span>
+                    {choice.badge ? <small className="list-select-badge">{choice.badge}</small> : null}
+                    {choice.value === value ? (
+                      <svg
+                        aria-hidden="true"
+                        className="list-select-check"
+                        fill="none"
+                        height="14"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        viewBox="0 0 24 24"
+                        width="14"
+                      >
+                        <path d="m5 12.5 4.5 4.5L19 7" />
+                      </svg>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
             </div>,
             document.body,
           )

@@ -42,7 +42,7 @@ const count = (markup: string, needle: string) => markup.split(needle).length - 
  * hand-typed input with a parallel native <select> of the fetched listing.
  * Static rendering cannot fetch a listing (no effects run), so what these
  * cases pin is the contract the replacement must keep in its idle shape:
- * one combobox input, no third <select> sneaking back in, and a clean
+ * one combobox input, no native <select> sneaking back in, and a clean
  * plain-input degradation while no listing exists. The keyboard/menu
  * interactions are covered by the browser E2E journeys.
  */
@@ -59,8 +59,10 @@ describe("the model-name field", () => {
       />,
     );
 
-    // presets=[] takes the custom branch: preset select + protocol select.
-    assert.equal(count(markup, "<select"), 2);
+    // presets=[] takes the custom branch: the provider and protocol choosers
+    // both draw their own listbox (ListSelect) rather than the OS popup.
+    assert.equal(count(markup, "<select"), 0);
+    assert.equal(count(markup, 'aria-haspopup="listbox"'), 2);
     assert.ok(markup.includes('role="combobox"'));
     assert.ok(markup.includes('aria-autocomplete="list"'));
     assert.ok(markup.includes('aria-expanded="false"'));
@@ -70,7 +72,7 @@ describe("the model-name field", () => {
     assert.ok(!("selectPlaceholder" in TEXT.wizard.provider));
   });
 
-  it("keeps a preset provider on one select and still renders the combobox", () => {
+  it("keeps a preset provider on one chooser and still renders the combobox", () => {
     const presets = [
       {
         baseUrl: "https://api.example.com/v1",
@@ -90,8 +92,9 @@ describe("the model-name field", () => {
       />,
     );
 
-    // A preset branch has no protocol select; the model combobox is not one.
-    assert.equal(count(markup, "<select"), 1);
+    // A preset branch has no protocol chooser; the model combobox is not one.
+    assert.equal(count(markup, "<select"), 0);
+    assert.equal(count(markup, 'aria-haspopup="listbox"'), 1);
     assert.ok(markup.includes('role="combobox"'));
   });
 

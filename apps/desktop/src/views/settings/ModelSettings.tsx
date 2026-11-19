@@ -297,7 +297,11 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
       )}
 
       {adding ? (
-        <SettingsModal label={TEXT.settings.model.add} onClose={() => onAddingChange(false)}>
+        <SettingsModal
+          hint={TEXT.settings.model.addHint}
+          label={TEXT.settings.model.add}
+          onClose={() => onAddingChange(false)}
+        >
           <ModelForm
             client={client}
             onCancel={() => onAddingChange(false)}

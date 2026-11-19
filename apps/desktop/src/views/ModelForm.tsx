@@ -12,7 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../api/client.js";
 import {
@@ -34,6 +44,7 @@ import type {
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { TEXT } from "../text.js";
 import { providerName } from "./provider-name.js";
+import { ListSelect, type ListChoice } from "./settings/ListSelect.js";
 
 export interface ModelFormResult {
   profile: ModelProfile;
@@ -93,36 +104,78 @@ const CUSTOM_DISCOVERY: Record<string, NonNullable<CreateModelProviderRequest["m
 const CUSTOM = "__custom__";
 
 interface ModelComboProps {
-  /** The field's inline trailing action (the wizard's 刷新列表), rendered inside
-   *  the combobox so the input itself stays as wide as every other field. */
-  action?: ReactNode;
   /** The busy channel of the surrounding ModelForm ("fetch"/"test"/"save"). */
   disabled: boolean;
   invalidate: () => void;
   listing: ProviderModelEntry[];
   onModelChange: (next: string) => void;
   placeholder: string;
+  /** Bumped after a successful fetch so the freshly read listing opens itself:
+   *  the reader asked for the list, so showing it is the answer. */
+  revealToken: number;
   value: string;
+}
+
+/** Where the dropdown sits, in viewport coordinates. The menu is portalled to
+ *  `document.body`, so it needs its own fixed geometry rather than the input's
+ *  containing block — see the note on ModelComboBox. */
+interface MenuGeometry {
+  bottom?: number;
+  left: number;
+  maxHeight: number;
+  top?: number;
+  width: number;
+}
+
+/** Keeps the menu on screen when the row is near an edge: the anchor's input
+ *  width, at least 260px, never past the right edge. */
+function menuGeometry(anchor: HTMLInputElement): MenuGeometry {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const below = window.innerHeight - rect.bottom - margin;
+  const above = rect.top - margin;
+  // Flip above when there is not enough room for a useful part of the listing
+  // below. In the add dialog the field is the last one, so this is also what
+  // keeps the menu in the middle of the window instead of pinned to its edge.
+  const placeAbove = below < 320 && above > below;
+  const room = placeAbove ? above : below;
+  const width = Math.min(
+    Math.max(rect.width, 260),
+    Math.max(220, window.innerWidth - margin * 2),
+  );
+  return {
+    ...(placeAbove
+      ? { bottom: window.innerHeight - rect.top + 6 }
+      : { top: rect.bottom + 6 }),
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+    maxHeight: Math.max(120, Math.min(320, room)),
+    width,
+  };
 }
 
 /**
  * The 模型名称 field: one input that both carries a hand-typed value and
- * offers the fetched listing through a dropdown of our own. It replaced a
- * hand-typed input with a parallel native <select> that appeared once the
- * listing arrived: the two read as overlapping pickers for the same value,
- * and the select could not carry a hand-typed model the listing did not
- * name, so switching between them was a trap. Opening this dropdown always
- * shows the whole listing (typing filters only while typing), the caret is
- * centered by our own CSS, and with no listing fetched it degrades to a
- * plain input for gateways without a /models endpoint.
+ * offers the fetched listing through a dropdown of our own.
+ *
+ * The menu is portalled to `document.body` rather than positioned inside the
+ * field. Both hosts (the settings modal and the wizard) clip their own content
+ * — the settings modal scrolls — and an absolutely positioned menu was being
+ * cut off after its first row and drawn over the action buttons. As a portal
+ * it can grow to 320px, flip above the field when the modal is near the bottom
+ * of the window, and keep a scrollbar the reader can actually drag.
+ *
+ * It opens on a click of the field as well as the caret, and closes on Escape,
+ * on a pointer outside it, or on choosing an option. It deliberately does not
+ * close on the input's blur: clicking or dragging the menu's scrollbar blurs
+ * the input, and the old `onBlur` handler made the listing vanish mid-scroll.
  */
 function ModelComboBox({
-  action,
   disabled,
   invalidate,
   listing,
   onModelChange,
   placeholder,
+  revealToken,
   value,
 }: ModelComboProps) {
   const [open, setOpen] = useState(false);
@@ -131,8 +184,12 @@ function ModelComboBox({
    * typing after the open narrows it. */
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [geometry, setGeometry] = useState<MenuGeometry>();
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const menuRef = useRef<HTMLUListElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const listId = useId();
+  const lastReveal = useRef(revealToken);
 
   const needle = query.trim().toLowerCase();
   const options = open
@@ -145,31 +202,85 @@ function ModelComboBox({
         )
     : [];
 
+  const place = useCallback(() => {
+    const anchor = inputRef.current;
+    if (anchor) setGeometry(menuGeometry(anchor));
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(-1);
+    setGeometry(undefined);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    if (disabled || listing.length === 0) return;
+    setQuery("");
+    // Start on the current value when the listing names it, so opening the
+    // menu does not lose the reader's place in a long list.
+    const current = listing.findIndex((entry) => entry.id === value);
+    setActiveIndex(current >= 0 ? current : 0);
+    setOpen(true);
+    // Selecting the current value lets a keystroke replace it at once, while
+    // the dropdown itself still shows the unfiltered listing (see `query`).
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [disabled, listing, value]);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  /** A successful 刷新列表 hands back the listing; open it so the result of
+   *  the click is visible rather than hidden behind a caret. */
   useEffect(() => {
-    if (!open || activeIndex < 0 || !menuRef.current) return;
-    menuRef.current.children[activeIndex]?.scrollIntoView({ block: "nearest" });
+    if (revealToken === lastReveal.current) return;
+    lastReveal.current = revealToken;
+    if (listing.length > 1) openMenu();
+  }, [listing.length, openMenu, revealToken]);
+
+  useEffect(() => {
+    // The unit tests mount this form without a DOM; there is nothing to listen
+    // on there and nothing to portal into.
+    if (!open || typeof document === "undefined") return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (inputRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    const reposition = () => place();
+    // The fields live inside a scrolling modal, so the menu has to follow it
+    // rather than only the window.
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [closeMenu, open, place]);
+
+  /** A listing that disappears (provider edited) or a form that goes busy
+   *  cannot keep its menu open. */
+  useEffect(() => {
+    if (open && (disabled || listing.length === 0)) closeMenu();
+  }, [closeMenu, disabled, listing.length, open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    listRef.current?.children[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, open]);
 
   const applyChoice = (id: string) => {
     onModelChange(id);
     invalidate();
-    setOpen(false);
-    setQuery("");
-    setActiveIndex(-1);
-  };
-
-  const closeMenu = () => {
-    setOpen(false);
-    setQuery("");
-    setActiveIndex(-1);
-  };
-
-  const openMenu = () => {
-    setQuery("");
-    setActiveIndex(-1);
-    setOpen(true);
-    // Selecting the current value lets a keystroke replace it at once, while
-    // the dropdown itself still shows the unfiltered listing (see `query`).
+    closeMenu();
+    // The click moved focus to the menu; hand it back so Tab continues from
+    // the field and the chosen value is visible as selected text.
     inputRef.current?.focus();
     inputRef.current?.select();
   };
@@ -197,6 +308,15 @@ function ModelComboBox({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActiveIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(options.length - 1);
+    } else if (event.key === "Tab") {
+      // Tab is the reader leaving the field; let it move focus on.
+      closeMenu();
     } else if (commitsOnEnter(event)) {
       const entry = activeIndex >= 0 ? options[activeIndex] : undefined;
       if (entry) {
@@ -211,15 +331,23 @@ function ModelComboBox({
   return (
     <span className="field-combo">
       <input
+        aria-activedescendant={open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined}
         aria-autocomplete="list"
+        aria-controls={open ? listId : undefined}
         aria-expanded={open}
-        className="field-input"
+        autoComplete="off"
+        className="field-input field-combo-input"
         disabled={disabled}
-        onBlur={closeMenu}
         onChange={(event) => {
           onModelChange(event.target.value);
           setQuery(event.target.value);
+          setActiveIndex(-1);
           invalidate();
+        }}
+        onClick={() => {
+          // Opening from the field itself is what makes the fetched listing
+          // discoverable; the caret is a second, explicit affordance.
+          if (!open && listing.length > 0) openMenu();
         }}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
@@ -228,41 +356,93 @@ function ModelComboBox({
         spellCheck={false}
         value={value}
       />
-      {action ?? null}
       {listing.length > 0 ? (
         <button
           aria-expanded={open}
-          className="field-combo-toggle"
+          aria-label={TEXT.wizard.provider.choose}
+          className={`field-combo-toggle${open ? " is-open" : ""}`}
           disabled={disabled}
           onClick={() => (open ? closeMenu() : openMenu())}
           onMouseDown={(event) => event.preventDefault()}
           type="button"
         >
-          <span aria-hidden="true" className="field-combo-caret" />
+          <svg
+            aria-hidden="true"
+            fill="none"
+            height="14"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+            width="14"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
         </button>
       ) : null}
-      {open && options.length > 0 ? (
-        <ul className="field-combo-menu" ref={menuRef} role="listbox">
-          {options.map((entry, index) => (
-            <li
-              aria-selected={index === activeIndex}
-              className={`field-combo-option${index === activeIndex ? " is-active" : ""}${
-                entry.id === value ? " is-current" : ""
-              }`}
-              key={entry.id}
-              onClick={() => applyChoice(entry.id)}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
-              role="option"
-            >
-              <span className="field-combo-option-id">{entry.id}</span>
-              {entry.displayName && entry.displayName !== entry.id ? (
-                <small className="field-combo-option-name">{entry.displayName}</small>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {open && geometry && typeof document !== "undefined"
+        ? createPortal(
+            // The anchor is the menu's square footprint in the surface colour.
+            // The menu inside it is rounded; opened upward over the form, its
+            // rounded corner would otherwise leave a sliver of the label behind
+            // visible in the corner notch.
+            <div className="field-combo-anchor" ref={menuRef} style={geometry}>
+              <div className="field-combo-menu">
+                {options.length > 0 ? (
+                  <ul
+                    aria-label={TEXT.wizard.provider.model}
+                    className="field-combo-list"
+                    id={listId}
+                    ref={listRef}
+                    role="listbox"
+                  >
+                    {options.map((entry, index) => (
+                      <li
+                        aria-selected={index === activeIndex}
+                        className={`field-combo-option${index === activeIndex ? " is-active" : ""}${
+                          entry.id === value ? " is-current" : ""
+                        }`}
+                        id={`${listId}-option-${index}`}
+                        key={entry.id}
+                        onClick={() => applyChoice(entry.id)}
+                        onMouseEnter={() => setActiveIndex(index)}
+                        role="option"
+                        title={entry.id}
+                      >
+                        <span className="field-combo-option-copy">
+                          <span className="field-combo-option-id">{entry.id}</span>
+                          {entry.displayName && entry.displayName !== entry.id ? (
+                            <small className="field-combo-option-name">{entry.displayName}</small>
+                          ) : null}
+                        </span>
+                        {entry.id === value ? (
+                          <svg
+                            aria-hidden="true"
+                            className="field-combo-check"
+                            fill="none"
+                            height="14"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2.2"
+                            viewBox="0 0 24 24"
+                            width="14"
+                          >
+                            <path d="m4 12 5 5L20 6" />
+                          </svg>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="field-combo-empty">{TEXT.wizard.provider.noMatch(query.trim())}</p>
+                )}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
@@ -311,6 +491,9 @@ export function ModelForm({
   const [revealed, setRevealed] = useState(false);
   const [modelName, setModelName] = useState("");
   const [listing, setListing] = useState<ProviderModelEntry[]>([]);
+  /** Bumped on every successful fetch that returned a list, so the combobox
+   *  opens itself instead of leaving the result behind a caret. */
+  const [listingToken, setListingToken] = useState(0);
   const [busy, setBusy] = useState<"" | "fetch" | "submit" | "test">("");
   const [verdict, setVerdict] = useState<Verdict>();
   const [testPassed, setTestPassed] = useState(false);
@@ -381,12 +564,14 @@ export function ModelForm({
     if (baseUrl.trim() === "") return;
     setBusy("fetch");
     invalidate();
+    let listed = 0;
     try {
       const preview = await previewProviderModels(client, requestBody());
       setListing(preview.models);
-      if (preview.models.length === 0) {
+      listed = preview.models.length;
+      if (listed === 0) {
         setVerdict({ kind: "fail", message: TEXT.wizard.provider.empty });
-      } else if (preview.models.length === 1) {
+      } else if (listed === 1) {
         // A gateway that answers with one model has already told us the answer.
         setModelName(preview.models[0]?.id ?? "");
       }
@@ -399,7 +584,12 @@ export function ModelForm({
         message: reason instanceof Error ? reason.message : TEXT.errors.generic,
       });
     } finally {
+      // Several answers: show them. The click asked for the list, and the
+      // reader should not have to find the caret to see it. Bumping the token
+      // after `busy` clears means the combobox opens on an enabled field in
+      // the same commit.
       setBusy("");
+      if (listed > 1) setListingToken((token) => token + 1);
     }
   };
 
@@ -532,41 +722,45 @@ export function ModelForm({
         : TEXT.settings.model.test;
   const showSubmit = !revealSubmitOnSuccess || testPassed;
 
+  /** The two choosers are drawn by the app, not by the OS: a native
+   *  `<select>` opens a system popup with the OS's own blue selection bar and
+   *  none of this dialog's type or spacing. `ListSelect` keeps the same row
+   *  vocabulary as the model-name listing beside it. */
+  const presetChoices: ListChoice[] = [
+    ...presets.map((candidate) => ({ label: candidate.name, value: candidate.id })),
+    { label: TEXT.wizard.custom.option, value: CUSTOM },
+  ];
+  const protocolChoices: ListChoice[] = CUSTOM_PROTOCOLS.map((candidate) => ({
+    label: TEXT.wizard.custom.protocols[candidate] ?? candidate,
+    value: candidate,
+  }));
+
   return (
-    <>
-      <label className="field">
+    <div className="model-form">
+      <div className="field">
         <span className="field-label">{TEXT.wizard.provider.preset}</span>
-        <select
-          className="field-select"
+        <ListSelect
+          caption={false}
+          choices={presetChoices}
           disabled={busy !== ""}
-          onChange={(event) => choosePreset(event.target.value)}
+          label={TEXT.wizard.provider.preset}
+          onChange={choosePreset}
           value={presetId}
-        >
-          {presets.map((candidate) => (
-            <option key={candidate.id} value={candidate.id}>
-              {candidate.name}
-            </option>
-          ))}
-          <option value={CUSTOM}>{TEXT.wizard.custom.option}</option>
-        </select>
-      </label>
+        />
+      </div>
 
       {custom ? (
-        <label className="field">
+        <div className="field">
           <span className="field-label">{TEXT.wizard.custom.protocol}</span>
-          <select
-            className="field-select"
+          <ListSelect
+            caption={false}
+            choices={protocolChoices}
             disabled={busy !== ""}
-            onChange={(event) => chooseProtocol(event.target.value)}
+            label={TEXT.wizard.custom.protocol}
+            onChange={chooseProtocol}
             value={protocol}
-          >
-            {CUSTOM_PROTOCOLS.map((candidate) => (
-              <option key={candidate} value={candidate}>
-                {TEXT.wizard.custom.protocols[candidate] ?? candidate}
-              </option>
-            ))}
-          </select>
-        </label>
+          />
+        </div>
       ) : null}
 
       <label className="field">
@@ -623,25 +817,42 @@ export function ModelForm({
          * native <select> that appeared once the listing arrived, which read
          * as two overlapping pickers for the same value — see ModelComboBox
          * for what took over. */}
-        <div className="field-row">
+        <div className="field-row is-action">
           <ModelComboBox
-            action={
-              <button
-                className="field-combo-refresh"
-                disabled={busy !== "" || baseUrl.trim() === ""}
-                onClick={() => void fetchListing()}
-                type="button"
-              >
-                {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
-              </button>
-            }
             disabled={busy !== ""}
             invalidate={invalidate}
             listing={listing}
             onModelChange={setModelName}
             placeholder={TEXT.wizard.provider.modelPlaceholder}
+            revealToken={listingToken}
             value={modelName}
           />
+          <button
+            className="field-refresh"
+            disabled={busy !== "" || baseUrl.trim() === ""}
+            onClick={() => void fetchListing()}
+            title={TEXT.wizard.provider.fetchHint}
+            type="button"
+          >
+            {busy === "fetch" ? (
+              <span className="spinner" />
+            ) : (
+              <svg
+                aria-hidden="true"
+                fill="none"
+                height="14"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.8"
+                viewBox="0 0 24 24"
+                width="14"
+              >
+                <path d="M20 11a8 8 0 1 0-2.3 6.4M20 5v6h-6" />
+              </svg>
+            )}
+            {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
+          </button>
         </div>
       </div>
 
@@ -661,6 +872,21 @@ export function ModelForm({
       ) : null}
 
       <div className="form-actions">
+        {onCancel || trailingAction ? (
+          <div className="form-actions-start">
+            {onCancel ? (
+              <button
+                className="secondary-button"
+                disabled={busy !== ""}
+                onClick={onCancel}
+                type="button"
+              >
+                {TEXT.menu.cancel}
+              </button>
+            ) : null}
+            {trailingAction}
+          </div>
+        ) : null}
         <button
           className={testButtonClass}
           disabled={busy !== ""}
@@ -679,18 +905,7 @@ export function ModelForm({
             {busy === "submit" ? TEXT.wizard.testing : submitLabel}
           </button>
         ) : null}
-        {onCancel ? (
-          <button
-            className="secondary-button"
-            disabled={busy !== ""}
-            onClick={onCancel}
-            type="button"
-          >
-            {TEXT.menu.cancel}
-          </button>
-        ) : null}
-        {trailingAction}
       </div>
-    </>
+    </div>
   );
 }
