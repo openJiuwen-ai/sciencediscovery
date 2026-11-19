@@ -91,8 +91,9 @@ export function ProxySettings({ client, onConfirm }: { client: ApiClient; onConf
         <ProxyBypass key={settings.noProxy ?? ""} value={settings.noProxy ?? ""} disabled={disabled}
           onSave={async noProxy => { await run(() => updateProxySettings(client, { defaultPolicy: settings.defaultPolicy, noProxy })); }} />
       </Group>
-      <Group heading={text.serversHeading}>
-        <div className="settings-form-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({})}>{text.add}</button></div>
+      <Group heading={text.serversHeading} actions={
+        <button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({})}>{text.add}</button>
+      }>
         {!settings.servers.length ? <p className="settings-empty">{text.empty}</p> : settings.servers.map(server => <Row key={server.id} title={server.name} hint={kindLabel(server.kind)}>
           <div className="row-inline-control"><button className="secondary-button" type="button" disabled={disabled} onClick={() => setEditing({ server })}>{common.edit}</button>
             <button className="danger-button" type="button" disabled={disabled} aria-label={`${server.name} · ${common.remove}`}
