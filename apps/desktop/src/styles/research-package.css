@@ -93,10 +93,7 @@
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
 
-/* Export progress and results share one position, anchored to the conversation
-   column (`.main-area` is the positioned ancestor) rather than to the window:
-   the rail and the sidebar are to its left, and this stack stays up for a whole
-   export, so a window-corner notice would cover the navigation while it ran. */
+/* Export progress and results stay in the conversation column, away from the sidebar. */
 .research-toast-stack {
   display: flex; flex-direction: column; gap: 8px;
   position: absolute; left: 16px; top: 16px; z-index: 60;
@@ -139,9 +136,9 @@
   background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
 }
 .research-file-card {
-  align-items: center; border: 1px solid var(--border); border-radius: 10px;
-  display: flex; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
 }
+.research-file-card-header { align-items: center; display: flex; gap: 12px; min-width: 0; }
 .research-file-card-icon { color: var(--warning-ink, #b45309); display: grid; place-items: center; }
 .research-file-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .research-file-card-body b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -200,4 +197,4 @@
 .research-package-dialog.is-import .research-import-select { min-height: 42px; }
 .research-package-dialog.is-import .research-package-upload { min-height: 208px; border-radius: 8px; }
 .research-package-dialog.is-import .research-file-card { min-height: 86px; background: var(--surface-subtle); padding: 16px 20px; }
-.research-package-dialog.is-import .research-import-meta { margin: 12px 0 0; }
+.research-package-dialog.is-import .research-import-meta { border-top: 1px solid var(--border); margin: 12px 0 0; padding-top: 12px; }
