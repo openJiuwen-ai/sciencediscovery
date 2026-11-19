@@ -3753,7 +3753,11 @@ body.is-resizing {
   font-size: 18px;
 }
 
-.settings-modal-close:hover {
+.settings-modal-close:disabled {
+  opacity: .45;
+}
+
+.settings-modal-close:hover:not(:disabled) {
   background: #f2f2f2;
   color: #191919;
 }
@@ -3788,6 +3792,11 @@ body.is-resizing {
   color: #191919;
   font-size: 13.5px;
   font-weight: 600;
+}
+
+.settings-field-label.is-required::after {
+  content: " *" / "";
+  color: var(--danger);
 }
 
 .settings-field-count {

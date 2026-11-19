@@ -226,6 +226,17 @@
   line-height: 1.5;
 }
 
+.settings-detail-header .primary-button {
+  flex: 0 0 auto;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.settings-detail-header .primary-button:hover {
+  border-color: var(--primary-strong);
+  background: var(--primary-strong);
+}
+
 /* Shared form pieces: a pane is a stack of cards on white, as in the handoff's
    settings frame. */
 .settings-group-detail .settings-section {
