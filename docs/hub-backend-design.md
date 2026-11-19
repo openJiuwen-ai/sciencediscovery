@@ -166,16 +166,24 @@ generated is `HUB_SESSION_SECRET`.
 
 1. Deploy the API and MySQL; create the bucket prefix or use the same bucket
    under a private prefix.
-2. Import the existing catalogue with a one-off script: for each entry in
-   `catalog.json`, create an asset and, for each archive, upload a version and
-   approve it. The static exporter already has the ids, versions and digests.
-3. Keep the static site as the read-only front page during the transition; it
-   can be pointed at the API when the UI work lands.
+2. Import the existing catalogue:
+   [`services/hub-api/scripts/import_catalog.py`](../services/hub-api/scripts/import_catalog.py)
+   reads `catalog.json`, preserves every id, verifies each artifact against
+   the catalogue's sha256, uploads it and records the version as approved.
+   It is idempotent, so it can be re-run after a failed pass, and
+   `--dry-run` validates without writing.
+3. Keep the static site as the front page during the transition. Build it
+   with `VITE_HUB_API_BASE=/api/v1` and every download resolves through the
+   API (which is what a private bucket requires); without that variable the
+   site behaves exactly as before, so the switch is a build flag, not a fork.
 4. Once every published asset exists in the database, the exporter's
    `catalog.json` becomes a cache the API can regenerate instead of the source
    of truth.
 
-The import is not implemented yet; it is the first follow-up.
+The importer covers all five kinds. Specialists and connectors ship a single
+JSON file; the importer wraps it in a one-entry archive so every version has
+the same shape, and checks the catalogue digest against the file, not the
+wrapper.
 
 ## Not in this iteration
 
@@ -186,3 +194,5 @@ The import is not implemented yet; it is the first follow-up.
 - Download analytics beyond a counter
 - Group permissions (the reference's `visibility=private` plus groups)
 - The admin UI; until then the API's `/docs` page is the operator console
+- An upload form in the site: the download path is wired to the API, but
+  publishing still goes through the API or `curl` until the UI lands
