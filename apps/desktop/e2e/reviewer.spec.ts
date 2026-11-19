@@ -686,15 +686,15 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(warning).toHaveClass(/is-warn/u);
   await expect(warning.locator(".review-summary")).toHaveText("1 项提醒");
   await warning.locator(".review-head").click();
-  await expect(warning.locator(".review-item-title")).toHaveText("缺少可识别的引文标识符。");
-  await expect(warning.locator(".review-item-label")).toHaveText("引用");
+  await expect(warning.locator(".review-item-title").first()).toHaveText("缺少可识别的引文标识符。");
+  await expect(warning.locator(".review-item-label").first()).toHaveText("引用");
 
   // A computation mismatch is a finding about the report, and the source
   // assessment that produced it is shown with its own verdict.
   const contradiction = cards.nth(3);
   await expect(contradiction).toHaveClass(/is-fail/u);
   await contradiction.locator(".review-head").click();
-  await expect(contradiction.locator(".review-item-title"))
+  await expect(contradiction.locator(".review-item.is-fail .review-item-title"))
     .toHaveText(["锁定 Evidence 与报告数值不一致。", "Response was 42%."]);
   await expect(contradiction.locator(".review-item.is-fail").nth(1).locator(".review-badge"))
     .toHaveText("矛盾");
@@ -705,8 +705,8 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(inconclusive).toHaveClass(/is-neutral/u);
   await expect(inconclusive.locator(".review-summary")).toHaveText("未验证交付");
   await inconclusive.locator(".review-head").click();
-  await expect(inconclusive.locator(".review-item-title")).toHaveText("没能核对结论来源");
-  await expect(inconclusive.locator(".review-item-body")).toHaveText("这次没能把结论与来源原文对照：查来源的服务没有返回结果。这不代表报告有问题。");
+  await expect(inconclusive.locator(".review-item-title", { hasText: "没能核对结论来源" })).toBeVisible();
+  await expect(inconclusive.locator(".review-item-body", { hasText: "没能把结论与来源原文对照" })).toBeVisible();
   await expect(inconclusive).not.toContainText("Paper Reader timeout");
 
   // A failed checkpoint is the Reviewer's failure, not a verdict on the

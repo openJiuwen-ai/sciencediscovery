@@ -281,6 +281,16 @@ describe("a review's rows", () => {
     assert.equal(row.tone, "neutral");
   });
 
+  it("draws the delivery row it could not check, so the header is not alone", () => {
+    // No completeness record at all: the header says 未验证交付, and this row
+    // is what tells the reader which check is missing.
+    const unrecorded = review({ checks: ["citation"], completeness: undefined });
+    const row = reviewRows(unrecorded).find((candidate) => candidate.id === "review-1:completeness-unchecked");
+    assert.equal(row?.tone, "neutral");
+    assert.equal(row?.title, TEXT.reviewer.completeness.notChecked);
+    assert.equal(row?.body, TEXT.reviewer.completeness.notCheckedBody);
+  });
+
   it("draws an unconfirmed delivery in grey, not as a warning", () => {
     const unconfirmed = review({
       checks: ["structure", "citation"],
@@ -357,6 +367,34 @@ describe("a review's rows", () => {
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
     assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveNone);
     assert.equal(row?.tone, "neutral");
+  });
+
+  it("wears the warning tone when a source check only partly supported a claim", () => {
+    const checked = review({
+      sourceAssessments: [{
+        assessment: {
+          assessment: "PARTIALLY_SUPPORTED",
+          claimId: "claim-1",
+          locatorIds: ["locator-1"],
+          policyVersion: "1",
+          rationale: "Only the first half is stated.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: [],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E3",
+          text: "代表工作",
+        },
+        locators: [],
+        snapshots: [],
+      }],
+    });
+    // The row is amber; a grey card around it would contradict its own content,
+    // and the header names the result rather than only the unverified delivery.
+    assert.equal(reviewTone(checked), "warn");
+    assert.equal(reviewSummary(checked), TEXT.reviewer.summaryPartlySupported(1));
   });
 
   it("folds the quoted passages, and why a verdict was only partial, under the row", () => {
