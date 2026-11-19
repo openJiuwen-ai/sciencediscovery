@@ -31,10 +31,10 @@ import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 
-test("a default Project uses the complete Runner catalog and toggling one preserves other registered Runners", async () => {
+test("a default Project uses the usable Runner catalog and toggling one preserves other usable Runners", async () => {
   const project: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
   const hosts = [buildHost({ id: "local" }), buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }), buildHost({ id: "gpu-b", capabilities: { platform: "Linux" } }),
-    buildHost({ id: "offline", status: "disconnected", runnerStatus: { hostId: "offline", state: "disconnected" } })];
+    buildHost({ id: "offline", status: "error", runnerStatus: { hostId: "offline", state: "disconnected" } })];
   const client = new ApiClient("");
   client.listRunners = async () => hosts;
   const updates: UpdateProjectRequest[] = [];
@@ -48,14 +48,14 @@ test("a default Project uses the complete Runner catalog and toggling one preser
     assert.ok(boxes.every(box => box.props.checked));
     const gpuA = boxes[1]; assert.ok(gpuA);
     await act(async () => { gpuA.props.onChange(); });
-    assert.deepEqual(updates, [{ runnerIds: ["local", "gpu-b", "offline"] }]);
+    assert.deepEqual(updates, [{ runnerIds: ["local", "gpu-b"] }]);
   } finally { await act(async () => renderer.unmount()); }
 });
 
 test("inherit to override waits for the catalog and preserves default or explicit Runner selections", async () => {
   const base: Project = { id: "project", name: "Default", remoteRunnerHostIds: [], createdAt: timestamp };
   const hosts = [buildHost({ id: "local" }), buildHost({ id: "gpu-a", capabilities: { platform: "Linux" } }), buildHost({ id: "gpu-b", capabilities: { platform: "Linux" } }),
-    buildHost({ id: "offline", status: "disconnected", runnerStatus: { hostId: "offline", state: "disconnected" } })];
+    buildHost({ id: "offline", status: "error", runnerStatus: { hostId: "offline", state: "disconnected" } })];
   for (const selection of [undefined, [], ["gpu-a"]]) {
     const project: Project = { ...base, ...(selection === undefined ? {} : { runnerIds: selection }) };
     const session: Session = { id: "session", projectId: project.id, title: "Session", createdAt: timestamp, updatedAt: timestamp,
@@ -75,7 +75,7 @@ test("inherit to override waits for the catalog and preserves default or explici
       await act(async () => { complete?.(hosts); });
       const select = renderer.root.findByType("select");
       assert.equal(select.props.disabled, false);
-      const expected = selection ?? ["local", "gpu-a", "gpu-b", "offline"];
+      const expected = selection ?? ["local", "gpu-a", "gpu-b"];
       const inherited = renderer.root.findAllByType("option").find(option => option.props.value === "inherit");
       assert.ok(inherited); assert.ok(inherited.children.join("").includes(String(expected.length)));
       await act(async () => { select.props.onChange({ target: { value: "override" } }); });

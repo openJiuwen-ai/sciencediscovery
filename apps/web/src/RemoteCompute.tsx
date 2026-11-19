@@ -1018,8 +1018,8 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
   const hosts = useRemoteHosts(client, onError);
   const [busyId, setBusyId] = useState<string>();
   const usable = (hosts ?? []).filter(runnerUsable);
-  const registeredRunnerIds = [...new Set(["local", ...(hosts ?? []).map(host => host.id)])];
-  const selectedIds = effectiveRunnerIds(project, undefined, registeredRunnerIds);
+  const usableRunnerIds = [...new Set(["local", ...(hosts ?? []).filter(runnerUsable).map(host => host.id)])];
+  const selectedIds = effectiveRunnerIds(project, undefined, usableRunnerIds);
 
   async function toggle(host: RemoteHostTarget): Promise<void> {
     setBusyId(host.id);
@@ -1067,9 +1067,9 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   const override = session.runnerIds ?? (session.remoteRunnerHostIds === undefined ? undefined : ["local", ...session.remoteRunnerHostIds]);
   const mode = override == null ? "inherit" : "override";
   const availableHosts = (hosts ?? []).filter(runnerUsable);
-  const registeredRunnerIds = [...new Set(["local", ...(hosts ?? []).map(host => host.id)])];
-  const projectIds = effectiveRunnerIds(project, undefined, registeredRunnerIds);
-  const effectiveIds = effectiveRunnerIds(project, session, registeredRunnerIds);
+  const usableRunnerIds = [...new Set(["local", ...(hosts ?? []).filter(runnerUsable).map(host => host.id)])];
+  const projectIds = effectiveRunnerIds(project, undefined, usableRunnerIds);
+  const effectiveIds = effectiveRunnerIds(project, session, usableRunnerIds);
 
   async function update(body: UpdateSessionRequest, fallback: string): Promise<void> {
     setBusyId("session-remote");
