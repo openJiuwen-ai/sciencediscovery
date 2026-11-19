@@ -3935,6 +3935,20 @@ body.is-resizing {
   box-shadow: 0 0 0 3px rgba(25, 25, 25, .08);
 }
 
+/* 刷新列表 beside the wizard's 32px model field. The row is `align-items:
+   center` there, so the button does not stretch to the input; give it the
+   wizard's own height, line and type scale instead of the dialog's. */
+.wizard-page .field-row .field-refresh {
+  height: 32px;
+  border-color: var(--wizard-line);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.wizard-page .field-row .field-refresh:hover:not(:disabled) {
+  border-color: #a8a8a8;
+}
+
 .secondary-button,
 .primary-button {
   height: 32px;

@@ -53,9 +53,35 @@ test("a workspace with no model cannot be used until the wizard's test passes", 
   await expect(page.getByRole("heading", { name: "选择一个模型提供方" })).toBeVisible();
   await expect(finish).toHaveCount(0);
 
+  // 刷新列表 shares the model field's row: it takes the wizard's 32px height,
+  // its line colour and its type scale, not the settings dialog's larger one.
+  const modelInput = page.getByPlaceholder("例如 deepseek-chat");
+  const refresh = page.getByRole("button", { name: "刷新列表" });
+  const [fieldBox, buttonBox] = await Promise.all([
+    modelInput.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        border: style.borderColor,
+        font: style.fontSize,
+        height: element.getBoundingClientRect().height,
+      };
+    }),
+    refresh.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        border: style.borderColor,
+        font: style.fontSize,
+        height: element.getBoundingClientRect().height,
+      };
+    }),
+  ]);
+  expect(buttonBox.height).toBeCloseTo(fieldBox.height, 0);
+  expect(buttonBox.font).toBe(fieldBox.font);
+  expect(buttonBox.border).toBe(fieldBox.border);
+
   await page.getByLabel("基础URL").fill("http://127.0.0.1:9999/v1");
   await page.getByPlaceholder("请输入 API key").fill("sk-e2e");
-  await page.getByPlaceholder("例如 deepseek-chat").fill("demo-model");
+  await modelInput.fill("demo-model");
 
   await page.getByRole("button", { name: "测试并继续" }).click();
 

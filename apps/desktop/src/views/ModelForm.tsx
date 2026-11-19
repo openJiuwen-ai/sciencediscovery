@@ -188,6 +188,10 @@ function ModelComboBox({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
+  /** The caret. It is inside the field but outside the input and the menu, so
+   *  the capture-phase outside-pointer handler has to exempt it: closing on the
+   *  button's pointerdown would let the click that follows reopen the menu. */
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
   const listId = useId();
   const lastReveal = useRef(revealToken);
 
@@ -249,6 +253,7 @@ function ModelComboBox({
       if (target === null) return;
       if (inputRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
+      if (toggleRef.current?.contains(target)) return;
       closeMenu();
     };
     const reposition = () => place();
@@ -364,6 +369,7 @@ function ModelComboBox({
           disabled={disabled}
           onClick={() => (open ? closeMenu() : openMenu())}
           onMouseDown={(event) => event.preventDefault()}
+          ref={toggleRef}
           type="button"
         >
           <svg
