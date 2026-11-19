@@ -394,7 +394,7 @@ describe("a review's rows", () => {
     // The row is amber; a grey card around it would contradict its own content,
     // and the header names the result rather than only the unverified delivery.
     assert.equal(reviewTone(checked), "warn");
-    assert.equal(reviewSummary(checked), TEXT.reviewer.summaryPartlySupported(1));
+    assert.equal(reviewSummary(checked), TEXT.reviewer.summaryPartlySupported);
   });
 
   it("folds the quoted passages, and why a verdict was only partial, under the row", () => {

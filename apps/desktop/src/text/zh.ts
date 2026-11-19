@@ -317,15 +317,16 @@ export const ZH = {
     summaryProblems: (count: number) => `${count} 个问题`,
     summaryWarnings: (count: number) => `${count} 项提醒`,
     summaryMixed: (problems: number, warnings: number) => `${problems} 个问题 · ${warnings} 项提醒`,
-    summaryContradicted: (count: number) => `${count} 条结论与来源矛盾`,
-    summaryPartlySupported: (count: number) => `${count} 条结论只得到部分支持`,
+    /** Short verdict words, the same ones the rows use. */
+    summaryContradicted: "矛盾",
+    summaryPartlySupported: "部分支持",
     summaryIncomplete: "交付不完整",
     summaryUnverified: "未验证交付",
     summaryFailed: "审查失败",
     summarySkipped: "已跳过审查",
     /** Nothing was raised, but the review itself said part of the claim was
      *  never examined. "未发现问题" alone would read as a pass. */
-    summaryPartial: (count: number) => `未发现问题，但有 ${count} 项未检查`,
+    summaryPartial: (count: number) => `有 ${count} 项未检查`,
     checks: (count: number) => `${count} 项检查`,
     /** One checkpoint can cover several artifacts; when their verdicts differ,
      *  the header's worst-of phrase would hide the clean ones. */

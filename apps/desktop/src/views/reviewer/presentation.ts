@@ -203,9 +203,9 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     // header has to name it: the card is amber because of it.
     const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
     const contradicted = verdicts.filter((verdict) => verdict === "CONTRADICTED").length;
-    if (contradicted > 0) return TEXT.reviewer.summaryContradicted(contradicted);
-    const partial = verdicts.filter((verdict) => verdict === "PARTIALLY_SUPPORTED").length;
-    if (partial > 0) return TEXT.reviewer.summaryPartlySupported(partial);
+    // The header uses the row's own word, not a sentence about the row.
+    if (contradicted > 0) return TEXT.reviewer.summaryContradicted;
+    if (verdicts.includes("PARTIALLY_SUPPORTED")) return TEXT.reviewer.summaryPartlySupported;
     if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
     if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;
@@ -448,7 +448,9 @@ export function mixedOutcomeCounts(reviews: readonly ArtifactReviewRun[]): strin
   return TEXT.reviewer.outcomeCounts(passed, attention);
 }
 
-const TONE_RANK: Record<ReviewTone, number> = { fail: 4, warn: 3, pending: 2, pass: 1, neutral: 0 };
+/* A review that could not confirm something outranks one that passed: the
+ * header must not say "passed" for a card whose own row says 未确认. */
+const TONE_RANK: Record<ReviewTone, number> = { fail: 4, warn: 3, neutral: 2, pass: 1, pending: 0 };
 
 /** The worst thing among the artifacts a checkpoint reviewed. One failing
  *  report is not hidden behind three green ones.
@@ -464,7 +466,7 @@ export function checkpointTone(
   return reviews.reduce<ReviewTone>((worst, review) => {
     const tone = reviewTone(review);
     return TONE_RANK[tone] > TONE_RANK[worst] ? tone : worst;
-  }, "neutral");
+  }, "pass");
 }
 
 /** Why a checkpoint produced no verdict, in words a reader can act on.
