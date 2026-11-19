@@ -47,7 +47,6 @@
    .secondary-button styling (design.css): a bespoke green, 10px-radius primary
    button here was the one control on this surface that did not match the rest
    of the desktop app. */
-.research-import-project { display:block; margin-bottom:16px; color:var(--text-secondary); font-size:13px; font-weight:650; }
 /* The arrow's stroke stays a literal hex: it lives inside a data URI, which
    cannot read a CSS custom property. `#667085` is that arrow's existing colour,
    kept so this stays a pure token pass rather than a visual change. */
@@ -80,7 +79,6 @@
 .research-package-status { font-size:12px; padding:8px 28px; display:flex; gap:12px; align-items:center; overflow-wrap:anywhere; }
 .research-package-status.is-failed { color:var(--danger); background:var(--danger-soft); }
 .research-package-error { color:var(--danger); font-size:13px; overflow-wrap:anywhere; }
-.research-import-review { border:1px solid var(--border); border-radius:var(--radius-s); padding:14px 16px; }
 .research-import-meta { color:var(--text-secondary); font-size:13px; margin-bottom:8px; }
 @media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } }
 .research-package-progress-toggle { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; }
