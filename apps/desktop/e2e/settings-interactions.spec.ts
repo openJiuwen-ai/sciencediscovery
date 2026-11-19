@@ -866,13 +866,15 @@ test.describe("模型", () => {
     await expect(modal).toBeVisible();
 
     // Tab also closes the empty filtered state, so leaving the field does not
-    // leave the 没有匹配 popup over the form.
+    // leave the 没有匹配 popup over the form. The empty state renders instead
+    // of the listbox, so the assertion has to watch the portal itself.
     await caret.click();
     const modelInput = modal.getByPlaceholder("例如 deepseek-chat");
     await modelInput.fill("no-such-model");
     await expect(page.locator(".field-combo-empty")).toBeVisible();
     await modelInput.press("Tab");
-    await expect(listbox).toHaveCount(0);
+    await expect(page.locator(".field-combo-anchor")).toHaveCount(0);
+    await expect(page.locator(".field-combo-empty")).toHaveCount(0);
   });
 
   test("the provider chooser picks a preset and closes one Escape at a time", async ({ page }) => {
