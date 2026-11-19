@@ -204,6 +204,15 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           const subview = settings.locator(".skill-subview-copy");
           await expect(subview.getByRole("heading", { name, exact: true })).toBeVisible();
           await expect(subview).toContainText(description);
+          await expect(subview.locator(".skill-breadcrumb")).toContainText(copy.skills);
+          // The page is a document in the pane's own column. A wide table or a
+          // long path inside a SKILL.md must scroll inside the prose; before
+          // the column was measured, one such line pushed the whole page
+          // sideways and the pane clipped the instructions at the right edge.
+          const overflow = await settings.locator(".settings-group-detail").evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+          );
+          expect(overflow, "the Skill page overflows the settings pane horizontally").toBe(0);
           await expect(settings.getByRole("heading", { name: copy.detailAvailability, exact: true })).toBeVisible();
           await expect(settings.getByRole("heading", { name: copy.detailFiles, exact: true })).toBeVisible();
           await expect(settings.locator(".skill-detail-file")).toContainText(firstInstructions);
