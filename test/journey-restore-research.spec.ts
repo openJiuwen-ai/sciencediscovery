@@ -32,6 +32,14 @@ import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSessi
 test("complete research package import restores a visible Session history", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@arch:arm64", "@mocked"] }, async ({ page, journey }) => {
   page.setDefaultTimeout(15_000);
   await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "zh-CN"));
+  // The export dialog streams the package into the File System Access picker when the
+  // browser has one, and automation cannot drive a native save dialog: without this
+  // the export never reaches the download this journey reads. Taking the picker away
+  // exercises the fallback every browser without that API gets, and the streaming
+  // path itself is covered by apps/web/tests/save-stream.test.ts (#1216).
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showSaveFilePicker", { configurable: true, value: undefined });
+  });
   let fixture: JourneyFixture | undefined;
   const previewFiles = [
     { path: "分析 Script.py", bytes: Buffer.from('# 原始脚本\r\nif True:\r\n    print("研究")\r\n') },
