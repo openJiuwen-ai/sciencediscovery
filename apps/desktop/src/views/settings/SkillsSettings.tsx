@@ -36,6 +36,7 @@ import { SkillEditorView } from "./SkillEditorView.js";
 import { SkillForm } from "./SkillForm.js";
 import { SkillGitImportView } from "./SkillGitImportView.js";
 import { SkillRowMenu, type SkillRowAction } from "./SkillRowMenu.js";
+import { skillMeta } from "./skill-meta.js";
 import { SkillUploadView } from "./SkillUploadView.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
@@ -316,6 +317,11 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     : undefined;
   const copy = view.kind === "list" ? undefined : subviewCopy(view);
   const back = () => setView({ kind: "list" });
+  /** The list already read this Skill; the page's header says where it came
+   *  from and at which revision without asking the detail request again. */
+  const listed = view.kind === "detail"
+    ? loaded.value?.skills.find((skill) => skill.id === view.id)
+    : undefined;
 
   const header = copy === undefined ? (
     <header className="settings-detail-header">
@@ -331,6 +337,41 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         <p>{TEXT.settings.system.groups.skills.description}</p>
       </div>
       <SkillAddMenu onChoose={(choice) => setView({ kind: choice })} />
+    </header>
+  ) : view.kind === "detail" ? (
+    <header className="settings-detail-header skill-subview-head skill-detail-page-head">
+      <div className="skill-subview-title">
+        <button
+          aria-label={TEXT.settings.skills.backToList}
+          className="skill-back"
+          onClick={back}
+          type="button"
+        >
+          <svg fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="15">
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+        </button>
+        <div className="skill-subview-copy">
+          {/* The trail names the list the page came from, and it goes back
+              there: the arrow alone would make 技能 the only unlabeled step. */}
+          <div className="skill-breadcrumb">
+            <button onClick={back} type="button">{TEXT.settings.system.groups.skills.label}</button>
+            <span aria-hidden="true">›</span>
+            <span>{view.name}</span>
+          </div>
+          <div className="skill-detail-title">
+            <span aria-hidden="true" className="skill-detail-mark">{skillMark(view)}</span>
+            <h3>{view.name}</h3>
+            {listed === undefined ? null : (
+              <span className={`skill-source-badge ${listed.source === "built-in" ? "is-sd" : "is-managed"}`}>
+                {sourceLabel(listed.source)}
+              </span>
+            )}
+          </div>
+          <p>{view.description}</p>
+          {listed === undefined ? null : <p className="skill-detail-facts">{skillMeta(listed)}</p>}
+        </div>
+      </div>
     </header>
   ) : (
     <header className="settings-detail-header skill-subview-head">

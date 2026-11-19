@@ -18,7 +18,7 @@ import type { SkillDetail } from "../../api/types.js";
 import { MarkdownProse } from "../../MarkdownProse.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
-import { Group, LoadGate, Switch, Tag } from "./rows.js";
+import { LoadGate, Switch } from "./rows.js";
 import { skillMeta } from "./skill-meta.js";
 
 interface Props {
@@ -58,9 +58,10 @@ function DetailRow({ label, value }: { label: string; value: string }) {
  *
  * The row used to open SKILL.md in place, which made the instructions a
  * squeezed box inside a list item. A Skill is a package — a document and the
- * files beside it — so it gets a page of its own: what the model is told,
- * where the package came from, and whether it is available. The header above
- * the page carries its name, description and the way back to the list.
+ * files beside it — so it gets a page of its own, laid out as the document it
+ * is: the instructions run down a measured column at the page's own width,
+ * with availability above and provenance below. Nothing is wrapped in a card,
+ * because a card would put a second edge between the reader and the text.
  */
 export function SkillDetailView({
   busy,
@@ -83,34 +84,31 @@ export function SkillDetailView({
         const compatibility = frontmatterString(detail, "compatibility");
         return (
           <div className="skill-detail">
-            <Group heading={TEXT.settings.skills.detailView.availability}>
-              <div className="settings-card skill-detail-availability">
-                <div className="settings-card-main">
-                  <strong>
-                    {enabled ? TEXT.settings.skills.on : TEXT.settings.skills.off}
-                    <Tag tone={enabled ? "on" : "off"}>{sourceLabel(detail.source)}</Tag>
-                  </strong>
-                  <small>{TEXT.settings.skills.scope}</small>
+            <section className="skill-detail-section">
+              <div className="skill-detail-head">
+                <div>
+                  <h4>{TEXT.settings.skills.detailView.availability}</h4>
+                  <p>{TEXT.settings.skills.scope}</p>
                 </div>
-                <div className="settings-card-actions">
-                  <Switch
-                    disabled={busy || !switchesAvailable}
-                    label={TEXT.settings.skills.toggle(skillName)}
-                    onChange={onToggle}
-                    value={enabled}
-                  />
-                </div>
+                <Switch
+                  disabled={busy || !switchesAvailable}
+                  label={TEXT.settings.skills.toggle(skillName)}
+                  onChange={onToggle}
+                  value={enabled}
+                />
               </div>
-            </Group>
+            </section>
 
-            <Group heading={TEXT.settings.skills.detailView.files}>
-              <article className="settings-card skill-detail-file text">
+            <section className="skill-detail-section">
+              <h4>{TEXT.settings.skills.detailView.files}</h4>
+              <article className="skill-detail-file text">
                 <MarkdownProse>{detail.instructions}</MarkdownProse>
               </article>
-            </Group>
+            </section>
 
-            <Group heading={TEXT.settings.skills.detail}>
-              <div className="settings-card skill-detail-meta-card">
+            <section className="skill-detail-section">
+              <h4>{TEXT.settings.skills.detail}</h4>
+              <div className="skill-detail-meta-card">
                 <DetailRow label={TEXT.settings.skills.detailView.source} value={sourceLabel(detail.source)} />
                 <DetailRow label={TEXT.settings.skills.version} value={skillMeta(detail)} />
                 {license ? <DetailRow label={TEXT.settings.skills.license} value={license} /> : null}
@@ -118,7 +116,7 @@ export function SkillDetailView({
                   ? <DetailRow label={TEXT.settings.skills.compatibility} value={compatibility} />
                   : null}
               </div>
-            </Group>
+            </section>
           </div>
         );
       }}

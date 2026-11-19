@@ -171,18 +171,6 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   font-size: 12.5px;
   text-align: center;
 }
-/* Showing an enabled switch for a skill that is off would be the wrong default to imply. */
-.skill-detail {
-  margin-top: 8px;
-  padding: 11px 13px;
-  border: 1px solid var(--primary-border-soft);
-  border-radius: var(--radius-m);
-  background: var(--primary-soft);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.skill-detail strong { color: var(--primary-strong); }
 .chip-select { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip-pick {
   display: inline-flex;
@@ -773,6 +761,44 @@ a.secondary-button {
   color: var(--text-secondary);
 }
 .skill-back:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-strong); }
+
+/* 技能 › one Skill's header: the trail, the identity row and the one-line
+   description. The mark is the same letter the list draws, enlarged to the
+   size of the name it introduces; the source badge sits beside the name
+   rather than in the description, where the reader looks for the page's own
+   facts. */
+.skill-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #999;
+  font-size: 12.5px;
+}
+/* The arrow belongs to the trail, so it sits level with it rather than with
+   the name two lines below. */
+.skill-detail-page-head .skill-back { margin-top: 0; }
+.skill-breadcrumb button { color: inherit; font-size: inherit; }
+.skill-breadcrumb button:hover { color: #191919; }
+.skill-detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.skill-detail-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 650;
+}
+.settings-detail-header p.skill-detail-facts {
+  margin-top: 6px;
+  color: #a3a3a3;
+  font-size: 12.5px;
+}
 /* The three add pages share one measure, so moving between them does not move
    the fields under the pointer. */
 .skill-create { width: min(100%, 860px); }
@@ -962,19 +988,51 @@ a.secondary-button {
 .skill-editor-new-file .field-input { flex: 1; min-width: 0; }
 .field-textarea.is-tall { min-height: 240px; font-family: var(--font-mono); font-size: 12px; }
 
-/* 技能 › one package. The page shows the SKILL.md the model is told, rendered
-   as the document it is; the card keeps the pane's measure so a long
-   instruction does not run edge to edge. */
-.skill-detail { display: grid; }
-.skill-detail-availability { align-items: center; }
-.skill-detail-availability .settings-card-main small { margin-top: 4px; }
+/* 技能 › one package. The page is the document the model is told, laid out in
+   the pane's own column: identity and description in the header above, then
+   availability, the instructions, and where the package came from. Sections
+   are separated by a hairline rather than boxed in cards, because a second
+   edge between the reader and a long instruction is one edge too many.
+   `minmax(0, 1fr)` is load-bearing: a grid column defaults to the widest
+   thing inside it, and one GFM table in a SKILL.md would otherwise push the
+   whole page past the pane (the table scrolls itself, see `.md-scroll`). */
+.skill-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 860px;
+}
+.skill-detail-section { padding: 22px 0; border-top: 1px solid var(--border-soft); }
+.skill-detail-section:first-child { padding-top: 0; border-top: 0; }
+.skill-detail-section > h4 {
+  margin: 0 0 10px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+}
+.skill-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.skill-detail-head p {
+  margin: 4px 0 0;
+  max-width: 640px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
 .skill-detail-file {
-  display: block;
+  min-width: 0;
   max-width: 100%;
-  padding: 18px 20px;
   overflow-wrap: anywhere;
 }
-.skill-detail-meta-card { display: grid; gap: 2px; align-items: stretch; }
+/* The instruction is read at length, so it takes the transcript's measure
+   rather than the settings pane's denser one. `.text` is defined later, hence
+   the doubled class. */
+.skill-detail-file.text { font-size: 14.5px; line-height: 23px; }
+.skill-detail-file .md-scroll { max-width: 100%; }
+.skill-detail-meta-card { display: grid; gap: 2px; align-items: stretch; max-width: 520px; }
 .skill-detail-row {
   display: flex;
   align-items: baseline;
