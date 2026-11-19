@@ -491,7 +491,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     </div>)}</div> : null}
     {!dialog && (error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
-      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}{dialog === "export" ? <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span> : null}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
+      <header className="modal-header"><div className="research-dialog-title"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2>{dialog === "export" ? <span className="research-scope-help" role="img" aria-label={t.sessionScope} title={t.sessionScope}>!</span> : null}</div><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
           <p className="research-dialog-lede">{t.evidenceOnly}</p>
