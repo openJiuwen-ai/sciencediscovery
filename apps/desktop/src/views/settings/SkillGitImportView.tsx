@@ -25,6 +25,11 @@ import { TEXT } from "../../text.js";
 
 interface Props {
   client: ApiClient;
+  /** Leaves for the list once every selected package arrived: the installed
+   *  Skill is what the reader came for, and the page that shows them is the
+   *  list behind this view. A partial import stays here so the failures keep
+   *  their ticks and messages. */
+  onDone?: () => void;
   /** Runs for every package the server installs; the caller enables it and
    *  reloads the list behind this view. */
   onImported: (skill: SkillDetail) => void | Promise<void>;
@@ -69,7 +74,7 @@ function messageOf(reason: unknown): string {
  * the inspection saw: if another window edited it meanwhile the server answers
  * 409, and the row says so rather than silently replacing that edit.
  */
-export function SkillGitImportView({ client, onImported }: Props) {
+export function SkillGitImportView({ client, onDone, onImported }: Props) {
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [subdirectory, setSubdirectory] = useState("");
@@ -216,12 +221,16 @@ export function SkillGitImportView({ client, onImported }: Props) {
     // What failed stays ticked, so a retry after fixing the cause is one press.
     setSelected(new Set(Object.keys(errors)));
     const failed = chosen.length - imported;
+    setBusy(false);
+    // Everything arrived: the list is where the reader sees what they just
+    // installed. A partial batch stays here, with the failures still ticked.
+    if (imported > 0 && failed === 0 && onDone) {
+      onDone();
+      return;
+    }
     setNotice(imported === 0
       ? undefined
-      : failed === 0
-        ? TEXT.settings.skills.importedCount(imported)
-        : TEXT.settings.skills.importPartial(imported, failed));
-    setBusy(false);
+      : TEXT.settings.skills.importPartial(imported, failed));
   };
 
   return (

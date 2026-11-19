@@ -150,8 +150,13 @@ test("a Git inspection pins the commit and never overwrites without the revision
     .reply({ ...detail, id: "fresh", name: "fresh" })
     .reply({ ...detail, currentRevision: 4 });
   const imported: SkillDetail[] = [];
+  let done = 0;
   const view = await mount(
-    <SkillGitImportView client={stub.asClient()} onImported={(row) => { imported.push(row); }} />,
+    <SkillGitImportView
+      client={stub.asClient()}
+      onDone={() => { done += 1; }}
+      onImported={(row) => { imported.push(row); }}
+    />,
   );
   try {
     const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
@@ -187,7 +192,7 @@ test("a Git inspection pins the commit and never overwrites without the revision
       subdirectory: "skills/review",
     });
     assert.deepEqual(imported.map((row) => row.id), ["fresh", "review"]);
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.importedCount(2)));
+    assert.equal(done, 1, "a complete import does not return to the Skill list");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -376,6 +381,7 @@ test("a resource file is read and written through its own route", async () => {
     <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
   );
   try {
+    await openAdvancedSettings(view);
     await act(async () => {
       view.root.findAllByType("button")
         .find((node) => node.props["aria-label"] === "references/guide.md")?.props.onClick();
@@ -410,6 +416,7 @@ test("a resource that is not UTF-8 is shown as uneditable rather than decoded", 
     <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
   );
   try {
+    await openAdvancedSettings(view);
     await act(async () => {
       view.root.findAllByType("button")
         .find((node) => node.props["aria-label"] === "assets/logo.png")?.props.onClick();
@@ -456,6 +463,12 @@ function rowMenu(view: ReactTestRenderer, name: string) {
     .find((node) => node.props["aria-label"] === TEXT.settings.skills.rowMenu.actions(name));
   assert.ok(trigger, `the row for ${name} has no action menu`);
   return trigger;
+}
+
+async function openAdvancedSettings(view: ReactTestRenderer): Promise<void> {
+  await act(async () => {
+    buttonWithText(view, TEXT.settings.skills.editor.advanced).props.onClick();
+  });
 }
 
 async function openRowMenu(view: ReactTestRenderer, name: string): Promise<void> {

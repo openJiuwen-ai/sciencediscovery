@@ -746,7 +746,6 @@ export const EN: Text = {
       importFailed: "The import failed.",
       importSucceeded: (name: string) => `Imported "${name}".`,
       importPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
-      importedCount: (count: number) => `Imported ${count} skills.`,
       git: {
         title: "Import from GitHub",
         description:
@@ -815,7 +814,16 @@ export const EN: Text = {
         referencesUsage: (count: number, total: number, size: string, limit: string) =>
           `References: ${count} / ${total}; package: ${size} / ${limit}`,
         referencesDrop: "Drop reference files or click to browse",
-        referencesDropHint: "Saved under references/ in the skill.",
+        referencesDropHint: (directory: string) => `Saved under ${directory} in the skill.`,
+        referencesEditHint: "Click a file below to edit it above.",
+        editResource: (path: string) => `Edit ${path}`,
+        referenceDirectory: "Target directory",
+        referenceDirectoryPlaceholder: "For example references, assets or scripts",
+        referenceDirectoryHint: "New files are saved here; leave empty for the skill root.",
+        referenceDirectoryInvalid: "The directory cannot be empty-segmented or contain . or ..",
+        editingResource: (path: string) => `Editing reference file: ${path}`,
+        referenceEditingHint: "Change it, then save with the button at the bottom.",
+        backToSkill: "Back to SKILL.md",
         addReferenceFailed: "The reference file could not be read.",
       },
     },

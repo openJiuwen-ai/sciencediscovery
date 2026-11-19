@@ -1029,6 +1029,32 @@ a.secondary-button {
   gap: 16px;
 }
 .skill-editor-content-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
+/* Editing a file beside SKILL.md: the path is the title, and the way back is
+   beside it. The form above changes what 保存 writes. */
+/* `.skill-editor-content-head > div:first-child` makes the normal header a
+   grid; this header is the same slot but keeps its own row layout. */
+.skill-editor-content-head > .skill-editor-editing-head {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.skill-editor-editing-head > div { display: grid; gap: 2px; min-width: 0; }
+.skill-editor-editing-head .settings-field-label {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-editor-back-to-skill {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
 /* 撰写 / 上传: one choice about the content below, drawn as one control. */
 .skill-editor-mode {
   display: inline-flex;
@@ -1128,6 +1154,19 @@ a.secondary-button {
   white-space: nowrap;
 }
 .skill-editor-resource-size { flex: 0 0 auto; color: var(--text-faint); font-size: 11px; }
+/* The row is the way into the editor; saying so once at the end of the row is
+   cheaper than making the reader discover it by pressing. */
+.skill-editor-resource-edit {
+  flex: 0 0 auto;
+  opacity: 0;
+  color: var(--primary-strong);
+  font-size: 11px;
+  transition: opacity .12s ease;
+}
+.skill-editor-resource:hover .skill-editor-resource-edit,
+.skill-editor-resource:focus-visible .skill-editor-resource-edit,
+.skill-editor-resource.is-active .skill-editor-resource-edit { opacity: 1; }
+.skill-editor-directory .field-input { width: 100%; }
 /* The footer is outside the form's scroll: 取消 and 保存 are the two ways the
    page ends, and neither should be scrolled away or laid over the fields. */
 .skill-editor-footer {

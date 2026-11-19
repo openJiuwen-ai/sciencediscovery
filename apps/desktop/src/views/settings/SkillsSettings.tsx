@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import {
@@ -122,6 +122,16 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     id: string;
     message: string;
   }>();
+
+  // An export's outcome is a passing confirmation, not a property of the row:
+  // it says what just happened, then leaves. A failure stays long enough to be
+  // read, and disappears the same way; the failed export itself changed
+  // nothing.
+  useEffect(() => {
+    if (!exportStatus) return;
+    const timer = setTimeout(() => setExportStatus(undefined), 4_000);
+    return () => clearTimeout(timer);
+  }, [exportStatus]);
   const [view, setView] = useState<SkillView>({ kind: "list" });
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -482,7 +492,11 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       ) : null}
 
       {view.kind === "git" ? (
-        <SkillGitImportView client={client} onImported={afterInstall} />
+        <SkillGitImportView
+          client={client}
+          onDone={() => setView({ kind: "list" })}
+          onImported={afterInstall}
+        />
       ) : null}
 
       {view.kind === "detail" ? (
