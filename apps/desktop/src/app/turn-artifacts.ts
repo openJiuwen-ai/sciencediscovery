@@ -51,7 +51,15 @@ const FOLDED: ReadonlySet<ScientificArtifactKind> = new Set<ScientificArtifactKi
 export interface TurnArtifact {
   artifact: ScientificArtifact;
   version: ScientificArtifactVersion;
-  /** The turn changed an existing artifact rather than creating one. */
+  /**
+   * The turn changed an existing artifact rather than creating one.
+   *
+   * Read from the version the row points at, i.e. from the final derivation: a run
+   * that created v1 and then wrote v2 leaves v2 with a `baseVersionId`, so a file
+   * this turn created is marked 已更新. That is rare and accepted — the marker
+   * answers "did the last write derive from an earlier one", not "did this run
+   * create the artifact".
+   */
   updated: boolean;
 }
 
