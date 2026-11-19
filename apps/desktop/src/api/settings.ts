@@ -32,6 +32,9 @@ import type {
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
   ResolvedProxy,
+  McpAuthorizationStart,
+  McpInspectorRequest,
+  McpInspectorResult,
   ConnectorManifest,
   CreateSkillPackageRequest,
   JiuwenSwarmSkillsResponse,
@@ -548,6 +551,62 @@ export function deleteMcpServer(client: ApiClient, id: string): Promise<{ delete
   return client.request<{ deleted: boolean }>(`/api/mcp/servers/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+/**
+ * Import a `{ "mcpServers": { … } }` spec.
+ *
+ * The route writes the whole spec or nothing, and a name clash with any existing
+ * server fails the write as a whole; the page therefore sends one entry per call
+ * so each server's outcome is its own.
+ */
+export function importMcpServers(
+  client: ApiClient,
+  body: unknown,
+): Promise<CustomMcpServerDetails[]> {
+  return client.request<CustomMcpServerDetails[]>("/api/mcp/servers/import", {
+    body: JSON.stringify(body),
+    method: "POST",
+  });
+}
+
+/** Call one tool on the server, for the read-only inspector. */
+export function inspectMcpTool(
+  client: ApiClient,
+  id: string,
+  body: McpInspectorRequest,
+  signal?: AbortSignal,
+): Promise<McpInspectorResult> {
+  return client.request<McpInspectorResult>(
+    `/api/mcp/servers/${encodeURIComponent(id)}/inspect`,
+    { body: JSON.stringify(body), method: "POST", ...(signal ? { signal } : {}) },
+  );
+}
+
+/** Begin OAuth: the route answers the URL the browser has to open. */
+export function startMcpAuthorization(
+  client: ApiClient,
+  id: string,
+  redirectUrl: string,
+): Promise<McpAuthorizationStart> {
+  return client.request<McpAuthorizationStart>(
+    `/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`,
+    { body: JSON.stringify({ redirectUrl }), method: "POST" },
+  );
+}
+
+export function cancelMcpAuthorization(client: ApiClient, id: string): Promise<{ ok: boolean }> {
+  return client.request<{ ok: boolean }>(
+    `/api/mcp/servers/${encodeURIComponent(id)}/oauth/cancel`,
+    { method: "POST" },
+  );
+}
+
+export function clearMcpAuthorization(client: ApiClient, id: string): Promise<{ ok: boolean }> {
+  return client.request<{ ok: boolean }>(
+    `/api/mcp/servers/${encodeURIComponent(id)}/oauth/clear`,
+    { method: "POST" },
+  );
 }
 
 /* -- Web ----------------------------------------------------------------- */
