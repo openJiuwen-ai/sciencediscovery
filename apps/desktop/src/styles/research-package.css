@@ -174,12 +174,14 @@
 .research-package-limit p { margin: 0; font-size: 13px; line-height: 1.5; }
 .research-package-limit button { align-self: flex-start; }
 
-.side-import-button { margin-top: 4px; }
+.side-import-button { margin-top: 0; }
 .research-package-upload { min-height: 190px; flex-direction: column; justify-content: center; background: #fafafa; }
-.research-upload-icon { font-size: 30px; color: var(--text); }
+.research-upload-icon { color: var(--text); }
 .research-package-source { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 8px 28px; color: var(--muted); font-size: 12px; }
 .research-package-source::before, .research-package-source::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
 .research-package-source button { border: 0; background: none; color: var(--primary); cursor: pointer; }
+.main-area > .research-package-source, .main-area > .research-package-resume { order: 1; }
+.main-area > .composer { order: 2; }
 .research-readonly-badge { background: var(--surface-subtle); border-radius: 4px; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .research-toast.is-success .research-toast-icon, .research-toast.is-error .research-toast-icon { border-radius: 50%; color: white; padding: 3px; }
 .research-toast.is-success .research-toast-icon { background: #52b800; }

@@ -133,6 +133,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const readOnly = isEvidenceSessionReadOnly(activeDetail);
   const canContinue = activeDetail?.researchSnapshot?.role === "imported_snapshot" && activeDetail.researchSnapshot.state === "ready" && activeDetail.researchSnapshot.continuationAvailable === true;
   const branch = activeDetail?.conversationBranch;
+  const [sourceTitle, setSourceTitle] = useState<string>();
+  useEffect(() => {
+    if (!branch?.sourceSessionId) { setSourceTitle(undefined); return; }
+    let active = true;
+    setSourceTitle(undefined);
+    void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(branch.sourceSessionId)}`)
+      .then(source => { if (active) setSourceTitle(source.title?.trim() || undefined); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [client, branch?.sourceSessionId]);
   const requestId = useRef(crypto.randomUUID());
   const copying = useRef(false);
   const busyRef = useRef(false);
@@ -468,7 +478,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const formatLimit = (bytes: number) => formatBytes(bytes);
   return <>
     {readOnly ? <div className="research-package-resume"><div><strong>{t.readOnlyTitle}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
-    {branch ? <div className="research-package-source">{t.contextFrom} <button onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button></div> : null}
+    {branch ? <div className="research-package-source">{t.contextFrom} <button onClick={() => onOpen(branch.sourceSessionId)} type="button">{sourceTitle ?? t.source}</button></div> : null}
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 || flashQueue.length ? <div className="research-toast-stack">
       {activeExports.length > 0 ? <div className="research-toast is-neutral research-export-progress" role="status"><span aria-hidden="true" className="spinner" /><button className="research-package-progress-toggle" onClick={() => setProgressExpanded(value => !value)} type="button">{t.exportsInProgress(activeExports.length)}</button>{progressExpanded ? <ul className="research-package-progress-list">{activeExports.map(record => <li key={record.id}><span>{record.task.filename}</span>{canCancel(record) ? <button onClick={() => void cancelOne(record)} type="button">{TEXT.menu.cancel}</button> : null}</li>)}</ul> : null}</div> : null}
@@ -535,7 +545,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
             </div>
           ) : (
-            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><span aria-hidden="true" className="research-upload-icon">⇧</span><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
           {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
         </> : <p>{t.branchHint}</p>}
