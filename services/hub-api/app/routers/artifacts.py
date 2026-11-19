@@ -12,7 +12,7 @@ from ..storage import Storage
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 
-@router.get("/{asset_id}")
+@router.get("/{asset_id:path}")
 def get_artifact(
     asset_id: str,
     version: str | None = Query(default=None),

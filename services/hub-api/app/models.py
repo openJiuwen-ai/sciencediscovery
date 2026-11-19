@@ -56,7 +56,10 @@ class User(Base):
 class Asset(Base):
     __tablename__ = "assets"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    # External skills use a path as their id
+    # (`chemistry_and_materials/real_world_workstations/...`), so this is wider
+    # than a uuid.
+    id: Mapped[str] = mapped_column(String(191), primary_key=True, default=new_id)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -99,7 +102,7 @@ class AssetVersion(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
     asset_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("assets.id"), nullable=False
+        String(191), ForeignKey("assets.id"), nullable=False
     )
     version: Mapped[str] = mapped_column(String(32), nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -134,7 +137,7 @@ class AuditLog(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
     actor_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
-    asset_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    asset_id: Mapped[str | None] = mapped_column(String(191), nullable=True)
     version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=utcnow)

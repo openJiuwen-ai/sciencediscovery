@@ -81,6 +81,19 @@ def _fixture(tmp_path: Path):
             "download": {"url": "http://example.test/sessions/compression-algorithm-20261117.sdresearch", **_write(sessions_root / "compression-algorithm-20261117.sdresearch", session)},
         },
     ]
+    external = make_zip({"SKILL.md": b"# Astropy\n"})
+    entries.append(
+        {
+            "id": "astronomy/astronomical_analysis/astropy",
+            "name": "astropy",
+            "kind": "skill",
+            "version": "1.2.3",
+            "description": "External skill with a path id.",
+            "category": {"domain": "astronomy", "subdomain": "astronomical_analysis"},
+            "tags": [],
+            "download": {"url": "packages/astropy-1.2.3.zip", **_write(assets_root / "packages/astropy-1.2.3.zip", external)},
+        }
+    )
     catalog = {"schemaVersion": 1, "generatedAt": "2026-11-19T00:00:00Z", "assets": entries}
     catalog_path = tmp_path / "catalog.json"
     catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
@@ -113,18 +126,25 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
     )
 
     assert stats.failed == []
-    assert stats.created_assets == 5
-    assert stats.created_versions == 5
+    assert stats.created_assets == 6
+    assert stats.created_versions == 6
 
     # The same settings drive the API, so this proves the catalogue is served
     # through the endpoints the site will call.
     app = create_app(settings)
     with TestClient(app) as client:
         listing = client.get("/api/v1/assets").json()["data"]
-        assert listing["total"] == 5
+        assert listing["total"] == 6
         ids = {item["id"] for item in listing["items"]}
         assert "antibody-design" in ids
         assert "compression-algorithm-20261117" in ids
+
+        # External skills carry a path as their id; the API must route it and
+        # the encoder the site uses turns the slashes into %2F.
+        encoded = "astronomy%2Fastronomical_analysis%2Fastropy"
+        external_artifact = client.get(f"/api/v1/artifacts/{encoded}")
+        assert external_artifact.status_code == 200, external_artifact.text
+        assert external_artifact.json()["data"]["version"] == "1.2.3"
 
         artifact = client.get("/api/v1/artifacts/antibody-design").json()["data"]
         assert artifact["version"] == "1.0.0"
@@ -148,7 +168,7 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
         settings=settings,
     )
     assert again.created_versions == 0
-    assert len(again.skipped) == 5
+    assert len(again.skipped) == 6
 
 
 def test_import_refuses_a_checksum_mismatch(tmp_path):

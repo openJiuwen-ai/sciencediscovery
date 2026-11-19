@@ -92,18 +92,6 @@ def list_assets(
     )
 
 
-@router.get("/{asset_id}")
-def get_asset(
-    asset_id: str,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(current_user),
-) -> dict:
-    asset = _get_asset(db, asset_id)
-    if not _visible_to(asset, user):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
-    return ok(asset_payload(asset, include_description=True))
-
-
 @router.post("")
 def create_asset(
     body: CreateAssetRequest,
@@ -140,7 +128,7 @@ def create_asset(
     return ok(asset_payload(asset))
 
 
-@router.patch("/{asset_id}")
+@router.patch("/{asset_id:path}")
 def update_asset(
     asset_id: str,
     body: UpdateAssetRequest,
@@ -161,7 +149,7 @@ def update_asset(
     return ok(asset_payload(asset, include_description=True))
 
 
-@router.get("/{asset_id}/versions")
+@router.get("/{asset_id:path}/versions")
 def list_versions(
     asset_id: str,
     db: Session = Depends(get_db),
@@ -177,7 +165,7 @@ def list_versions(
     return ok({"items": [version_payload(row) for row in rows]})
 
 
-@router.get("/{asset_id}/versions/{version}")
+@router.get("/{asset_id:path}/versions/{version}")
 def get_version(
     asset_id: str,
     version: str,
@@ -201,7 +189,7 @@ def get_version(
     return ok(payload)
 
 
-@router.get("/{asset_id}/versions/{version}/files")
+@router.get("/{asset_id:path}/versions/{version}/files")
 def read_version_files(
     asset_id: str,
     version: str,
@@ -243,7 +231,19 @@ def read_version_files(
     return ok({"files": row.manifest, "content_path": with_content, "content": content})
 
 
-@router.post("/{asset_id}/versions", status_code=status.HTTP_201_CREATED)
+@router.get("/{asset_id:path}")
+def get_asset(
+    asset_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    asset = _get_asset(db, asset_id)
+    if not _visible_to(asset, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    return ok(asset_payload(asset, include_description=True))
+
+
+@router.post("/{asset_id:path}/versions", status_code=status.HTTP_201_CREATED)
 async def upload_version(
     asset_id: str,
     version: str = Form(min_length=1, max_length=32),

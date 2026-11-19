@@ -25,6 +25,16 @@ def safe_segment(value: str) -> str:
     return value
 
 
+def safe_path(value: str) -> str:
+    """Validate an id that may contain `/` (external skills use path ids)."""
+    parts = value.split("/")
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"unsafe path: {value!r}")
+    for part in parts:
+        safe_segment(part)
+    return "/".join(parts)
+
+
 def package_key(
     *, kind: str, publisher_id: str, asset_id: str, version: str, filename: str
 ) -> str:
@@ -33,8 +43,12 @@ def package_key(
     Mirrors the reference layout (`skills/<publisher>/<asset>/<version>/...`)
     but adds the kind, because the hub publishes several kinds from one bucket.
     """
-    for segment in (kind, publisher_id, asset_id, version):
+    for segment in (kind, publisher_id, version):
         safe_segment(segment)
+    # External skill ids are paths (`astronomy/astronomical_analysis/astropy`),
+    # so the asset segment may hold subdirectories; it is still validated
+    # segment by segment.
+    safe_path(asset_id)
     name = os.path.basename(filename)
     if not name or name in (".", "..") or "\\" in name or "/" in name:
         raise ValueError(f"unsafe filename: {filename!r}")
