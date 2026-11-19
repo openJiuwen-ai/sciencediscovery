@@ -295,7 +295,7 @@ export const ZH = {
   reviewer: {
     title: "审查",
     settings: "自动审阅",
-    unavailable: "系统设置中的审查专家已关闭，此会话的自动审阅不会生效。",
+    unavailable: "审查专家已关闭，此会话的自动审阅不会生效。",
     level: "审查档位",
     /** 显示在档位行上：自动审阅关着时它并没有失效，立即审查仍会用它。 */
     levelManualHint: "自动审阅已关闭；立即审查仍会使用这个档位。",
@@ -362,7 +362,7 @@ export const ZH = {
     citationOnlyNote: "本次只核对引用格式，未检查结论支撑。",
     /** Why a checkpoint produced nothing, by the server's reason code. */
     skipReasons: {
-      specialist_disabled: "系统设置 › 专家 中的审查专家已关闭，本次没有产生审查结论。",
+      specialist_disabled: "审查专家已关闭，本次没有产生审查结论。",
       automatic_review_disabled: "此会话已关闭自动审阅，本次没有产生审查结论。",
     } as Record<string, string>,
     skipUnknown: "本次没有产生审查结论。",
@@ -1503,16 +1503,14 @@ export const ZH = {
         failed: "保存失败。",
         unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回到这里重试。",
       },
-      reviewer: {
-        heading: "审查专家",
-        label: "启用审查专家",
-        hint: "关闭后，所有会话都不再自动审阅产物，会话里的自动审阅开关也不再起作用。",
-      },
       specialists: {
         heading: "专家",
         add: "新增专家",
         help: "专家是可复用的指令与工具组合，任务可以指派给它们。",
-        empty: "还没有专家。",
+        /** The line under the built-in Review Specialist. It says who uses it,
+         *  which is the only thing there is to say about it: it cannot be
+         *  turned off, so there is no state to describe. */
+        reviewerUse: "由自动审阅使用",
         builtIn: "内置",
         enabled: "已启用",
         disabled: "已停用",

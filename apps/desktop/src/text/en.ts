@@ -296,7 +296,7 @@ export const EN: Text = {
   reviewer: {
     title: "Review",
     settings: "Auto-review",
-    unavailable: "Reviewer Specialist is off in Settings, so automatic review will not run for this session.",
+    unavailable: "The Reviewer Specialist is off, so automatic review will not run for this session.",
     level: "Review level",
     /** Shown on the level row when automatic review is off: the level is not
      *  idle, a manual run still reads it. */
@@ -365,7 +365,7 @@ export const EN: Text = {
     citationOnlyNote: "This review checked citation format only; claim support was not checked.",
     /** Why a checkpoint produced nothing, by the server's reason code. */
     skipReasons: {
-      specialist_disabled: "Reviewer Specialist is off in Settings › Specialists, so no review was produced.",
+      specialist_disabled: "The Reviewer Specialist is off, so no review was produced.",
       automatic_review_disabled: "Automatic review is off for this session, so no review was produced.",
     } as Record<string, string>,
     skipUnknown: "No review was produced.",
@@ -1486,16 +1486,14 @@ export const EN: Text = {
         failed: "Saving failed.",
         unavailable: "The Idea Tree service is not ready: start the Evolve service, then come back and retry.",
       },
-      reviewer: {
-        heading: "Reviewer",
-        label: "Enable the Reviewer Specialist",
-        hint: "When off, no session reviews its artifacts automatically and the session's own auto-review switch has no effect.",
-      },
       specialists: {
         heading: "Specialists",
         add: "Add specialist",
         help: "A specialist is a reusable bundle of instructions and tools that work can be dispatched to.",
-        empty: "No specialists yet.",
+        /** The line under the built-in Review Specialist. It says who uses it,
+         *  which is the only thing there is to say about it: it cannot be
+         *  turned off, so there is no state to describe. */
+        reviewerUse: "Used by Auto-review",
         builtIn: "Built-in",
         enabled: "Enabled",
         disabled: "Disabled",
