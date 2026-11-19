@@ -37,24 +37,24 @@ async function tempDir(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "hub-external-"));
 }
 
-test("tar round-trips long paths and binary bytes", () => {
+test("tar round-trips long paths and binary bytes", async () => {
   const bytes = new Uint8Array(1024).map((_, index) => index % 251);
-  const archive = packTar([
+  const archive = await packTar([
     { bytes, path: `${LONG_PATH}/SKILL.md` },
     { bytes: new TextEncoder().encode("hello"), path: "a/b/c.txt" },
   ]);
-  const files = unpackTar(archive);
+  const files = await unpackTar(archive);
   assert.deepEqual([...files.keys()], ["a/b/c.txt", `${LONG_PATH}/SKILL.md`]);
   assert.deepEqual(files.get(`${LONG_PATH}/SKILL.md`), bytes);
   assert.equal(new TextDecoder().decode(files.get("a/b/c.txt")), "hello");
 });
 
-test("tar output is byte-identical regardless of input order", () => {
-  const left = packTar([
+test("tar output is byte-identical regardless of input order", async () => {
+  const left = await packTar([
     { bytes: new TextEncoder().encode("one"), path: "b.md" },
     { bytes: new TextEncoder().encode("two"), path: "a.md" },
   ]);
-  const right = packTar([
+  const right = await packTar([
     { bytes: new TextEncoder().encode("two"), path: "a.md" },
     { bytes: new TextEncoder().encode("one"), path: "b.md" },
   ]);
@@ -118,7 +118,7 @@ test("the snapshot tarball carries SKILL.md byte for byte", async () => {
   const outDir = await tempDir();
   try {
     await syncExternalSkills({ fixtureDir: FIXTURE, now: NOW, outDir });
-    const files = unpackTar(gunzipSync(await readFile(path.join(outDir, "snapshot.tar.gz"))));
+    const files = await unpackTar(gunzipSync(await readFile(path.join(outDir, "snapshot.tar.gz"))));
     assert.equal(files.size, 4);
     for (const skillPath of files.keys()) {
       assert.ok(skillPath.endsWith("/SKILL.md"));

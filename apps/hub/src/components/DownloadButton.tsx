@@ -58,9 +58,11 @@ export function DownloadButton({
   suggestedName,
 }: DownloadButtonProps): JSX.Element {
   const href = assetUrl(basePath, url);
-  const filename = suggestedName ?? url.split("/").pop() ?? "download";
-  const [busy, setBusy] = useState(false);
   const viaApi = hubApiConfigured && Boolean(assetId);
+  // `suggestedName` describes the package the API serves (a zip); a static
+  // download is the file the catalogue points at, so it keeps that name.
+  const filename = viaApi && suggestedName ? suggestedName : url.split("/").pop() ?? "download";
+  const [busy, setBusy] = useState(false);
   const canPick = typeof window !== "undefined" && typeof window.showSaveFilePicker === "function";
 
   async function startDownload(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
@@ -71,7 +73,9 @@ export function DownloadButton({
     let target = href;
     try {
       if (canPick) {
-        const handle = await window.showSaveFilePicker!({ suggestedName: filename });
+        const picker = window.showSaveFilePicker;
+        if (!picker) throw new Error("no save dialog");
+        const handle = await picker({ suggestedName: filename });
         // Same-origin, so the page may read the bytes for the file handle
         // without a bucket CORS rule.
         target = viaApi && assetId ? downloadContentPath(assetId, version) : href;

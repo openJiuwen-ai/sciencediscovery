@@ -52,8 +52,9 @@ export interface ExportOptions {
 async function loadExternal(options: ExportOptions): Promise<ExternalSkills | null> {
   const dir = options.externalSkillsDir ?? process.env.HUB_EXTERNAL_SKILLS_DIR;
   const url = options.externalSkillsUrl ?? process.env.HUB_EXTERNAL_SKILLS_URL;
-  if (!dir && !url) return null;
-  const snapshot = await loadExternalSnapshot(dir ? { dir } : { url: url! });
+  const source = dir ? { dir } : url ? { url } : null;
+  if (!source) return null;
+  const snapshot = await loadExternalSnapshot(source);
   if (!snapshot) {
     console.warn("external skills snapshot is not published yet; building without it");
     return null;
@@ -73,8 +74,9 @@ interface Sessions {
 async function loadSessions(options: ExportOptions): Promise<Sessions | null> {
   const dir = options.sessionsDir ?? process.env.HUB_SESSIONS_DIR;
   const url = options.sessionsUrl ?? process.env.HUB_SESSIONS_INDEX_URL;
-  if (!dir && !url) return null;
-  const index = await loadSessionIndex(dir ? { dir } : { url: url! });
+  const source = dir ? { dir } : url ? { url } : null;
+  if (!source) return null;
+  const index = await loadSessionIndex(source);
   const baseUrl = options.sessionsBaseUrl ?? process.env.HUB_SESSIONS_BASE_URL ?? "/sessions";
   return { assets: collectSessions(index, baseUrl), updatedAt: index.updatedAt };
 }

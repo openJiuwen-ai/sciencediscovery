@@ -47,10 +47,14 @@ def _entries(data: bytes):
     duplicates, and regular files only — a tar can also carry symlinks, hard
     links and devices, none of which a package should contain.
     """
-    if data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data)):
+    try:
+        is_tar = data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data))
+    except (tarfile.TarError, EOFError) as exc:
+        raise PackageError("the uploaded file is not a readable archive") from exc
+    if is_tar:
         try:
             archive = tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
-        except tarfile.TarError as exc:
+        except (tarfile.TarError, EOFError) as exc:
             raise PackageError("the uploaded file is not a readable archive") from exc
         with archive:
             for member in archive.getmembers():
@@ -128,19 +132,33 @@ def validate_package(data: bytes, *, max_bytes: int, max_uncompressed: int) -> P
 def read_member(data: bytes, name: str, *, max_bytes: int = 2 * 1024 * 1024) -> bytes | None:
     """Read one entry for the Files tab, with the same traversal rules and a cap."""
     _safe_member(name)
-    if data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data)):
+    try:
+        is_tar = data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data))
+    except (tarfile.TarError, EOFError) as exc:
+        raise PackageError("the stored package is not a readable archive") from exc
+    if is_tar:
         try:
             archive = tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
-        except tarfile.TarError as exc:
+        except (tarfile.TarError, EOFError) as exc:
             raise PackageError("the stored package is not a readable archive") from exc
         with archive:
-            for entry in archive.getmembers():
-                if entry.name == name and entry.isfile():
-                    if entry.size > max_bytes:
-                        raise PackageError("file is too large to preview")
-                    handle = archive.extractfile(entry)
-                    return handle.read() if handle else None
+            count = 0
+            try:
+                for entry in archive:
+                    count += 1
+                    if count > MAX_ENTRIES:
+                        raise PackageError(
+                            f"the package has more than {MAX_ENTRIES} entries"
+                        )
+                    if entry.name == name and entry.isfile():
+                        if entry.size > max_bytes:
+                            raise PackageError("file is too large to preview")
+                        handle = archive.extractfile(entry)
+                        return handle.read() if handle else None
+            except (tarfile.TarError, EOFError) as exc:
+                raise PackageError("the stored package is not a readable archive") from exc
         return None
+
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         for entry in archive.infolist():
             if entry.filename == name and not entry.is_dir():

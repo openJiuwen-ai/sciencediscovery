@@ -275,3 +275,34 @@ def test_a_non_ascii_filename_does_not_break_the_header(client, register):
     assert response.status_code == 200
     disposition = response.headers["content-disposition"]
     assert "filename*=UTF-8''" in disposition
+
+
+def test_a_tar_with_too_many_entries_is_refused(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers, kind="session", name="too-many")
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for index in range(5001):
+            info = tarfile.TarInfo(f"f/{index}")
+            info.size = 0
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(b""))
+    response = client.post(
+        f"/api/v1/assets/{asset['id']}/versions",
+        headers=headers,
+        data={"version": "1", "changelog": ""},
+        files={"file": ("many.sdresearch", buffer.getvalue(), "application/gzip")},
+    )
+    assert response.status_code == 400
+    assert "entries" in response.json()["detail"]
+
+
+def test_a_truncated_stored_tar_is_a_package_error():
+    import pytest
+
+    from app.validation import PackageError, read_member
+
+    payload = make_tar_gz({"a.txt": b"x" * 4096})
+    with pytest.raises(PackageError):
+        read_member(payload[: len(payload) // 2], "a.txt")

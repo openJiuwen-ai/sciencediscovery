@@ -180,11 +180,11 @@ async function publish(sessionsDir: string, options: {
 }
 
 /** Rebuilds a package with a mutated manifest, keeping every payload byte. */
-function repack(bytes: Uint8Array, mutate: (manifest: PackageManifest) => void): Uint8Array {
+async function repack(bytes: Uint8Array, mutate: (manifest: PackageManifest) => void): Promise<Uint8Array> {
   const imported = importResearchPackage(bytes);
   const manifest = structuredClone(imported.manifest);
   mutate(manifest);
-  return gzipSync(packTar([
+  return gzipSync(await packTar([
     { bytes: new TextEncoder().encode(JSON.stringify(manifest)), path: "manifest.json" },
     { bytes: jsonBytes(imported.records), path: "records.json" },
     { bytes: imported.readme, path: "README.md" },
@@ -262,8 +262,9 @@ describe("session package publication", () => {
 
   it("marks a package with a full trajectory as complete", async () => {
     // The manifest, not the sidecar, decides whether the trajectory is complete.
-    const bytes = repack(makePackage(), (manifest) => {
-      manifest.exportProfile!.capabilities.fullTrajectory = true;
+    const bytes = await repack(makePackage(), (manifest) => {
+      if (!manifest.exportProfile) throw new Error("the fixture has no exportProfile");
+      manifest.exportProfile.capabilities.fullTrajectory = true;
     });
     const sessionsDir = await drop("complete-trajectory", bytes);
     const { index } = await publish(sessionsDir);
@@ -316,7 +317,7 @@ describe("session package publication", () => {
   });
 
   it("rejects a package whose bytes do not match its manifest", async () => {
-    const corrupted = repack(makePackage(), (manifest) => {
+    const corrupted = await repack(makePackage(), (manifest) => {
       manifest.inventory.find((entry) => entry.path === "records.json")!.checksum = "0".repeat(64);
     });
     await assert.rejects(
