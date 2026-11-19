@@ -2003,17 +2003,35 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   }, [refreshReviewer, reviewerBusy, sessionId]);
 
   /**
-   * Swap the card this window drew for the coordinator's own once the run ends.
+   * The Session a review has been outstanding in since this window last read
+   * its transcript.
    *
-   * The card written by `runReview` says "running" and nothing more; the
-   * server's copy of it carries the phase, the progress, and — for a run that
-   * produced no review — whether it failed or was skipped. While the queue is
-   * empty is the only moment the two can differ, so the transcript is read
-   * once then.
+   * An automatic review writes its checkpoint message in the coordinator, and
+   * nothing pushes that message at this window: no `reviewer_checkpoint.updated`
+   * event reaches a quiet-window audit, and `refreshReviewer` reads the queue
+   * and the verdicts but not the transcript. Without this marker the card for
+   * an automatic review would surface only on the next unrelated read of the
+   * Session — after a manual review, say — and then look like a duplicate.
+   */
+  const reviewSettling = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (reviewerBusy && sessionId !== undefined) reviewSettling.current = sessionId;
+  }, [reviewerBusy, sessionId]);
+
+  /**
+   * Read the transcript once the reviewer queue empties.
+   *
+   * For a review started here, the card this window drew says "running" and
+   * nothing more; the server's copy carries the phase, the progress, and — for
+   * a run that produced no review — whether it failed or was skipped. For an
+   * automatic review that copy is the only one there is, so the read is what
+   * makes its card appear at all. The queue being empty is the moment either
+   * copy has settled.
    */
   useEffect(() => {
     const target = sessionId;
-    if (target === undefined || reviewerBusy || optimisticCheckpoints.current.size === 0) return;
+    if (target === undefined || reviewerBusy) return;
+    if (optimisticCheckpoints.current.size === 0 && reviewSettling.current !== target) return;
     // A turn in flight owns the transcript; its settle reads the Session again
     // and brings the server's copy with it.
     if (runningRef.current) return;
@@ -2025,6 +2043,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         rememberBounded(detailsBySession.current, target, fresh);
         setDetail(fresh);
         optimisticCheckpoints.current.clear();
+        reviewSettling.current = undefined;
       } catch {
         // The card stays as this window drew it; nothing here is worth a
         // toast, and reopening the Session reads the server's copy.

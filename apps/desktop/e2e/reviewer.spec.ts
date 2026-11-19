@@ -740,6 +740,56 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(cards.nth(7)).toHaveClass(/is-neutral/u);
 });
 
+test("an automatic review's card arrives when the coordinator finishes, with no click", async ({ page }) => {
+  const toolCallId = "automatic-review:message-auto";
+  const mock = await installMockApi(page, {
+    reviewer: {
+      reviews: [review({ toolCallId })],
+      // A quiet-window audit is running. The queue says so; no checkpoint
+      // message exists yet, so the transcript has nothing to draw.
+      tasks: [{
+        artifactVersionIds: ["version-1"],
+        checkpointMessageId: "message-auto",
+        createdAt: AT,
+        feedbackPolicy: "record",
+        id: "task-auto",
+        inputFingerprint: "automatic",
+        origin: "artifact_registered",
+        reviewLevel: "quick",
+        sessionId: SESSION,
+        status: "running",
+        toolCallId,
+      }],
+    },
+    sessions: [makeSession({ messages: [] })],
+  });
+  await page.goto("/");
+  await expect(page.locator(".side-session-name", { hasText: "晶体结构分析" })).toBeVisible();
+  const cards = page.locator(".review-card");
+  await expect(cards).toHaveCount(0);
+
+  // The window has read the queue once, so it knows a review is outstanding.
+  await expect.poll(
+    () => mock.calls.filter((call) => call.method === "GET" && call.path.endsWith("/reviewer-audit-tasks")).length,
+  ).toBeGreaterThan(0);
+
+  // The coordinator finishes: it writes the checkpoint and empties the queue.
+  // An automatic audit publishes no event at this window, so the queue poll is
+  // the only thing that can tell the page the card now exists — and the card
+  // has to come from a fresh read of the transcript.
+  const session = mock.state.sessions.find((entry) => entry.id === SESSION);
+  session!.messages = [...(session!.messages as JsonRecord[]), checkpointMessage("message-auto", toolCallId)];
+  mock.state.reviewer.tasks = [];
+
+  await expect(cards).toHaveCount(1, { timeout: 15_000 });
+  await expect(cards.locator(".review-summary")).toHaveText("未发现问题");
+  // No click was involved, so there is no card of this window's own to settle:
+  // the one above is the server's, joined by its tool call id and covering the
+  // artifact once.
+  await cards.locator(".review-head").click();
+  await expect(cards.locator("[data-testid='review-artifact']")).toHaveCount(1);
+});
+
 test("a reviewer switched off on the server still says why the session cannot review", async ({ page }) => {
   await installMockApi(page, {
     reviewer: { settings: { enabled: false, feedbackPolicy: "record" } },
