@@ -18,6 +18,7 @@ def client(tmp_path):
         session_ttl_seconds=3600,
         max_package_bytes=2 * 1024 * 1024,
         max_uncompressed_bytes=8 * 1024 * 1024,
+        preview_max_bytes=1024,
         allow_registration=True,
     )
     app = create_app(settings)

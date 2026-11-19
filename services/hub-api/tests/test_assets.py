@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
+import tarfile
+from urllib.parse import urlsplit
 
 from tests.support import make_zip
 
@@ -77,7 +80,7 @@ def test_approval_publishes_and_serves_the_bytes(client, register):
     data = artifact.json()["data"]
     assert data["version"] == "1.0.0"
     assert data["sha256"] == hashlib.sha256(payload).hexdigest()
-    assert data["url"].endswith(".zip")
+    assert urlsplit(data["url"]).path.endswith(".zip")
 
     # The save dialog reads the same bytes from the same-origin endpoint.
     streamed = client.get(f"/api/v1/artifacts/{asset['id']}/content")
@@ -85,11 +88,14 @@ def test_approval_publishes_and_serves_the_bytes(client, register):
     assert streamed.content == payload
     assert "attachment" in streamed.headers["content-disposition"]
 
-    # The local backend serves the exact bytes the manifest promised.
+    # The local backend serves the exact bytes the manifest promised, but only
+    # through the signed URL: the key alone grants nothing.
     download = client.get(data["url"])
     assert download.status_code == 200
     assert download.content == payload
     assert "attachment" in download.headers["content-disposition"]
+    unsigned = client.get(data["url"].split("?")[0])
+    assert unsigned.status_code == 403
 
 
 def test_rejection_keeps_the_version_private(client, register):
@@ -174,4 +180,61 @@ def test_upload_limits_are_enforced(client, register):
     oversized = _upload(
         client, headers, asset["id"], payload=make_zip({"big.bin": os.urandom(3 * 1024 * 1024)})
     )
-    assert oversized.status_code == 400
+    assert oversized.status_code == 413
+
+
+def make_tar_gz(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def test_a_sdresearch_package_is_accepted(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers, kind="session", name="session-demo")
+    payload = make_tar_gz({"manifest.json": b'{"files": []}', "README.md": b"# Session\n"})
+    upload = client.post(
+        f"/api/v1/assets/{asset['id']}/versions",
+        headers=headers,
+        data={"version": "20261119", "changelog": "tar"},
+        files={"file": ("session-demo.sdresearch", payload, "application/gzip")},
+    )
+    assert upload.status_code == 201, upload.text
+    assert upload.json()["data"]["sha256"] == hashlib.sha256(payload).hexdigest()
+
+    client.post(
+        f"/api/v1/admin/reviews/{asset['id']}/20261119",
+        headers=headers,
+        json={"decision": "approve"},
+    )
+    listing = client.get(f"/api/v1/assets/{asset['id']}/versions/20261119/files").json()["data"]
+    assert [item["path"] for item in listing["files"]] == ["README.md", "manifest.json"]
+    text = client.get(
+        f"/api/v1/assets/{asset['id']}/versions/20261119/files",
+        params={"with_content": "README.md"},
+    ).json()["data"]
+    assert text["content"] == "# Session\n"
+
+
+def test_preview_is_capped(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers)
+    payload = make_zip({"big.txt": b"x" * 4096})
+    assert _upload(client, headers, asset["id"], payload=payload).status_code == 201
+    client.post(
+        f"/api/v1/admin/reviews/{asset['id']}/1.0.0",
+        headers=headers,
+        json={"decision": "approve"},
+    )
+    response = client.get(
+        f"/api/v1/assets/{asset['id']}/versions/1.0.0/files",
+        params={"with_content": "big.txt"},
+    )
+    assert response.status_code == 413

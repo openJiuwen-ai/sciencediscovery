@@ -20,6 +20,8 @@ import test from "node:test";
 
 import { gunzipSync, unzipSync } from "fflate";
 
+import { createServer } from "node:http";
+
 import { collectExternalSkills, loadExternalSnapshot } from "./external-skills.js";
 import { exportHub } from "./export.js";
 import { buildSnapshot, parseReadmeTables, syncExternalSkills } from "./sync-external-skills.js";
@@ -238,5 +240,24 @@ test("buildSnapshot rejects a malformed SKILL.md instead of publishing it", asyn
     await assert.rejects(() => buildSnapshot(source, NOW), /frontmatter/);
   } finally {
     await rm(fixture, { force: true, recursive: true });
+  }
+});
+
+
+test("a bucket without a snapshot publishes the built-in catalogue", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  try {
+    const snapshot = await loadExternalSnapshot({
+      url: `http://127.0.0.1:${port}/external-skills`,
+    });
+    assert.equal(snapshot, null);
+  } finally {
+    server.close();
   }
 });

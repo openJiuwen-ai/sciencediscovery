@@ -39,9 +39,10 @@ Deliberate differences:
   `specialist`, `connector`, `session` — so there is one `assets` table with a
   `kind` column rather than one model per type.
 - **No plugin schema validation.** The reference validates `plugin.yaml`,
-  icons and previews per type. The hub accepts a zip or `.sdresearch` package
-  and validates what a server must: size, traversal, zip bombs, per-entry
-  digests. Domain checks stay in the exporter until a type needs them.
+  icons and previews per type. The hub accepts a zip or a `.sdresearch`
+  (gzip'd tar) and validates what a server must: size, traversal, archive
+  bombs, non-regular tar entries, per-entry digests, and a per-file ceiling
+  for previews. Domain checks stay in the exporter until a type needs them.
 - **Stateless sessions.** The reference keeps OAuth sessions in Redis. This
   service signs its own HMAC tokens, so the only stateful dependency is the
   database (SQLite in development, MySQL in production).
@@ -153,6 +154,8 @@ never reads them.
 | Uncompressed-size ceiling | A 1 MiB zip can expand to gigabytes; refuse before writing |
 | Per-entry sha256 in the manifest | The client can verify a single file without trusting the server |
 | Scrypt password hashing, HMAC tokens | No native crypto dependency, no session table |
+| The development byte route is signed too | A guessed key must not bypass approval or visibility; the local backend signs a short-lived URL with the session secret |
+| Uploads and previews are bounded while reading | A declared `Content-Length` is advisory; the running total enforces the cap, and a preview is refused above `HUB_PREVIEW_MAX_BYTES` |
 | Registration closed after the first account | The first account is the administrator; later accounts come from the administrator |
 | Every review and upload in `audit_log` | Who published, who approved, when |
 

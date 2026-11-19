@@ -11,10 +11,14 @@ Two backends behind one interface:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -59,6 +63,13 @@ class StorageError(RuntimeError):
     pass
 
 
+def local_signature(secret: str, key: str, expires: int) -> str:
+    """Signature for a development download URL."""
+    return hmac.new(
+        secret.encode("utf-8"), f"{key}:{expires}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
 class Storage:
     def put(self, key: str, data: bytes, content_type: str) -> None:
         raise NotImplementedError
@@ -81,6 +92,7 @@ class Storage:
 class LocalStorage(Storage):
     root: Path
     base_url: str
+    secret: str = ""
 
     def __post_init__(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -106,8 +118,15 @@ class LocalStorage(Storage):
         return path.read_bytes()
 
     def download_url(self, key: str, filename: str, expires_in: int) -> str:
-        # The API forwards the bytes; dev only, never the production path.
-        return f"{self.base_url.rstrip('/')}/api/v1/files/{key}"
+        # The API forwards the bytes; dev only. The URL carries a short-lived
+        # signature so a key alone does not grant access, which keeps this
+        # backend to the same rule as the bucket.
+        expires = int(time.time()) + expires_in
+        signature = local_signature(self.secret, key, expires)
+        return (
+            f"{self.base_url.rstrip('/')}/api/v1/files/{quote(key, safe='/')}"
+            f"?expires={expires}&signature={signature}"
+        )
 
     def delete(self, key: str) -> None:
         path = self._path(key)
@@ -208,6 +227,8 @@ def build_storage(settings) -> Storage:
         )
     if settings.storage_backend == "local":
         return LocalStorage(
-            root=Path(settings.local_root), base_url=settings.public_base_url
+            root=Path(settings.local_root),
+            base_url=settings.public_base_url,
+            secret=settings.session_secret,
         )
     raise StorageError(f"unknown storage backend: {settings.storage_backend}")
