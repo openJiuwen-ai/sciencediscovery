@@ -43,7 +43,7 @@
     "hub:test": "tsx --test scripts/hub/export.test.ts scripts/hub/external-skills.test.ts scripts/hub/sessions.test.ts",
     "hub:test:ci": "pnpm --filter \"@sciencediscovery/specialist^...\" build && pnpm hub:test",
     "hub:typecheck": "pnpm --filter @sciencediscovery/hub typecheck",
-    "hub:build": "HUB_BASE_PATH=/site/ pnpm --filter @sciencediscovery/hub build",
+    "hub:build": "node scripts/hub/build-site.mjs",
     "jiuwenswarm:setup": "bash scripts/jiuwenswarm.sh setup",
     "jiuwenswarm:start": "bash scripts/jiuwenswarm.sh start",
     "jiuwenswarm:status": "bash scripts/jiuwenswarm.sh status",

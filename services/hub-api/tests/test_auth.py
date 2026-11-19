@@ -23,6 +23,7 @@ def test_registration_closes_after_the_first_account(tmp_path):
         database_url=f"sqlite:///{tmp_path / 'closed.db'}",
         storage_backend="local",
         local_root=str(tmp_path / "store"),
+        session_secret="test-secret",
         allow_registration=False,
     )
     with TestClient(create_app(settings)) as client:
@@ -86,3 +87,37 @@ def test_admin_creates_accounts_while_registration_is_closed(client, register):
         "/api/v1/auth/login", json={"username": "teammate", "password": "correct-horse"}
     )
     assert ok_login.status_code == 200
+
+
+def test_local_backend_refuses_the_committed_default_secret(tmp_path):
+    import pytest
+
+    from app.config import DEFAULT_SESSION_SECRET, Settings
+    from app.main import create_app
+
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'guard.db'}",
+        storage_backend="local",
+        local_root=str(tmp_path / "store"),
+    )
+    assert settings.session_secret == DEFAULT_SESSION_SECRET
+    with pytest.raises(RuntimeError, match="HUB_SESSION_SECRET"):
+        create_app(settings)
+
+    empty = Settings(
+        database_url=f"sqlite:///{tmp_path / 'empty.db'}",
+        storage_backend="local",
+        local_root=str(tmp_path / "store"),
+        session_secret="",
+    )
+    with pytest.raises(RuntimeError, match="HUB_SESSION_SECRET"):
+        create_app(empty)
+
+    # The development opt-in is explicit and still works.
+    opted_in = Settings(
+        database_url=f"sqlite:///{tmp_path / 'optin.db'}",
+        storage_backend="local",
+        local_root=str(tmp_path / "store"),
+        allow_dev_secret=True,
+    )
+    create_app(opted_in).state  # builds without raising

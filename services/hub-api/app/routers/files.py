@@ -8,6 +8,7 @@ from fastapi.responses import Response
 
 from ..deps import get_settings, get_storage
 from ..storage import LocalStorage, Storage, StorageError, local_signature
+from .artifacts import content_disposition
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -42,5 +43,5 @@ def download_local(
     return Response(
         content=data,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition(filename)},
     )
