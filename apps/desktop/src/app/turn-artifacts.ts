@@ -122,3 +122,29 @@ export function turnArtifacts(
 
   return { visible, hidden: rows.length - visible.length };
 }
+
+/**
+ * The same selection for every run in one Session, computed once.
+ *
+ * The conversation draws one `AssistantTurns` per turn and the panel already
+ * rebuilds its grouping on every render; asking each turn to walk the whole
+ * output list would make typing in the composer cost O(turns × outputs). The
+ * caller memoises this on the `outputs` reference instead.
+ */
+export function turnArtifactsByRun(
+  outputs: readonly SessionArtifactOutput[],
+  limit: number = TURN_ARTIFACT_LIMIT,
+): Map<string, TurnArtifacts> {
+  const perRun = new Map<string, SessionArtifactOutput[]>();
+  for (const output of outputs) {
+    for (const runId of output.version.executionRunIds) {
+      const bucket = perRun.get(runId);
+      if (bucket) bucket.push(output);
+      else perRun.set(runId, [output]);
+    }
+  }
+
+  const summary = new Map<string, TurnArtifacts>();
+  for (const [runId, subset] of perRun) summary.set(runId, turnArtifacts(subset, runId, limit));
+  return summary;
+}
