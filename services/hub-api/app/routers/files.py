@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
 from ..deps import get_settings, get_storage
+from ..filenames import content_disposition
 from ..storage import LocalStorage, Storage, StorageError, local_signature
-from .artifacts import content_disposition
 
 router = APIRouter(prefix="/files", tags=["files"])
 

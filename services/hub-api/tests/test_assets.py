@@ -252,3 +252,26 @@ def test_an_oversized_declared_body_is_refused_before_parsing(client, register):
         content=body,
     )
     assert response.status_code == 413
+
+
+def test_a_non_ascii_filename_does_not_break_the_header(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers)
+    payload = make_zip({"SKILL.md": b"# x\n"})
+    upload = client.post(
+        f"/api/v1/assets/{asset['id']}/versions",
+        headers=headers,
+        data={"version": "1.0.0", "changelog": ""},
+        files={"file": ("论文.zip", payload, "application/zip")},
+    )
+    assert upload.status_code == 201, upload.text
+    client.post(
+        f"/api/v1/admin/reviews/{asset['id']}/1.0.0",
+        headers=headers,
+        json={"decision": "approve"},
+    )
+    response = client.get(f"/api/v1/artifacts/{asset['id']}/content")
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in disposition

@@ -14,4 +14,4 @@ RUN useradd --system --uid 10001 hub
 USER hub
 
 EXPOSE 8100
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8100"]
