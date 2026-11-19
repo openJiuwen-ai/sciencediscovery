@@ -55,6 +55,9 @@ class Storage:
     def download_url(self, key: str, filename: str, expires_in: int) -> str:
         raise NotImplementedError
 
+    def delete(self, key: str) -> None:
+        raise NotImplementedError
+
 
 @dataclass
 class LocalStorage(Storage):
@@ -88,6 +91,11 @@ class LocalStorage(Storage):
         # The API forwards the bytes; dev only, never the production path.
         return f"{self.base_url.rstrip('/')}/api/v1/files/{key}"
 
+    def delete(self, key: str) -> None:
+        path = self._path(key)
+        if path.is_file():
+            path.unlink()
+
 
 class S3Storage(Storage):
     def __init__(
@@ -114,7 +122,15 @@ class S3Storage(Storage):
             region_name=region or None,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+            # OBS accepts SigV4 but not the CRC32 trailer botocore adds by
+            # default since 1.36 (aws-chunked uploads); without this the PUT
+            # fails with XAmzContentSHA256Mismatch.
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "virtual"},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            ),
         )
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
@@ -139,6 +155,9 @@ class S3Storage(Storage):
             },
             ExpiresIn=expires_in,
         )
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
 
 
 def build_storage(settings) -> Storage:
