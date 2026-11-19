@@ -752,8 +752,9 @@ describe("an execution request drives the sandbox's cards", () => {
 
   test("an immediate bubblewrap failure is reported instead of leaving the execution pending", { timeout: 5_000 }, async (context) => {
     // Hold the seccomp fd close while the shim exits. Observing the child must
-    // not wait for that close: awaiting it delivers the exit first, and the
-    // execution then stays pending until execTimeoutMs.
+    // not wait for that close: this test releases the gate only after
+    // executePython settles, so an awaited close keeps the execution pending
+    // until execTimeoutMs and fails the stderr assertion below.
     const { config, request } = await fixture(context, inventory([
       { chipName: "910B3", health: "OK", hostIndex: 1_000_000, sandboxUsable: true },
     ]));
@@ -762,15 +763,37 @@ describe("an execution request drives the sandbox's cards", () => {
     await chmod(shim, 0o755);
     config.bwrapPath = shim;
     config.execTimeoutMs = 1_500;
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => { releaseClose = resolve; });
+    let closeStarted = false;
+    let closeFinished = false;
+    let markClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { markClosed = resolve; });
     config.closeSeccompFilter = async (handle) => {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await handle.close();
+      closeStarted = true;
+      await closeGate;
+      try {
+        await handle.close();
+      } finally {
+        closeFinished = true;
+        markClosed();
+      }
     };
-    const started = Date.now();
+    // Release the gate even when an assertion above fails, so no close remains
+    // pending for the rest of the file.
+    context.after(async () => {
+      releaseClose();
+      if (closeStarted) await closed;
+    });
     const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [1_000_000] });
-    assert.ok(Date.now() - started < 250, `exit was reported only after ${Date.now() - started}ms; the seccomp close must not be awaited`);
+    // Startup work is load-sensitive, so timing is not the signal: the execution
+    // must have settled while the seccomp close was still blocked.
+    assert.equal(closeStarted, true, "the seccomp close must start without blocking the execution");
+    assert.equal(closeFinished, false, "the execution settled only after the seccomp close completed");
     assert.notEqual(python.exitCode, 0);
     assert.match(python.stderr, /\/dev\/davinci1000000/u);
+    releaseClose();
+    await closed;
   });
 
   test("a signalled child whose close was missed keeps the stop reason", { timeout: 5_000 }, async (context) => {
