@@ -313,6 +313,13 @@ function ModelComboBox({
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // Tab is the reader leaving the field, so it closes the listing even when
+    // the filter has emptied the options — the empty-state popup must not stay
+    // over the form while focus moves on.
+    if (event.key === "Tab" && open) {
+      closeMenu();
+      return;
+    }
     if (!open || options.length === 0) {
       if (event.key === "ArrowDown" && listing.length > 0) {
         event.preventDefault();
@@ -332,9 +339,6 @@ function ModelComboBox({
     } else if (event.key === "End") {
       event.preventDefault();
       setActiveIndex(options.length - 1);
-    } else if (event.key === "Tab") {
-      // Tab is the reader leaving the field; let it move focus on.
-      closeMenu();
     } else if (commitsOnEnter(event)) {
       const entry = activeIndex >= 0 ? options[activeIndex] : undefined;
       if (entry) {
