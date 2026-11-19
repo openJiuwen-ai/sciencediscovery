@@ -275,17 +275,29 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
 
   for (const assessment of review.sourceAssessments ?? []) {
     const verdict = assessment.assessment.assessment;
+    // An assessment that reached no conclusion is an absence again, not a
+    // warning, and its rationale is the policy's own words — "No issued E3
+    // source locator is available for this claim." names an evidence level
+    // and a locator, neither of which a reader should have to know. The card
+    // says the two facts that matter instead: whether any source text was
+    // found, and that it was not enough to check the claim. The raw reason
+    // stays in the review record.
+    const inconclusive = verdict === "INCONCLUSIVE";
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
-      tone: verdict === "SUPPORTED"
-        ? "pass"
-        : verdict === "CONTRADICTED" ? "fail" : "warn",
+      tone: inconclusive
+        ? "neutral"
+        : verdict === "SUPPORTED" ? "pass" : verdict === "CONTRADICTED" ? "fail" : "warn",
       label: TEXT.reviewer.source,
       labelTip: labelTipFor("source"),
       title: claimText(assessment.claim) ?? TEXT.reviewer.source,
-      body: assessment.locators.length > 0
-        ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
-        : assessment.assessment.rationale,
+      body: inconclusive
+        ? assessment.locators.length > 0
+          ? TEXT.reviewer.sourceInconclusiveWith(assessment.locators.length)
+          : TEXT.reviewer.sourceInconclusiveNone
+        : assessment.locators.length > 0
+          ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
+          : assessment.assessment.rationale,
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
     });
   }

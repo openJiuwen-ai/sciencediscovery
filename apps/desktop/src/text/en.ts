@@ -401,7 +401,13 @@ export const EN: Text = {
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `${count} queued`,
-    locators: (count: number) => `${count} ${count === 1 ? "locator" : "locators"}`,
+    /** A bounded passage in a locked source; "locator" and evidence levels
+     *  are internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
+    sourceInconclusiveWith: (count: number) => count === 1
+      ? "Found 1 source passage, but it is not enough to support this claim."
+      : `Found ${count} source passages, but they are not enough to support this claim.`,
+    sourceInconclusiveNone: "No source passage was found to support this claim.",
     failedDetail: "The review reported an error.",
     empty: "This checkpoint produced no review record.",
     noReviews: "No reviews yet.",
