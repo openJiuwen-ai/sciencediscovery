@@ -91,6 +91,10 @@ audit_log        id, actor_id, action, asset_id, version, detail, created_at
 
 Rules:
 
+- Asset ids are not always slugs: external skills use a path
+  (`chemistry_and_materials/real_world_workstations/dual-station-…`, up to 88
+  characters), so id columns are 191, storage keys validate the id segment by
+  segment, and the API routes the id with a path converter.
 - `(publisher_id, kind, name)` is unique: one publisher cannot have two
   `skill`s with the same name.
 - `(asset_id, version)` is unique and **write-once**. A rejected version is not
