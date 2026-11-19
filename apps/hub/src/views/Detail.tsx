@@ -277,7 +277,7 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
   return (
     <article className="detail">
       <DetailHeader
-        actions={<DownloadButton basePath={basePath} label={copy("download")} url={skill.download.url} />}
+        actions={<DownloadButton assetId={skill.id} basePath={basePath} label={copy("download")} url={skill.download.url} version={skill.version} />}
         asset={skill}
       >
         <h1>{skill.name}</h1>
@@ -368,7 +368,7 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
       <DetailHeader
         actions={(
           <>
-            <DownloadButton basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} />
+            <DownloadButton assetId={specialist.id} basePath={basePath} label={copy("downloadJson")} url={specialist.download.url} version={specialist.version} />
             <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} variant="ghost" />
           </>
         )}
@@ -463,7 +463,7 @@ export function SessionDetail({ asset, basePath, catalog, copy, language, onNavi
   return (
     <article className="detail">
       <DetailHeader
-        actions={<DownloadButton basePath={basePath} label={copy("downloadPackage")} url={session.download.url} />}
+        actions={<DownloadButton assetId={session.id} basePath={basePath} label={copy("downloadPackage")} url={session.download.url} version={session.version} />}
         asset={session}
       >
         <h1>{session.name}</h1>
@@ -492,7 +492,7 @@ export function ConnectorDetail({ asset, basePath, copy }: DetailProps): JSX.Ele
   return (
     <article className="detail">
       <DetailHeader
-        actions={<DownloadButton basePath={basePath} label={copy("downloadJson")} url={connector.download.url} />}
+        actions={<DownloadButton assetId={connector.id} basePath={basePath} label={copy("downloadJson")} url={connector.download.url} version={connector.version} />}
         asset={connector}
       >
         <h1>{connector.name}</h1>

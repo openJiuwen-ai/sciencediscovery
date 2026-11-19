@@ -1,0 +1,50 @@
+# The hub API is a Python service beside the TypeScript workspace. It gets its
+# own workflow so a change to it does not pay for the full desktop matrix, and
+# so this check can be marked required on its own.
+
+name: Hub API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/hub-api/**"
+      - ".github/workflows/hub-api.yml"
+  pull_request:
+    paths:
+      - "services/hub-api/**"
+      - ".github/workflows/hub-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/hub-api/pyproject.toml
+
+      - name: Install
+        working-directory: services/hub-api
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run
+        working-directory: services/hub-api
+        run: python -m pytest
+
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deployment image
+        run: docker build -t hub-api:ci services/hub-api
