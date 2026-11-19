@@ -250,6 +250,72 @@ describe("a review's rows", () => {
     assert.equal(row.title, TEXT.reviewer.completeness.unconfirmed);
   });
 
+  it("says an inconclusive source check in plain words, not in evidence levels", () => {
+    const checked = review({
+      sourceAssessments: [{
+        assessment: {
+          assessment: "INCONCLUSIVE",
+          claimId: "claim-1",
+          locatorIds: [],
+          policyVersion: "1",
+          rationale: "No issued E3 source locator is available for this claim.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: ["doi:10.1000/example"],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E3",
+          text: "代表工作 1",
+        },
+        locators: [{
+          excerpt: "an abstract sentence",
+          excerptHash: "abc",
+          id: "locator-1",
+          locator: { paragraph: 2 },
+          snapshotId: "snapshot-1",
+        }],
+        snapshots: [],
+      }],
+    });
+    const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
+    assert.ok(row);
+    // Found one passage, not enough to check the claim: that is the whole
+    // message. "E3" and "locator" are the policy's words, not the reader's.
+    assert.equal(row.tone, "neutral");
+    assert.equal(row.body, TEXT.reviewer.sourceInconclusiveWith(1));
+    assert.ok(!(row.body ?? "").includes("E3"));
+    assert.ok(!/locator/u.test(row.body ?? ""));
+    assert.equal(row.badge, TEXT.reviewer.assessments.INCONCLUSIVE);
+  });
+
+  it("says so when an inconclusive source check found nothing at all", () => {
+    const checked = review({
+      sourceAssessments: [{
+        assessment: {
+          assessment: "INCONCLUSIVE",
+          claimId: "claim-1",
+          locatorIds: [],
+          policyVersion: "1",
+          rationale: "The public source could not be reached.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: [],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E3",
+          text: "代表工作 2",
+        },
+        locators: [],
+        snapshots: [],
+      }],
+    });
+    const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
+    assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveNone);
+    assert.equal(row?.tone, "neutral");
+  });
+
   it("puts the checks that ran above what the review never looked at", () => {
     const partial = review({
       checks: ["citation"],

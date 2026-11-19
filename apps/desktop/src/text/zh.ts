@@ -460,7 +460,11 @@ export const ZH = {
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `排队 ${count}`,
-    locators: (count: number) => `${count} 条定位`,
+    /** A bounded passage in a locked source; "定位" and evidence levels are
+     *  internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} 处原文`,
+    sourceInconclusiveWith: (count: number) => `找到 ${count} 处原文，但还不足以支撑这条结论。`,
+    sourceInconclusiveNone: "没有找到可用于支撑这条结论的原文。",
     failedDetail: "审查过程报告了错误。",
     empty: "这个检查点没有产生审查记录。",
     noReviews: "还没有审查记录。",
