@@ -7,24 +7,39 @@
  * The conversation used to say nothing about the files a turn wrote: they only
  * appeared in the right panel, grouped by Session, so the reader had to guess
  * which of a Session's artifacts came from the answer in front of them. The link
- * exists in the data — a version records the runs that wrote it — and this file
+ * exists in the data — a version names the turn that wrote it — and this file
  * turns that into the strip the turn renders.
+ *
+ * The link is `version.turnId`, which is the `SessionRun` the transcript draws
+ * (`packages/schema/src/artifact-provenance.ts`: "The client assigns it to the
+ * visible top-level Run from `version.turnId`"). It is *not*
+ * `version.executionRunIds`: those name the `ExecutionRun` — the code or shell
+ * execution that wrote the bytes — a different identifier entirely. A real
+ * version reads `{turnId: <SessionRun.id>, executionRunIds: [<ExecutionRun.id>]}`
+ * and the two never share a value, so joining on the latter matches nothing.
  *
  * Two rules keep the strip honest:
  *
- *  - a version with no `executionRunIds` is never attached. Uploads and
- *    hand-registered files have no run, and pretending they do would put a file
- *    under an answer that never touched it;
+ *  - a version with no turn id is never attached. Uploads and hand-registered
+ *    files have no turn, and pretending they do would put a file under an answer
+ *    that never touched it;
  *  - one row per artifact, at the version that answers "what does this file look
  *    like now". That is the highest `version` ordinal, not the latest timestamp:
  *    an imported Session keeps the package's ordinals while `createdAt` can be
  *    the import time, so the two disagree exactly where it matters.
+ *
+ * A child agent's version names the *subagent* as its `turnId`, and the child
+ * names the turn that delegated it in `parentTurnId`. Those are resolved up to
+ * the run before anything is attached — four versions in one local catalog were
+ * subagent-produced, and leaving them out silently would be a strip that quietly
+ * omits half of what a run wrote.
  */
 import type {
   ScientificArtifact,
   ScientificArtifactKind,
   ScientificArtifactVersion,
   SessionArtifactOutput,
+  Subagent,
 } from "@sciencediscovery/schema";
 
 /** Kinds that answer "what did this turn hand me", most useful first. */
@@ -69,7 +84,55 @@ export interface TurnArtifacts {
   hidden: number;
 }
 
+/**
+ * What is needed to say which Run a version belongs to.
+ *
+ * `runIds` is every Session run the transcript draws; `parentTurnBySubagent` maps
+ * a child agent to the turn that delegated it, which is how a child's version
+ * climbs back to its run.
+ */
+export interface TurnLineage {
+  parentTurnBySubagent: ReadonlyMap<string, string>;
+  runIds: ReadonlySet<string>;
+}
+
+export const EMPTY_LINEAGE: TurnLineage = { parentTurnBySubagent: new Map(), runIds: new Set() };
+
 export const TURN_ARTIFACT_LIMIT = 5;
+
+/** Build the lineage from the runs and children a Session's transcript holds. */
+export function turnLineage(
+  runIds: readonly string[],
+  subagents: readonly Subagent[],
+): TurnLineage {
+  return {
+    parentTurnBySubagent: new Map(subagents.map((subagent) => [subagent.id, subagent.parentTurnId])),
+    runIds: new Set(runIds),
+  };
+}
+
+/**
+ * The Run a version belongs to, or `undefined` when the transcript cannot say.
+ *
+ * A main-agent version names the run directly; a child's names the child, so the
+ * walk follows `parentTurnId` until it reaches a run. A cycle or an unknown id
+ * yields nothing rather than a guess: attributing a file by timestamp would turn
+ * project history into invented chat history, and the version stays reachable
+ * from the panel's artifact list either way.
+ */
+export function ownerRunId(
+  version: ScientificArtifactVersion,
+  lineage: TurnLineage,
+): string | undefined {
+  const visited = new Set<string>();
+  let current = version.turnId;
+  while (current !== undefined && !visited.has(current)) {
+    if (lineage.runIds.has(current)) return current;
+    visited.add(current);
+    current = lineage.parentTurnBySubagent.get(current);
+  }
+  return undefined;
+}
 
 function rank(kind: ScientificArtifactKind): number {
   const index = KIND_ORDER.indexOf(kind);
@@ -98,22 +161,23 @@ function compareRows(a: TurnArtifact, b: TurnArtifact): number {
   return a.artifact.id < b.artifact.id ? -1 : a.artifact.id > b.artifact.id ? 1 : 0;
 }
 
-/**
- * The artifacts one run produced, ready to render.
- *
- * `limit` is the number of rows shown before the strip stops and offers the rest;
- * passing 0 disables the cap.
- */
+/** The artifacts of one run, ready to render. `limit` 0 disables the cap. */
 export function turnArtifacts(
   outputs: readonly SessionArtifactOutput[],
   runId: string | undefined,
+  lineage: TurnLineage = EMPTY_LINEAGE,
   limit: number = TURN_ARTIFACT_LIMIT,
 ): TurnArtifacts {
   if (!runId) return { visible: [], hidden: 0 };
+  return select(
+    outputs.filter((output) => ownerRunId(output.version, lineage) === runId),
+    limit,
+  );
+}
 
+function select(outputs: readonly SessionArtifactOutput[], limit: number): TurnArtifacts {
   const byArtifact = new Map<string, TurnArtifact>();
   for (const { artifact, version } of outputs) {
-    if (!version.executionRunIds.includes(runId)) continue;
     const existing = byArtifact.get(artifact.id);
     if (existing && compareVersion(existing.version, version) <= 0) continue;
     byArtifact.set(artifact.id, { artifact, updated: Boolean(version.baseVersionId), version });
@@ -143,18 +207,19 @@ export function turnArtifacts(
  */
 export function turnArtifactsByRun(
   outputs: readonly SessionArtifactOutput[],
+  lineage: TurnLineage = EMPTY_LINEAGE,
   limit: number = TURN_ARTIFACT_LIMIT,
 ): Map<string, TurnArtifacts> {
   const perRun = new Map<string, SessionArtifactOutput[]>();
   for (const output of outputs) {
-    for (const runId of output.version.executionRunIds) {
-      const bucket = perRun.get(runId);
-      if (bucket) bucket.push(output);
-      else perRun.set(runId, [output]);
-    }
+    const runId = ownerRunId(output.version, lineage);
+    if (runId === undefined) continue;
+    const bucket = perRun.get(runId);
+    if (bucket) bucket.push(output);
+    else perRun.set(runId, [output]);
   }
 
   const summary = new Map<string, TurnArtifacts>();
-  for (const [runId, subset] of perRun) summary.set(runId, turnArtifacts(subset, runId, limit));
+  for (const [runId, subset] of perRun) summary.set(runId, select(subset, limit));
   return summary;
 }
