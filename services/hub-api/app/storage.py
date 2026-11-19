@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from .filenames import content_disposition
+
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -203,7 +205,7 @@ class S3Storage(Storage):
             Params={
                 "Bucket": self.bucket,
                 "Key": key,
-                "ResponseContentDisposition": f'attachment; filename="{filename}"',
+                "ResponseContentDisposition": content_disposition(filename),
             },
             ExpiresIn=expires_in,
         )

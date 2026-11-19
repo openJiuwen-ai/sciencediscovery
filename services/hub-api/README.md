@@ -15,14 +15,18 @@ The design and its mapping to the openJiuwen Agentic Hub reference are in
 cd services/hub-api
 uv venv .venv
 uv pip install -e '.[dev]'
-.venv/bin/uvicorn app.main:app --reload --port 8100
+export HUB_SESSION_SECRET=$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')
+.venv/bin/uvicorn app.main:create_app --factory --reload --port 8100
 ```
 
 Defaults are the development profile: SQLite at `./.hub-api.db`, packages in
 `./.hub-storage`, downloads served by the API itself. That profile refuses to
 start with the committed default `HUB_SESSION_SECRET`, because the signed
-development download URL would otherwise be forgeable; set a real secret (or
-use `HUB_STORAGE_BACKEND=s3`). Open
+development download URL would otherwise be forgeable. The guard does not
+depend on the backend: session tokens use the same key, so an `s3` profile with
+the default or empty secret refuses to start for the same reason, and a bare
+image built from `Dockerfile` must be given `HUB_SESSION_SECRET` (plus its
+database and storage settings) before it will start. Open
 <http://127.0.0.1:8100/docs> for the OpenAPI page.
 
 The first account to register becomes an administrator. After that,

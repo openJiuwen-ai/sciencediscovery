@@ -22,17 +22,13 @@ from .storage import build_storage
 from .routers import artifacts, assets, auth, files, health, reviews
 
 
-def create_app(settings=None) -> FastAPI:
-    settings = settings or get_settings()
+def validate_settings(settings) -> None:
+    """Refuse a configuration whose tokens anyone can forge.
 
-    engine = make_engine(settings.database_url)
-    Base.metadata.create_all(engine)
-    session_factory = make_session_factory(engine)
-    storage = build_storage(settings)
-
-    # The session secret signs login tokens and the development download URLs.
-    # Empty or the committed default makes both forgeable, so the service
-    # refuses to start unless a development machine opts in explicitly.
+    The session secret signs login tokens and the development download URLs;
+    empty or the committed default makes both forgeable, so this runs before
+    anything is created and a server fails at startup rather than serving.
+    """
     if (
         not settings.session_secret
         or settings.session_secret == DEFAULT_SESSION_SECRET
@@ -41,6 +37,16 @@ def create_app(settings=None) -> FastAPI:
             "set HUB_SESSION_SECRET to a random value "
             "(or HUB_ALLOW_DEV_SECRET=1 on a development machine)"
         )
+
+
+def create_app(settings=None) -> FastAPI:
+    settings = settings or get_settings()
+    validate_settings(settings)
+
+    engine = make_engine(settings.database_url)
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    storage = build_storage(settings)
 
     app = FastAPI(
         title="ScienceDiscovery Hub API",
@@ -100,21 +106,7 @@ def _bootstrap_admin(app: FastAPI, settings) -> None:
         session.close()
 
 
-class _LazyApp:
-    """Build the app on first use.
-
-    Importing this module must not require a valid configuration: tests import
-    `create_app`, and the startup guard below should fail a server, not an
-    import that happens to load the module.
-    """
-
-    def __init__(self) -> None:
-        self._app: FastAPI | None = None
-
-    def __call__(self, scope, receive, send):
-        if self._app is None:
-            self._app = create_app()
-        return self._app(scope, receive, send)
-
-
-app = _LazyApp()
+# The server entry point is the factory, not a module-level instance:
+# `uvicorn app.main:create_app --factory` evaluates the configuration before it
+# listens, so a refused secret stops the process instead of producing a server
+# that answers 500 to everything. Tests import `create_app` and build their own.

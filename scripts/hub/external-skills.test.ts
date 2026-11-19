@@ -153,6 +153,7 @@ test("external assets carry author, category, version and a byte-faithful packag
   try {
     await syncExternalSkills({ fixtureDir: FIXTURE, now: NOW, outDir });
     const snapshot = await loadExternalSnapshot({ dir: outDir });
+    assert.ok(snapshot);
     const { assets, warnings } = collectExternalSkills(snapshot);
     assert.deepEqual(warnings, []);
     const abalign = assets.find((entry) => entry.asset.id === "biology/bioinformatics/abalign");

@@ -8,13 +8,9 @@ from sqlalchemy.orm import Session
 from ..deps import current_user, get_db, get_settings, get_storage
 from ..models import Asset, AssetVersion, User, utcnow
 from ..serializers import ok
+from ..filenames import content_disposition
 from ..storage import Storage, StorageError
 
-
-def content_disposition(filename: str) -> str:
-    """Quote a filename for a header without letting it break the header."""
-    safe = filename.replace("\\", "_").replace('"', "").replace("\r", "").replace("\n", "")
-    return f'attachment; filename="{safe or "download"}"'
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
