@@ -55,6 +55,20 @@ a server must enforce (size, traversal, zip bombs).
 | `HUB_ADMIN_USERNAME` / `HUB_ADMIN_PASSWORD` | — | Optional administrator created at startup |
 | `VITE_HUB_API_BASE` | — | Build-time, site only: API prefix (e.g. `/api/v1`) so downloads resolve through the service |
 
+## Run the site against the local API
+
+```bash
+pnpm hub:export
+HUB_BASE_PATH=/site/ VITE_HUB_API_BASE=/api/v1 \
+  pnpm --filter @sciencediscovery/hub build
+```
+
+`dist/` then contains the catalogue, the skill READMEs and the packages,
+because Vite copies `public/` into it. A workspace-wide `pnpm build` rebuilds
+`dist/` without those env vars and without the exporter's output, so run the
+two commands again after one; otherwise `/site/catalog.json` falls back to
+`index.html` and the page reports a JSON parse error.
+
 ## Import the existing catalogue
 
 ```bash
