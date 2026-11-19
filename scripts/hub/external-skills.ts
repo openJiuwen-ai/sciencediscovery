@@ -90,7 +90,9 @@ function validateIndex(raw: string): ExternalIndex {
   return index;
 }
 
-export async function loadExternalSnapshot(source: { dir: string } | { url: string }): Promise<LoadedSnapshot> {
+export async function loadExternalSnapshot(
+  source: { dir: string } | { url: string },
+): Promise<LoadedSnapshot | null> {
   let indexBytes: Uint8Array;
   let tarGz: Uint8Array;
   if ("dir" in source) {
@@ -103,6 +105,10 @@ export async function loadExternalSnapshot(source: { dir: string } | { url: stri
       fetch(`${base}/${SNAPSHOT_INDEX}`, { signal }),
       fetch(`${base}/${SNAPSHOT_TARBALL}`, { signal }),
     ]);
+    // A fresh bucket has no snapshot until the sync workflow runs. That is not
+    // a build failure: the built-in catalogue publishes without it, exactly as
+    // a missing sessions index publishes an empty session list.
+    if (indexResponse.status === 404) return null;
     if (!indexResponse.ok) throw new Error(`external snapshot index download failed: ${indexResponse.status} ${base}`);
     if (!tarResponse.ok) throw new Error(`external snapshot download failed: ${tarResponse.status} ${base}`);
     indexBytes = new Uint8Array(await indexResponse.arrayBuffer());

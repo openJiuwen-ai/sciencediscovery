@@ -50,7 +50,8 @@ a server must enforce (size, traversal, zip bombs).
 | `HUB_SESSION_SECRET` | dev value | HMAC key for session tokens; set this in production |
 | `HUB_SESSION_TTL_SECONDS` | `604800` | Login lifetime |
 | `HUB_MAX_PACKAGE_BYTES` | `52428800` | Upload cap (50 MiB) |
-| `HUB_MAX_UNCOMPRESSED_BYTES` | `536870912` | Zip-bomb ceiling |
+| `HUB_MAX_UNCOMPRESSED_BYTES` | `536870912` | Archive-expansion ceiling |
+| `HUB_PREVIEW_MAX_BYTES` | `2097152` | Largest single file the Files tab previews |
 | `HUB_ALLOW_REGISTRATION` | `false` | Whether anyone may create an account |
 | `HUB_ADMIN_USERNAME` / `HUB_ADMIN_PASSWORD` | — | Optional administrator created at startup |
 | `VITE_HUB_API_BASE` | — | Build-time, site only: API prefix (e.g. `/api/v1`) so downloads resolve through the service |

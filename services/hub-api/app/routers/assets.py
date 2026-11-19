@@ -196,6 +196,7 @@ def read_version_files(
     with_content: str | None = Query(default=None),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
+    settings=Depends(get_settings),
     user: User | None = Depends(current_user),
 ) -> dict:
     asset = _get_asset(db, asset_id)
@@ -213,9 +214,19 @@ def read_version_files(
 
     content = None
     if with_content:
+        entry = next((item for item in row.manifest if item["path"] == with_content), None)
+        if entry is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="file not in package"
+            )
+        if entry["size"] > settings.preview_max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="file is too large to preview",
+            )
         try:
             data = storage.get(row.storage_key)
-            raw = read_member(data, with_content)
+            raw = read_member(data, with_content, max_bytes=settings.preview_max_bytes)
         except PackageError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         if raw is None:
@@ -258,8 +269,26 @@ async def upload_version(
     if not _owned(asset, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not the owner")
 
-    data = await file.read()
-    # Read then check: the client's Content-Length is advisory only.
+    # Read in bounded chunks. `UploadFile.read()` without a size would buffer
+    # whatever the client sends before the limit is ever consulted; a declared
+    # size is only advisory, so the running total is what enforces the cap.
+    if file.size is not None and file.size > settings.max_package_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"package is larger than {settings.max_package_bytes} bytes",
+        )
+    buffer = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > settings.max_package_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"package is larger than {settings.max_package_bytes} bytes",
+            )
+    data = bytes(buffer)
     try:
         info = validate_package(
             data,

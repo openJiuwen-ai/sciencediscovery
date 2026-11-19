@@ -81,6 +81,11 @@ class Settings:
     max_uncompressed_bytes: int = field(
         default_factory=lambda: _int("HUB_MAX_UNCOMPRESSED_BYTES", 512 * 1024 * 1024)
     )
+    # A single file previewed in the Files tab; a browser cannot render more
+    # than a token amount of text and the server should not inflate more.
+    preview_max_bytes: int = field(
+        default_factory=lambda: _int("HUB_PREVIEW_MAX_BYTES", 2 * 1024 * 1024)
+    )
 
     # Off by default: a public server should not let anyone create an account.
     # The first account can always register, which is how a fresh deployment

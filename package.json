@@ -41,6 +41,8 @@
     "hub:publish-sessions": "tsx scripts/hub/sessions-index.ts",
     "hub:sync-skills": "tsx scripts/hub/sync-external-skills.ts",
     "hub:test": "tsx --test scripts/hub/export.test.ts scripts/hub/external-skills.test.ts scripts/hub/sessions.test.ts",
+    "hub:typecheck": "pnpm --filter @sciencediscovery/hub typecheck",
+    "hub:build": "HUB_BASE_PATH=/site/ pnpm --filter @sciencediscovery/hub build",
     "jiuwenswarm:setup": "bash scripts/jiuwenswarm.sh setup",
     "jiuwenswarm:start": "bash scripts/jiuwenswarm.sh start",
     "jiuwenswarm:status": "bash scripts/jiuwenswarm.sh status",

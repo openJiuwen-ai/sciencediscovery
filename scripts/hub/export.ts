@@ -54,6 +54,10 @@ async function loadExternal(options: ExportOptions): Promise<ExternalSkills | nu
   const url = options.externalSkillsUrl ?? process.env.HUB_EXTERNAL_SKILLS_URL;
   if (!dir && !url) return null;
   const snapshot = await loadExternalSnapshot(dir ? { dir } : { url: url! });
+  if (!snapshot) {
+    console.warn("external skills snapshot is not published yet; building without it");
+    return null;
+  }
   return collectExternalSkills(snapshot);
 }
 
