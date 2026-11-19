@@ -845,6 +845,15 @@ test.describe("模型", () => {
     // A click on the field itself reopens the listing (not only the caret).
     await modal.getByPlaceholder("例如 deepseek-chat").click();
     await expect(listbox).toBeVisible();
+
+    // The caret closes the list it opened. A real pointer sequence is what
+    // catches the old order: the capture-phase outside handler closed the menu
+    // on the button's pointerdown, and the click that followed reopened it.
+    const caret = modal.locator(".field-combo-toggle");
+    await caret.click();
+    await expect(listbox).toHaveCount(0);
+    await caret.click();
+    await expect(listbox).toBeVisible();
   });
 
   test("the provider chooser picks a preset and closes one Escape at a time", async ({ page }) => {
