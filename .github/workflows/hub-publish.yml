@@ -189,7 +189,10 @@ jobs:
         run: |
           # Wipe first so a renamed asset cannot linger, then upload. The
           # first publish has no `site/` prefix yet, hence `|| true`.
+          # Upload `dist/`, not `public/`: Vite copies `public/` into `dist/`
+          # and adds `index.html` and the hashed bundle, so `public/` alone
+          # has no entry page and no JS.
           obsutil rm "obs://$OBS_BUCKET/site/" -r -f || true
-          obsutil cp ./apps/hub/public/ "obs://$OBS_BUCKET/site/" -r -f
-          obsutil cp ./apps/hub/public/index.html "obs://$OBS_BUCKET/site/index.html" -f \
+          obsutil cp ./apps/hub/dist/ "obs://$OBS_BUCKET/site/" -r -f
+          obsutil cp ./apps/hub/dist/index.html "obs://$OBS_BUCKET/site/index.html" -f \
             -meta="Content-Type:text/html"
