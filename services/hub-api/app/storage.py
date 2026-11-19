@@ -72,6 +72,10 @@ class Storage:
     def delete(self, key: str) -> None:
         raise NotImplementedError
 
+    def open_stream(self, key: str) -> tuple[object, int | None]:
+        """Yield the object in chunks, with its size when the backend knows it."""
+        raise NotImplementedError
+
 
 @dataclass
 class LocalStorage(Storage):
@@ -109,6 +113,21 @@ class LocalStorage(Storage):
         path = self._path(key)
         if path.is_file():
             path.unlink()
+
+    def open_stream(self, key: str):
+        path = self._path(key)
+        if not path.is_file():
+            raise StorageError(f"missing object: {key}")
+
+        def chunks():
+            with path.open("rb") as handle:
+                while True:
+                    block = handle.read(1024 * 1024)
+                    if not block:
+                        break
+                    yield block
+
+        return chunks(), path.stat().st_size
 
 
 class S3Storage(Storage):
@@ -172,6 +191,10 @@ class S3Storage(Storage):
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def open_stream(self, key: str):
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        return response["Body"].iter_chunks(1024 * 1024), response.get("ContentLength")
 
 
 def build_storage(settings) -> Storage:

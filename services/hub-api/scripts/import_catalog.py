@@ -59,6 +59,9 @@ class Artifact:
     # For a single file wrapped into an archive, the catalogue's digest is of
     # the file, not of the archive we build around it.
     original_sha256: str | None = None
+    # What the downloaded file should be called. A wrapped single file gets a
+    # .zip name because the bytes really are an archive.
+    package_name: str | None = None
 
 
 @dataclass
@@ -109,7 +112,7 @@ def _artifact_bytes(entry: dict, assets_root: Path, sessions_root: Path) -> Arti
         return None
     data = path.read_bytes()
     if data[:2] == b"PK":
-        return Artifact(data=data)
+        return Artifact(data=data, package_name=path.name)
     # A single JSON file (specialist, connector) becomes a one-entry archive so
     # every version has the same shape and the Files tab always has something
     # to list.
@@ -117,7 +120,9 @@ def _artifact_bytes(entry: dict, assets_root: Path, sessions_root: Path) -> Arti
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(path.name, data)
     return Artifact(
-        data=buffer.getvalue(), original_sha256=hashlib.sha256(data).hexdigest()
+        data=buffer.getvalue(),
+        original_sha256=hashlib.sha256(data).hexdigest(),
+        package_name=f"{path.stem}.zip",
     )
 
 
@@ -230,7 +235,7 @@ def import_catalog(
                 stats.created_versions += 1
                 continue
 
-            filename = Path(entry["download"]["url"]).name
+            filename = artifact.package_name or Path(entry["download"]["url"]).name
             key = package_key(
                 kind=kind,
                 publisher_id=user.id,
@@ -242,6 +247,7 @@ def import_catalog(
 
             if existing is not None and force:
                 existing.storage_key = key
+                existing.filename = filename
                 existing.sha256 = info.sha256
                 existing.size = info.size
                 existing.manifest = info.manifest

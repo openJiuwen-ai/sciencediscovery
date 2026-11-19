@@ -79,6 +79,12 @@ def test_approval_publishes_and_serves_the_bytes(client, register):
     assert data["sha256"] == hashlib.sha256(payload).hexdigest()
     assert data["url"].endswith(".zip")
 
+    # The save dialog reads the same bytes from the same-origin endpoint.
+    streamed = client.get(f"/api/v1/artifacts/{asset['id']}/content")
+    assert streamed.status_code == 200
+    assert streamed.content == payload
+    assert "attachment" in streamed.headers["content-disposition"]
+
     # The local backend serves the exact bytes the manifest promised.
     download = client.get(data["url"])
     assert download.status_code == 200

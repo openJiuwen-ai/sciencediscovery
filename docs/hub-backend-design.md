@@ -71,7 +71,11 @@ browser / desktop app
 
 The bucket never serves an anonymous request. `GET /api/v1/artifacts/{id}`
 resolves the version, checks visibility, and returns a URL that expires
-(`HUB_PRESIGN_SECONDS`, default 10 minutes). This is the same trade the
+(`HUB_PRESIGN_SECONDS`, default 10 minutes). A second route,
+`/api/v1/artifacts/{id}/content`, streams the same bytes through the service;
+the browser's save dialog uses it because a cross-origin read of a presigned
+URL would require a bucket CORS rule, which the hub's credentials do not
+include. This is the same trade the
 reference makes: control and auditability in exchange for a server on the read
 path and no CDN caching of downloads.
 

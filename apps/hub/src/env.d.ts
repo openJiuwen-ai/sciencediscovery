@@ -8,3 +8,17 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+// Chrome's File System Access API: a save dialog the page can write to. It is
+// optional in the type system because Firefox and Safari do not implement it.
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+}
+
+interface SaveFileHandle {
+  createWritable(): Promise<WritableStream<Uint8Array>>;
+}
+
+interface Window {
+  showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<SaveFileHandle>;
+}

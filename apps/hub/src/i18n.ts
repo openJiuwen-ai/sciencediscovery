@@ -65,6 +65,10 @@ const COPY = {
     zh: "该文件没有文本预览，请打开下载文件查看。",
   },
   readme: { en: "Readme", zh: "说明" },
+  readmeUnavailable: {
+    en: "This description is not available right now.",
+    zh: "说明暂时无法加载。",
+  },
   runtime: { en: "Runtime", zh: "运行时" },
   runAt: { en: "Run at", zh: "运行时间" },
   score: { en: "Score", zh: "分数" },
