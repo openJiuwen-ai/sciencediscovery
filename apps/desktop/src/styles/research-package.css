@@ -93,14 +93,15 @@
 .research-package-saved-row button { border:0; background:none; color:var(--primary); cursor:pointer; font-size:12px; padding:0; text-decoration:underline; }
 .research-package-saved-row .is-error { color:var(--danger); }
 
-/* Export progress and results stay in the conversation column, away from the sidebar. */
+/* The stack follows the conversation column and clears its header controls. */
 .research-toast-stack {
   display: flex; flex-direction: column; gap: 8px;
-  position: absolute; left: 16px; top: 16px; z-index: 60;
+  position: absolute; right: 16px; top: calc(var(--d-head) + 12px); z-index: 60;
+  max-width: calc(100% - 32px);
 }
 .research-toast {
   align-items: center; border-radius: 8px; box-shadow: 0 4px 16px rgba(16, 24, 40, .10);
-  display: flex; font-size: 12px; gap: 8px; max-width: 340px; min-width: 200px;
+  display: flex; font-size: 12px; gap: 8px; max-width: 340px; min-width: min(200px, 100%);
   padding: 10px 10px 10px 12px;
 }
 .research-toast.is-success { background: #f0f9ec; border: 1px solid #d6ebcf; color: #2f6b2f; }
