@@ -43,6 +43,7 @@ import type {
 } from "../api/types.js";
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { TEXT } from "../text.js";
+import { claimsEscape } from "./dialog-escape.js";
 import { providerName } from "./provider-name.js";
 import { ListSelect, type ListChoice } from "./settings/ListSelect.js";
 
@@ -275,6 +276,27 @@ function ModelComboBox({
     if (open && (disabled || listing.length === 0)) closeMenu();
   }, [closeMenu, disabled, listing.length, open]);
 
+  /**
+   * Escape belongs to the open listing wherever focus is.
+   *
+   * Clicking the list's padding or dragging its scrollbar leaves focus on the
+   * page, where the input's own keydown handler cannot see the key; the
+   * settings modal's document listener would then close the whole dialog.
+   * Claiming Escape in the capture phase keeps one Escape to one layer, the
+   * same way `ListSelect` does for the provider and protocol lists.
+   */
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!claimsEscape(event)) return;
+      event.preventDefault();
+      closeMenu();
+      inputRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [closeMenu, open]);
+
   useEffect(() => {
     if (!open || activeIndex < 0) return;
     listRef.current?.children[activeIndex]?.scrollIntoView({ block: "nearest" });
@@ -291,15 +313,6 @@ function ModelComboBox({
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape" && open) {
-      // Close only the dropdown here; the surrounding dialog (settings modal,
-      // wizard step) must not see this Escape — including when the active
-      // filter has emptied the menu.
-      event.preventDefault();
-      event.stopPropagation();
-      closeMenu();
-      return;
-    }
     if (!open || options.length === 0) {
       if (event.key === "ArrowDown" && listing.length > 0) {
         event.preventDefault();
