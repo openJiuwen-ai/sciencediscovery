@@ -17,7 +17,8 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "declaration": false
+    "declaration": false,
+    "jsx": "react-jsx"
   },
   "exclude": [],
   "include": [

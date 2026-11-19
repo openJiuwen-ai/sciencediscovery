@@ -1,5 +1,21 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+/**
+ * E2E-META
+ * Purpose: Exercise MCP server JSON paste and file import through the Desktop settings UI.
+ * Steps:
+ *   1. Open MCP settings and exercise the import menu and keyboard dismissal.
+ *   2. Preview valid and invalid JSON through both paste and file upload paths.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: in-memory MCP configuration only
+ * OtherExternal: none
+ * Credentials: fixture access token only
+ * CostSideEffects: isolated browser state only
+ */
 import { expect, test as base, type Page } from "@playwright/test";
 import { createJourneyReporter, type JourneyReporter } from "../../../test/helpers/journey-report.ts";
 import { installMockApi, TOKEN, TOKEN_STORAGE_KEY } from "./fixtures.js";

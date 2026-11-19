@@ -1,20 +1,28 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { backendName } from '../test/support/tagged/execution.mjs';
 import { changedPaths, documentationOnly } from './changed-paths.mjs';
 import { assessVersionChange, RELEASE_METADATA, VERSION_FILE, versionOf } from './release-version.mjs';
 
+import { webUiStSelection } from './web-ui-st.mjs';
+
 const distributionProfiles = ['pr', 'daily', 'release'];
+const desktopSharedTestFiles = new Set([
+  'apps/desktop/e2e/fixtures.ts',
+  'apps/desktop/e2e/playwright.config.ts',
+  'apps/desktop/e2e-real/support.ts',
+  'apps/desktop/e2e-real/playwright.config.ts',
+]);
 const desktopProfiles = ['daily', 'release'];
 const packageJobs = new Map([
   ['linux-windows', ['binary', 'windows-desktop']],
   ['macos', ['macos-desktop']],
   ['all', ['binary', 'windows-desktop', 'macos-desktop']],
 ]);
-const testJobs = ['ut', 'st', 'e2e-plan', 'e2e', 'real-merge', 'real-scheduled'];
+const testJobs = ['ut', 'st', 'e2e-plan', 'e2e', 'desktop-mocked', 'real-merge', 'real-scheduled'];
 const distributionJobs = ['binary', 'docker', 'windows-desktop', 'macos-desktop'];
 
 export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = null, packagePlatform = 'linux-windows') {
@@ -26,11 +34,19 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = 
   const selected = packaging ? packageJobs.get(packagePlatform) : [];
   if (!selected) throw new Error(`Unknown package platform: ${packagePlatform}`);
   const docs_only = !packaging && ['pull_request', 'push', 'merge_group'].includes(event) && documentationOnly(paths);
+  // Shared harness changes require the full mocked suite even in PRs.
+  const fullDesktop = profile !== 'pr' || paths?.some(path => desktopSharedTestFiles.has(path));
+  const desktopChangedSpecs = profile === 'pr' ? paths?.filter(path =>
+    /^apps\/desktop\/e2e\/[\w-]+\.spec\.ts$/u.test(path) && existsSync(path)) : [];
+  const desktop_specs = packaging || docs_only ? 'none' : fullDesktop ? 'all'
+    : desktopChangedSpecs?.length ? JSON.stringify([...new Set(desktopChangedSpecs)].sort()) : 'none';
+  const web_ui_st_specs = packaging || docs_only || profile !== 'pr' ? 'none' : webUiStSelection(paths);
   const distribution = distributionProfiles.includes(profile);
   const desktop = desktopProfiles.includes(profile);
   return {
     profile, backend: backendName(backend), test_layers: !packaging,
-    mocked: !packaging && profile !== 'pr', real: !packaging && profile !== 'pr',
+    desktop_specs, web_ui_st_specs,
+    mocked: !packaging && (profile !== 'pr' || web_ui_st_specs !== 'none'), real: !packaging && profile !== 'pr',
     package_platform: packaging ? packagePlatform : '',
     binary: distribution || selected.includes('binary'), distribution,
     windows_desktop: desktop || selected.includes('windows-desktop'),
@@ -127,7 +143,10 @@ export function gate(profile, needs) {
     return problems;
   }
   const required = ['policy', 'l1', 'ut', 'st'];
-  if (profile !== 'pr') required.push('e2e-plan', 'e2e');
+  const expectsWeb = profile !== 'pr' || (needs.policy?.outputs?.web_ui_st_specs ?? 'none') !== 'none';
+  if (expectsWeb) required.push('e2e-plan', 'e2e');
+  const expectsDesktop = profile !== 'pr' || (needs.policy?.outputs?.desktop_specs ?? 'none') !== 'none';
+  if (expectsDesktop) required.push('desktop-mocked');
   const realJob = profile === 'merge' ? 'real-merge' : profile === 'pr' ? null : 'real-scheduled';
   if (realJob) required.push(realJob);
   // Linux and Docker distributions run on PRs and nightly/release. Both
@@ -137,7 +156,10 @@ export function gate(profile, needs) {
   const problems = required.filter(name => needs[name]?.result !== 'success').map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
   // A scheduled job may not quietly run (or fail) outside the selected policy.
   const inactive = ['real-merge', 'real-scheduled'].filter(name => name !== realJob);
-  if (profile === 'pr') inactive.push('e2e-plan', 'e2e');
+  if (profile === 'pr') {
+    if (!expectsWeb) inactive.push('e2e-plan', 'e2e');
+    if (!expectsDesktop) inactive.push('desktop-mocked');
+  }
   if (!distributionProfiles.includes(profile)) inactive.push('binary', 'docker');
   if (!desktopProfiles.includes(profile)) inactive.push('windows-desktop', 'macos-desktop');
   for (const name of inactive) {

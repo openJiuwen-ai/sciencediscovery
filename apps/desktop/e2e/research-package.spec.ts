@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const kind of ["continuation", "branch"] as const) {
-  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, async ({ page }, info) => {
+  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, { tag: "@ui-st" }, async ({ page }, info) => {
     const source = Object.assign(makeSession({ messages }), kind === "continuation" ? { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } } : {});
     const mock = await installMockApi(page, { sessions: [source] });
     const keys: string[] = [];
@@ -223,7 +223,8 @@ test("the import action defaults to no project and allows an existing project", 
     await expect(page.getByRole("button", { name: "导入会话", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "在「默认项目」中导入会话" })).toHaveCount(0);
     await page.getByRole("button", { name: "新建会话", exact: true }).click();
-    await expect(page.locator(".landing")).toBeVisible();
+    await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
+    await expect(page.locator("#composer-textarea")).toBeVisible();
     expect(targets).toEqual([]);
   });
   for (const project of ["inbox-1", "project-1"]) {
@@ -259,7 +260,7 @@ test("the import action defaults to no project and allows an existing project", 
     });
   }
   expect(targets).toEqual(["inbox-1", "project-1"]);
-  await info.attach("journey-report", { body: "Hover-only import, unchanged create actions, no-project default and optional project assignment verified; import opens the read-only snapshot and the explicit continue action creates the writable research copy.", contentType: "text/plain" });
+  await info.attach("journey-report", { body: "Sidebar import, independent create action, no-project default and optional project assignment verified; import opens the read-only snapshot and the explicit continue action creates the writable research copy.", contentType: "text/plain" });
 });
 
 test("reply menu branches at the selected reply without its later conversation", async ({ page }, info) => {

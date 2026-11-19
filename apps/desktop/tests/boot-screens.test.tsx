@@ -75,7 +75,7 @@ describe("the offline screen", () => {
   });
 });
 
-describe("the first-run setup wizard", () => {
+describe("the first-run setup wizard environment and validation", () => {
   it("opens on the workspace step, which records a directory without moving data", () => {
     const markup = renderToStaticMarkup(
       <SetupWizard

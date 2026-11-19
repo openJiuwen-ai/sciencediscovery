@@ -56,12 +56,18 @@ export function discoverFiles(root, paths) {
 }
 const writeJSON = (path, data) => writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
 const readJSON = path => JSON.parse(readFileSync(path, 'utf8'));
-function invoke(command, args, { root, env, outputDir, name, timeoutMs = 120_000 }) {
+// Collection imports the complete source inventory (including TSX and API
+// fixtures). On a WSL checkout mounted from Windows this can exceed two
+// minutes even when every module is healthy. Give collection five minutes and
+// leave an explicit marker when the process really timed out, so a slow host
+// cannot be mistaken for a dynamic-registration failure.
+function invoke(command, args, { root, env, outputDir, name, timeoutMs = 300_000 }) {
   const isolatedEnv = { ...env };
   // Nested node:test processes must not inherit the parent's private worker flag.
   delete isolatedEnv.NODE_TEST_CONTEXT;
   const completed = spawnSync(command, args, { cwd: root, env: isolatedEnv, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
-  writeFileSync(join(outputDir, `${name}.log`), `${completed.stdout ?? ''}\n${completed.stderr ?? ''}`);
+  const timeout = completed.error?.code === 'ETIMEDOUT' ? `\nTIMEOUT after ${timeoutMs}ms\n` : '';
+  writeFileSync(join(outputDir, `${name}.log`), `${completed.stdout ?? ''}\n${completed.stderr ?? ''}${timeout}`);
   return completed;
 }
 // Plugin autoload stays off, so nothing installed in a project's environment

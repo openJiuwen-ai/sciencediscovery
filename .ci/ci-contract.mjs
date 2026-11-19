@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 
 import { nodeSources } from "../test/support/tagged/profiles.mjs";
 import * as defaultCatalog from "./test-catalog.mjs";
+import { sourceTestMapProblems } from "./source-test-map.mjs";
 
 export const defaultRepositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -225,6 +226,6 @@ export async function utContractProblems(catalog = defaultCatalog, repositoryRoo
 }
 
 export async function assertCiContract(catalog = defaultCatalog, repositoryRoot = defaultRepositoryRoot) {
-  const problems = [...catalogProblems(catalog), ...(await utContractProblems(catalog, repositoryRoot))];
+  const problems = [...catalogProblems(catalog), ...(await utContractProblems(catalog, repositoryRoot)), ...(await sourceTestMapProblems(repositoryRoot))];
   if (problems.length > 0) throw new Error(`Invalid CI test catalog:\n- ${problems.join("\n- ")}`);
 }

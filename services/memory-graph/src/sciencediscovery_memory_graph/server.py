@@ -120,6 +120,7 @@ def export_research_package(body: PackageScope) -> dict[str, Any]:
     try:
         return export_snapshot(body.session_ids)
     except (ValueError, RuntimeError) as exc:
+        log.warning("research package graph export failed: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

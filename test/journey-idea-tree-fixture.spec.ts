@@ -87,7 +87,10 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await expect(page.getByLabel("研究目标与约束")).toHaveCount(0);
       await expect(page.getByLabel("给定材料", {exact: true})).toHaveCount(0);
       await expect(page.getByRole("dialog", {name: explorerName})).toHaveCount(0);
-      await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE"))).toBe(true);
+      // This signal spans the main Agent's tool handoff and the Python engine's
+      // first provider request. Allow a cold start while still requiring that
+      // the exact pinned design prompt reaches the model.
+      await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE")), { timeout: 30_000 }).toBe(true);
       await expect(page.getByText(/已启动 Idea Tree 研究/)).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();
       await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");

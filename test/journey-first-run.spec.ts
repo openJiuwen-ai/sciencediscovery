@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { expect, type Page } from "@playwright/test";
 
@@ -24,7 +26,8 @@ import {
   requireFirstRunState,
   scriptedModel,
   sendUserMessage,
-  waitForRunTerminal,
+  waitForMcpTool,
+  type ScriptedModelStep,
   type JourneyFixture,
   type JourneyModel,
   type JourneyProject,
@@ -44,20 +47,20 @@ test.use({ locale: "zh-CN" });
  *   2. Create a Project through the UI, then explicitly select the newly registered model for the task.
  *   3. Verify empty sessions keep a neutral heading and usable composer with no connectors, literature connectors, or PubMed/UniProt.
  *   4. Send a shell-backed request, inspect its marked tool input/output, and observe completion.
- *   5. Send a second request proving Workspace files persist but Shell cwd/export do not.
+ *   5. Send a second request proving Workspace files persist but Shell cwd/export do not, and publish the verified file with provenance.
  *   6. Reload and verify the same Project, Session, messages with their send times, and expandable tool history remain.
  * Environment: Isolated local stack at E2E_BASE_URL with an empty model/project catalog; zh-CN browser locale and persisted UI locale.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; two deterministic user turns.
  * WebSearch: none
  * PaperSources: none
- * MCP: none
+ * MCP: Real SDK stdio echo in the second Run.
  * OtherExternal: none — shell runs inside the local sandbox and non-local browser requests are aborted.
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; temporary model and Project records are deleted in finally.
  */
 test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, async ({ journey, page, playwright }, testInfo) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   journey.scenario({
     goal: "一位第一次打开 ScienceDiscovery 的中文用户，要把工作台配起来，"
       + "并确认产品真的在本机执行命令、保留工作区文件而不继承 Shell 状态，刷新之后工作也还在。",
@@ -73,6 +76,9 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
   const firstMarker = `J1-FIRST-${Date.now()}`;
   const persistedFileValue = `J1-FILE-${Date.now()}`;
   const secondMarker = `J1-SECOND-${Date.now()}`;
+  const mcpMarker = `first-run-mcp-${Date.now()}`;
+  // Settings supply the tool name after the API has discovered the connector.
+  const echoStep: ScriptedModelStep = { tool: "", arguments: { text: mcpMarker } };
   const stub = await scriptedModel([
     [
       {
@@ -92,6 +98,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         delayMs: 700,
         tool: "run_shell",
       },
+      echoStep,
+      { arguments: { path: "scratch/value.txt" }, tool: "declare_artifact" },
       { text: `第二次分析已完成，从工作区文件读回 ${persistedFileValue}，Shell 状态没有继承。` },
     ],
   ]);
@@ -103,6 +111,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
   let providerName = "";
   let providerId = "";
   let model: JourneyModel | undefined;
+  let mcpId: string | undefined;
+  let skill: { id: string; hash: string } | undefined;
 
   const apiJsonSafe = async (path: string, init?: { data?: unknown; method?: string }) => {
     const response = await page.request.fetch(`${apiBaseUrl()}${path}`, {
@@ -277,6 +287,30 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       },
     );
 
+    await journey.step("给首个会话启用本地 MCP 和 Skill", "会话保留两个能力，MCP 工具目录和 Skill 哈希可查。", async () => {
+      const connector = await api.post("/api/mcp/servers", { data: {
+        name: mcpMarker, command: process.execPath,
+        args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: true,
+      } });
+      expect(connector.status()).toBe(201);
+      mcpId = (await connector.json() as { id: string }).id;
+      const echo = await waitForMcpTool(page, mcpId, "echo");
+      echoStep.tool = `mcp__${mcpId}__${echo.id}`;
+      const created = await api.post("/api/skills", { data: {
+        name: mcpMarker, description: "Local onboarding research skill", instructions: "# Workflow\n\nCheck the workspace evidence before publishing.",
+      } });
+      expect(created.status()).toBe(201);
+      const { id, hash } = await created.json() as { id: string; hash: string };
+      skill = { id, hash };
+      expect(await apiJsonSafe(`/api/skills/${skill.id}`)).toMatchObject(skill!);
+      const updated = await api.patch(`/api/sessions/${fixture!.session.id}`, { data: {
+        enabledConnectorIds: [mcpId], enabledSkillIds: [skill.id], skillSelectionMode: "selected",
+      } });
+      expect(updated.ok()).toBe(true);
+      expect(await updated.json()).toMatchObject({ enabledConnectorIds: [mcpId] });
+      await page.reload();
+    });
+
     await journey.step(
       "发出第一条分析任务并批准权限请求",
       "任务发出后主按钮变成可点的「停止当前运行」；受控动作的审批卡出现在主对话，批准后本轮运行完成。",
@@ -317,7 +351,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       "第二条命令从工作区文件读回保存的值，同时确认 cwd 回到工作区根、上一条 export 不存在。",
       async () => {
         const secondRun = await sendUserMessage(page, fixture!.session.id, secondPrompt);
-        const secondTerminal = await waitForRunTerminal(page, fixture!.session.id, secondRun.id);
+        const { run: secondTerminal } = await handlePermissionsUntilTerminal(page, fixture!.session.id, secondRun.id);
         expect(secondTerminal.status).toBe("completed");
         const secondTool = await expandToolStep(page, { contains: secondMarker });
         await expect(secondTool).toContainText(`${secondMarker}:${persistedFileValue}`);
@@ -326,9 +360,33 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       },
     );
 
+    await journey.step("读取批准执行生成的产物及来源", "产物只有一个版本，字节与首次批准执行写入的值一致。", async () => {
+      const scope = `/api/sessions/${fixture!.session.id}`;
+      const artifacts = await apiJsonSafe(`${scope}/artifacts`) as Array<{ id: string }>;
+      expect(artifacts).toHaveLength(1);
+      const versions = await apiJsonSafe(`${scope}/artifacts/${artifacts[0]!.id}/versions`) as Array<{
+        id: string; content: { hash: string }; version: number;
+      }>;
+      expect(versions).toHaveLength(1);
+      const version = versions[0]!;
+      expect(await apiJsonSafe(`${scope}/mcp/invocations`)).toContainEqual(expect.objectContaining({ sourceId: mcpId, status: "succeeded" }));
+      expect(await apiJsonSafe(`${scope}/prompt-manifests`)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ skillRefs: expect.arrayContaining([expect.objectContaining(skill!)]) }),
+      ]));
+      expect(version.version).toBe(1);
+      expect(version.content.hash).toBe(createHash("sha256").update(persistedFileValue).digest("hex"));
+      const content = await api.get(`${scope}/artifact-versions/${version.id}/content`);
+      expect(content.ok()).toBe(true);
+      expect(await content.text()).toBe(persistedFileValue);
+      const provenance = await apiJsonSafe(`${scope}/artifact-versions/${version.id}/provenance`);
+      expect(provenance).toMatchObject({ version: { id: version.id, content: version.content } });
+      const file = await apiJsonSafe(`${scope}/workspace/provenance?path=scratch%2Fvalue.txt`);
+      expect(file).toMatchObject({ currentRevision: { toolName: "run_shell", contentHash: version.content.hash } });
+    });
+
     await journey.step(
       "刷新页面后回到同一个会话",
-      "两轮的用户消息都还在，各自带发送时间；两条工具步骤都还在，展开后仍能看到上一轮读回的值。",
+      "两轮的用户消息都还在，各自带发送时间；工具步骤都还在，展开后仍能看到上一轮读回的值。",
       async () => {
         await page.reload();
         await openProjectSession(page, fixture!);
@@ -337,9 +395,9 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         // 每条消息显示发送时间（本地时间，YYYY-MM-DD HH:MM:SS），刷新后仍可读。
         await expect(page.locator(".message.user").filter({ hasText: firstPrompt })
           .locator(".message-time")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-        // Each run exposes the requested shell tool on its first model step.
+        // Both shell steps, the MCP call and the artifact declaration survive the reload.
         await expect(page.getByRole("region", { name: "Agent 活动" }).locator("details.timeline-disclosure.tool"))
-          .toHaveCount(2);
+          .toHaveCount(4);
         await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(persistedFileValue);
       },
     );
@@ -421,6 +479,8 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     } catch {
       // Best-effort cleanup; the journey result is authoritative.
     }
+    if (mcpId) await api.delete(`/api/mcp/servers/${mcpId}`).catch(() => undefined);
+    if (skill) await api.delete(`/api/skills/${skill.id}`).catch(() => undefined);
     await api.dispose().catch(() => undefined);
     await stub.stop();
   }

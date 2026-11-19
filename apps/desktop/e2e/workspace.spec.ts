@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop workspace journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

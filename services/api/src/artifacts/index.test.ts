@@ -115,6 +115,9 @@ test("artifact provenance resolves process environment for store and graph paths
 
   const graph = {
     getArtifactProvenance: async () => ({
+      artifactId: version.artifactId,
+      version: version.version,
+      contentHash: version.content.hash,
       codeHash: currentRun.code.hash,
       codeId: currentRun.id,
       exitCode: currentRun.exitCode,
@@ -131,6 +134,15 @@ test("artifact provenance resolves process environment for store and graph paths
   assert.equal("sourceSessionDeleted" in fromStore, false);
   assert.equal("sourceSessionDeleted" in fromGraph, false);
 
+  assert.equal(fromGraph.executionLog.length, 1);
+  for (const mismatch of [{ artifactId: "other" }, { version: version.version + 1 }, { contentHash: "stale-hash" }]) {
+    const staleGraph = {
+      getArtifactProvenance: async () => ({ ...await graph.getArtifactProvenance(version.artifactId, version.version, version.sessionId), ...mismatch }),
+    } as unknown as typeof graph;
+    const fallback = await artifactVersionProvenance(store, recorder, staleGraph, "session-1", version.id);
+    assert.deepEqual(fallback, fromStore, `stale graph metadata: ${JSON.stringify(mismatch)}`);
+  }
+
   // The source-Session gate itself: once the version's Session is gone the
   // runs are unreachable, so both paths return an empty log and flag it.
   const orphanedStore = storeWithSession(() => undefined);
@@ -140,4 +152,36 @@ test("artifact provenance resolves process environment for store and graph paths
   const orphanedFromGraph = await artifactVersionProvenance(orphanedStore, recorder, graph, "session-1", version.id);
   assert.deepEqual(orphanedFromGraph.executionLog, []);
   assert.equal(orphanedFromGraph.sourceSessionDeleted, true);
+});
+test("artifact provenance falls back to the legacy store when the graph is disabled or unavailable", async () => {
+  const currentRun = executionRun("run-current", null);
+  const store = {
+    getArtifactVersion: () => version,
+    getSession: (id: string) => id === version.sessionId ? { id } : undefined,
+    listEnvironmentRevisions: () => [],
+    listExecutionRuns: async () => [currentRun],
+    listPromptManifests: async () => [],
+    listReviews: async () => [],
+    readMessages: async () => [],
+  } as unknown as Parameters<typeof artifactVersionProvenance>[0];
+  const recorder = {
+    cas: {
+      read: async (hash: string) => Buffer.from(hash.endsWith("code") ? "legacy-code" : hash.endsWith("stdout") ? "legacy-output" : ""),
+    },
+  } as unknown as Parameters<typeof artifactVersionProvenance>[1];
+  const graph = {
+    getArtifactProvenance: async () => ({
+      codeHash: null,
+      codeId: null,
+      exitCode: null,
+      finishedAt: null,
+      status: null,
+      reason: "memory_graph_unreachable",
+    }),
+  } as unknown as NonNullable<Parameters<typeof artifactVersionProvenance>[2]>;
+
+  const result = await artifactVersionProvenance(store, recorder, graph, "session-1", version.id);
+  assert.equal(result.code[0]?.code, "legacy-code");
+  assert.equal(result.executionLog[0]?.stdout, "legacy-output");
+  assert.equal(result.executionLog[0]?.status, "succeeded");
 });

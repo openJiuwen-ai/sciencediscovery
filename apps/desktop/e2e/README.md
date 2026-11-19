@@ -15,6 +15,15 @@ The [MCP stack journey](../e2e-stack/README.md) uses a real local API, Runner,
 and SDK MCP server with a deterministic local model. It covers creation,
 editing, chat invocation, and deletion through the desktop UI.
 
+In PR CI, a changed Desktop E2E spec runs the affected spec. Changes to the
+shared Desktop mock fixture or Playwright configuration run the full mocked
+suite. Desktop source changes are covered by the full Desktop UI-ST and mocked
+suites on merge candidates and scheduled profiles, so they do not select a
+Desktop browser job in the PR profile. Merge, nightly and release also run the
+continuous `@ui-st` subset via `.ci/run-desktop-e2e.mjs ui-st`. Both modes
+collect a Playwright plan before execution and reconcile identities from the
+execution report before the gate accepts the run.
+
 ## What runs
 
 `playwright.config.ts` starts the desktop Vite app on port 4175. `fixtures.ts`
@@ -40,14 +49,13 @@ are the shared `.e2e/browsers` set. Neither is committed.
 
 Run one file by appending its name, for example `boot.spec.ts`.
 
-## This suite is a local gate, not a CI one
+## CI entry
 
-No workflow runs `apps/desktop/e2e`: neither the config nor its port (4175)
-appears under `.github` or `.ci`, and `pnpm test` only runs
-`apps/desktop/tests/*.test.ts{,x}`. A spec added here is evidence when someone
-runs it by hand, and nothing will notice a regression in it. Wire it into a
-layer (pinned to the same Chromium as `.e2e`) or say plainly, in the PR that
-adds a spec, that the evidence is local — do not describe it as a CI gate.
+This suite is catalogued as `e2e.desktop-mocked`. CI invokes it through
+`.ci/run-desktop-e2e.mjs mocked`, using the shared pinned Chromium preparation
+and recording a blocked result when that preparation is missing. The real
+counterpart is the separate `e2e.desktop-real` entry, so real evidence can
+never be counted as mock evidence.
 
 ## Specs
 

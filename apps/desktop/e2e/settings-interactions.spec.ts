@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop settings interactions journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -589,7 +605,7 @@ test.describe("MCP 服务器", () => {
     expect(mock.state.mcpServers[0]?.enabled).toBe(true);
   });
 
-  test("a rejected default selection keeps the saved value and allows retry", async ({ page }) => {
+  test("a rejected default selection keeps the saved value and allows retry", { tag: "@ui-st" }, async ({ page }) => {
     const options = {
       mcpSources: sources,
       fail: { message: "selection save refused", method: "PUT", path: "/api/settings" },
@@ -961,12 +977,15 @@ test.describe("技能", () => {
     expect(mock.calls.some((call) => call.path.includes("skills-by-id"))).toBe(false);
   });
 
-  test("a card opens to the skill's source, version and file count", async ({ page }) => {
+  test("a card opens to the skill's source and instructions", async ({ page }) => {
     await installMockApi(page, {
       models: MODELS,
       projectSettings: { effective: { enabledSkillIds: [] }, overrides: {}, sources: {} },
       skills,
     });
+    await page.route("**/api/skills/skill-2", route => route.fulfill({ json: {
+      ...skills[1], frontmatter: { license: "Apache-2.0" }, instructions: "读取分子结构并生成图像。", resources: [],
+    } }));
     const dialog = await openSettings(page, "技能");
     const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
 
@@ -976,8 +995,8 @@ test.describe("技能", () => {
     const detail = dialog.locator(".skill-detail");
     await expect(detail).toBeVisible();
     await expect(detail.locator(".skill-source-badge")).toContainText("内置");
-    await expect(detail).toContainText("画分子图");
-    await expect(detail.locator(".skill-detail-file")).toContainText("画分子图");
+    await expect(detail.locator(".skill-detail-description")).toHaveText("画分子图");
+    await expect(detail.locator(".skill-detail-file")).toContainText("读取分子结构并生成图像。");
   });
 
   test("switching back paints the remembered list before the refresh answers", async ({ page }) => {

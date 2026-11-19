@@ -4,7 +4,7 @@
 /**
  * E2E-META
  * Purpose: Use the same Runner catalog, connection, execution and workspace workflow locally and remotely.
- * Steps: Start API/local Runner plus a separate-store Runner; select each Runner and submit foreground/background jobs; inspect wake results and retained logs; continue the session.
+ * Steps: Run local/remote foreground and background jobs, then deny and approve a remote sandbox operation, explicitly pull its output, declare an artifact and remove the remote workspace.
  * Environment: Committed and built task worktree, production server CLIs, ephemeral loopback ports, separate API/remote CAS directories.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub, which reads execution_status on wake.
@@ -19,14 +19,14 @@
  */
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim(), "", "Commit candidate before E2E");
-const root = resolve(".tmp", `runner-location-${randomUUID()}`);
+const root = process.env.E2E_REPORT_DIR ? resolve(process.env.E2E_REPORT_DIR) : resolve(".tmp", `runner-location-${randomUUID()}`);
 await mkdir(root, { recursive: true });
 const dataDir = resolve(root, "api-data");
 const remoteDataDir = resolve(root, "remote-data");
@@ -38,6 +38,8 @@ let logs = "";
 let api;
 let runnerId;
 let remoteRunnerId;
+const governedPath = "approved-result.txt";
+const governedContent = "approved remote sandbox result\n";
 const redact = (value) => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 const stub = createServer(async (request, response) => {
   try {
@@ -51,7 +53,8 @@ const stub = createServer(async (request, response) => {
     const results = messages.slice(lastUser + 1).filter((message) => message.role === "tool");
     const wake = prompt.includes("[Execution notifications]");
     let call;
-    if (wake) {
+    const governed = messages.some(message => String(message.content).startsWith("Governed runner:"));
+    if (wake && !governed) {
       const previousCalls = messages.slice(0, lastUser).flatMap((message) => message.tool_calls ?? []);
       assert.equal(previousCalls.filter((item) => item.function.name === "run_shell").length, 1, "wake retains the completed submission's tool history");
       const notifications = JSON.parse(prompt.slice(prompt.indexOf('[{"')));
@@ -61,6 +64,16 @@ const stub = createServer(async (request, response) => {
         assert.equal(result.state, "completed");
         assert.equal(result.provenance, "committed");
         assert.match(result.result.stdout, /runner-location-complete/);
+      }
+    } else if (prompt.startsWith("Governed runner:") && !results.length) {
+      const path = prompt.endsWith("deny") ? "denied-result.txt" : governedPath;
+      call = { name: "run_shell", arguments: { runner_id: remoteRunnerId,
+        command: `printf '%s\\n' '${governedContent.trim()}' > ${path}`, wait_ms: 20000 } };
+    } else if (prompt === "Publish the approved remote output") {
+      if (!results.length) {
+        call = { name: "sync_remote_workspace", arguments: { runner_id: remoteRunnerId, operation: "pull", paths: [governedPath] } };
+      } else if (results.length === 1) {
+        call = { name: "declare_artifact", arguments: { path: governedPath } };
       }
     } else if (prompt.startsWith("Run remote") && !results.length) {
       const background = prompt.includes("background");
@@ -110,9 +123,12 @@ async function start(kind, extra = {}) {
   });
   return origin;
 }
-async function json(path, body) {
-  const response = await fetch(`${api}${path}`, { headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    ...(body ? { method: "POST", body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
+async function request(path, body, method = body ? "POST" : "GET") {
+  return fetch(`${api}${path}`, { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
+}
+async function json(path, body, method) {
+  const response = await request(path, body, method);
   const text = await response.text();
   assert.ok(response.ok, `${path}: ${response.status}: ${redact(text)}`);
   return JSON.parse(text);
@@ -121,6 +137,7 @@ async function step(name, expected, operation) {
   try { steps.push({ name, expected, actual: await operation(), status: "PASS" }); }
   catch (error) { steps.push({ name, expected, actual: redact(error.stack), status: "FAIL" }); throw error; }
 }
+const governedOnly = process.argv.includes("--governed-only");
 let outcome = "FAIL";
 try {
   await new Promise((done) => stub.listen(0, "127.0.0.1", done));
@@ -128,7 +145,13 @@ try {
     const local = await start("runner");
     const remote = await start("runner", { SCIENCE_AGENT_DATA_DIR: remoteDataDir });
     api = await start("api", { SCIENCE_AGENT_RUNNER_URL: local });
-    for (const origin of [local, remote, api]) assert.equal((await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+    for (const origin of [local, remote, api]) {
+      await until(async () => {
+        const response = await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${token}` } });
+        await response.body?.cancel();
+        return response.ok;
+      });
+    }
     const url = new URL(remote);
     const host = await json("/api/runners", { alias: "separate-store", connectionKind: "direct",
       endpoint: { host: url.hostname, port: Number(url.port), protocol: "http" }, token });
@@ -141,7 +164,8 @@ try {
   const model = await json("/api/models", { name: "Remote wake journey", model: "wake-journey", apiToken: token,
     baseUrl: `http://127.0.0.1:${stub.address().port}/v1` });
   const project = await json("/api/projects", { name: "Remote execution wake" });
-  for (const id of ["local", remoteRunnerId]) {
+  if (governedOnly) assert.equal((await json(`/api/runners/${remoteRunnerId}/connect`, {})).state, "ready");
+  for (const id of governedOnly ? [] : ["local", remoteRunnerId]) {
     runnerId = id;
     assert.equal((await json(`/api/runners/${id}/connect`, {})).state, "ready");
     const connectLog = await json(`/api/runners/${id}/connect-log`);
@@ -196,6 +220,77 @@ try {
     });
   }
   }
+  await step("Remote sandbox permission, publication and cleanup", "Denial leaves no output; approval creates one artifact with a verifiable version and provenance; cleanup removes the remote copy.", async () => {
+    const session = await json(`/api/projects/${project.id}/sessions`, { title: "Governed remote output", modelId: model.id,
+      runnerIds: [remoteRunnerId], approvalMode: "ask_for_dangerous" });
+    const scope = `/api/sessions/${session.id}`;
+    const remoteWorkspace = `/api/runners/${remoteRunnerId}/workspaces/${session.id}`;
+    const waitCompleted = async (runId) => until(async () => {
+      const run = (await json(`${scope}/runs`)).find((item) => item.id === runId);
+      assert.ok(run);
+      assert.ok(!["failed", "cancelled"].includes(run.status), run.error ?? run.status);
+      return run.status === "completed";
+    });
+    for (const [suffix, decision] of [["deny", "deny"], ["approve", "allow_once"]]) {
+      const run = await json(`${scope}/runs`, { content: `Governed runner: ${suffix}` });
+      let pending;
+      await until(async () => {
+        pending = (await json(`/api/permission-requests?sessionId=${session.id}`)).find((item) => item.state === "pending");
+        const current = (await json(`${scope}/runs`)).find((item) => item.id === run.id);
+        assert.ok(pending || !["completed", "failed", "cancelled"].includes(current.status), `Run ended without permission: ${current.status}`);
+        return pending;
+      });
+      assert.equal((await json(`${scope}/execution-runs`)).length, 0);
+      await json(`/api/permission-requests/${pending.id}/decision`, { decision });
+      await waitCompleted(run.id);
+      if (decision === "deny") assert.equal((await json(`${scope}/execution-runs`)).length, 0);
+    }
+    const [execution, ...extraExecutions] = await json(`${scope}/execution-runs`);
+    assert.equal(extraExecutions.length, 0);
+    assert.equal(execution.runnerId, remoteRunnerId);
+    assert.equal(execution.sandbox, "bubblewrap");
+    assert.equal(execution.exitCode, 0);
+    assert.deepEqual((await json(`${remoteWorkspace}/files`)).files.map(({ path }) => path), [governedPath]);
+    assert.equal((await request(`${scope}/file?path=${governedPath}`)).status, 404);
+    const publication = await json(`${scope}/runs`, { content: "Publish the approved remote output" });
+    const approvedTransfers = new Set();
+    await until(async () => {
+      const current = (await json(`${scope}/runs`)).find((item) => item.id === publication.id);
+      assert.ok(current);
+      assert.ok(!["failed", "cancelled"].includes(current.status), current.error ?? current.status);
+      if (current.status === "completed") return true;
+      const permissions = await json(`/api/permission-requests?sessionId=${session.id}`);
+      for (const { id, state } of permissions) {
+        if (state !== "pending" || approvedTransfers.has(id)) continue;
+        await json(`/api/permission-requests/${id}/decision`, { decision: "allow_once" });
+        approvedTransfers.add(id);
+      }
+      return false;
+    });
+    const [transfer, ...extraTransfers] = await json(`${scope}/remote-workspace/sync-records`);
+    assert.equal(extraTransfers.length, 0);
+    assert.equal(transfer.status, "completed");
+    const artifacts = await json(`${scope}/artifacts`);
+    assert.equal(artifacts.length, 1);
+    const versions = await json(`${scope}/artifacts/${artifacts[0].id}/versions`);
+    assert.equal(versions.length, 1);
+    const [version] = versions;
+    assert.equal(version.version, 1);
+    assert.equal(version.content.hash, createHash("sha256").update(governedContent).digest("hex"));
+    const versionUrl = `${scope}/artifact-versions/${version.id}`;
+    const body = await request(`${versionUrl}/content`);
+    assert.equal(body.status, 200);
+    assert.equal(await body.text(), governedContent);
+    assert.deepEqual((await json(`${versionUrl}/provenance`)).version, version);
+    const source = (await json(`${scope}/workspace/provenance?path=${governedPath}`)).currentRevision;
+    assert.equal(source.contentHash, version.content.hash);
+    assert.equal(source.originMeta.runnerId, remoteRunnerId);
+    assert.equal(source.originMeta.transferId, transfer.id);
+    assert.deepEqual(await json(remoteWorkspace, undefined, "DELETE"), { deleted: true });
+    assert.deepEqual((await json(`${remoteWorkspace}/files`)).files, []);
+    assert.equal(await (await request(`${versionUrl}/content`)).text(), governedContent);
+    return `Session ${session.id}, remote Runner ${remoteRunnerId}, ExecutionRun ${execution.id}, transfer ${transfer.id}, artifact version ${version.id}, hash ${version.content.hash}.`;
+  });
   if (process.argv.includes("--browser")) await step(`${steps.length + 1}. 浏览器验证相同位置交互与 SSH 兼容`, "共同目录、工作区、失败重试、窄屏、SSH/NPU 设置旅程均通过。", async () => {
     const child = spawn("npm", ["--prefix", ".e2e", "run", "test:mocked", "--", "journey-runner-locations.spec.ts", "journey-ssh-remote-runner.spec.ts", "journey-npu-cards.spec.ts"], {
       stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TMPDIR: root, E2E_BASE_URL: api, E2E_API_URL: api, E2E_API_TOKEN: token,
@@ -209,7 +304,7 @@ try {
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
-  await writeFile(resolve(root, "report.md"), `# Runner location journey\n\nResult: ${outcome}\n\nTarget: ${sha}\n\nCommand: node test/api/runner-location-journey.mjs\n\nEnvironment: production API/Runner CLIs, separate remote CAS, loopback model stub; no SSH/NPU hardware or Web checks. Model calls: ${modelCalls.length}.\n\n${steps.map((item) => `## ${item.name}\n\nExpected: ${item.expected}\n\nActual: ${item.actual}\n\n${item.status}\n`).join("\n")}\n## Diagnostic log\n\n\`\`\`text\n${logs.slice(-5000)}\n\`\`\`\n`);
+  await writeFile(resolve(root, "report.md"), `# Runner location journey\n\nResult: ${outcome}\n\nTarget: ${sha}\n\nCommand: node test/api/runner-location-journey.mjs${governedOnly ? " --governed-only" : ""}\n\nEnvironment: production API/Runner CLIs, separate remote CAS, loopback model stub; no SSH/NPU hardware or Web checks. Model calls: ${modelCalls.length}.\n\n${steps.map((item) => `## ${item.name}\n\nExpected: ${item.expected}\n\nActual: ${item.actual}\n\n${item.status}\n`).join("\n")}\n## Diagnostic log\n\n\`\`\`text\n${logs.slice(-5000)}\n\`\`\`\n`);
   for (const child of processes.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;
     const done = new Promise((resolveDone) => child.once("exit", resolveDone));

@@ -17,10 +17,11 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect, createServer as createTcpServer, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
 
@@ -37,6 +38,12 @@ import type {
   ArtifactVersionProvenance,
   ArtifactVersionDiff,
   ConfirmSkillReviewDraftResult,
+  CreateGitSkillReviewDraftsResponse,
+  GitSkillRepositoryInspection,
+  CreateGitSkillReviewDraftsRequest,
+  ImportSkillFromGitRequest,
+  MergeSkillReviewDraftsRequest,
+  InspectGitSkillRepositoryRequest,
   CreateProjectResponse,
   DeletionImpact,
   Environment,
@@ -120,6 +127,7 @@ import {
 } from "./server.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createJiuwenSwarmAgentFactory } from "./agent-run/jiuwenswarm-agent.js";
+import { SkillCatalog } from "@sciencediscovery/specialist";
 import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
@@ -958,6 +966,7 @@ async function startScientificTestApi(
   context: TestContext,
   dataDir: string,
   onInstall?: (body: Record<string, unknown>) => void,
+  installAuthFailure?: () => 401 | 403 | undefined,
 ): Promise<{ origin: string }> {
   const snapshot = Buffer.from("{\"format\":\"scientific-test\"}\n");
   const snapshotHash = createHash("sha256").update(snapshot).digest("hex");
@@ -1065,9 +1074,12 @@ async function startScientificTestApi(
     if (install && request.method === "POST") {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      onInstall?.(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
       const environment = environments.find((candidate) => candidate.id === install[1]);
       if (!environment) return send(404, { error: "not found" });
+      const failure = installAuthFailure?.();
+      if (failure) return send(failure, { error: "Runner credentials rejected" });
+      onInstall?.(body);
       const revision = addRevision(environment.id, environment.language);
       environment.currentRevisionId = revision.id;
       return send(201, revision);
@@ -1981,7 +1993,10 @@ async function startSubagentModel(
   };
 }
 
-async function startTextModel(context: TestContext, delayed = false): Promise<{
+async function startTextModel(context: TestContext, delayed = false, fixture?: {
+  responseText: string;
+  requests: Array<{ authorization?: string; model?: string }>;
+}): Promise<{
   baseUrl: string;
   requested: Promise<void>;
   release: () => void;
@@ -1991,14 +2006,16 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
   let release: () => void = () => undefined;
   const gate = delayed ? new Promise<void>((resolveGate) => { release = resolveGate; }) : Promise.resolve();
   const modelServer = createHttpServer(async (request, response) => {
-    for await (const _chunk of request) {
-      // Consume the OpenAI-compatible request before streaming the fixture response.
+    let body = "";
+    for await (const chunk of request) body += String(chunk);
+    if (fixture) {
+      fixture.requests.push({ authorization: request.headers.authorization, model: JSON.parse(body).model });
     }
     signalRequested();
     await gate;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({
-      choices: [{ delta: { content: "Snapshot response" }, finish_reason: null, index: 0 }],
+      choices: [{ delta: { content: fixture?.responseText ?? "Snapshot response" }, finish_reason: null, index: 0 }],
       created: 1,
       id: "chatcmpl-snapshot",
       model: "snapshot-model",
@@ -3620,6 +3637,66 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.match(await invalid.text(), /Referenced Project artifact is unavailable/);
 });
 
+test("GJ-02 reconnects a dropped Run event stream from the last durable event", { id: "gj02-run-sse-resume", tags: ["swarm:required"] }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `run-sse-resume-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const provider = await startTextModel(context, true);
+  const model = await createTestModel(origin, { baseUrl: provider.baseUrl });
+  const headers = { ...authorization, "content-type": "application/json" };
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    headers, method: "POST", body: JSON.stringify({ name: "Run replay" }),
+  });
+  assert.equal(project.response.status, 201);
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    headers, method: "POST", body: JSON.stringify({ modelId: model.id, title: "Run replay" }),
+  });
+  assert.equal(session.response.status, 201);
+  const runsUrl = `${origin}/api/sessions/${session.body.id}/runs`;
+  const run = await jsonRequest<SessionRun>(runsUrl, {
+    headers, method: "POST", body: JSON.stringify({ content: "Keep executing across a disconnected client." }),
+  });
+  assert.equal(run.response.status, 201);
+  const eventsUrl = `${runsUrl}/${run.body.id}/events`;
+  const firstConnection = new AbortController();
+  const signal = AbortSignal.timeout(30_000);
+  const eventHeaders = { ...authorization, accept: "text/event-stream" };
+  const eventIds = (stream: string) => [...stream.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+  let prefix: number[] = [];
+  try {
+    const response = await fetch(eventsUrl, {
+      headers: eventHeaders, signal: AbortSignal.any([signal, firstConnection.signal]),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let text = "";
+    while (prefix.length === 0) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false, "the stream should deliver durable events before completion");
+      text += chunk.value;
+      prefix = eventIds(text.slice(0, Math.max(0, text.lastIndexOf("\n\n") + 2)));
+    }
+  } finally {
+    firstConnection.abort();
+    provider.release();
+  }
+  const resumed = await fetch(eventsUrl, {
+    headers: { ...eventHeaders, "last-event-id": String(prefix.at(-1)) }, signal,
+  });
+  assert.equal(resumed.status, 200);
+  const tail = await resumed.text();
+  const stored = await listRunEvents(origin, session.body.id, run.body.id);
+  assert.deepEqual([...prefix, ...eventIds(tail)], stored.map((record) => record.sequence));
+  assert.equal(new Set(stored.map((record) => record.sequence)).size, stored.length);
+  assert.equal(parseSseEvents(tail).filter((event) => event.type === "run.status" && event.status === "completed").length, 1);
+  const reloaded = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers: authorization });
+  assert.equal(reloaded.body.messages.filter((message) => message.role === "assistant" && message.content === "Snapshot response").length, 1);
+  const listing = await jsonRequest<SessionRun[]>(runsUrl, { headers: authorization });
+  assert.deepEqual(listing.body.map(({ id, status }) => ({ id, status })), [{ id: run.body.id, status: "completed" }]);
+});
+
 test("running sessions accept queued runs and start them after the active run completes", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `queued-runs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -3787,6 +3864,11 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
   assert.equal(setup.body.components.conda.state, "ready");
   const initial = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.deepEqual(initial.body.map((environment) => environment.id), ["starter-python", "starter-r"]);
+  const readRevisions = () => jsonRequest<EnvironmentRevision[]>(`${origin}/api/environment-revisions`, { headers: authorization });
+  assert.equal((await fetch(`${origin}/api/environment-revisions`)).status, 401);
+  const initialRevisions = await readRevisions();
+  assert.equal(initialRevisions.response.status, 200);
+  assert.ok(initialRevisions.body.some(revision => revision.provisioner === "system"));
   const created = await jsonRequest<Environment>(`${origin}/api/environments`, {
     body: JSON.stringify({ language: "python", name: "single-cell" }),
     headers: { ...authorization, "content-type": "application/json" },
@@ -3878,6 +3960,67 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
   assert.equal(deleted.status, 200);
   const final = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
   assert.equal(final.body.some((environment) => environment.id === created.body.id), false);
+  const retained = await readRevisions();
+  assert.equal(retained.response.status, 200);
+  const byId = new Map(retained.body.map(revision => [revision.id, revision]));
+  assert.equal(byId.size, retained.body.length, "reconciling the Runner catalog must not duplicate revisions");
+  for (const revision of [...initialRevisions.body, installed.body.revision, uninstalled.body.revision]) {
+    assert.deepEqual(byId.get(revision.id), revision, `retained immutable revision ${revision.id}`);
+  }
+});
+
+test("environment mutations preserve Runner not-found errors, isolate Runner auth failures and reject malformed package lists", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `environment-mutation-errors-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const installBodies: Array<Record<string, unknown>> = [];
+  let runnerAuthFailure: 401 | 403 | undefined;
+  const { origin } = await startScientificTestApi(context, tempRoot, (body) => installBodies.push(body), () => runnerAuthFailure);
+  const headers = { ...authorization, "content-type": "application/json" };
+
+  const before = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
+  const missingInstall = await fetch(`${origin}/api/environments/missing/install`, {
+    body: JSON.stringify({ packages: ["numpy"] }), headers, method: "POST",
+  });
+  assert.equal(missingInstall.status, 404);
+  assert.match(await missingInstall.text(), /Runner request failed \(404\)/);
+  const missingUninstall = await fetch(`${origin}/api/environments/missing/uninstall`, {
+    body: JSON.stringify({ packages: ["numpy"] }), headers, method: "POST",
+  });
+  assert.equal(missingUninstall.status, 404);
+  assert.match(await missingUninstall.text(), /Runner request failed \(404\)/);
+  assert.equal(installBodies.length, 0, "a missing environment must not be treated as an install");
+
+  for (const body of [{}, { packages: ["numpy", 2] }, null]) {
+    const response = await fetch(`${origin}/api/environments/${before.body[0]!.id}/install`, {
+      body: JSON.stringify(body), headers, method: "POST",
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /packages must be an array of strings/);
+  }
+  const malformedUninstall = await fetch(`${origin}/api/environments/${before.body[0]!.id}/uninstall`, {
+    body: JSON.stringify({ packages: "numpy" }), headers, method: "POST",
+  });
+  assert.equal(malformedUninstall.status, 400);
+  assert.match(await malformedUninstall.text(), /packages must be an array of strings/);
+  assert.equal(installBodies.length, 0, "malformed requests must not reach the Runner");
+
+  for (const status of [401, 403] as const) {
+    runnerAuthFailure = status;
+    const response = await fetch(`${origin}/api/environments/${before.body[0]!.id}/install`, {
+      body: JSON.stringify({ packages: ["numpy"] }), headers, method: "POST",
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.ok(body !== null && typeof body === "object" && "code" in body && "error" in body);
+    assert.equal(body.code, "RUNNER_AUTH_FAILED");
+    assert.ok(typeof body.error === "string");
+    assert.match(body.error, /Check the configured Runner credentials/);
+  }
+
+  const after = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
+  assert.deepEqual(after.body.map((environment) => [environment.id, environment.currentRevisionId]),
+    before.body.map((environment) => [environment.id, environment.currentRevisionId]));
 });
 
 test("the built-in Runner answers setup queries before its scientific environments exist", async (context) => {
@@ -8189,24 +8332,41 @@ test("WSP-005 a reserved device name on the file-write route answers 400 and wri
   assert.deepEqual(listed.body.map((file) => file.path), ["conifer.csv"]);
 });
 
-test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
+test("same-named uploads remain physically isolated and append one Project artifact version chain", { id: "session-isolation-artifact-version-chain" }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
-  const model = await createTestModel(origin);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const createLane = async (lane: "a" | "b") => {
+    const requests: Array<{ authorization?: string; model?: string }> = [];
+    const responseText = `Model response owned by session ${lane}`;
+    const provider = await startTextModel(context, false, { responseText, requests });
+    const apiToken = `fixture-model-token-${lane}`;
+    const model = await createTestModel(origin, { baseUrl: provider.baseUrl, model: `model-${lane}`, name: `Model ${lane}`, apiToken });
+    const skill = await jsonRequest<SkillDetail>(`${origin}/api/skills`, {
+      headers, method: "POST", body: JSON.stringify({ name: `isolation-skill-${lane}`,
+        description: `Synthetic skill for lane ${lane}`, instructions: `# Skill for lane ${lane}\n\nUse only inputs from this lane.` }),
+    });
+    assert.equal(skill.response.status, 201);
+    return { model, apiToken, requests, responseText, skill: skill.body };
+  };
+  const laneA = await createLane("a");
+  const laneB = await createLane("b");
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Isolation" }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
   const sessionA = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ modelId: model.id, title: "A" }),
+    body: JSON.stringify({ modelId: laneA.model.id, title: "A", approvalMode: "ask_for_dangerous",
+      settingsOverrides: { skillSelectionMode: "selected", enabledSkillIds: [laneA.skill.id], enabledConnectorIds: ["arxiv"] } }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
   const sessionB = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ modelId: model.id, title: "B" }),
+    body: JSON.stringify({ modelId: laneB.model.id, title: "B", approvalMode: "always_allow",
+      settingsOverrides: { skillSelectionMode: "selected", enabledSkillIds: [laneB.skill.id], enabledConnectorIds: ["pubmed"] } }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
@@ -8238,7 +8398,103 @@ test("same-named uploads remain physically isolated and append one Project artif
     `${origin}/api/projects/${project.body.id}/artifacts/${artifacts.body[0]!.id}/versions`,
     { headers: authorization },
   );
-  assert.deepEqual(versions.body.map((version) => version.sessionId), [sessionA.body.id, sessionB.body.id]);
+  assert.equal(versions.response.status, 200);
+  assert.deepEqual(versions.body.map((version) => [version.version, version.sessionId]), [[1, sessionA.body.id], [2, sessionB.body.id]]);
+  await Promise.all(([
+    [sessionA.body, laneA, "ask_for_dangerous", "session-a", versions.body[0]!, "arxiv"],
+    [sessionB.body, laneB, "always_allow", "session-b", versions.body[1]!, "pubmed"],
+  ] as const).map(async ([session, lane, approvalMode, content, version, connector]) => {
+    const current = await jsonRequest<Session>(`${origin}/api/sessions/${session.id}`, { headers: authorization });
+    assert.equal(current.response.status, 200);
+    assert.equal(current.body.modelId, lane.model.id);
+    assert.equal(current.body.approvalMode, approvalMode);
+    assert.deepEqual(current.body.enabledConnectorIds, [connector]);
+    const run = await fetch(`${origin}/api/sessions/${session.id}/messages`, {
+      headers, method: "POST", signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ content: `Continue research owned by ${content}.` }),
+    });
+    assert.equal(run.status, 200);
+    const events = parseSseEvents(await run.text());
+    assert.ok(events.some((event) => event.type === "run.completed"));
+    assert.ok(lane.requests.some((request) => request.model === lane.model.model));
+    assert.ok(lane.requests.every((request) => request.authorization === `Bearer ${lane.apiToken}`));
+    const reloaded = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.id}`, { headers: authorization });
+    const assistant = reloaded.body.messages.filter((message) => message.role === "assistant");
+    assert.deepEqual(assistant.map((message) => message.content), [lane.responseText]);
+    const manifests = await jsonRequest<PromptManifest[]>(`${origin}/api/sessions/${session.id}/prompt-manifests`, { headers: authorization });
+    assert.ok(manifests.body.length > 0);
+    for (const manifest of manifests.body) {
+      assert.equal(manifest.modelProfileId, lane.model.id);
+      assert.equal(manifest.sessionId, session.id);
+      assert.deepEqual(manifest.runtimeSettings.enabledConnectorIds, [connector]);
+      assert.ok(manifest.skillRefs.some((ref) => ref.id === lane.skill.id));
+      // Swarm currently exposes every installed Skill to every Run.
+      if (!onJiuwenSwarm) assert.deepEqual(manifest.skillRefs.map(({ id }) => id), [lane.skill.id]);
+    }
+    const provenance = await jsonRequest<ArtifactVersionProvenance>(
+      `${origin}/api/sessions/${session.id}/artifact-versions/${version.id}/provenance`, { headers: authorization },
+    );
+    assert.equal(provenance.response.status, 200);
+    assert.equal(provenance.body.version.id, version.id);
+    assert.equal(provenance.body.version.sessionId, session.id);
+    assert.equal(provenance.body.version.content.hash, createHash("sha256").update(content).digest("hex"));
+  }));
+});
+
+test("GJ-03 retries an upload interrupted between workspace write and artifact registration", { id: "gj03-artifact-registration-retry" }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `artifact-retry-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    headers: authorization, method: "POST", body: JSON.stringify({ name: "Artifact retry" }),
+  });
+  assert.equal(project.response.status, 201);
+  const sessionUrl = `${origin}/api/sessions/${project.body.firstSession.id}`;
+  const artifactsUrl = `${origin}/api/projects/${project.body.id}/artifacts`;
+  const content = "value\n42\n";
+  const create = SessionStore.prototype.createArtifactVersion;
+  let failOnce = true;
+  const publish = context.mock.method(SessionStore.prototype, "createArtifactVersion", async function (
+    this: SessionStore, input: Parameters<typeof create>[0],
+  ) {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("injected artifact-store failure");
+    }
+    return create.call(this, input);
+  });
+  const upload = async () => {
+    const form = new FormData();
+    form.append("files", new Blob([content]), "result.csv");
+    return jsonRequest<WorkspaceUploadResult>(`${sessionUrl}/workspace/upload?conflict=overwrite`, {
+      body: form, headers: authorization, method: "POST",
+    });
+  };
+  const failed = await upload();
+  assert.equal(failed.response.status, 201);
+  assert.deepEqual(failed.body.uploaded.map(({ status }) => status), ["failed"]);
+  assert.equal(publish.mock.callCount(), 1);
+  const workspaceFile = await fetch(`${sessionUrl}/file?path=result.csv`, { headers: authorization });
+  assert.equal(workspaceFile.status, 200);
+  assert.equal(await workspaceFile.text(), content);
+  assert.deepEqual((await jsonRequest<ScientificArtifact[]>(artifactsUrl, { headers: authorization })).body, []);
+
+  const retried = await upload();
+  assert.equal(retried.response.status, 201);
+  assert.deepEqual(retried.body.errors, []);
+  const { body: artifacts } = await jsonRequest<ScientificArtifact[]>(artifactsUrl, { headers: authorization });
+  assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0]?.name, "result.csv");
+  const versions = await jsonRequest<ScientificArtifactVersion[]>(`${artifactsUrl}/${artifacts[0]!.id}/versions`, { headers: authorization });
+  assert.equal(versions.response.status, 200);
+  const hash = createHash("sha256").update(content).digest("hex");
+  assert.deepEqual(versions.body.map(({ version, content }) => [version, content.hash]), [[1, hash]]);
+  const provenance = await jsonRequest<ArtifactVersionProvenance>(`${sessionUrl}/artifact-versions/${versions.body[0]!.id}/provenance`, { headers: authorization });
+  assert.equal(provenance.response.status, 200);
+  assert.equal(provenance.body.version.id, versions.body[0]?.id);
+  assert.equal(provenance.body.version.content.hash, hash);
+  assert.equal(provenance.body.version.sessionId, project.body.firstSession.id);
 });
 
 test("artifact outputs endpoint is Session-scoped and rejects an unknown Session", async (context) => {
@@ -9095,6 +9351,258 @@ test("WPC-004 the memory-graph disabled toggle short-circuits the endpoint witho
   assert.equal(sidecarCalls.length, 0, "disabled toggle must short-circuit before any sidecar request");
 });
 
+test("memory query routes have direct HTTP contracts for validation, auth and disabled state", { id: "memory-query-http-validation" }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `memory-route-contract-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const sidecarCalls: string[] = [];
+  const sidecar = createHttpServer((request, response) => {
+    sidecarCalls.push(request.url ?? "");
+    response.writeHead(503, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "sidecar must not be called while disabled" }));
+  });
+  await new Promise<void>((done) => sidecar.listen(0, "127.0.0.1", done));
+  context.after(async () => {
+    await new Promise<void>((done) => sidecar.close(() => done()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const api = createProductionApiServer({
+    ...testConfig(root),
+    memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "test" },
+  });
+  await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  context.after(async () => { await closeApiServer(api); });
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const jsonHeaders = { ...authorization, "content-type": "application/json" };
+  const unauthenticated = await fetch(`${origin}/api/memory/query/match`, { method: "POST", body: JSON.stringify({ query: "paper" }) });
+  assert.equal(unauthenticated.status, 401);
+  const disabled = await fetch(`${origin}/api/memory/settings`, {
+    method: "PUT", headers: jsonHeaders, body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(disabled.status, 200);
+  for (const [path, body] of [
+    ["/api/memory/query/match", {}],
+    ["/api/memory/query/match", { query: 42 }],
+    ["/api/memory/query/by-node-type", { node_types: "Artifact" }],
+    ["/api/memory/query/by-node-type", { node_types: [" "] }],
+    ["/api/memory/query/by-edge-type", { edge_types: [] }],
+    ["/api/memory/query/by-edge-type", { edge_types: [42] }],
+    ["/api/memory/query/chain-exists", { node_id: "n1", kinds: [null] }],
+    ["/api/memory/query/by-node-type", {}],
+    ["/api/memory/query/by-edge-type", {}],
+    ["/api/memory/query/chain", {}],
+    ["/api/memory/query/chain-exists", { node_id: "n1" }],
+    ["/api/memory/query/scope-expansion", { scope_task_id: "scope" }],
+    ["/api/memory/query/group-expansion", { group_id: "group" }],
+    ["/api/memory/trace/provenance", {}],
+  ] as const) {
+    const response = await fetch(`${origin}${path}`, { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) });
+    assert.equal(response.status, 400, path);
+    assert.match((await response.json() as { error: string }).error, /must be non-empty|must be a non-empty list/, path);
+  }
+  const queries = [
+    ["/api/memory/query/match", { query: "paper", session_id: "s1" }],
+    ["/api/memory/query/by-node-type", { node_types: ["Artifact"], session_id: "s1" }],
+    ["/api/memory/query/by-edge-type", { edge_types: ["produces"], session_id: "s1" }],
+    ["/api/memory/query/chain", { node_id: "artifact-1", session_id: "s1", version: 2 }],
+    ["/api/memory/query/chain-exists", { node_id: "artifact-1", session_id: "s1", kinds: ["viewOutput", "viewProducingTask"] }],
+    ["/api/memory/query/scope-expansion", { scope_task_id: "scope", session_id: "s1" }],
+    ["/api/memory/query/group-expansion", { group_id: "_group:scope:Artifact", session_id: "s1" }],
+    ["/api/memory/trace/provenance", { node_id: "artifact-1", session_id: "s1" }],
+  ] as const;
+  const artifactPath = "/api/memory/query/artifact-provenance?artifact_id=a&version=2&session_id=s1";
+  for (const enabled of [false, true]) {
+    if (enabled) {
+      const response = await fetch(`${origin}/api/memory/settings`, {
+        method: "PUT", headers: jsonHeaders, body: JSON.stringify({ enabled: true }),
+      });
+      assert.equal(response.status, 200);
+    }
+    const reason = enabled ? "memory_graph_unreachable" : "memory_graph_disabled";
+    for (const [path, body] of queries) {
+      const response = await jsonRequest<Record<string, unknown>>(`${origin}${path}`, {
+        method: "POST", headers: jsonHeaders, body: JSON.stringify(body),
+      });
+      assert.equal(response.response.status, 200, path);
+      if (path.endsWith("chain-exists")) {
+        assert.deepEqual(response.body, { viewOutput: false, viewProducingTask: false });
+      } else {
+        assert.equal(response.body.reason, reason, path);
+        const collection = path.endsWith("provenance") ? "chain" : /(?:match|by-node-type)$/.test(path) ? "hits" : "nodes";
+        assert.deepEqual(response.body[collection], [], path);
+      }
+    }
+    const artifact = await jsonRequest(`${origin}${artifactPath}`, { headers: authorization });
+    assert.equal(artifact.response.status, 200);
+    // The graph query endpoint has one fallback reason; the separate artifact
+    // endpoint is responsible for reading legacy provenance from the store.
+    assert.deepEqual(artifact.body, { reason: "memory_graph_disabled" });
+    if (!enabled) assert.deepEqual(sidecarCalls, [], "disabled routes must not contact the sidecar");
+  }
+  for (const [path] of queries) {
+    assert.ok(sidecarCalls.includes(path.slice("/api/memory".length)), `enabled route must call ${path}`);
+  }
+  assert.ok(sidecarCalls.some(path => path.startsWith("/query/artifact-provenance?")));
+  const invalidArtifact = await fetch(`${origin}/api/memory/query/artifact-provenance?artifact_id=a&version=0`, { headers: authorization });
+  assert.equal(invalidArtifact.status, 400);
+});
+
+
+test("memory query and provenance routes forward complete success contracts", { id: "memory-query-http-forwarding" }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `memory-route-success-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const calls: Array<{ path: string; body?: Record<string, unknown> }> = [];
+  const node = (id: string) => ({
+    created_at: "2026-10-01T08:00:00.000Z",
+    excerpt: id === "node-1" ? "matched artifact" : "derived node",
+    extra: { source: "fixture" },
+    id,
+    label: "Artifact",
+    session_id: "session-1",
+  });
+  const sidecar = createHttpServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      const url = new URL(request.url ?? "/", "http://sidecar.test");
+      let body: Record<string, unknown> | undefined;
+      if (raw) {
+        try { body = JSON.parse(raw) as Record<string, unknown>; } catch { body = undefined; }
+      }
+      calls.push({ path: url.pathname, ...(body ? { body } : {}) });
+      const types = body?.node_types ?? body?.edge_types;
+      if (Array.isArray(types) && types.includes("NotAGraphType")) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ detail: "unknown graph type" }));
+        return;
+      }
+      let result: unknown = {};
+      if (url.pathname === "/query/match" || url.pathname === "/query/by-node-type") {
+        result = { hits: [node("node-1")], total: 1, truncated: false };
+      } else if (url.pathname === "/query/by-edge-type") {
+        result = { edges: [{ source: "node-1", target: "node-2", type: "produces" }], nodes: [node("node-2")], total: 1, truncated: false };
+      } else if (url.pathname === "/query/chain") {
+        result = body?.node_id === "missing"
+          ? { nodes: [], edges: [], total: 0, truncated: false, reason: "node_not_found" }
+          : { nodes: [node("node-1"), node("node-2")], edges: [{ source: "node-1", target: "node-2", type: "produces" }], total: 2, truncated: false };
+      } else if (url.pathname === "/query/chain-exists") {
+        result = { viewOutput: true, viewProducingTask: false };
+      } else if (url.pathname === "/query/scope-expansion" || url.pathname === "/query/group-expansion") {
+        if (body?.session_id !== "session-1") {
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(JSON.stringify({ detail: { code: "not_found", message: "scope not found in session" } }));
+          return;
+        }
+        result = { nodes: [node("node-2")], edges: [{ source: "scope-1", target: "node-2", type: "produces" }], total: 1, truncated: false };
+      } else if (url.pathname === "/trace/provenance") {
+        result = body?.node_id === "broken"
+          ? { start_node: node("broken"), chain: [], broken: true, truncated: true, reason: "provenance_truncated" }
+          : {
+              start_node: node("node-1"),
+              chain: [{ hop: 1, node: node("node-2"), via_edge: "produces", is_terminal: true }],
+              broken: false,
+              truncated: false,
+            };
+      } else if (url.pathname === "/query/artifact-provenance") {
+        if (url.searchParams.get("version") === "99") {
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(JSON.stringify({ detail: "node not found" }));
+          return;
+        }
+        result = {
+          artifact_id: "artifact-1", version: 2, logical_name: "report.md", media_type: "text/markdown",
+          content_hash: "sha256:report", turn_id: "turn-1", code_hash: null, stdout_hash: null, stderr_hash: null,
+          env_hash: "sha256:env", exit_code: 0, status: "succeeded", finished_at: "2026-10-01T09:00:00.000Z",
+          started_at: "2026-10-01T08:59:00.000Z", code_id: null, language: "python", tool: "runner",
+          messages_turn_id: "turn-1", dependencies: [{ kind: "artifact", artifact_id: "input-1", version: 1, logical_name: "input.csv", media_type: "text/csv", path: "input.csv" }],
+        };
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(result)}\n`);
+    });
+  });
+  await new Promise<void>((done) => sidecar.listen(0, "127.0.0.1", done));
+  context.after(async () => {
+    await new Promise<void>((done) => sidecar.close(() => done()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const api = createProductionApiServer({
+    ...testConfig(root),
+    memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "test" },
+  });
+  await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  context.after(async () => { await closeApiServer(api); });
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const headers = { ...authorization, "content-type": "application/json" };
+  const setting = await fetch(`${origin}/api/memory/settings`, { method: "PUT", headers, body: JSON.stringify({ enabled: true }) });
+  assert.equal(setting.status, 200);
+
+  const requestJson = async (path: string, body: Record<string, unknown>) => jsonRequest<Record<string, unknown>>(`${origin}${path}`, {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  const match = await requestJson("/api/memory/query/match", { query: "crystal structure", session_id: "session-1" });
+  assert.equal(match.body.total, 1);
+  assert.equal((match.body.hits as Array<Record<string, unknown>>)[0]?.id, "node-1");
+  const byNode = await requestJson("/api/memory/query/by-node-type", { node_types: ["Artifact"], session_id: "session-1" });
+  assert.equal((byNode.body.hits as Array<Record<string, unknown>>)[0]?.sessionId, "session-1");
+  const byEdge = await requestJson("/api/memory/query/by-edge-type", { edge_types: ["produces"], session_id: "session-1" });
+  assert.equal((byEdge.body.edges as Array<Record<string, unknown>>)[0]?.type, "produces");
+  for (const query of [
+    { route: "by-node-type", field: "node_types", empty: { hits: [] } },
+    { route: "by-edge-type", field: "edge_types", empty: { edges: [], nodes: [] } },
+  ]) {
+    const input = { [query.field]: ["NotAGraphType"], session_id: "session-1" };
+    const rejected = await requestJson(`/api/memory/query/${query.route}`, input);
+    assert.equal(rejected.response.status, 200);
+    assert.deepEqual(rejected.body, { ...query.empty, total: 0, truncated: false, reason: "memory_graph_unreachable" });
+    assert.deepEqual(calls.findLast((call) => call.path === `/query/${query.route}`)?.body, input);
+  }
+  const chain = await requestJson("/api/memory/query/chain", { node_id: "node-1", session_id: "session-1", version: 2, kind: "viewOutput" });
+  assert.equal(chain.body.total, 2);
+  const missingChain = await requestJson("/api/memory/query/chain", { node_id: "missing", session_id: "session-1", kind: "viewOutput" });
+  assert.equal(missingChain.body.reason, "node_not_found");
+  const exists = await requestJson("/api/memory/query/chain-exists", { node_id: "node-1", session_id: "session-1", version: 2, kinds: ["viewOutput", "viewProducingTask"] });
+  assert.deepEqual(exists.body, { viewOutput: true, viewProducingTask: false });
+  const scope = await requestJson("/api/memory/query/scope-expansion", { scope_task_id: "scope-1", session_id: "session-1" });
+  assert.equal(scope.body.total, 1);
+  const group = await requestJson("/api/memory/query/group-expansion", { group_id: "_group:scope-1:Artifact", session_id: "session-1" });
+  assert.equal(group.body.total, 1);
+  for (const [query, id] of [
+    ["scope-expansion", { scope_task_id: "scope-1" }],
+    ["group-expansion", { group_id: "_group:scope-1:Artifact" }],
+  ] as const) {
+    const body = { ...id, session_id: "session-2" };
+    const absent = await requestJson(`/api/memory/query/${query}`, body);
+    assert.equal(absent.response.status, 200);
+    assert.deepEqual(absent.body, { nodes: [], edges: [], total: 0, truncated: false, reason: "not_found" });
+    assert.deepEqual(calls.filter((call) => call.path === `/query/${query}`).map((call) => call.body), [
+      { ...id, session_id: "session-1" }, body,
+    ]);
+  }
+  const trace = await requestJson("/api/memory/trace/provenance", { node_id: "node-1", target_label: "Artifact", max_hops: 4, session_id: "session-1" });
+  assert.equal(trace.body.broken, false);
+  assert.equal((trace.body.chain as Array<Record<string, unknown>>)[0]?.viaEdge, "produces");
+  const broken = await requestJson("/api/memory/trace/provenance", { node_id: "broken", session_id: "session-1" });
+  assert.equal(broken.body.broken, true);
+  assert.equal(broken.body.reason, "provenance_truncated");
+  const artifact = await jsonRequest<Record<string, unknown>>(`${origin}/api/memory/query/artifact-provenance?artifact_id=artifact-1&version=2&session_id=session-1`, { headers: authorization });
+  assert.equal(artifact.body.artifactId, "artifact-1");
+  assert.equal(artifact.body.version, 2);
+  assert.equal(artifact.body.contentHash, "sha256:report");
+  assert.equal((artifact.body.dependencies as Array<Record<string, unknown>>)[0]?.artifactId, "input-1");
+  const missingArtifact = await jsonRequest<Record<string, unknown>>(`${origin}/api/memory/query/artifact-provenance?artifact_id=artifact-1&version=99`, { headers: authorization });
+  assert.equal(missingArtifact.body.reason, "node_not_found");
+
+  const matchCall = calls.find((call) => call.path === "/query/match");
+  assert.deepEqual(matchCall?.body, { query: "crystal structure", session_id: "session-1", mode: "all_terms" });
+  assert.deepEqual(calls.find((call) => call.path === "/query/chain")?.body, {
+    node_id: "node-1", session_id: "session-1", version: 2, kind: "viewOutput",
+  });
+  assert.deepEqual(calls.find((call) => call.path === "/trace/provenance")?.body, {
+    node_id: "node-1", target_label: "Artifact", max_hops: 4, session_id: "session-1",
+  });
+  assert.equal(calls.some((call) => call.path === "/query/artifact-provenance"), true);
+});
+
 test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", async (context) => {
   // The sidecar is reachable (HTTP 200) but its Neo4j is unreachable, so it
   // answers { content_hash: null, reason: "memory_graph_unreachable" }. The API
@@ -9496,4 +10004,363 @@ test("model deletion HTTP validates replacement options and preserves explicit u
   // Legacy DELETE callers can omit a body and leave the removed default unset.
   assert.equal((await fetch(`${origin}/api/models/${b.id}`, { method: "DELETE", headers })).status, 200);
   assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, undefined);
+  const repeatedDelete = await fetch(`${origin}/api/models/${b.id}`, { method: "DELETE", headers });
+  assert.equal(repeatedDelete.status, 404);
+  assert.match(await repeatedDelete.text(), /Model not found/);
+});
+
+test("concurrent model deletion is serialized and leaves one durable result", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-deletion-concurrent-${randomUUID()}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const created = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    body: JSON.stringify({ name: "Concurrent delete", model: "concurrent-delete", baseUrl: "https://models.example.test/v1", apiToken: randomUUID() }),
+    headers,
+    method: "POST",
+  });
+  assert.equal(created.response.status, 201);
+  const responses = await Promise.all([
+    fetch(`${origin}/api/models/${created.body.id}`, { headers: authorization, method: "DELETE" }),
+    fetch(`${origin}/api/models/${created.body.id}`, { headers: authorization, method: "DELETE" }),
+  ]);
+  assert.deepEqual(responses.map((response) => response.status).toSorted(), [200, 404]);
+  const models = await jsonRequest<ModelProfile[]>(`${origin}/api/models`, { headers: authorization });
+  assert.equal(models.body.some((model) => model.id === created.body.id), false);
+  const settings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers: authorization });
+  assert.notEqual(settings.body.overrides.modelId, created.body.id);
+});
+
+test("Git Skill HTTP routes preserve inspect, review, import and publish contracts", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-git-skill-contract-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const inspection: GitSkillRepositoryInspection = {
+    candidates: [{ diagnostics: [], name: "git-route-skill", packageHash: "hash-1", status: "new", subdirectory: "skills/git-route-skill" }],
+    commit: "commit-1",
+    ref: "main",
+    repositoryUrl: "https://example.test/repo.git",
+  };
+  const draft: SkillReviewDraftSummary = {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    draftId: "draft-git-route",
+    fileCount: 1,
+    name: "git-route-skill",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const imported = { id: "git-route-skill", name: "git-route-skill" } as SkillDetail;
+  const published: ConfirmSkillReviewDraftResult = { contentHash: "content-1", libraryId: "project-skills", skillId: "git-route-skill", versionId: "version-1" };
+  let inspectInput: unknown;
+  let reviewInput: unknown;
+  let importInput: unknown;
+  let mergeInput: unknown;
+  context.mock.method(SkillCatalog.prototype, "inspectGitRepository", async (input: InspectGitSkillRepositoryRequest) => { inspectInput = input; return inspection; });
+  context.mock.method(SkillCatalog.prototype, "createGitReviewDrafts", async (input: CreateGitSkillReviewDraftsRequest) => { reviewInput = input; return { commit: input.commit, drafts: [draft] } satisfies CreateGitSkillReviewDraftsResponse; });
+  context.mock.method(SkillCatalog.prototype, "importFromGit", async (input: ImportSkillFromGitRequest) => { importInput = input; return imported; });
+  context.mock.method(SkillCatalog.prototype, "mergeReviewDrafts", async (input: MergeSkillReviewDraftsRequest) => { mergeInput = input; return draft; });
+  context.mock.method(SkillCatalog.prototype, "publishReviewDraft", async () => published);
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const inspect = await jsonRequest<GitSkillRepositoryInspection>(`${origin}/api/skills/import-git/inspect`, {
+    body: JSON.stringify({ ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectory: "skills" }), headers, method: "POST",
+  });
+  assert.equal(inspect.response.status, 200);
+  assert.deepEqual(inspect.body, inspection);
+  assert.deepEqual(inspectInput, { ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectory: "skills" });
+
+  const review = await jsonRequest<CreateGitSkillReviewDraftsResponse>(`${origin}/api/skills/import-git/review`, {
+    body: JSON.stringify({ commit: inspection.commit, ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectories: ["skills/git-route-skill"] }), headers, method: "POST",
+  });
+  assert.equal(review.response.status, 201);
+  assert.deepEqual(review.body.drafts, [draft]);
+  assert.deepEqual(reviewInput, { commit: inspection.commit, ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectories: ["skills/git-route-skill"] });
+
+  const importedResponse = await jsonRequest<SkillDetail>(`${origin}/api/skills/import-git`, {
+    body: JSON.stringify({ ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectory: "skills/git-route-skill" }), headers, method: "POST",
+  });
+  assert.equal(importedResponse.response.status, 201);
+  assert.deepEqual(importedResponse.body, imported);
+  assert.deepEqual(importInput, { ref: "main", repositoryUrl: inspection.repositoryUrl, subdirectory: "skills/git-route-skill" });
+
+  const merged = await jsonRequest<SkillReviewDraftSummary>(`${origin}/api/skill-review-drafts/merge`, {
+    body: JSON.stringify({ draftIds: ["draft-primary", "draft-secondary"], targetDraftId: "draft-primary" }),
+    headers,
+    method: "POST",
+  });
+  assert.equal(merged.response.status, 200);
+  assert.deepEqual(merged.body, draft);
+  assert.deepEqual(mergeInput, { draftIds: ["draft-primary", "draft-secondary"], targetDraftId: "draft-primary" });
+
+  const confirmed = await jsonRequest<ConfirmSkillReviewDraftResult>(`${origin}/api/skill-review-drafts/${draft.draftId}/confirm`, {
+    body: JSON.stringify({ expectedUpdatedAt: draft.updatedAt, files: [{ content: "# Git route skill", path: "SKILL.md" }] }), headers, method: "POST",
+  });
+  assert.equal(confirmed.response.status, 201);
+  assert.deepEqual(confirmed.body, published);
+});
+
+test("route contracts reject invalid language and preserve native backend semantics", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-language-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  assert.equal((await fetch(`${origin}/api/jiuwenswarm/language`, { method: "PUT", headers, body: JSON.stringify({ language: "fr" }) })).status, 400);
+  assert.equal((await fetch(`${origin}/api/jiuwenswarm/language`, { method: "PUT", headers, body: JSON.stringify({ language: "zh-CN" }) })).status, 200);
+  const native = await jsonRequest<{ applied: boolean; backend: string; language: string }>(`${origin}/api/jiuwenswarm/language`, { method: "PUT", headers, body: JSON.stringify({ language: "en" }) });
+  assert.deepEqual(native.body, { applied: false, backend: "native", language: "en" });
+  assert.equal((await fetch(`${origin}/api/jiuwenswarm/language`, { method: "PUT", body: JSON.stringify({ language: "en" }) })).status, 401);
+});
+
+test("JiuwenSwarm language route retries a failed adapter write and caches only successful changes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-language-adapter-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const requests: unknown[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    if (request.url !== "/agent/language") {
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requests.push({ method: request.method, auth: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString()) });
+    response.writeHead(requests.length === 1 ? 503 : 200, { "content-type": "application/json" }).end("{}");
+  });
+  await new Promise<void>(done => adapter.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>(done => { adapter.close(() => done()); adapter.closeAllConnections(); }));
+  const env = {
+    SCIENCE_AGENT_EXECUTOR: "jiuwenswarm",
+    SCIENCE_AGENT_ADAPTER_URL: `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`,
+    SCIENCE_AGENT_ADAPTER_TOKEN: "local-adapter-fixture",
+  };
+  const previous = Object.fromEntries(Object.keys(env).map(name => [name, process.env[name]]));
+  Object.assign(process.env, env);
+  let api: ReturnType<typeof createApiServer>;
+  try { api = createApiServer(testConfig(root)); }
+  finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  await new Promise<void>(done => api.listen(0, "127.0.0.1", done));
+  context.after(() => closeApiServer(api));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const setLanguage = (language: string) => jsonRequest<Record<string, unknown>>(`${origin}/api/jiuwenswarm/language`, {
+    method: "PUT", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ language }),
+  });
+  const failure = await setLanguage("zh-CN");
+  assert.equal(failure.response.status, 502);
+  assert.match(String(failure.body.error), /HTTP 503/);
+  const success = await setLanguage("zh-CN");
+  assert.equal(success.response.status, 200);
+  assert.deepEqual(success.body, { applied: true, backend: "jiuwenswarm", language: "zh" });
+  assert.deepEqual((await setLanguage("zh")).body, success.body);
+  assert.deepEqual(requests, [
+    { method: "POST", auth: "Bearer local-adapter-fixture", body: { language: "zh" } },
+    { method: "POST", auth: "Bearer local-adapter-fixture", body: { language: "zh" } },
+  ]);
+});
+
+test("environment revision route reports an unavailable Runner without inventing revisions", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-environment-unavailable-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root, undefined, { runnerUrl: "http://127.0.0.1:1" });
+  const response = await fetch(`${origin}/api/environment-revisions`, { headers: authorization });
+  assert.equal(response.status, 200);
+  const revisions = await response.json() as EnvironmentRevision[];
+  assert.ok(revisions.length > 0, "the local Runner seeds system revisions even when scientific environment health is unavailable");
+  assert.ok(revisions.every((revision) => revision.provisioner === "system"));
+});
+
+test("settings, usage and environment revision routes expose side effects and unavailable dependencies", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-settings-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const webUsage = await jsonRequest(`${origin}/api/web/usage`, { headers: authorization });
+  assert.equal(webUsage.response.status, 200);
+  assert.deepEqual(webUsage.body, { cacheHits: 0, failures: 0, fallbacks: 0, fetches: 0, searches: 0 });
+  assert.equal((await fetch(`${origin}/api/web/usage`)).status, 401);
+  const model = await jsonRequest<ModelProfile>(`${origin}/api/models`, { method: "POST", headers, body: JSON.stringify({ name: "route-model", model: "route-model", baseUrl: "https://models.example.test/v1", apiToken: "token" }) });
+  assert.equal(model.response.status, 201);
+  assert.equal((await fetch(`${origin}/api/settings`, { method: "PUT", headers, body: JSON.stringify({ modelId: model.body.id }) })).status, 200);
+  const mismatch = await jsonRequest<{ cleared: boolean }>(`${origin}/api/settings/clear-model-if-current`, { method: "POST", headers, body: JSON.stringify({ modelId: "other-model" }) });
+  assert.equal(mismatch.response.status, 200);
+  assert.equal(mismatch.body.cleared, false);
+  const unchanged = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers: authorization });
+  assert.equal(unchanged.body.overrides.modelId, model.body.id);
+  const cleared = await jsonRequest<{ cleared: boolean }>(`${origin}/api/settings/clear-model-if-current`, { method: "POST", headers, body: JSON.stringify({ modelId: model.body.id }) });
+  assert.equal(cleared.response.status, 200);
+  assert.equal(cleared.body.cleared, true);
+  const repeated = await jsonRequest<{ cleared: boolean }>(`${origin}/api/settings/clear-model-if-current`, { method: "POST", headers, body: JSON.stringify({ modelId: model.body.id }) });
+  assert.equal(repeated.response.status, 200);
+  assert.equal(repeated.body.cleared, false);
+  const settings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers: authorization });
+  assert.equal(settings.body.overrides.modelId, undefined);
+  const revisions = await jsonRequest<EnvironmentRevision[]>(`${origin}/api/environment-revisions`, { headers: authorization });
+  assert.equal(revisions.response.status, 200);
+  assert.ok(Array.isArray(revisions.body));
+  const missingUsage = await fetch(`${origin}/api/sessions/missing-session/usage`, { headers: authorization });
+  assert.equal(missingUsage.status, 404);
+  const invalidExport = await fetch(`${origin}/api/usage/analytics/export?format=xml`, { headers: authorization });
+  assert.equal(invalidExport.status, 400);
+  const jsonExport = await fetch(`${origin}/api/usage/analytics/export?format=json`, { headers: authorization });
+  assert.equal(jsonExport.status, 200);
+  assert.match(jsonExport.headers.get("content-type") ?? "", /application\/json/);
+});
+
+test("Git Skill route contracts fail closed for unsafe imports and incomplete review requests", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `route-git-skill-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const inspect = async (body: unknown) => fetch(`${origin}/api/skills/import-git/inspect`, { method: "POST", headers, body: JSON.stringify(body) });
+  assert.equal((await inspect({ repositoryUrl: "https://user:secret@example.test/repo.git" })).status, 400);
+  assert.equal((await inspect({ repositoryUrl: "https://example.test/repo.git", subdirectory: "../escape" })).status, 400);
+  assert.equal((await inspect({})).status, 400);
+  assert.equal((await fetch(`${origin}/api/skills/import-git/review`, { method: "POST", headers, body: JSON.stringify({}) })).status, 400);
+  assert.equal((await fetch(`${origin}/api/skills/import-git`, { method: "POST", headers, body: JSON.stringify({}) })).status, 400);
+  const mergeValidation = await fetch(`${origin}/api/skill-review-drafts/merge`, { method: "POST", headers, body: JSON.stringify({ draftIds: ["one"], targetDraftId: "one" }) });
+  assert.equal(mergeValidation.status, 400);
+  const mergeMissing = await fetch(`${origin}/api/skill-review-drafts/merge`, { method: "POST", headers, body: JSON.stringify({ draftIds: ["one", "two"], targetDraftId: "one" }) });
+  assert.equal(mergeMissing.status, 404);
+  assert.equal((await fetch(`${origin}/api/skill-review-drafts`, { headers: authorization })).status, 200);
+});
+
+test("Git Skill review rejects changed refs and duplicate names, and restores drafts on write failure", { id: "git-skill-review-ref-conflict" }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `git-review-conflict-${randomUUID()}`);
+  const repo = resolve(root, "repo");
+  await mkdir(repo, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const git = async (...args: string[]) => execFileAsync("git", ["-C", repo, ...args]);
+  await git("init", "--initial-branch=review");
+  const writeSkill = async (directory: string, body: string, name = "reviewed-method") => {
+    const path = resolve(repo, directory);
+    await mkdir(path, { recursive: true });
+    await writeFile(resolve(path, "SKILL.md"), `---\nname: ${name}\ndescription: A review fixture\n---\n${body}\n`);
+  };
+  const commit = async (message: string) => {
+    await git("add", ".");
+    await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", message);
+    return (await git("rev-parse", "HEAD")).stdout.trim();
+  };
+  await writeSkill("first", "Initial method");
+  const head = await commit("initial method");
+  // Serve the private fixture over the real Git upload-pack protocol on loopback.
+  const reservation = createTcpServer();
+  await new Promise<void>((done) => reservation.listen(0, "127.0.0.1", done));
+  const port = (reservation.address() as AddressInfo).port;
+  await new Promise<void>((done) => reservation.close(() => done()));
+  const daemon = spawn("git", ["daemon", "--verbose", "--export-all", "--strict-paths", "--listen=127.0.0.1",
+    `--port=${port}`, `--base-path=${root}`, resolve(repo, ".git")], { stdio: ["ignore", "ignore", "pipe"] });
+  context.after(async () => {
+    if (daemon.exitCode !== null || daemon.signalCode !== null) return;
+    const closed = once(daemon, "close");
+    daemon.kill();
+    await closed;
+  });
+  await new Promise<void>((done, reject) => {
+    let log = "";
+    daemon.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      log += chunk;
+      if (log.includes("Ready to rumble")) done();
+    });
+    daemon.once("error", reject);
+    daemon.once("exit", (code) => reject(new Error(`Git fixture exited (${code}): ${log}`)));
+  });
+  const repositoryUrl = "https://git-review-fixture.invalid/repo/.git";
+  const rewrite = `git://127.0.0.1:${port}/`;
+  const configCount = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  const config = { GIT_CONFIG_COUNT: String(configCount + 1), [`GIT_CONFIG_KEY_${configCount}`]: `url.${rewrite}.insteadOf`, [`GIT_CONFIG_VALUE_${configCount}`]: "https://git-review-fixture.invalid/" };
+  const previous = Object.keys(config).map((key) => [key, process.env[key]] as const);
+  Object.assign(process.env, config);
+  context.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  const { origin } = await startTestApi(context, root);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const source = { repositoryUrl, ref: "review" };
+  const readDrafts = async () => {
+    const drafts = await jsonRequest<SkillReviewDraftSummary[]>(`${origin}/api/skill-review-drafts`, { headers });
+    assert.equal(drafts.response.status, 200);
+    return drafts.body;
+  };
+  const scan = async () => jsonRequest<GitSkillRepositoryInspection>(`${origin}/api/skills/import-git/inspect`, {
+    method: "POST", headers, body: JSON.stringify(source),
+  });
+  const review = async (commit: string, subdirectories: string[]) => fetch(`${origin}/api/skills/import-git/review`, {
+    method: "POST", headers, body: JSON.stringify({ ...source, commit, subdirectories }),
+  });
+  const scanBefore = await scan();
+  assert.equal(scanBefore.response.status, 200, JSON.stringify(scanBefore.body));
+  assert.equal(scanBefore.body.commit, head);
+  await writeSkill("second", "Same advertised name");
+  const next = await commit("move review ref");
+  const pinned = await review(head, ["first"]);
+  assert.equal(pinned.status, 201);
+  const pinnedResult = await pinned.json() as CreateGitSkillReviewDraftsResponse;
+  assert.equal(pinnedResult.commit, head);
+  assert.deepEqual(pinnedResult.drafts[0]?.provenance?.git, { ...source, commit: head, subdirectory: "first" });
+  const before = await readDrafts();
+  // Inspecting the new HEAD replaces the snapshot of the original commit.
+  const scanAfter = await scan();
+  assert.equal(scanAfter.response.status, 200);
+  assert.equal(scanAfter.body.commit, next);
+  const stale = await review(head, ["first"]);
+  assert.equal(stale.status, 409);
+  assert.match(await stale.text(), /Git ref moved after inspection/);
+  assert.deepEqual(await readDrafts(), before);
+  const duplicate = await review(next, ["first", "second"]);
+  assert.equal(duplicate.status, 400);
+  assert.match(await duplicate.text(), /duplicate Skill names/);
+  assert.deepEqual(await readDrafts(), before);
+  const accepted = await review(next, ["first"]);
+  assert.equal(accepted.status, 201);
+  const result = await accepted.json() as CreateGitSkillReviewDraftsResponse;
+  assert.equal(result.commit, next);
+  const retry = await review(next, ["first"]);
+  assert.equal(retry.status, 201);
+  const repeated = await retry.json() as CreateGitSkillReviewDraftsResponse;
+  assert.equal(repeated.drafts[0]?.draftId, result.drafts[0]?.draftId);
+  const saved = await readDrafts();
+  assert.equal(result.drafts[0]?.draftId, pinnedResult.drafts[0]?.draftId);
+  assert.deepEqual(saved.map(({ draftId }) => draftId).sort(), before.map(({ draftId }) => draftId).sort());
+
+  await writeSkill("first", "Updated method");
+  await writeSkill("second", "Independent method", "independent-method");
+  const updated = await commit("prepare a two-Skill review");
+  // Fail the second file write after the first draft has already been changed.
+  // The Git checkout, selection, persistence and rollback stay on the production path.
+  type DraftStorage = { saveReviewDraft(draft: { name: string }, create?: boolean): Promise<void> };
+  const storage = SkillCatalog.prototype as unknown as DraftStorage;
+  const save = storage.saveReviewDraft;
+  const attempted: string[] = [];
+  const inject = context.mock.method(storage, "saveReviewDraft", async function (
+    this: DraftStorage, draft: { name: string }, create?: boolean,
+  ) {
+    attempted.push(draft.name);
+    if (draft.name === "independent-method") throw new Error("injected draft write failure");
+    await save.call(this, draft, create);
+  });
+  try {
+    const failed = await review(updated, ["first", "second"]);
+    assert.equal(failed.status, 500);
+    assert.deepEqual(await failed.json(), { error: "Internal server error" });
+    assert.deepEqual(attempted, ["reviewed-method", "independent-method", "reviewed-method"]);
+    assert.deepEqual(await readDrafts(), saved);
+  } finally { inject.mock.restore(); }
+  const afterRollback = await review(updated, ["first", "second"]);
+  assert.equal(afterRollback.status, 201);
+  const restored = await afterRollback.json() as CreateGitSkillReviewDraftsResponse;
+  assert.equal(restored.commit, updated);
+  assert.equal(restored.drafts[0]?.draftId, result.drafts[0]?.draftId);
+  assert.equal((await readDrafts()).length, saved.length + 1);
 });

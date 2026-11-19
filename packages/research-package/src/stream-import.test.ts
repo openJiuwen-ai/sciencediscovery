@@ -1,12 +1,14 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import test from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { createResearchPackage, importResearchPackage, importResearchPackageStreamed, sha256, RESEARCH_PACKAGE_UNPACK_BUDGET_CODE } from "./index.js";
+
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 
 function fixture() {
   const objects = [Buffer.from("alpha payload\n"), Buffer.from("beta payload\n")];

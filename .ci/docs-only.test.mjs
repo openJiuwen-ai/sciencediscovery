@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import { webUiStEntries } from './web-ui-st.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,12 +13,12 @@ import { gate, route } from './tier-policy.mjs';
 
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
+const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8').replaceAll('\r\n', '\n');
 const jobs = Object.fromEntries(workflow.split('\njobs:\n')[1].split(/\n(?=  [\w-]+:\n)/).slice(1)
   .map(block => [block.match(/^  ([\w-]+):/)[1], block]));
 const condition = block => block.match(/\bif: (?:>-\s*)?\$\{\{([\s\S]*?)\}\}/)?.[1].trim();
 const dependencies = name => (jobs[name].match(/^    needs: (.+)/m)?.[1] ?? '').replace(/[\[\]]/g, '').split(', ').filter(Boolean);
-const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'binary', 'docker', 'windows-desktop', 'macos-desktop', 'real-merge', 'real-scheduled'];
+const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'desktop-mocked', 'coverage', 'binary', 'docker', 'windows-desktop', 'macos-desktop', 'real-merge', 'real-scheduled'];
 
 function eligible(expression, needs, { event = 'pull_request', draft = false, success = true, inputs = {} } = {}) {
   if (!expression) return success;
@@ -214,7 +215,7 @@ test('documentation-only PR, push and queue run docs and merge-gate without heav
   assert.ok(full); assert.ok(docs);
   assert.match(docs, /pnpm install --frozen-lockfile/);
   const artifacts = jobs['merge-gate'].split(/\n      - /).filter(step => /download-artifact|mocked-report|upload-artifact/.test(step));
-  assert.equal(artifacts.length, 4);
+  assert.equal(artifacts.length, 5);
   for (const paths of [['docs/en/guide.md'], ['.agents/skills/foo/SKILL.md', '.agents/skills/foo/references/note.md']]) {
     for (const event of ['pull_request', 'push', 'merge_group']) {
       const needs = selection(event, paths);
@@ -276,7 +277,7 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
         const needs = selection(event, paths, { profile });
         const selectedProfile = needs.policy.outputs.profile;
         for (const name of ['l1', 'ut', 'st', 'coverage', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
-        for (const name of ['e2e-plan', 'e2e']) assert.equal(needs[name].result, selectedProfile === 'pr' ? 'skipped' : 'success');
+        for (const name of ['e2e-plan', 'e2e']) assert.equal(needs[name].result, needs.policy.outputs.mocked === 'true' ? 'success' : 'skipped');
         for (const name of ['binary', 'docker']) assert.equal(needs[name].result, selectedProfile === 'merge' ? 'skipped' : 'success');
         for (const name of ['windows-desktop', 'macos-desktop']) {
           assert.equal(needs[name].result, ['daily', 'release'].includes(selectedProfile) ? 'success' : 'skipped', name);
@@ -285,7 +286,7 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
         assert.equal(needs['real-scheduled'].result, ['daily', 'release'].includes(selectedProfile) ? 'success' : 'skipped');
         assert.deepEqual(gate(selectedProfile, needs), []);
         const artifacts = jobs['merge-gate'].split(/\n      - /).filter(step => /download-artifact|mocked-report|upload-artifact/.test(step));
-        for (const step of artifacts) assert.equal(eligible(condition(step), needs), selectedProfile !== 'pr', `${selectedProfile}: E2E artifacts`);
+        for (const step of artifacts) assert.equal(eligible(condition(step), needs), step.includes('desktop-mocked-results') ? needs.policy.outputs.desktop_specs !== 'none' : needs.policy.outputs.mocked === 'true', `${selectedProfile}: E2E artifacts`);
         for (const name of ['ut', 'st', 'e2e-plan', 'e2e']) {
           const result = needs[name].result === 'skipped' ? 'success' : 'skipped';
           assert.ok(gate(selectedProfile, { ...needs, [name]: { result } }).length, `${event}: ${name}`);
@@ -340,4 +341,90 @@ test('failed Linux binary blocks Windows while macOS can finish in package/all',
   assert.equal(needs['macos-desktop'].result, 'success');
   assert.equal(needs['merge-gate'].result, 'success', 'the aggregate still runs');
   assert.deepEqual(gate('package', needs), ['binary: failure', 'windows-desktop: skipped']);
+});
+
+test('Desktop browser coverage runs once on the merge candidate and remains required for scheduled gates', () => {
+  const paths = ['apps/desktop/src/views/WorkspacePanel.tsx'];
+  for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
+    const needs = selection(event, paths, { profile: 'pr' });
+    assert.equal(needs.policy.outputs.desktop_specs, 'none');
+    assert.equal(needs['desktop-mocked'].result, 'skipped');
+    assert.deepEqual(gate('pr', needs), []);
+    assert.ok(gate('pr', { ...needs, 'desktop-mocked': { result: 'success' } }).includes('desktop-mocked: expected skipped in pr policy'));
+  }
+  for (const [event, profile] of [['merge_group', 'merge'], ['workflow_dispatch', 'merge'], ['schedule', 'daily'], ['push', 'release']]) {
+    const needs = selection(event, paths, { profile });
+    assert.equal(needs.policy.outputs.desktop_specs, 'all');
+    assert.equal(needs['desktop-mocked'].result, 'success');
+    assert.deepEqual(gate(profile, needs), []);
+    assert.ok(gate(profile, { ...needs, 'desktop-mocked': { result: 'skipped' } }).includes('desktop-mocked: skipped'));
+  }
+});
+
+test('Web UI-ST uses the frozen mocked matrix and remains required for affected PRs', () => {
+  const oauth = 'test/journey-mcp-oauth.spec.ts';
+  const needs = selection('pull_request', ['apps/web/src/McpInspector.tsx', oauth]);
+  assert.deepEqual(JSON.parse(needs.policy.outputs.web_ui_st_specs), [oauth]);
+  assert.equal(needs['e2e-plan'].result, 'success');
+  assert.equal(needs.e2e.result, 'success');
+  assert.deepEqual(gate('pr', needs), []);
+  assert.ok(gate('pr', { ...needs, e2e: { result: 'skipped' } }).includes('e2e: skipped'));
+  for (const name of ['e2e-plan', 'e2e']) {
+    assert.match(jobs[name], /CI_WEB_UI_ST_SPECS: \$\{\{ needs\.policy\.outputs\.web_ui_st_specs \}\}/u);
+  }
+  const research = 'test/journey-restore-research.spec.ts';
+  for (const path of [research, 'apps/web/src/views/MemoryExplorer.tsx', 'apps/web/src/views/ResearchPackage.tsx']) {
+    assert.deepEqual(JSON.parse(route('pull_request', 'pr', 'jiuwenswarm', [path]).web_ui_st_specs), [research]);
+  }
+  assert.equal(route('pull_request', 'pr', 'jiuwenswarm', ['apps/web/src/App.tsx']).web_ui_st_specs, 'all');
+  assert.equal(route('pull_request', 'pr', 'jiuwenswarm', ['apps/desktop/src/App.tsx']).web_ui_st_specs, 'none');
+  assert.equal(route('workflow_dispatch', 'daily', 'jiuwenswarm', [oauth]).mocked, true);
+  assert.equal(route('workflow_dispatch', 'daily', 'jiuwenswarm', [oauth]).web_ui_st_specs, 'none');
+});
+
+
+test('merge queue supplies both candidate SHAs to changed-path enforcement', () => {
+  assert.match(jobs.l1, /CI_BASE_SHA: \$\{\{ github\.event\.merge_group\.base_sha \|\|/u);
+  assert.match(jobs.l1, /CI_HEAD_SHA: \$\{\{ github\.event\.merge_group\.head_sha \|\|/u);
+});
+
+test('Desktop shared harness changes require the full mocked suite in PRs', () => {
+  for (const path of [
+    'apps/desktop/e2e/fixtures.ts',
+    'apps/desktop/e2e/playwright.config.ts',
+    'apps/desktop/e2e-real/support.ts',
+    'apps/desktop/e2e-real/playwright.config.ts',
+  ]) {
+    const needs = selection('pull_request', [path]);
+    assert.equal(needs.policy.outputs.desktop_specs, 'all', path);
+    assert.equal(needs['desktop-mocked'].result, 'success', path);
+    assert.equal(needs['real-merge'].result, 'skipped', path);
+    assert.equal(needs['real-scheduled'].result, 'skipped', path);
+    assert.deepEqual(gate('pr', needs), []);
+    assert.ok(gate('pr', { ...needs, 'desktop-mocked': { result: 'skipped' } }).includes('desktop-mocked: skipped'));
+  }
+});
+
+test('browser-spec-only PRs require their affected mocked job', () => {
+  const desktop = 'apps/desktop/e2e/ui-st-smoke.spec.ts';
+  const desktopNeeds = selection('pull_request', [desktop, 'apps/desktop/e2e/deleted.spec.ts']);
+  assert.deepEqual(JSON.parse(desktopNeeds.policy.outputs.desktop_specs), [desktop]);
+  assert.equal(desktopNeeds['desktop-mocked'].result, 'success');
+  assert.deepEqual(gate('pr', desktopNeeds), []);
+  assert.ok(gate('pr', { ...desktopNeeds, 'desktop-mocked': { result: 'skipped' } }).includes('desktop-mocked: skipped'));
+
+  const web = 'test/journey-ui-critical-gaps.spec.ts';
+  const webNeeds = selection('pull_request', [web, 'test/deleted.spec.ts']);
+  const routeSelection = webNeeds.policy.outputs.web_ui_st_specs;
+  assert.deepEqual(JSON.parse(routeSelection), [web]);
+  assert.equal(webNeeds.e2e.result, 'success');
+  assert.deepEqual(gate('pr', webNeeds), []);
+  const other = { source: 'test/journey-session-capabilities.spec.ts' };
+  assert.deepEqual(webUiStEntries([{ source: web }, other], routeSelection), [{ source: web }]);
+
+  const baseline = ['mcp-oauth', 'idea-tree-fixture', 'evolve-initialization', 'restore-research']
+    .map(name => ({ source: `test/journey-${name}.spec.ts` }));
+  assert.deepEqual(webUiStEntries([...baseline, other], JSON.stringify(['test/real-only.spec.ts'])), baseline);
+  const mixed = route('pull_request', 'pr', 'jiuwenswarm', ['.ci/tier-policy.mjs', web]);
+  assert.deepEqual(webUiStEntries([...baseline, other, { source: web }], mixed.web_ui_st_specs), [...baseline, { source: web }]);
 });

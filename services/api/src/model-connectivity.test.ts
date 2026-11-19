@@ -22,7 +22,7 @@ import type { AddressInfo } from "node:net";
 
 import { setModelCatalogSnapshot, type ModelConnectivityTestResult, type ModelProfile } from "@sciencediscovery/schema";
 
-import { ModelConnectivityTestCoordinator, testModelConnectivity } from "./model-connectivity.js";
+import { DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS, ModelConnectivityTestCoordinator, modelConnectivityTimeoutMs, testModelConnectivity } from "./model-connectivity.js";
 
 function profile(baseUrl: string): ModelProfile {
   return {
@@ -62,6 +62,15 @@ async function withProvider<T>(
 }
 
 const directProxy = () => ({ mode: "direct" } as const);
+
+test("model connectivity timeout configuration keeps the product default and bounds CI overrides", () => {
+  assert.equal(modelConnectivityTimeoutMs({}), DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS);
+  assert.equal(modelConnectivityTimeoutMs({ SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "" }), DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS);
+  assert.equal(modelConnectivityTimeoutMs({ SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "30000" }), 30_000);
+  assert.equal(modelConnectivityTimeoutMs({ SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "not-a-number" }), DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS);
+  assert.equal(modelConnectivityTimeoutMs({ SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "999999" }), 60_000);
+  assert.equal(modelConnectivityTimeoutMs({ SCIENCE_AGENT_MODEL_CONNECTIVITY_TIMEOUT_MS: "0" }), 1);
+});
 
 test("CFG-R02: every compatibility dispatch has a final destination guard, including the tool-result round trip", async () => {
   const provider = await protocolProvider("all"); let checks = 0;

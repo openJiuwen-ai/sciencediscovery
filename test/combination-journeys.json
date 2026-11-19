@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "journeys": [
+    {
+      "id": "GJ-01",
+      "productBrowserSpecs": ["test/journey-first-run.spec.ts", "test/journey-model-connect-wizard.spec.ts", "test/journey-approval-defaults.spec.ts", "test/journey-custom-mcp.spec.ts", "test/journey-artifact-archive.spec.ts"],
+      "title": "First-run setup through approval, tool configuration, run and artifact",
+      "evidence": ["test/journey-first-run.spec.ts", "test/journey-model-connect-wizard.spec.ts", "test/journey-approval-defaults.spec.ts", "test/journey-custom-mcp.spec.ts", "test/journey-artifact-archive.spec.ts"],
+      "faults": ["approval-reject", "provider-error"],
+      "assertions": ["configuration persists", "approval is explicit", "tool call is audited", "artifact is readable"]
+    },
+    {
+      "id": "GJ-02",
+      "productBrowserSpecs": ["test/journey-execution-management.spec.ts"],
+      "title": "Session recovery after Runner or provider interruption",
+      "evidence": ["test/journey-runner-recovery-real.spec.ts", "test/recovery-runner-journey.mjs", "test/api/detached-runner-journey.mjs"],
+      "faults": ["sse-disconnect", "runner-restart", "cancel-retry"],
+      "assertions": ["events remain ordered", "resume is idempotent", "provenance is retained"]
+    },
+    {
+      "id": "GJ-03",
+      "productBrowserSpecs": ["test/journey-restore-research.spec.ts", "test/journey-idea-tree-fixture.spec.ts", "test/journey-evolve-initialization.spec.ts"],
+      "title": "File input through memory or idea graph into research and evolve",
+      "evidence": ["test/api/memory-folded-subgraph-journey.mjs", "test/api/idea-research-protocol-journey.mjs", "test/api/evolve-thinking-journey.mjs", "test/journey-idea-tree-fixture.spec.ts", "test/journey-evolve-initialization.spec.ts"],
+      "faults": ["memory-sidecar-down", "partial-artifact"],
+      "assertions": ["input version is retained", "graph edges are attributable", "result source is visible"]
+    },
+    {
+      "id": "GJ-04",
+      "productBrowserSpecs": ["test/journey-ssh-remote-runner.spec.ts", "test/journey-npu-cards.spec.ts", "test/journey-sandbox-network-consent.spec.ts"],
+      "title": "Remote or NPU execution through sandbox, approval and artifact cleanup",
+      "evidence": ["test/api/runner-location-journey.mjs", "test/journey-ssh-remote-runner.spec.ts", "test/journey-npu-cards.spec.ts", "test/api/sandbox-disconnect-journey.mjs", "test/journey-sandbox-network-consent.spec.ts"],
+      "faults": ["runner-unavailable", "approval-timeout", "resource-exhausted"],
+      "assertions": ["capability selection is visible", "unsafe execution is blocked", "cleanup is complete"]
+    },
+    {
+      "id": "GJ-05",
+      "productBrowserSpecs": ["test/swarm-specialist-mcp-mocked.spec.ts", "test/journey-delegate-subtask.spec.ts"],
+      "title": "Parallel Specialist, MCP and subagent work merged into one result",
+      "evidence": ["test/swarm-specialist-mcp-mocked.spec.ts", "test/api/specialist-multiruntime-journey.mjs", "test/journey-delegate-subtask.spec.ts", "test/journey-session-trajectory.spec.ts"],
+      "faults": ["tool-timeout", "subagent-failure", "partial-merge"],
+      "assertions": ["subagent lanes remain isolated", "tool trace is complete", "merge keeps citations"]
+    },
+    {
+      "id": "GJ-06",
+      "productBrowserSpecs": ["test/journey-session-capabilities.spec.ts", "test/journey-runner-locations.spec.ts"],
+      "title": "Two Sessions keep model, Skill, MCP, Runner and memory state isolated",
+      "evidence": ["test/journey-session-capabilities.spec.ts", "test/journey-model-settings.spec.ts", "test/journey-custom-mcp.spec.ts", "test/journey-runner-locations.spec.ts", "services/api/src/server.test.ts"],
+      "faults": ["duplicate-request", "permission-denied"],
+      "assertions": ["registry selection is session-scoped", "credentials do not cross sessions", "results remain separated"]
+    }
+  ]
+}

@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise Desktop Runner registration, diagnostics, and catalog navigation.
+ * Steps:
+ *   1. Open Desktop Settings and navigate to the Runner catalog.
+ *   2. Exercise an operation and assert the resulting UI and API interactions.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -408,7 +424,7 @@ test.describe("删除", () => {
 });
 
 test.describe("运行环境导航", () => {
-  test("all catalog machines have details without changing project availability", async ({ page }) => {
+  test("all catalog machines have details without changing project availability", { tag: "@ui-st" }, async ({ page }) => {
     const mock = await installMockApi(page, {
       projects: [{ ...DEFAULT_PROJECT, runnerIds: ["local"] }],
       runners: [localRunner(), runner()],

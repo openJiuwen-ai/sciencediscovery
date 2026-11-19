@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ConfigurationValues, type ModelProfile,
   type EffectiveRuntimeSettings, type RuntimeSettingsOverrides, type ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
-import { testModelConnectivity } from "../model-connectivity.js";
+import { modelConnectivityTimeoutMs, testModelConnectivity } from "../model-connectivity.js";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import type { ConfigurationAdapter, ConfigurationAdapterContext, ConfigurationPlan, ConfigurationSnapshot } from "./types.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
@@ -159,6 +159,7 @@ export function createConfigurationDomainAdapters(options: Options): Configurati
     const probe = async (apiToken?: string) => {
       options.destinations.assertContext(context, isRepair ? "model.repair_credential" : "model.connect", profile, Boolean(apiToken));
       const tested = await testModelConnectivity({ profile, apiToken, allowMissingToken: !isRepair && input.tokenOptional === true,
+        timeoutMs: modelConnectivityTimeoutMs(),
         beforeDispatch: () => {
           if (store.notifications.generation(context.sessionId) !== context.snapshot.stopGeneration) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped before the probe was sent", 409);
           const current = isRepair ? store.getModel(text(context.input, "modelId")) : profile;
