@@ -17,6 +17,7 @@ const { describe, it } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
 });
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 // The test runner compiles JSX with the classic runtime, so React has to be in
 // scope even though the app itself uses the automatic one.
 import React from "react";
@@ -135,5 +136,28 @@ describe("the column controls", () => {
     assert.ok(markup.includes(TEXT.sidebar.newTask));
     assert.ok(markup.includes("晶体结构分析"));
     assert.ok(markup.includes("结构比对"));
+  });
+});
+
+/**
+ * The two session actions are one group: the change is a DOM move plus two CSS
+ * declarations, so without this case a later sidebar edit could take the import
+ * button back out (or the rule back to a row) and the suite would stay green.
+ */
+describe("the session actions' group", () => {
+  it("puts the import action inside the new-session container", () => {
+    const markup = render();
+    const open = markup.indexOf('<div class="side-new-split">');
+    assert.ok(open >= 0, "the two actions share one container");
+    const close = markup.indexOf("</div>", open);
+    const group = markup.slice(open, close);
+
+    assert.ok(group.includes("side-import-button"), "the import button is inside the group");
+    assert.ok(group.includes(TEXT.researchPackage.import), "and it is the import label");
+  });
+
+  it("stacks them with a 2px gap instead of a row", () => {
+    const css = readFileSync(new URL("../src/styles/research-package.css", import.meta.url), "utf8");
+    assert.match(css, /\.side-new-split \{[^}]*display:flex;[^}]*flex-direction:column;[^}]*gap:2px;/);
   });
 });
