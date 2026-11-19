@@ -72,6 +72,21 @@ zip, marks every imported version approved and is safe to re-run.
 
 ## Deploy
 
+Before deploying, prove the bucket and the credentials:
+
+```bash
+set -a; . ./.env; set +a
+.venv/bin/python -m scripts.storage_smoke
+```
+
+It uploads a few bytes, presigns a URL, downloads it anonymously, checks the
+digest, confirms an unsigned GET is refused, and deletes the object.
+
+The host clock must be within fifteen minutes of real time: SigV4 rejects a
+signature dated further ahead (`RequestTimeTooSkewed`). Run NTP on the server.
+The smoke script measures and compensates for a drifting development host; the
+service itself does not, on purpose.
+
 `Dockerfile` builds the service; `docker-compose.yml` runs it beside MySQL.
 The bucket is expected to be **private**: every download is a presigned URL
 issued by `GET /api/v1/artifacts/{id}`. Do not put credentials in the image;
