@@ -105,6 +105,64 @@ export const ZH = {
     /** Shown as the tooltip on a session name, for the gesture nothing else
      *  announces. The same rename is in the row's `⋯` menu. */
     renameHint: "双击改名",
+    /** The marker on an archived Session in search results; the read-only view
+     *  itself belongs to #1250. */
+    archived: "已归档",
+  },
+
+  /** The sidebar's search field and result list, and the session-list filters. */
+  search: {
+    label: "搜索会话、项目、产物",
+    placeholder: "搜索会话、项目、产物",
+    /** The field must not promise message search: the server matches names and
+     *  titles only, and the issue records content search as a follow-up. */
+    hint: "搜索会话、项目、产物；只匹配名称与标题，不搜索消息内容 · Ctrl/Cmd+K",
+    clear: "清除搜索",
+    loading: "正在搜索…",
+    count: (count: number) => `${count} 条结果`,
+    /** The live announcement when the answer is empty; the block itself
+     *  carries the full sentence at heading weight. */
+    noResults: "无结果",
+    emptyTitle: "没有匹配的会话、项目或产物",
+    emptyBody: "搜索只匹配名称与标题，不搜索消息内容。换一个名称或标题试试。",
+    failed: (reason: string) => `搜索失败：${reason}`,
+    /** Used when the reason is a transport failure rather than the server's
+     *  own sentence; "操作失败" appended to "搜索失败" would only repeat it. */
+    fallbackReason: "请稍后重试。",
+    retry: "重试",
+    groups: {
+      project: "项目",
+      session: "会话",
+      artifact: "产物",
+    },
+    deletedSession: "原会话已删除",
+    /** The inbox read failed in whole or in part; the panel still shows the
+     *  rows it could read and says the answer may be incomplete. */
+    inboxIncomplete: "部分会话或产物的搜索数据暂时读不到，结果可能不完整。",
+    /** A result whose creating Session is gone has no Session to read its
+     *  output through, so it is shown but cannot be opened. */
+    artifactUnavailable: "原会话已删除，无法打开",
+    more: (shown: number, total: number) =>
+      `已显示前 ${shown} 条，共 ${total} 条；请缩小搜索范围。`,
+    filters: {
+      label: "筛选",
+      onlyCurrentProject: "仅当前项目",
+      onlyRunning: "仅运行中",
+      hasArtifacts: "有产物",
+      timeWindow: "时间范围",
+      timeAll: "全部时间",
+      timeToday: "今天",
+      timeWeek: "最近 7 天",
+      pending: "正在读取各会话的运行状态与产物…",
+      pendingRows: "正在读取…",
+      failed: "运行状态或产物读取失败，筛选结果可能不完整。",
+      retry: "重试",
+      empty: "当前筛选下没有会话",
+      /** Shown in place of the empty sentence when the facts could not be
+       *  read: unknown is not the same answer as "none". */
+      unavailable: "读取失败，暂时无法判断哪些会话符合筛选",
+      reset: "清除筛选",
+    },
   },
 
   sessionBar: {

@@ -12,10 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import type { ApiClient } from "../api/client.js";
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { projectWithName } from "../app/project-name.js";
+import {
+  hasActiveFilter,
+  readSidebarFilters,
+  sessionInWindow,
+  sessionMatchesFilters,
+  writeSidebarFilters,
+  type SidebarFilters,
+  type SidebarWindow,
+} from "../app/sidebar-filters.js";
+import { useSessionFilterFacts } from "../app/use-session-filter.js";
 import type { WorkspaceActions } from "../app/use-workspace.js";
 import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
@@ -25,6 +36,7 @@ import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
 import { sessionTitle } from "../app/session-title.js";
+import { SidebarSearch } from "./SidebarSearch.js";
 import { SidebarToggle } from "./SidebarToggle.js";
 
 /** One rename in progress, whichever kind of row it started from. A Project
@@ -36,11 +48,17 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
+  /** The sidebar calls the workbench search and the two on-demand filter reads
+   *  through this: the app's one authenticated client. */
+  client: ApiClient;
   onExportSession?: (session: Session) => void;
   onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
   activeProjectId?: string;
   activeSessionId?: string;
+  /** The inbox Project, whose archived Sessions and artifacts the server's
+   *  search skips; passed through to the search panel. */
+  inboxProjectId?: string;
   onToggleSidebar?: () => void;
   /** The Projects the user made, oldest first. The inbox is not among them:
    *  its Sessions are the `recent` list, and it gets no fold. */
@@ -91,10 +109,12 @@ const PAGE_SIZE = 6;
  */
 export function Sidebar({
   actions,
+  client,
   onExportSession,
   onImportSession,
   activeProjectId,
   activeSessionId,
+  inboxProjectId,
   onToggleSidebar,
   projects,
   recent,
@@ -112,7 +132,67 @@ export function Sidebar({
    *  list (`recent` or a Project id), so one long list does not unfold the
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<SidebarFilters>(() => readSidebarFilters());
+  /** A manual retry for a failed on-demand fact read. */
+  const [factsAttempt, setFactsAttempt] = useState(0);
   const stars = useGithubStars();
+  const searching = query.trim() !== "";
+
+  /** Every loaded Session, which is what the filters read. `recent` and the
+   *  Project lists overlap for a Session already moved into a Project, so the
+   *  ids are deduplicated before the on-demand reads. */
+  const allSessions = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Session[] = [];
+    for (const session of [...recent, ...Object.values(sessionsByProject).flat()]) {
+      if (seen.has(session.id)) continue;
+      seen.add(session.id);
+      list.push(session);
+    }
+    return list;
+  }, [recent, sessionsByProject]);
+  /** Only the rows the cheap filters leave can need a per-Session read, so an
+   *  enabled 仅运行中 / 有产物 does not ask about Sessions the other filters
+   *  have already hidden. */
+  const filterCandidates = useMemo(
+    () => allSessions.filter((session) => {
+      if (filters.onlyCurrentProject && activeProjectId !== undefined
+        && session.projectId !== activeProjectId) return false;
+      return sessionInWindow(session, filters.window);
+    }),
+    [activeProjectId, allSessions, filters.onlyCurrentProject, filters.window],
+  );
+  // `running` flips when the open run ends, which must re-read the facts even
+  // if the Session rows themselves have not changed yet.
+  const sessionFacts = useSessionFilterFacts(
+    client,
+    filterCandidates,
+    filters,
+    `${running === true ? "running" : "idle"}:${factsAttempt}`,
+  );
+
+  const changeFilters = (patch: Partial<SidebarFilters>) => {
+    setFilters((current) => {
+      const next = { ...current, ...patch };
+      writeSidebarFilters(next);
+      return next;
+    });
+  };
+  const resetFilters = () => changeFilters({ hasArtifacts: false, onlyCurrentProject: false, onlyRunning: false, window: "all" });
+
+  const sessionVisible = (session: Session): boolean => sessionMatchesFilters(session, filters, {
+    activeProjectId,
+    running: sessionFacts.running,
+    withArtifacts: sessionFacts.withArtifacts,
+  });
+  const visibleRecent = recent.filter(sessionVisible);
+  /** A filter whose facts are still loading is not an empty result set. */
+  const filteredEmpty = sessionFacts.pending
+    ? TEXT.search.filters.pendingRows
+    : sessionFacts.failed
+      ? TEXT.search.filters.unavailable
+      : TEXT.search.filters.empty;
 
   const anchor = (event: { clientX: number; clientY: number }) => ({
     x: event.clientX,
@@ -261,7 +341,92 @@ export function Sidebar({
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12v4M4 4v16h12v-4M9 12h11m-4-4 4 4-4 4" /></svg><span>{TEXT.researchPackage.import}</span>
       </button>
 
-      <div className="side-scroll">
+      <SidebarSearch
+        client={client}
+        inboxProjectId={inboxProjectId}
+        onOpenArtifact={(artifactId, sessionId) => void actions.openArtifactResult(artifactId, sessionId)}
+        onOpenProject={(projectId) => {
+          // Opening a Project result unfolds its fold and points the next
+          // conversation at it; it does not create a Session.
+          setFolded((current) => {
+            if (!current.has(projectId)) return current;
+            const next = new Set(current);
+            next.delete(projectId);
+            return next;
+          });
+          actions.selectProject(projectId);
+        }}
+        onOpenSession={(sessionId, projectId) => void actions.openSession(sessionId, projectId)}
+        onQueryChange={setQuery}
+        query={query}
+        recent={recent}
+      />
+
+      {searching ? null : (
+        <>
+          <div aria-label={TEXT.search.filters.label} className="side-filters" role="group">
+            <span className="side-filters-label">{TEXT.search.filters.label}</span>
+            <button
+              aria-pressed={filters.onlyCurrentProject}
+              className={`side-filter${filters.onlyCurrentProject ? " is-on" : ""}`}
+              onClick={() => changeFilters({ onlyCurrentProject: !filters.onlyCurrentProject })}
+              type="button"
+            >
+              {TEXT.search.filters.onlyCurrentProject}
+            </button>
+            <button
+              aria-pressed={filters.onlyRunning}
+              className={`side-filter${filters.onlyRunning ? " is-on" : ""}`}
+              onClick={() => changeFilters({ onlyRunning: !filters.onlyRunning })}
+              type="button"
+            >
+              {TEXT.search.filters.onlyRunning}
+            </button>
+            <button
+              aria-pressed={filters.hasArtifacts}
+              className={`side-filter${filters.hasArtifacts ? " is-on" : ""}`}
+              onClick={() => changeFilters({ hasArtifacts: !filters.hasArtifacts })}
+              type="button"
+            >
+              {TEXT.search.filters.hasArtifacts}
+            </button>
+            <select
+              aria-label={TEXT.search.filters.timeWindow}
+              className="side-filter-select"
+              onChange={(event) => changeFilters({ window: event.target.value as SidebarWindow })}
+              value={filters.window}
+            >
+              <option value="all">{TEXT.search.filters.timeAll}</option>
+              <option value="today">{TEXT.search.filters.timeToday}</option>
+              <option value="week">{TEXT.search.filters.timeWeek}</option>
+            </select>
+            {hasActiveFilter(filters) ? (
+              <button className="side-filter-reset" onClick={resetFilters} type="button">
+                {TEXT.search.filters.reset}
+              </button>
+            ) : null}
+          </div>
+          {sessionFacts.pending ? (
+            <div className="side-filters-pending" role="status">{TEXT.search.filters.pending}</div>
+          ) : null}
+          {sessionFacts.failed ? (
+            <div className="side-filters-failed" role="status">
+              <span>{TEXT.search.filters.failed}</span>
+              <button
+                className="side-filter-retry"
+                onClick={() => setFactsAttempt((current) => current + 1)}
+                type="button"
+              >
+                {TEXT.search.filters.retry}
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
+
+      {/* Kept mounted while the results show: `hidden` takes it out of the
+          layout but keeps the scroll position Escape returns to. */}
+      <div className="side-scroll" hidden={searching}>
         <div className="side-label side-label-row">
           <span>{TEXT.sidebar.project}</span>
           <button
@@ -278,6 +443,7 @@ export function Sidebar({
         {projects.map((project) => {
           const open = !folded.has(project.id);
           const sessions = byRecency(sessionsByProject[project.id] ?? []);
+          const visibleSessions = sessions.filter(sessionVisible);
           const editing = renaming?.kind === "project" && renaming.project.id === project.id;
           return (
             <div key={project.id}>
@@ -347,7 +513,9 @@ export function Sidebar({
               {open
                 ? sessions.length === 0
                   ? <div className="side-empty">{TEXT.sidebar.noTasks}</div>
-                  : sessionList(project.id, sessions)
+                  : visibleSessions.length === 0
+                    ? <div className="side-empty">{filteredEmpty}</div>
+                    : sessionList(project.id, visibleSessions)
                 : null}
             </div>
           );
@@ -360,8 +528,10 @@ export function Sidebar({
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
           <div className="side-empty">{TEXT.sidebar.noRecent}</div>
+        ) : visibleRecent.length === 0 ? (
+          <div className="side-empty">{filteredEmpty}</div>
         ) : (
-          <div className="side-flat">{sessionList("recent", recent)}</div>
+          <div className="side-flat">{sessionList("recent", visibleRecent)}</div>
         )}
       </div>
 

@@ -150,6 +150,14 @@ export interface MockOptions {
    *  on. The transcript is rebuilt from these alone — the stored messages stay
    *  as they were listed. */
   runsBySession?: Record<string, ReplayRecord[]>;
+  /** The rows `GET /api/search` answers with (#1251). The endpoint's matching
+   *  is covered by the API's own tests; the sidebar spec needs a known page
+   *  with one result of each kind. */
+  searchResults?: JsonRecord[];
+  /** The paging fields alongside `searchResults`; a truncated page is what
+   *  the always-visible notice test needs. */
+  searchHasMore?: boolean;
+  searchTotal?: number;
   /** The catalog behind `GET .../subagents`, keyed by Session id. It is the only
    *  place a replayed child's steps live, so a spec that opens one needs both
    *  the snapshot in the run's log and the row here. */
@@ -698,6 +706,20 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/projects" && method === "GET") {
         return json(route, 200, state.projects);
+      }
+
+      // #1251: the workbench search the sidebar consumes. Its matcher lives in
+      // the API; the desktop spec only needs a fixed answer it can group and
+      // open, so an unknown query still returns these rows.
+      if (path === "/api/search" && method === "GET") {
+        const results = options.searchResults ?? [];
+        return json(route, 200, {
+          hasMore: options.searchHasMore ?? false,
+          limit: 250,
+          offset: 0,
+          results,
+          total: options.searchTotal ?? results.length,
+        });
       }
 
       // The inbox is a Project the server keeps but leaves out of the list; the

@@ -64,6 +64,11 @@ export const APPROVAL_MODE_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:approval-mod
  *  from it (#1205). Only an explicit pick writes it. */
 export const REMEMBERED_MODEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:last-model`;
 
+/** The sidebar's session-list filters (#1251): 仅当前项目 / 仅运行中 / 有产物 /
+ * time window. A live preference like the approval mode — the next start reads
+ * it back rather than starting from the unfiltered list. */
+export const SIDEBAR_FILTERS_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:sidebar-filters`;
+
 function safeRead(storage: ReadableStorage, key: string): string | null {
   try {
     return storage.getItem(key);

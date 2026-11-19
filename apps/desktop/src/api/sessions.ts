@@ -72,9 +72,11 @@ export function listSessions(
   client: ApiClient,
   projectId: string,
   state: SessionListState = "active",
+  init: RequestInit = {},
 ): Promise<Session[]> {
   return client.request<Session[]>(
     `/api/projects/${encodeURIComponent(projectId)}/sessions?state=${state}`,
+    init,
   );
 }
 
@@ -182,9 +184,11 @@ export function listArtifacts(client: ApiClient, sessionId: string): Promise<Sci
 export function listArtifactOutputs(
   client: ApiClient,
   sessionId: string,
+  init: RequestInit = {},
 ): Promise<SessionArtifactOutput[]> {
   return client.request<SessionArtifactOutput[]>(
     `/api/sessions/${encodeURIComponent(sessionId)}/artifact-outputs`,
+    init,
   );
 }
 

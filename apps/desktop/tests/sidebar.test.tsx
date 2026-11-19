@@ -20,10 +20,14 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ApiClient } from "../src/api/client.js";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { Sidebar } from "../src/views/Sidebar.js";
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
+/** Static rendering never runs the search or filter effects; this only fills
+ *  the required client prop. */
+const client = { request: async () => ({}) } as unknown as ApiClient;
 
 function session(id: string, title: string, updatedAt = "2026-01-01T00:00:00.000Z", projectId = "inbox") {
   return { id, projectId, title, updatedAt } as never;
@@ -35,7 +39,7 @@ function project(id: string, name: string) {
 
 function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
   return renderToStaticMarkup(
-    <Sidebar actions={actions} projects={[]} recent={[]} sessionsByProject={{}} {...over} />,
+    <Sidebar actions={actions} client={client} projects={[]} recent={[]} sessionsByProject={{}} {...over} />,
   );
 }
 
@@ -72,10 +76,14 @@ test("a project lists its sessions most recently used first", () => {
   assert.ok(markup.indexOf("较新的会话") < markup.indexOf("较早的会话"));
 });
 
-test("the task column has no search field under 新建会话", () => {
+test("the task column offers a search field and the session-list filters", () => {
   const markup = render({ recent: [session("s1", "结构比对")] });
-  assert.doesNotMatch(markup, /side-search/);
-  assert.doesNotMatch(markup, /type="search"/);
+  // #1251: the field is the way into workbench search, and the filters narrow
+  // the lists under it instead of being hidden behind another surface.
+  assert.match(markup, /class="side-search"/);
+  assert.match(markup, /type="search"/);
+  assert.match(markup, /class="side-filters"/);
+  assert.match(markup, /仅运行中/);
 });
 
 test("a session row carries the double-click rename as its own tooltip", () => {
