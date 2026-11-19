@@ -4,7 +4,7 @@
 
 import { resolve } from "node:path";
 import type { RemoteComputeClient, RunnerClient } from "@sciencediscovery/executor";
-import { effectiveRunnerIds, type RunnerTarget, type RemoteRunnerStatus, type CreateEnvironmentRequest, type InstallEnvironmentRequest, type UninstallEnvironmentRequest } from "@sciencediscovery/schema";
+import { effectiveRunnerIds, type RunnerTarget, type RemoteRunnerStatus, type CreateEnvironmentRequest, type InstallEnvironmentRequest } from "@sciencediscovery/schema";
 import type { SessionStore } from "./store.js";
 import { resolveEnvironmentInstallRequest } from "./environment-sources.js";
 import { remoteWorkspaceKey } from "./remote-runner.js";
@@ -46,6 +46,15 @@ export async function runnerTarget(
     workspaceRoot: resolve(store.dataDir, "projects") };
 }
 
+function readEnvironmentPackages(body: unknown): string[] {
+  if (typeof body !== "object" || body === null || Array.isArray(body)
+    || !Array.isArray((body as { packages?: unknown }).packages)
+    || (body as { packages: unknown[] }).packages.some((value) => typeof value !== "string")) {
+    throw new Error("packages must be an array of strings");
+  }
+  return (body as { packages: string[] }).packages;
+}
+
 /** Remote catalogs stay on their Runner: IDs may overlap the local catalog. */
 export async function manageRunnerEnvironment(runner: RunnerClient, store: SessionStore, path: string, method: string, body: unknown): Promise<unknown> {
   if (path === "environment-setup" && method === "GET") return runner.getEnvironmentSetup();
@@ -61,11 +70,12 @@ export async function manageRunnerEnvironment(runner: RunnerClient, store: Sessi
       let revision;
       if (match[2] === "install") {
         const input = body as InstallEnvironmentRequest;
-        if (input.packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) throw new Error("Local wheel paths require an Agent Session workspace");
-        revision = await runner.installEnvironment(id, resolveEnvironmentInstallRequest(input, store.getEnvironmentSourceSettings()));
+        const packages = readEnvironmentPackages(input);
+        if (packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) throw new Error("Local wheel paths require an Agent Session workspace");
+        revision = await runner.installEnvironment(id, resolveEnvironmentInstallRequest({ ...input, packages }, store.getEnvironmentSourceSettings()));
       } else {
-        const input = body as UninstallEnvironmentRequest;
-        revision = await runner.uninstallEnvironment(id, { packages: input.packages });
+        const packages = readEnvironmentPackages(body);
+        revision = await runner.uninstallEnvironment(id, { packages });
       }
       const environment = (await runner.listEnvironments()).find((item) => item.id === id);
       if (!environment) throw new Error("Updated environment disappeared from the Runner catalog");

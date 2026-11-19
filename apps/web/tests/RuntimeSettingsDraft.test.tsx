@@ -130,18 +130,23 @@ function selectedCheckboxes(root: ReactTestInstance): ReactTestInstance[] {
   return root.findAllByType("input").filter((input) => input.props.type === "checkbox" && !input.props["aria-label"] && input.props.checked);
 }
 
+async function changeSelect(select: ReactTestInstance, value: string): Promise<void> {
+  const target = { value };
+  await act(async () => select.props.onChange({ target, currentTarget: target }));
+}
+
 async function chooseRuntimeDraft(root: ReactTestInstance): Promise<void> {
   let controls = settingsControls(root);
-  if (controls.approval) await act(async () => controls.approval!.props.onChange({ target: { value: "always_allow" } }));
+  if (controls.approval) await changeSelect(controls.approval, "always_allow");
   controls = settingsControls(root);
-  await act(async () => controls.model.props.onChange({ target: { value: model.id } }));
+  await changeSelect(controls.model, model.id);
   controls = settingsControls(root);
-  await act(async () => controls.connectorMode.props.onChange({ target: { value: "override" } }));
+  await changeSelect(controls.connectorMode, "override");
   const connectorCheckbox = root.findAllByType("input").find((input) => input.props.type === "checkbox");
   assert.ok(connectorCheckbox);
   await act(async () => connectorCheckbox.props.onChange());
   controls = settingsControls(root);
-  await act(async () => controls.skillMode.props.onChange({ target: { value: "selected" } }));
+  await changeSelect(controls.skillMode, "selected");
   const checkboxes = root.findAllByType("input").filter((input) => input.props.type === "checkbox" && !input.props["aria-label"]);
   assert.equal(checkboxes.length, 2);
   await act(async () => checkboxes[1]!.props.onChange());

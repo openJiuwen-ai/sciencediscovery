@@ -29,7 +29,7 @@ No workflow maintains its own list of case titles.
 | Tier | Event / authorization | Workflow jobs | Gate / job ceiling |
 | --- | --- | --- | --- |
 | L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + Linux binary and Docker distribution gates; mocked and real E2E are skipped; no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + Linux binary and Docker distribution gates; selected mocked browser checks run based on the diff, with no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L1/UT/ST rerun on the group SHA + mocked E2E + nine short real API journeys (including Runner wait/finish decisions); Linux binary, Windows desktop and Docker jobs are skipped | Required before automatic merge; mock E2E 90 minutes; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Nightly workflow at 16:00 UTC, or explicit dispatch | L3 + Linux binary, Windows desktop installer and Docker distribution gates + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
 | L5 (`release`) | Version release tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
@@ -39,9 +39,14 @@ and `release` alias L2, L3, L4 and L5. The release policy now includes paid
 research; it is no longer equal to the hermetic PR policy. Release failures
 must not be worked around by moving the tag.
 
-The local test profiles remain cumulative. Workflow job selection is separate:
-PR runs build distributions without E2E; the merge queue runs E2E without
-distribution builds. The nightly (`daily`), version release (`release`), and
+The local test profiles remain cumulative. In the `pr` profile (including PRs
+and default-branch pushes), Desktop unit tests run in UT. The dedicated Desktop
+browser job runs changed mocked specs when the diff selects them. Changes to the
+mocked fixture or Playwright config, or to the real suite's support module or
+Playwright config, select the full Desktop mocked suite. Merge candidates,
+nightly, and release run both the full Desktop UI-ST and mocked suites. The real
+Desktop suite still runs in the credentialed merge profile. The merge queue
+runs E2E without distribution builds. The nightly (`daily`), version release (`release`), and
 on-demand `package` profiles can build the Windows desktop installer.
 `pnpm ci:e2e` still runs the mocked slice locally with the default `pr` profile.
 

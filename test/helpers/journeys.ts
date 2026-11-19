@@ -86,6 +86,7 @@ export interface ScriptedToolStep {
 }
 
 export interface ScriptedTextStep {
+  waitFor?: Promise<void>;
   reasoning?: string;
   delayMs?: number;
   text: string;
@@ -220,11 +221,11 @@ function userText(content: unknown): unknown {
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
-  options: { captureContext?: boolean; waitForShellCompletion?: boolean; namingTitles?: string[] } = {},
+  options: { captureContext?: boolean; waitForShellCompletion?: boolean; namingTitles?: string[]; identity?: { model: string; apiToken: string } } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
-  const model = "journey-scripted-model";
-  const apiToken = "journey-local-stub-token";
+  const model = options.identity?.model ?? "journey-scripted-model";
+  const apiToken = options.identity?.apiToken ?? "journey-local-stub-token";
   let sequence = 0;
   let namingIndex = 0;
   let mainStepIndex = 0;
@@ -239,8 +240,13 @@ export function scriptedModel(
       try {
         const body = JSON.parse(Buffer.concat(bodyChunks).toString("utf8")) as {
           messages?: ChatMessage[];
+          model?: string;
           tools?: Array<{ function?: { name?: string } }>;
         };
+        if (options.identity && (request.headers.authorization !== `Bearer ${apiToken}` || body.model !== model)) {
+          response.writeHead(401).end();
+          return;
+        }
         const messages = body.messages ?? [];
         if (options.namingTitles && String(messages[0]?.content).includes("Create a concise title for the research session")) {
           const titles = options.namingTitles;
@@ -345,7 +351,7 @@ export function scriptedModel(
           role: "assistant", reasoning_content: step.reasoning,
         }, null))}\n\n`);
         if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
-        if ("tool" in step && step.waitFor) await step.waitFor;
+        if (step.waitFor) await step.waitFor;
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
             ...(step.text ? { content: step.text } : {}),

@@ -198,6 +198,27 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
       totalTokens: null,
       usageStatus: "provider-not-reported",
     },
+    {
+      attemptIndex: 0,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: null,
+      finishedAt: "2026-01-02T00:00:01.000Z",
+      id: "usage-other-session",
+      inputTokens: 100,
+      invocationId: "inv-other",
+      invocationKind: "task",
+      model: "other-model",
+      modelProfileId: "other-model-profile",
+      modelProfileName: "Other Model",
+      outputTokens: 20,
+      projectId: "other-project",
+      runId: "other-run",
+      sessionId: "other-session",
+      startedAt: "2026-01-02T00:00:00.000Z",
+      totalTokens: 120,
+      usageStatus: "reported",
+    },
   ], null, 2)}\n`, "utf8");
 
   const sessionUsageResponse = await fetch(`${origin}/api/sessions/${session.id}/usage`, { headers: authorization });
@@ -213,7 +234,8 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   const globalUsageResponse = await fetch(`${origin}/api/usage/models`, { headers: authorization });
   await assertResponseStatus(globalUsageResponse, 200);
   const globalUsage = await globalUsageResponse.json() as GlobalModelUsageSummary;
-  assert.equal(globalUsage.totals.invocationCount, 2);
+  assert.equal(globalUsage.totals.invocationCount, 3);
+  assert.equal(globalUsage.totals.totalTokens, 135);
   assert.equal(globalUsage.byModel[0]?.modelProfileId, "usage-model-profile");
   assert.equal(globalUsage.byModel[0]?.projects[0]?.projectId, project.id);
   assert.equal(globalUsage.byModel[0]?.projects[0]?.sessions[0]?.sessionId, session.id);
@@ -223,6 +245,7 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   await assertResponseStatus(analyticsResponse, 200);
   const analytics = await analyticsResponse.json() as ModelUsageAnalyticsSummary;
   assert.equal(analytics.overview.totalTokens, 15);
+  assert.equal(analytics.overview.inputTokens, 10);
   assert.equal(analytics.dailyByModel.length, 1);
   assert.equal(analytics.dailyByModel[0]?.date, "2026-01-01");
   assert.equal(analytics.dailyByModel[0]?.cacheReadTokens, 4);
@@ -238,5 +261,26 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   const jsonResponse = await fetch(`${origin}/api/usage/analytics/export?format=json&from=2026-01-01&to=2026-01-01`, { headers: authorization });
   await assertResponseStatus(jsonResponse, 200);
   const exported = await jsonResponse.json() as ModelUsageAnalyticsSummary;
-  assert.equal(exported.overview.totalTokens, 15);
+  const { generatedAt: analyticsGeneratedAt, ...analyticsWithoutTimestamp } = analytics;
+  const { generatedAt: exportedGeneratedAt, ...exportedWithoutTimestamp } = exported;
+  assert.match(analyticsGeneratedAt, /^2026-/);
+  assert.match(exportedGeneratedAt, /^2026-/);
+  assert.deepEqual(exportedWithoutTimestamp, analyticsWithoutTimestamp,
+    "JSON export must use the same filtered summary as the analytics endpoint");
+
+  const scopedResponse = await fetch(`${origin}/api/usage/analytics?from=2026-01-01&to=2026-01-02&projectId=${project.id}&modelProfileId=usage-model-profile`, { headers: authorization });
+  await assertResponseStatus(scopedResponse, 200);
+  const scoped = await scopedResponse.json() as ModelUsageAnalyticsSummary;
+  assert.equal(scoped.overview.totalTokens, 15);
+  assert.deepEqual(scoped.dailyByModel.map((row) => row.date), ["2026-01-01"]);
+  const invalidTimeZone = await fetch(`${origin}/api/usage/analytics?from=2026-01-01&to=2026-01-01&timeZone=not/a-real-zone`, { headers: authorization });
+  await assertResponseStatus(invalidTimeZone, 200);
+  const fallback = await invalidTimeZone.json() as ModelUsageAnalyticsSummary;
+  assert.deepEqual(fallback.dailyByModel.map((row) => row.date), ["2026-01-01"]);
+
+  const futureOnly = await fetch(`${origin}/api/usage/analytics?from=2026-01-02&to=2026-01-02`, { headers: authorization });
+  await assertResponseStatus(futureOnly, 200);
+  const futureSummary = await futureOnly.json() as ModelUsageAnalyticsSummary;
+  assert.equal(futureSummary.overview.totalTokens, 120);
+  assert.deepEqual(futureSummary.dailyByModel.map((row) => row.date), ["2026-01-02"]);
 });

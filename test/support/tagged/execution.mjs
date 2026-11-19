@@ -52,7 +52,8 @@ export function mockedShards(plan) {
     } else if (!['research', 'literature', 'governed'].includes(fixture)) throw new Error(`UNKNOWN_MOCKED_FIXTURE: ${entry.id}`);
     if (files.has(entry.source) && files.get(entry.source) !== name) throw new Error(`SPLIT_MOCKED_FILE: ${entry.source}`);
     files.set(entry.source, name);
-    const group = groups.get(name) ?? { name, fixture, keys: [], checks: name === 'standard-config' && plan.execution.backend === 'jiuwenswarm' ? swarmChecks : [] };
+    const runsSupplementalChecks = !['web-ui-st', 'combination-browser'].includes(plan.suite) && name === 'standard-config' && plan.execution.backend === 'jiuwenswarm';
+    const group = groups.get(name) ?? { name, fixture, keys: [], checks: runsSupplementalChecks ? swarmChecks : [] };
     group.keys.push(entry.key); groups.set(name, group);
   }
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));

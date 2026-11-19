@@ -214,6 +214,10 @@ export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
 # Evolve is started by the source launcher on its owned socket. Do not invent
 # an operator URL here: that explicitly opts out of owned service startup.
 export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
+export SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR="$SCIENCE_DISCOVERY_DATA_DIR/memory-graph"
+if [[ "$group" == mocked ]]; then
+  export SCIENCE_AGENT_MEMORY_GRAPH_BACKEND=local
+fi
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
 export SCIENTIFIC_ENVS="${E2E_SCIENTIFIC_ENVS:-0}"

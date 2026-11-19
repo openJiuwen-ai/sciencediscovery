@@ -1,10 +1,12 @@
-import test from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
 import { Writable } from "node:stream";
 import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, sha256, type ResearchPackageExportProfile } from "./index.js";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
+
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 
 test("memoized JSON sizing preserves repeated immutable values and JSON normalization", () => {
   const shared = { text: '中\\\"\n' + 'x'.repeat(32767) + '😀', omitted: undefined, nested: [NaN, null] };

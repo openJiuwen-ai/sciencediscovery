@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop scientific memory journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -730,7 +746,8 @@ test("the memory state reads beside the switch, and only while the switch is on"
   // Turning it off takes the line, and the question, away again.
   await enabled.click();
   await expect.poll(() => mock.state.memorySettings.enabled).toBe(false);
-  expect(JSON.parse(lastCall(mock, "/api/memory/settings")!.body!)).toEqual({ enabled: false });
+  const write = mock.calls.findLast((call) => call.path === "/api/memory/settings" && call.method === "PUT");
+  expect(JSON.parse(write?.body ?? "null")).toEqual({ enabled: false });
   await expect(status).toHaveCount(0);
 
   // The switch is the page's whole surface: where the graph is stored is the

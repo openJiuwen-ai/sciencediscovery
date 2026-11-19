@@ -43,8 +43,13 @@ export default defineConfig({
   workers: 2,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  // Stop a failing PR gate early when shared setup breaks many cases.
+  maxFailures: process.env.CI_DESKTOP_PROFILE === "pr" ? 5 : 0,
+  reporter: process.env.CI_RESULT_FILE
+    ? [["list"], ["json", { outputFile: process.env.CI_RESULT_FILE }]]
+    : [["list"]],
   outputDir: resolve(here, "test-results"),
+  ...(process.env.PLAYWRIGHT_GREP ? { grep: new RegExp(process.env.PLAYWRIGHT_GREP) } : {}),
   use: {
     baseURL: "http://127.0.0.1:4175",
     trace: "retain-on-failure",

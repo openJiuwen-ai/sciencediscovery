@@ -8,10 +8,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExecutionRun, McpInvocation, PromptManifest, SessionDetail } from "../packages/schema/src/index.js";
 import { fileURLToPath } from "node:url";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, handlePermissionsUntilTerminal, openProjectSession, scriptedModel, sendUserMessage, waitForMcpTool } from "./helpers/journeys.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, handlePermissionsUntilTerminal, openProjectSession, registerModel, scriptedModel, sendUserMessage, waitForMcpTool, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
@@ -22,6 +29,9 @@ test.use({ locale: "en-US", actionTimeout: 15_000 });
 // ScienceDiscovery's web tools, and the executor-native ones that stand in for them.
 const WEB_TOOLS = ["web_search", "web_fetch", "free_search", "paid_search", "fetch_webpage"];
 
+let stopEcho: (() => void) | undefined;
+test.afterEach(() => { stopEcho?.(); stopEcho = undefined; });
+
 /**
  * E2E-META
  * Purpose: Data sources, custom MCP servers and Web access are separate Session checkboxes, and each one decides what the Agent can call.
@@ -31,24 +41,37 @@ const WEB_TOOLS = ["web_search", "web_fetch", "free_search", "paid_search", "fet
  *   2. With Web access inherited and the custom MCP checked, the Agent is offered both and one MCP tool call succeeds.
  *   3. Uncheck Web access and the custom MCP: neither is offered; a search attempt fails without a permission card.
  *   4. Check both again but turn the server off in System settings: Web access returns, the server's tools stay absent.
- *   5. Open Session settings: the override list shows the same three groups and checked state.
+ *   5. Confirm the override list in Settings and run two Sessions using different models, Skills, connectors and Runners.
  * Environment: Isolated local stack and data directory, current local working tree; en-US browser locale.
  * Type: mocked
  * LLM: Local deterministic OpenAI-compatible stub that records the tools offered on each request; no provider API is called.
  * WebSearch: none; the only search attempt is made while Web access is off and never reaches a provider.
  * PaperSources: none
- * MCP: Real SDK stdio echo fixture on the API host.
+ * MCP: Real SDK HTTP echo fixture on loopback.
  * OtherExternal: none; browser non-local requests are blocked.
  * Credentials: E2E_API_TOKEN; local stub token has no external access.
  * CostSideEffects: Temporary model, project and MCP server; removed in finally. Global settings are cleared for the journey and restored in finally.
  */
 test("Session checkboxes turn custom MCP and Web access on and off for the Agent", { tag: "@mocked" }, async ({ page, journey }) => {
   const name = `Capability MCP ${Date.now()}`;
-  const echoFixture = fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url));
+  const echoFixture = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url)), "--http", "0"]);
+  stopEcho = () => { echoFixture.kill(); };
+  let stderr = "";
+  const echoPort = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Local MCP echo server did not start")), 30_000);
+    echoFixture.once("error", error => { clearTimeout(timer); reject(error); });
+    echoFixture.once("exit", () => { clearTimeout(timer); reject(new Error("Local MCP echo server exited")); });
+    echoFixture.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      const match = /^\{"port":(\d+)\}$/m.exec(stderr);
+      if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+    });
+  });
+  const echoUrl = `http://127.0.0.1:${echoPort}/mcp`;
   const saveServer = async (enabled: boolean, id?: string) => {
     const response = await page.request.fetch(`${apiBaseUrl()}/api/mcp/servers${id ? `/${id}` : ""}`, {
       method: id ? "PUT" : "POST", headers: authorizationHeader(),
-      data: { name, command: process.execPath, args: [echoFixture], enabled },
+      data: { name, transport: "http", url: echoUrl, enabled },
     });
     expect(response.ok()).toBe(true);
     return await response.json() as { id: string };
@@ -170,6 +193,10 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
       await expect(dialog.getByRole("group", { name: "Data sources" }).getByRole("checkbox", { name: "PubMed" })).not.toBeChecked();
       await dialog.getByRole("group", { name: "Custom MCP" }).scrollIntoViewIfNeeded();
     });
+    await journey.step("Run two Sessions with separate capabilities", "Model credentials, Skills, MCP calls, Runner outputs and Memory data stay with their Session", async () => {
+      await expect.poll(enabledIds).toEqual(["web", server.id]);
+      await checkConcurrentSessions(page, fixture.project.id, echoUrl);
+    });
   } finally {
     await globalSettings(page, globalOverrides);
     await cleanupJourney(page, fixture);
@@ -179,6 +206,127 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
 });
 
 });
+
+async function checkConcurrentSessions(page: Page, projectId: string, echoUrl: string) {
+  const headers = authorizationHeader();
+  const api = apiBaseUrl();
+  const json = async <T>(path: string, method = "GET", data?: unknown): Promise<T> => {
+    const response = await page.request.fetch(`${api}${path}`, { headers, method, data });
+    expect(response.ok(), `${method} ${path} returned ${response.status()}`).toBe(true);
+    return response.json() as Promise<T>;
+  };
+  const { createRunnerServer } = await import("../services/runner/dist/server.js");
+  const dataDir = await mkdtemp(join(tmpdir(), "sd-gj06-"));
+  const token = randomUUID();
+  const remote = createRunnerServer({ authToken: token, bwrapPath: "bwrap", dataDir, execTimeoutMs: 60_000,
+    host: "127.0.0.1", maxOutputBytes: 1_000_000, maxWorkspaceBytes: 1_073_741_824, npuBrokerEnabled: false, port: 0 });
+  const cleanup: Array<() => Promise<unknown>> = [];
+  const remove = async (path: string, data?: unknown) => {
+    const response = await page.request.delete(`${api}${path}`, { headers, data });
+    expect(response.ok(), `DELETE ${path} returned ${response.status()}`).toBe(true);
+  };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      remote.once("error", reject);
+      remote.listen(0, "127.0.0.1", resolve);
+    });
+    const suffix = randomUUID().slice(0, 8);
+    const host = await json<{ id: string }>("/api/runners", "POST", { alias: `isolation-runner-${suffix}`,
+      connectionKind: "direct", endpoint: { host: "127.0.0.1", port: (remote.address() as AddressInfo).port, protocol: "http" }, token });
+    cleanup.unshift(() => remove(`/api/remote-hosts/${host.id}`));
+    const readiness = await json<{ state: string }>(`/api/runners/${host.id}/connect`, "POST", {});
+    expect(readiness.state).toBe("ready");
+    const filename = "evidence.csv";
+    const laneIds = ["alpha", "beta"] as const;
+    const lanes = [];
+    for (const [index, lane] of laneIds.entries()) {
+      const content = `value\n${17 + index}\n`;
+      const runnerId = index === 0 ? "local" : host.id;
+      const label = `${lane}-${suffix}`;
+      const connector = await json<{ id: string }>("/api/mcp/servers", "POST", { name: `Isolation MCP ${label}`,
+        transport: "http", url: echoUrl, enabled: true });
+      cleanup.unshift(() => remove(`/api/mcp/servers/${connector.id}`));
+      const echo = await waitForMcpTool(page, connector.id, "echo");
+      const mcpTool = `mcp__${connector.id}__${echo.id}`;
+      const skill = await json<{ id: string }>("/api/skills", "POST", { name: `isolation-skill-${label}`,
+        description: `Fixture for ${label}`, instructions: `# Isolation skill\n\nUse only evidence for ${label}.` });
+      cleanup.unshift(() => remove(`/api/skills/${skill.id}`));
+      const identity = { model: `isolation-model-${label}`, apiToken: randomUUID() };
+      const answer = `Completed isolation task ${label}.`;
+      const stub = await scriptedModel([[
+        { tool: "tool_search", arguments: { query: `select:${mcpTool}` } },
+        { tool: mcpTool, arguments: { text: label } },
+        { tool: "run_shell", arguments: { runner_id: runnerId, command: `printf '%s\\n' '${label}' > result.txt; cat result.txt`, wait_ms: 20_000 } },
+        { text: answer },
+      ]], undefined, { captureContext: true, identity, waitForShellCompletion: true });
+      cleanup.unshift(stub.stop);
+      const model = await registerModel(page, { ...identity, baseUrl: stub.baseUrl, name: identity.model });
+      cleanup.unshift(() => remove(`/api/models/${model.id}`));
+      const session = await json<{ id: string }>(`/api/projects/${projectId}/sessions`, "POST", { title: `Isolation ${lane}`,
+        modelId: model.id, runnerIds: [runnerId], approvalMode: "always_allow", settingsOverrides: {
+          skillSelectionMode: "selected", enabledSkillIds: [skill.id], enabledConnectorIds: [connector.id],
+        } });
+      const scope = `/api/sessions/${session.id}`;
+      cleanup.unshift(async () => {
+        await cancelActiveSessionRuns(page, session.id);
+        if (runnerId === host.id) await remove(`/api/runners/${host.id}/workspaces/${session.id}`);
+        await remove(scope, { confirmationId: session.id });
+      });
+      const uploaded = await page.request.post(`${api}${scope}/workspace/upload`, { headers, multipart: {
+        files: { name: filename, mimeType: "text/csv", buffer: Buffer.from(content) },
+      } });
+      expect(uploaded.status()).toBe(201);
+      lanes.push({ session, scope, label, runnerId, connector, mcpTool, skill, model, stub, answer, content });
+    }
+    const runs = await Promise.all(lanes.map(lane => json<{ id: string }>(`${lane.scope}/runs`, "POST", { content: `Execute isolation task ${lane.label}` })));
+    await Promise.all(lanes.map(async (lane, index) => {
+      const other = lanes[1 - index]!;
+      const run = runs[index]!;
+      const terminal = await waitForRunTerminal(page, lane.session.id, run.id, 120_000);
+      expect(terminal.status, terminal.error).toBe("completed");
+      const detail = await json<SessionDetail>(lane.scope);
+      expect(detail.messages.filter(message => message.role === "assistant").map(message => message.content)).toContain(lane.answer);
+      expect(JSON.stringify(detail.messages)).not.toContain(other.answer);
+      expect(lane.stub.calls.some(call => call.offeredTools?.includes(lane.mcpTool))).toBe(true);
+      expect(lane.stub.calls.every(call => !call.offeredTools?.includes(other.mcpTool))).toBe(true);
+      const calls = await json<McpInvocation[]>(`${lane.scope}/mcp/invocations`);
+      expect(calls.map(({ sourceId, turnId, status }) => ({ sourceId, turnId, status }))).toEqual([
+        { sourceId: lane.connector.id, turnId: run.id, status: "succeeded" },
+      ]);
+      const manifests = (await json<PromptManifest[]>(`${lane.scope}/prompt-manifests`)).filter(item => item.turnId === run.id);
+      expect(manifests.length).toBeGreaterThan(0);
+      for (const manifest of manifests) {
+        expect(manifest.modelProfileId).toBe(lane.model.id);
+        expect(manifest.runtimeSettings.enabledConnectorIds).toEqual([lane.connector.id]);
+        expect(manifest.runtimeSettings.enabledSkillIds).toEqual([lane.skill.id]);
+        expect(manifest.skillRefs.map(ref => ref.id)).toContain(lane.skill.id);
+      }
+      const executions = await json<ExecutionRun[]>(`${lane.scope}/execution-runs`);
+      expect(executions).toHaveLength(1);
+      expect(executions[0]).toMatchObject({ runnerId: lane.runnerId, exitCode: 0, sandbox: "bubblewrap", createdFiles: ["result.txt"],
+        stdout: { hash: createHash("sha256").update(`${lane.label}\n`).digest("hex") } });
+      const results = lane.stub.calls.flatMap(call => call.toolResults ?? []).join("\n");
+      expect(results).toContain(lane.label.toUpperCase());
+      expect(results).not.toContain(other.label.toUpperCase());
+      const read = await page.request.get(`${api}${lane.scope}/file?path=${filename}`, { headers });
+      expect(await read.text()).toBe(lane.content);
+      await expect.poll(async () => {
+        const graph = await json<{ hits: Array<{ id: string; sessionId: string; extra: { content_hash: string } }> }>(
+          "/api/memory/query/by-node-type", "POST", { node_types: ["SourceFile"], session_id: lane.session.id });
+        return graph.hits.filter(hit => hit.id.endsWith(`:${filename}`)).map(hit => [hit.id, hit.sessionId, hit.extra.content_hash]);
+      }, { timeout: 15_000 }).toEqual([[`source_file:session:${lane.session.id}:${filename}`, lane.session.id,
+        createHash("sha256").update(lane.content).digest("hex")]]);
+    }));
+  } finally {
+    const errors: unknown[] = [];
+    for (const dispose of cleanup) {
+      try { await dispose(); } catch (error) { errors.push(error); }
+    }
+    await new Promise<void>(resolve => { remote.close(() => resolve()); remote.closeAllConnections(); });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 3 });
+    if (errors.length) throw new AggregateError(errors, "Could not clean up Session isolation fixtures");
+  }
+}
 
 /** Read the Global overrides, or replace them when `overrides` is given. */
 async function globalSettings(page: Page, overrides?: Record<string, unknown>): Promise<Record<string, unknown>> {

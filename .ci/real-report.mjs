@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { canonical, validatePlan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
 import { isProviderFaultProblem, PROVIDER_FAULT } from '../test/support/tagged/provider-fault.mjs';
+import { retryReportMissing } from '../test/support/tagged/retry.mjs';
 import { collectSuite, renderSuite } from './biomni-gate.mjs';
 
 export function reconcile(plan, root) {
@@ -22,23 +23,19 @@ export function reconcile(plan, root) {
       // A valid failed shard still executed its cases. Retain those results so
       // suite accounting distinguishes FAIL from NOT_RUN while the gate fails.
       results.push(...summary.results);
-      // A shard whose cases only faulted at the model gateway is still valid
-      // evidence: the identity checks above apply, and its results are folded
-      // into the suite's accounting. It does not certify the suite — the
-      // suite's own accounting decides the exit code, and a remaining provider
-      // fault makes that exit non-zero. Turning it into an opaque shard
-      // failure instead would lose the provider-fault problems it carries.
-      // A product failure in the same shard still fails the shard.
-      if (summary.status !== 'PASS' && summary.status !== 'PROVIDER_FAULT') throw new Error('SHARD_FAILED');
-      // The shard's own claim has to agree with the results it carries: a
-      // shard cannot hide a fault behind a `PASS` it did not earn.
-      if ((summary.providerFaults ?? 0) !== verifyResults(workerPlan, summary.results).providerFaults) throw new Error('SHARD_RESULT_ACCOUNTING_MISMATCH');
-      // The audit codes a failed repeat leaves behind are not implied by the
-      // case results, so the suite's accounting takes them over: a repeat
-      // that did not work is still an unverified case.
-      for (const problem of summary.problems ?? []) {
-        if (isProviderFaultProblem(problem) && !problem.startsWith(`${PROVIDER_FAULT}: `)) errors.push(`${PROVIDER_FAULT}: ${shard.name}: ${problem}`);
-      }
+      // A shard whose cases failed or only faulted at the model gateway is
+      // still valid evidence. Keep its case results so the suite can report
+      // FAIL, PROVIDER_FAULT and NOT_RUN separately instead of converting a
+      // real product failure into an opaque SHARD_FAILED/NOT_RUN result.
+      // Retry audit problems are not implied by individual case results.
+      const retryProblems = (summary.problems ?? []).filter(problem =>
+        typeof problem === 'string' &&
+        (problem === retryReportMissing || /^PROVIDER_FAULT_RETRY_FAILED: [1-9]\d*$/.test(problem)));
+      const workerVerdict = verifyResults(workerPlan, summary.results, retryProblems);
+      if (summary.status !== workerVerdict.status) throw new Error('SHARD_RESULT_STATUS_MISMATCH');
+      // The shard's own claim has to agree with the results it carries.
+      if ((summary.providerFaults ?? 0) !== workerVerdict.providerFaults) throw new Error('SHARD_RESULT_ACCOUNTING_MISMATCH');
+      for (const problem of retryProblems) errors.push(`${PROVIDER_FAULT}: ${shard.name}: ${problem}`);
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }
   }
   return verifyResults(plan, results, errors);

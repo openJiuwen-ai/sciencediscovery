@@ -20,3 +20,16 @@ test("MCP contribution preserves source identity, deferral and tool policy", asy
   assert.equal((await createPluginScope([mcpPlugin({ ...ports, toolPolicy: { disallowed: ["fixture_lookup"] } })])).contributions[0]!.tools.length, 0);
   assert.equal((await createPluginScope([mcpPlugin(ports)], ["mcp"])).contributions.length, 0);
 });
+
+test("MCP tool invocation failures propagate without being converted into a false success", async () => {
+  const scope = await createPluginScope([mcpPlugin({
+    mcpTools: [{
+      name: "failing_tool", displayName: "Failing", description: "failure fixture", sourceId: "fixture", toolId: "failing",
+      inputSchema: { type: "object" }, routing: { keywords: ["failure"], mode: "prefer" as const, priority: 1 },
+      execute: async () => { throw new Error("provider unavailable"); },
+    }],
+  })]);
+  const tool = scope.contributions[0]!.tools[0]!;
+  await assert.rejects(() => tool.execute("call-1", {}, new AbortController().signal), /provider unavailable/);
+  await scope.dispose();
+});

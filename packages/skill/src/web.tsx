@@ -99,7 +99,7 @@ t:(key:SkillMessageKey,variables?:Record<string,string|number>)=>string;renderSo
       </fieldset> : null}
       {skillScope === "global" || skillsBackend === "jiuwenswarm" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t(FIELD_LABELS.skillSelectionMode)}</legend>
-        <select aria-label={t("settings.skillModeAria")} value={skillMode} onChange={(event) => setSkillMode(event.target.value as "inherit" | SkillSelectionMode)}>
+        <select aria-label={t("settings.skillModeAria")} value={skillMode} onChange={(event) => setSkillMode((event.currentTarget as unknown as { value: string }).value as "inherit" | SkillSelectionMode)}>
           {skillInheritable ? <option value="inherit">
             {t("settings.skillModeInherit", { mode: t(SKILL_MODE_LABELS[details.effective.skillSelectionMode]), count: details.effective.enabledSkillIds.length })}
           </option> : null}
@@ -136,9 +136,9 @@ t:(key:SkillMessageKey,variables?:Record<string,string|number>)=>string;renderSo
                 </span>
               </label>
               {selected ? <div className="settings-library-controls">
-                <label><span>{t("settings.skillLibraryVersion" as SkillMessageKey)}</span><input value={selectedMount.versionId ?? "head"} onChange={(event) => setSkillLibraryMount(library.id, { versionId: event.target.value || "head" })} placeholder="head" /></label>
-                <label><span>{t("settings.skillLibraryPriority" as SkillMessageKey)}</span><input inputMode="numeric" type="number" value={selectedMount.priority ?? 0} onChange={(event) => setSkillLibraryMount(library.id, { priority: Number(event.target.value || 0) })} /></label>
-                <label><span>{t("settings.skillLibraryLimit" as SkillMessageKey)}</span><input inputMode="numeric" max={100} min={1} type="number" value={selectedMount.limit ?? 12} onChange={(event) => setSkillLibraryMount(library.id, { limit: Number(event.target.value || 12) })} /></label>
+                <label><span>{t("settings.skillLibraryVersion" as SkillMessageKey)}</span><input value={selectedMount.versionId ?? "head"} onChange={(event) => setSkillLibraryMount(library.id, { versionId: (event.currentTarget as unknown as { value: string }).value || "head" })} placeholder="head" /></label>
+                <label><span>{t("settings.skillLibraryPriority" as SkillMessageKey)}</span><input inputMode="numeric" type="number" value={selectedMount.priority ?? 0} onChange={(event) => setSkillLibraryMount(library.id, { priority: Number((event.currentTarget as unknown as { value: string }).value || 0) })} /></label>
+                <label><span>{t("settings.skillLibraryLimit" as SkillMessageKey)}</span><input inputMode="numeric" max={100} min={1} type="number" value={selectedMount.limit ?? 12} onChange={(event) => setSkillLibraryMount(library.id, { limit: Number((event.currentTarget as unknown as { value: string }).value || 12) })} /></label>
               </div> : null}
             </div>;
           })}

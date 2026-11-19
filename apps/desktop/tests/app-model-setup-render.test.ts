@@ -18,7 +18,11 @@ for (const language of ["zh-CN", "en"]) {
       const { stdout } = await run(process.execPath, [
         "--import", "tsx", fileURLToPath(new URL("./support/app-model-setup-render.ts", import.meta.url)),
         language, scenario,
-      ], { cwd: fileURLToPath(new URL("../../../", import.meta.url)), timeout: 30_000 });
+      ], {
+        cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+        // Cold loading the App's TSX module graph can exceed 30 seconds on a WSL-mounted checkout.
+        timeout: 90_000,
+      });
       assert.equal(stdout.trim(), `Rendered ${scenario} in ${language}`);
     });
   }

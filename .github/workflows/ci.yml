@@ -99,6 +99,8 @@ jobs:
       profile: ${{ steps.policy.outputs.profile }}
       backend: ${{ steps.policy.outputs.backend }}
       mocked: ${{ steps.policy.outputs.mocked }}
+      web_ui_st_specs: ${{ steps.policy.outputs.web_ui_st_specs }}
+      desktop_specs: ${{ steps.policy.outputs.desktop_specs }}
       real: ${{ steps.policy.outputs.real }}
       test_layers: ${{ steps.policy.outputs.test_layers }}
       binary: ${{ steps.policy.outputs.binary }}
@@ -131,6 +133,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -141,6 +145,16 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
         run: pnpm ci:l1
+      - name: Enforce changed-path test evidence
+        if: ${{ needs.policy.outputs.docs_only != 'true' }}
+        env:
+          CI_ENFORCE_SOURCE_MAP: "1"
+          CI_BASE_SHA: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha || (github.event_name == 'push' && github.ref_type == 'branch' && github.event.before) || '' }}
+          CI_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
+          CI_FETCH_PUSH_BASE: ${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.forced && '1' || '0' }}
+          # On fork force pushes, use the same upstream comparison as a PR.
+          CI_FORK_UPSTREAM: ${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.forced && github.event.repository.fork && format('{0}/openJiuwen-ai/sciencediscovery.git', github.server_url) || '' }}
+        run: node .ci/changed-path-check.mjs
       - name: Run documentation checks
         if: ${{ needs.policy.outputs.docs_only == 'true' }}
         run: |
@@ -164,6 +178,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     env:
+      CI_WEB_UI_ST_SPECS: ${{ needs.policy.outputs.web_ui_st_specs }}
       CI_PROFILE: ${{ needs.policy.outputs.profile }}
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
     steps:
@@ -195,12 +210,13 @@ jobs:
   # Keep the entry points separate and the actual real suite in one workflow.
   real-merge:
     name: L3 real E2E
-    needs: [policy, l1, ut, st, e2e-plan, e2e]
+    needs: [policy, l1, ut, st, e2e-plan, e2e, desktop-mocked]
     if: >-
       ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && github.event_name != 'pull_request' &&
           needs.policy.outputs.profile == 'merge' && needs.policy.result == 'success' &&
           needs.l1.result == 'success' && needs.ut.result == 'success' && needs.st.result == 'success' &&
-          needs.e2e-plan.result == 'success' && needs.e2e.result == 'success' }}
+          needs.e2e-plan.result == 'success' && needs.e2e.result == 'success' &&
+          needs.desktop-mocked.result == 'success' }}
     uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
     with:
@@ -277,6 +293,41 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
         run: pnpm ci:ut -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+
+      - name: Verify release plan stability
+        if: ${{ success() && needs.policy.outputs.profile == 'release' }}
+        env:
+          CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        # The UT step prepared Node and Python. Playwright discovery also
+        # needs its pinned npm environment, without a browser installation.
+        run: |
+          node test/sync-e2e.mjs --write
+          npm ci --prefix .e2e
+          pnpm ci:plan:stability -- --profile release --slice shared
+
+      - name: Run combination journey execution contract
+        if: ${{ always() && needs.policy.outputs.profile != 'pr' }}
+        run: node .ci/run-combination-journeys.mjs
+      - name: Verify production Runner restart and resume
+        if: ${{ success() && needs.policy.outputs.profile == 'daily' }}
+        env:
+          E2E_REPORT_DIR: ${{ github.workspace }}/.ci-results/runner-restart
+        run: node test/recovery-runner-journey.mjs
+      - name: Verify remote sandbox approval and artifact provenance
+        if: ${{ success() && needs.policy.outputs.profile == 'daily' }}
+        env:
+          E2E_REPORT_DIR: ${{ github.workspace }}/.ci-results/runner-remote-artifact
+        run: node test/api/runner-location-journey.mjs --governed-only
+      - name: Generate overlap report
+        if: always()
+        env:
+          OVERLAP_REPORT: ${{ github.workspace }}/.ci-results/overlap-report.json
+        run: pnpm ci:overlap
+
+      - name: Generate source inventory
+        if: always()
+        run: pnpm ci:inventory
 
       - name: Report the shared plan
         if: always()
@@ -510,6 +561,7 @@ jobs:
       max-parallel: 4
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
+      CI_WEB_UI_ST_SPECS: ${{ needs.policy.outputs.web_ui_st_specs }}
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -614,6 +666,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  desktop-mocked:
+    name: Desktop UI-ST and mocked E2E
+    needs: [policy, l1]
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.desktop_specs != 'none' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      - run: ln -s ../../../.e2e/node_modules apps/desktop/e2e/node_modules
+      - name: Build Desktop workspace dependencies
+        run: pnpm --filter "@sciencediscovery/desktop^..." build
+      - name: Install Chromium
+        run: .e2e/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run deterministic UI-ST
+        if: ${{ needs.policy.outputs.profile != 'pr' }}
+        env:
+          CI: "1"
+        run: node .ci/run-desktop-e2e.mjs ui-st
+      - name: Run selected Desktop mocked specs
+        env:
+          CI: "1"
+          CI_DESKTOP_SPECS: ${{ needs.policy.outputs.desktop_specs }}
+          CI_DESKTOP_PROFILE: ${{ needs.policy.outputs.profile }}
+        run: node .ci/run-desktop-e2e.mjs mocked
+      - name: Upload Desktop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mocked-results
+          overwrite: true
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
   # The single-file release binaries, each built on its own architecture.
   #
   # The script can cross build, but the four-entry smoke gate can only boot an
@@ -1086,7 +1182,7 @@ jobs:
     # Keep the required check name for PR and queue events. Manual package
     # runs report a distinct check even if the policy fails to resolve inputs.
     name: ${{ inputs.profile == 'package' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && 'package-gate' || 'merge-gate' }}
-    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
+    needs: [policy, l1, ut, st, e2e-plan, e2e, desktop-mocked, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1105,9 +1201,27 @@ jobs:
         with:
           pattern: mocked-e2e-results-*
           path: .ci-mocked-results
+      - uses: actions/download-artifact@v4
+        if: ${{ always() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.desktop_specs != 'none' }}
+        with:
+          name: desktop-mocked-results
+          path: .ci-results/desktop-evidence
       - name: Reconcile mocked results
         if: ${{ needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results .ci-results
+      - name: Reconcile combination journey browser evidence
+        if: ${{ !cancelled() && needs.policy.outputs.profile == 'daily' && needs.policy.outputs.mocked == 'true' }}
+        run: |
+          mkdir -p .ci-results
+          node .ci/combination-browser-evidence.mjs .ci-mocked-plan/plan.json .ci-results/e2e/tagged/summary.json > .ci-results/combination-browser-evidence.json
+      - name: Reconcile Desktop UI-ST and mocked results
+        if: ${{ always() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.desktop_specs != 'none' }}
+        env:
+          CI_PROFILE: ${{ needs.policy.outputs.profile }}
+        run: |
+          modes=(mocked)
+          if [[ "$CI_PROFILE" != pr ]]; then modes+=(ui-st); fi
+          node .ci/desktop-report.mjs .ci-results/desktop-evidence "${modes[@]}"
       - name: Upload combined E2E results
         if: ${{ always() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' }}
         uses: actions/upload-artifact@v4

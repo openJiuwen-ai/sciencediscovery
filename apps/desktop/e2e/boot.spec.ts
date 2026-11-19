@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop boot journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -71,7 +87,7 @@ test.describe("entering the workspace", () => {
     // The newest Session is the one the composer is already writing into.
     await expect(page.locator(".task-head-title")).toHaveText("最近的会话");
     await expect(page.locator(".side-session-name", { hasText: "最近的会话" })).toBeVisible();
-    await expect(page.getByText("ScienceDiscovery", { exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "ScienceDiscovery" })).toBeVisible();
   });
 
   test("with an empty workspace asks for the inbox and shows the welcome page", async ({
