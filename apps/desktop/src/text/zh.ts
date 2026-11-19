@@ -311,7 +311,12 @@ export const ZH = {
       citation: "核对引用",
     } as Record<string, string>,
     summaryPass: "未发现问题",
-    summaryFindings: (count: number) => `${count} 个问题`,
+    /** The count uses the same nouns as the rows: 问题 for a critical
+     *  finding, 提醒 for a warning. Counting both as 问题 promised a problem
+     *  the reader could not find below. */
+    summaryProblems: (count: number) => `${count} 个问题`,
+    summaryWarnings: (count: number) => `${count} 项提醒`,
+    summaryMixed: (problems: number, warnings: number) => `${problems} 个问题 · ${warnings} 项提醒`,
     summaryIncomplete: "交付不完整",
     summaryUnverified: "未验证交付",
     summaryFailed: "审查失败",
@@ -357,9 +362,20 @@ export const ZH = {
       citation_identity: "引用身份",
       computation: "计算",
     } as Record<string, string>,
+    /** What the unperformed check would have covered, and what to do next.
+     *  The server's own reason is an English template; the card keeps its
+     *  language and says the same thing in the reader's words. */
+    gapBodies: {
+      claim_support: "这次审查没有核对结论有没有来源支撑。要核对请用深度审查。",
+      citation_identity: "这次审查没有核对文献身份（作者、期刊、年份）。",
+      computation: "这次审查没有核对数字与计算依据。",
+    } as Record<string, string>,
+    gapBodyUnknown: "这次审查没有执行这一项。",
+    sourceSupported: "来源原文支持这条结论。",
+    sourcePartly: "来源原文只支持这条结论的一部分。",
     /** A source check that could not conclude is not a report defect. */
-    inconclusive: "来源核验没有得出结论",
-    inconclusiveBody: "来源服务未返回结论，这不代表报告有问题。",
+    inconclusive: "没能核对结论来源",
+    inconclusiveBody: "这次没能把结论与来源原文对照：查来源的服务没有返回结果。这不代表报告有问题。",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "本次只核对引用格式，未检查结论支撑。",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -383,10 +399,10 @@ export const ZH = {
     completeness: {
       complete: "交付完整",
       incomplete: "交付不完整",
-      unconfirmed: "未声明交付清单",
-      sourceBrief: "依据本次任务声明的交付清单。",
-      sourceSession: "本次任务没有声明，按会话内已有声明核对。",
-      sourceNone: "没有找到可对照的交付声明，因此无法确认。",
+      unconfirmed: "任务没说明要交付哪些文件",
+      sourceBrief: "对照的是本次任务里写明的交付文件。",
+      sourceSession: "本次任务没写明，对照的是会话里已有的交付声明。",
+      sourceNone: "这次任务没有写明要产出哪些文件，所以没法确认该交的是否都交了。下次在任务里写明要生成的文件，才能检查这一点。",
       missing: "缺失",
       empty: "空文件",
     },
