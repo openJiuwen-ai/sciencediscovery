@@ -435,6 +435,29 @@ export const ZH = {
     gapBodyUnknown: "这次审查没有执行这一项。",
     sourceSupported: "来源原文支持这条结论。",
     sourcePartly: "来源原文只支持这条结论的一部分。",
+    /** Where a source passage sits, for the evidence list under a source row. */
+    locatorAt: {
+      page: (page: number) => `第 ${page} 页`,
+      paragraph: (paragraph: number) => `第 ${paragraph} 段`,
+      line: (line: number) => `第 ${line} 行`,
+      section: (section: string) => `章节 ${section}`,
+      table: (table: string) => `表 ${table}`,
+      row: (row: string) => `第 ${row} 行`,
+      column: (column: string) => `第 ${column} 列`,
+      field: (field: string) => `字段 ${field}`,
+      output: (output: string) => `输出 ${output}`,
+    },
+    sourceTypes: {
+      abstract: "摘要",
+      artifact: "产物",
+      code: "代码",
+      dataset: "数据集",
+      execution: "运行记录",
+      paper_fulltext: "论文全文",
+      paper_metadata: "论文元数据",
+      supplement: "补充材料",
+      table: "表格",
+    } as Record<string, string>,
     /** A source check that could not conclude is not a report defect. */
     inconclusive: "没能核对结论来源",
     inconclusiveBody: "这次没能把结论与来源原文对照：查来源的服务没有返回结果。这不代表报告有问题。",
@@ -461,10 +484,10 @@ export const ZH = {
     completeness: {
       complete: "交付完整",
       incomplete: "交付不完整",
-      unconfirmed: "任务没说明要交付哪些文件",
+      unconfirmed: "无法核对交付文件",
       sourceBrief: "对照的是本次任务里写明的交付文件。",
       sourceSession: "本次任务没写明，对照的是会话里已有的交付声明。",
-      sourceNone: "这次任务没有写明要产出哪些文件，所以没法确认该交的是否都交了。下次在任务里写明要生成的文件，才能检查这一点。",
+      sourceNone: "任务里没有写明要交付的文件名和路径，所以没法逐项核对该交的是否都交了。在任务里写明要生成的文件名和路径，才能检查这一点。",
       missing: "缺失",
       empty: "空文件",
     },
@@ -479,7 +502,7 @@ export const ZH = {
     /** A bounded passage in a locked source; "定位" and evidence levels are
      *  internal vocabulary, so the card says what was found instead. */
     locators: (count: number) => `${count} 处原文`,
-    sourceInconclusiveWith: (count: number) => `找到 ${count} 处原文，但还不足以支撑这条结论。`,
+    sourceInconclusiveSome: "找到了原文，但还不足以支撑这条结论。",
     sourceInconclusiveNone: "没有找到可用于支撑这条结论的原文。",
     failedDetail: "审查过程报告了错误。",
     empty: "这个检查点没有产生审查记录。",

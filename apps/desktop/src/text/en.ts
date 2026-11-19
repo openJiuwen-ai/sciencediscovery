@@ -439,6 +439,29 @@ export const EN: Text = {
     gapBodyUnknown: "This review did not run this check.",
     sourceSupported: "The source text supports this claim.",
     sourcePartly: "The source text supports only part of this claim.",
+    /** Where a source passage sits, for the evidence list under a source row. */
+    locatorAt: {
+      page: (page: number) => `page ${page}`,
+      paragraph: (paragraph: number) => `paragraph ${paragraph}`,
+      line: (line: number) => `line ${line}`,
+      section: (section: string) => `section ${section}`,
+      table: (table: string) => `table ${table}`,
+      row: (row: string) => `row ${row}`,
+      column: (column: string) => `column ${column}`,
+      field: (field: string) => `field ${field}`,
+      output: (output: string) => `output ${output}`,
+    },
+    sourceTypes: {
+      abstract: "Abstract",
+      artifact: "Artifact",
+      code: "Code",
+      dataset: "Dataset",
+      execution: "Execution record",
+      paper_fulltext: "Full text",
+      paper_metadata: "Paper metadata",
+      supplement: "Supplement",
+      table: "Table",
+    } as Record<string, string>,
     /** A source check that could not conclude is not a report defect. */
     inconclusive: "Could not check this claim against its source",
     inconclusiveBody: "The claim was not compared with its source text because the source lookup returned no result. This is not a problem with the report.",
@@ -465,10 +488,10 @@ export const EN: Text = {
     completeness: {
       complete: "Delivery complete",
       incomplete: "Delivery incomplete",
-      unconfirmed: "The task did not name its deliverables",
+      unconfirmed: "Delivery could not be checked",
       sourceBrief: "Checked against the files this task named as deliverables.",
       sourceSession: "This task named none, so the session's own declarations were used.",
-      sourceNone: "This task did not say which files it should produce, so there is no way to confirm they are all there. Naming them in the task is what makes this checkable.",
+      sourceNone: "The task did not name the files and paths it should produce, so there was nothing to check the artifacts against. Naming the files and paths in the task is what makes this checkable.",
       missing: "Missing",
       empty: "Empty",
     },
@@ -483,9 +506,7 @@ export const EN: Text = {
     /** A bounded passage in a locked source; "locator" and evidence levels
      *  are internal vocabulary, so the card says what was found instead. */
     locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
-    sourceInconclusiveWith: (count: number) => count === 1
-      ? "Found 1 source passage, but it is not enough to support this claim."
-      : `Found ${count} source passages, but they are not enough to support this claim.`,
+    sourceInconclusiveSome: "Source text was found, but it is not enough to support this claim.",
     sourceInconclusiveNone: "No source passage was found to support this claim.",
     failedDetail: "The review reported an error.",
     empty: "This checkpoint produced no review record.",
