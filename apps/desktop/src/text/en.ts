@@ -1162,6 +1162,8 @@ export const EN: Text = {
         authorize: "Authorize",
         cancelAuthorization: "Cancel authorization",
         clearAuthorization: "Clear authorization",
+        nameRequired: "A server name is required.",
+        openAuthorization: "Open the authorization page",
       },
       web: {
         searchHeading: "Search",
