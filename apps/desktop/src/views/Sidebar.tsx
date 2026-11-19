@@ -256,13 +256,10 @@ export function Sidebar({
         </svg>
         <span>{TEXT.sidebar.newTask}</span>
       </button>
-        <div className="side-import-dropdown">
-          <button className="side-import-trigger" aria-label={TEXT.researchPackage.newOptions} aria-haspopup="menu" type="button">
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m7 10 5 5 5-5" /></svg>
-          </button>
-          <div className="side-import-menu" role="menu"><button className="ctx-item" role="menuitem" onClick={() => onImportSession?.()} type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg><span>{TEXT.researchPackage.import}</span></button></div>
-        </div>
       </div>
+      <button className="side-new side-import-button" onClick={() => onImportSession?.()} type="button">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12v4M4 4v16h12v-4M9 12h11m-4-4 4 4-4 4" /></svg><span>{TEXT.researchPackage.import}</span>
+      </button>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
