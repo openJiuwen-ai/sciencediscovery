@@ -91,8 +91,14 @@ export function useConfigurationRequests({ client, sessionId, active, refreshKey
     try {
       const response = await listConfigurationRequests(client, sessionId, controller.signal);
       if (!valid() || sequence !== scope.sequence || controller.signal.aborted) return;
+      // The error transition is a visible change of its own: the load-failure
+      // banner and the cards' read-only state both come down when a retry
+      // succeeds. A retry that reads back the same list repaints nothing in
+      // `merge`, so this has to paint on its own.
+      const hadError = scope.error;
       scope.error = false;
       merge(response.items);
+      if (hadError) render();
     } catch {
       if (!valid() || sequence !== scope.sequence || controller.signal.aborted) return;
       // Keep the last good cards; do not expose transport/backend error text.
