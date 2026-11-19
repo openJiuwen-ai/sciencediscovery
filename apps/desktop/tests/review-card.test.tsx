@@ -82,13 +82,13 @@ describe("a review's verdict", () => {
     assert.equal(reviewTone(parsed), "pass");
   });
 
-  it("is amber when delivery was never verified", () => {
+  it("is grey when delivery was never verified: nothing was found, nothing was claimed", () => {
     const unconfirmed = review({
       completeness: undefined,
       checks: ["structure", "citation"],
     });
     assert.equal(unverifiedDelivery(unconfirmed), true);
-    assert.equal(reviewTone(unconfirmed), "warn");
+    assert.equal(reviewTone(unconfirmed), "neutral");
     assert.equal(reviewSummary(unconfirmed), TEXT.reviewer.summaryUnverified);
   });
 
@@ -140,8 +140,9 @@ describe("a review's verdict", () => {
     assert.equal(declaredGap(gapped), true);
     // Nothing was raised, and delivery was confirmed: green would tell the
     // reader the whole claim was examined, which the card's own gap row denies.
+    // It is not a finding either, so the card does not wear the warning tone.
     assert.equal(unverifiedDelivery(gapped), false);
-    assert.equal(reviewTone(gapped), "warn");
+    assert.equal(reviewTone(gapped), "neutral");
     assert.equal(reviewSummary(gapped), TEXT.reviewer.summaryPartial(1));
   });
 
@@ -233,6 +234,34 @@ describe("a review's rows", () => {
     assert.ok(row);
     assert.equal(row.label, TEXT.reviewer.gaps);
     assert.equal(row.body, "no source text");
+    // An absence is not a warning about the artifact, and it is not a pass.
+    assert.equal(row.tone, "neutral");
+  });
+
+  it("draws an unconfirmed delivery in grey, not as a warning", () => {
+    const unconfirmed = review({
+      checks: ["structure", "citation"],
+      completeness: { required: [], source: "none", status: "unconfirmed" },
+    });
+    const row = reviewRows(unconfirmed).find((candidate) => candidate.id.endsWith(":completeness"));
+    assert.ok(row);
+    assert.equal(row.tone, "neutral");
+    assert.equal(row.badge, TEXT.reviewer.badgeUnconfirmed);
+    assert.equal(row.title, TEXT.reviewer.completeness.unconfirmed);
+  });
+
+  it("puts the checks that ran above what the review never looked at", () => {
+    const partial = review({
+      checks: ["citation"],
+      completeness: undefined,
+      notChecked: [{ check: "claim_support", reason: "No source was read." }],
+    });
+    const rows = reviewRows(partial);
+    // The citation check ran and passed; the claim check did not run at all.
+    assert.equal(rows[0]?.tone, "pass");
+    assert.equal(rows[0]?.label, TEXT.reviewer.checkNames.citation);
+    assert.equal(rows.at(-1)?.id, "review-1:gap:0");
+    assert.equal(rows.at(-1)?.tone, "neutral");
   });
 
   it("keeps the header's count honest about what expansion reveals", () => {
