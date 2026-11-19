@@ -1,5 +1,5 @@
-.side-new-split { display:flex; align-items:center; }
-.side-new-split .side-new { flex:1; min-width:0; }
+.side-new-split { display:flex; flex-direction:column; gap:2px; }
+.side-new-split .side-new { flex:1; min-width:0; margin-top:0; }
 .research-package-notice { color:var(--muted); font-size:12px; line-height:1.6; margin:8px 0; }
 .research-package-dialog { width:min(680px,calc(100vw - 32px)); max-height:85vh; overflow:hidden; display:flex; flex-direction:column; }
 .research-package-dialog .modal-body { min-height:0; overflow:auto; overflow-wrap:anywhere; }
@@ -171,7 +171,6 @@
 .research-package-limit p { margin: 0; font-size: 13px; line-height: 1.5; }
 .research-package-limit button { align-self: flex-start; }
 
-.side-import-button { margin-top: 0; }
 .research-package-upload { min-height: 190px; flex-direction: column; justify-content: center; background: #fafafa; }
 .research-upload-icon { color: var(--text); }
 .research-package-source { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 8px 28px; color: var(--muted); font-size: 12px; }

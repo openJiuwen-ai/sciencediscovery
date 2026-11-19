@@ -256,10 +256,10 @@ export function Sidebar({
         </svg>
         <span>{TEXT.sidebar.newTask}</span>
       </button>
+        <button className="side-new side-import-button" onClick={() => onImportSession?.()} type="button">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12v4M4 4v16h12v-4M9 12h11m-4-4 4 4-4 4" /></svg><span>{TEXT.researchPackage.import}</span>
+        </button>
       </div>
-      <button className="side-new side-import-button" onClick={() => onImportSession?.()} type="button">
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12v4M4 4v16h12v-4M9 12h11m-4-4 4 4-4 4" /></svg><span>{TEXT.researchPackage.import}</span>
-      </button>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
