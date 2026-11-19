@@ -322,7 +322,7 @@ const SIGNIFICANT_CLOCK_OFFSET_MS = 30_000;
 function runnerUsable(host: RemoteHostTarget): boolean {
   if (host.id === "local") return true;
   if (host.status !== "ready") return false;
-  if (host.connectionKind === "direct") return Boolean(host.endpoint && host.hasToken);
+  if (host.connectionKind === "direct") return Boolean(host.endpoint && host.hasToken && host.capabilities?.platform === "Linux");
   return host.capabilities?.platform === "Linux";
 }
 
