@@ -1,0 +1,28 @@
+# 可选的 Issue 到 PR 开发流水线
+
+[repo-issue-pipeline Skill](../../../.agents/skills/repo-issue-pipeline/SKILL.md)
+沉淀了主 Agent 调度、独立 Codex SDK Worker 执行、私有文本账本持久化的开发流程。
+它是贡献者工具，不改变 ScienceDiscovery 的科研 Agent 后端，克隆仓库不会自动启动机器人。
+
+```text
+周期唤醒 → 主 Codex Agent → 独立 SDK Worker → 个人 fork 的 PR
+                 ↕                ↓
+             私有文本账本 ← 报告与测试证据
+```
+
+主 Agent 在入队前确认负责人和问题是否仍存在，按约定并发调度，复核交付并持续关注 PR。
+Worker 自主完成分析、开发、测试、文档、Magpie 风格的 pairing 预检（正确性 / 安全 / 约定）和提交；
+后续处理评论、CI、冲突时，恢复原有线程。标 Ready 前须确认当前 head 无未解决的 blocking pairing 项。
+Issue 部分完成后的剩余工作仍需跟踪，等待外部决策的任务不占执行名额。
+
+启用前阅读[配置与运行指南](../../../.agents/skills/repo-issue-pipeline/references/setup.md)，
+与用户确认仓库、个人 fork、目标分支、标签、并发、巡检频率、时区、私有状态目录及权限和成本边界。
+本次不包含任何个人账号、实际队列、日志、凭据或已启用的定时服务。
+Worker 使用经用户明确授权的完整宿主机权限，工作树不是安全隔离；不要用于执行不可信 PR 的服务。
+
+脚本只负责一次 SDK 调用、原线程恢复、事件和状态落盘，不负责选择 Issue 或决定方案。
+部署说明给出了周期唤醒示例，不自动安装服务，也尚未实现完成事件即时唤醒。
+离线测试验证的是传输契约，不是模型决策质量；真实 SDK、目标机器的服务管理器和账号权限仍需验收。
+合并、进入合入队列、发版、修改密钥或设置、放宽门禁、付费真实模型测试均需要相应授权。
+
+同仓库另外提供 [Issue as Interface](issue-as-interface.md) 技能族（门禁 / 巡检 / worker / MagPie review / 开源运营），与本流水线互补；安装不会自动启动机器人。
