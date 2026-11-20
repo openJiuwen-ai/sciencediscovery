@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createTest } from '../test/support/tagged/compat.mjs';
@@ -24,6 +25,89 @@ const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux',
 
 const REPOSITORY = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TITLE = 'chore(release): reset the Windows desktop package to the 0.4.0-rc1 line';
+const PR_HEAD = 'd'.repeat(40);
+const checkoutParents = base => () => `${'e'.repeat(40)} ${base} ${PR_HEAD}\n`;
+
+function versionHistory(t) {
+  const parent = join(REPOSITORY, '.tmp/r');
+  mkdirSync(parent, { recursive: true });
+  const root = mkdtempSync(join(parent, 'version-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  git(['init', '--initial-branch=main']);
+  git(['config', 'user.name', 'Version Policy Test']);
+  git(['config', 'user.email', 'version-policy@example.test']);
+  const writeVersion = version => {
+    mkdirSync(join(root, 'application'), { recursive: true });
+    writeFileSync(join(root, VERSION_FILE), JSON.stringify({ version }));
+  };
+  const commit = message => {
+    git(['add', '.']);
+    git(['-c', 'commit.gpgsign=false', 'commit', '-m', message]);
+    return git(['rev-parse', 'HEAD']).trim();
+  };
+  writeVersion('0.4.1');
+  const oldBase = commit('initial version');
+  git(['checkout', '-b', 'feature']);
+  writeFileSync(join(root, 'feature.txt'), 'feature');
+  const head = commit('functional change');
+  git(['checkout', 'main']);
+  writeVersion('0.4.0-rc1');
+  const currentBase = commit('release version reset');
+  git(['-c', 'commit.gpgsign=false', 'merge', '--no-ff', 'feature', '-m', 'merge candidate']);
+  return {
+    commit, currentBase, git, head, oldBase, writeVersion,
+    readFile: path => readFileSync(join(root, path), 'utf8'),
+  };
+}
+
+test('an old PR does not own a version change inherited from the current target branch', t => {
+  const history = versionHistory(t);
+  for (const base of [history.oldBase, history.currentBase]) {
+    assert.deepEqual(versionProblemsFromEvent({
+      event: 'pull_request',
+      payload: { pull_request: { base: { sha: base }, head: { sha: history.head }, title: 'feat: functional change' } },
+      git: history.git,
+      readFile: history.readFile,
+      showFile: (sha, path) => history.git(['show', `${sha}:${path}`]),
+    }), []);
+  }
+});
+
+test('the merge comparison still rejects a functional PR that changes the version', t => {
+  const history = versionHistory(t);
+  history.git(['checkout', '-b', 'version-feature', history.currentBase]);
+  history.writeVersion('0.5.0');
+  const head = history.commit('functional change with a version bump');
+  history.git(['checkout', '--detach', history.currentBase]);
+  history.git(['-c', 'commit.gpgsign=false', 'merge', '--no-ff', head, '-m', 'version candidate']);
+  const problems = versionProblemsFromEvent({
+    event: 'pull_request',
+    payload: { pull_request: { base: { sha: history.oldBase }, head: { sha: head }, title: 'feat: functional change' } },
+    git: history.git,
+    readFile: history.readFile,
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /moves 0\.4\.0-rc1 -> 0\.5\.0/u);
+  assert.match(problems[0], /does not start with "chore\(release\):"/u);
+});
+
+test('a raw PR checkout or an unrelated merge cannot stand in for the tested merge', () => {
+  const base = 'a'.repeat(40);
+  const candidate = 'e'.repeat(40);
+  for (const parents of [
+    `${PR_HEAD} ${base}`,
+    `${candidate} ${base} ${'f'.repeat(40)}`,
+    `${candidate} ${base} ${PR_HEAD} ${'f'.repeat(40)}`,
+  ]) {
+    assert.throws(() => versionProblemsFromEvent({
+      event: 'pull_request',
+      payload: { pull_request: { head: { sha: PR_HEAD }, title: 'feat: functional change' } },
+      git: () => parents,
+      readFile: () => { throw new Error('an unverified checkout must not be read'); },
+    }), /checkout must be a two-parent PR merge/u);
+  }
+});
 
 function readme(version, dot) {
   return `[![Release](https://img.shields.io/badge/Release-${dot}-1f6feb)](https://github.com/o/r/releases/tag/v${version})\n`;
@@ -255,7 +339,8 @@ test('the checkout read covers every metadata file, and the base commit', () => 
   const contents = { ...files('0.4.1'), [VERSION_FILE]: '{"version": "0.4.1"}' };
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'a'.repeat(40) }, title: 'fix(mcp): reconnect' } },
+    payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: PR_HEAD }, title: 'fix(mcp): reconnect' } },
+    git: checkoutParents('a'.repeat(40)),
     readFile: path => { asked.push(path); return contents[path]; },
     showFile: (sha, path) => { asked.push(`${sha.slice(0, 7)}:${path}`); return '{"version": "0.4.0"}'; },
   });
@@ -273,7 +358,8 @@ test('a pull request that removes a metadata file is not stopped when the versio
   const asked = [];
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'b'.repeat(40) }, title: 'docs: drop a stale README' } },
+    payload: { pull_request: { base: { sha: 'b'.repeat(40) }, head: { sha: PR_HEAD }, title: 'docs: drop a stale README' } },
+    git: checkoutParents('b'.repeat(40)),
     readFile: path => {
       asked.push(path);
       if (path === VERSION_FILE) return '{"version": "0.4.0-rc1"}';
@@ -290,7 +376,8 @@ test('a pull request that removes a metadata file is not stopped when the versio
 test('a missing metadata file is reported by name when the version did move', () => {
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'c'.repeat(40) }, title: 'chore(release): bump' } },
+    payload: { pull_request: { base: { sha: 'c'.repeat(40) }, head: { sha: PR_HEAD }, title: 'chore(release): bump' } },
+    git: checkoutParents('c'.repeat(40)),
     readFile: path => {
       if (path === VERSION_FILE) return '{"version": "0.5.0-rc1"}';
       if (path === 'application/build/nsh-syntax-check-stub.nsi') {
@@ -312,6 +399,6 @@ test('the checkout read refuses an event it cannot compare against', () => {
       event: 'pull_request', payload: { pull_request: { title: 'chore(release): x' } },
       readFile: () => '{}', showFile: () => '{}',
     }),
-    /no usable pull_request\.base\.sha/u,
+    /no usable pull_request\.head\.sha/u,
   );
 });
