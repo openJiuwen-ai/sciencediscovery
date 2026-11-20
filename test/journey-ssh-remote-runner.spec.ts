@@ -691,7 +691,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText("Runner", { exact: true })).toBeVisible();
         const allowedHost = dialog.getByRole("checkbox", { name: /institution-linux/ });
         await expect(allowedHost).not.toBeChecked();
-        await allowedHost.check();
+        // This controlled checkbox updates only after the asynchronous save.
+        await allowedHost.click();
         await expect.poll(() => project.remoteRunnerHostIds).toEqual([hostId]);
         expect(project.runnerIds).toEqual(["local", hostId]);
         await expect(allowedHost).toBeChecked();
