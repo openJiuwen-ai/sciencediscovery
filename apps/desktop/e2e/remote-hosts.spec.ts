@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * 设置 › 远程 as a set of multi-step flows.
+ * 设置 › 运行环境 as a set of multi-step flows.
  *
  * Registration probes before it answers, a connect streams a log while it runs,
  * and an untrusted host key is a question rather than a failure. Each of those
@@ -28,7 +28,6 @@ import {
   TOKEN,
   TOKEN_STORAGE_KEY,
   installMockApi,
-  makeSession,
   type JsonRecord,
   type Mock,
 } from "./fixtures.js";
@@ -88,13 +87,19 @@ function npuInventory(): JsonRecord {
   };
 }
 
-async function openRemote(page: Page): Promise<Locator> {
+async function openRuntimeSettings(page: Page): Promise<Locator> {
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "设置" });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "远程", exact: true }).click();
+  await dialog.getByRole("button", { name: "运行环境", exact: true }).click();
   return dialog;
+}
+
+async function openRunnerDetails(dialog: Locator, name = "gpu-01"): Promise<Locator> {
+  await card(dialog, name).getByRole("button").click();
+  await expect(dialog.getByRole("button", { name: "返回运行环境", exact: true })).toBeVisible();
+  return card(dialog, name);
 }
 
 function calls(mock: Mock, method: string, path: string): JsonRecord[] {
@@ -123,7 +128,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("登记", () => {
   test("an SSH machine is registered with its port, login and executable", async ({ page }) => {
     const mock = await installMockApi(page);
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -150,7 +155,7 @@ test.describe("登记", () => {
 
   test("a self-deployed Runner is registered with its endpoint and token", async ({ page }) => {
     const mock = await installMockApi(page);
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -173,7 +178,7 @@ test.describe("登记", () => {
 
   test("an incomplete form cannot be registered", async ({ page }) => {
     await installMockApi(page);
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -194,7 +199,7 @@ test.describe("登记", () => {
     const mock = await installMockApi(page, {
       hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:6vCf3yZ9q1" },
     });
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -231,7 +236,7 @@ test.describe("登记", () => {
         username: "alice",
       }],
     });
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -249,7 +254,7 @@ test.describe("登记", () => {
 
   test("a generated key pair fills the path and shows only the public half", async ({ page }) => {
     const mock = await installMockApi(page);
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
     await dialog.getByRole("button", { name: "新增远端 Runner" }).click();
     const form = dialog.locator(".settings-card.is-form");
@@ -264,8 +269,8 @@ test.describe("登记", () => {
 test.describe("连接", () => {
   test("connect and disconnect are one write each, and the card follows", async ({ page }) => {
     const mock = await installMockApi(page, { runners: [runner()] });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     await machine.getByRole("button", { name: "连接", exact: true }).click();
     await expect(machine.getByRole("button", { name: "断开", exact: true })).toBeVisible();
@@ -282,8 +287,8 @@ test.describe("连接", () => {
       connectLog: ["connecting to gpu-01", "ssh handshake failed"],
       runners: [runner()],
     });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     await machine.getByRole("button", { name: "连接", exact: true }).click();
 
@@ -308,13 +313,11 @@ test.describe("连接", () => {
         },
       })],
     });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     await expect(machine).toContainText("就绪");
-    // The readings are folded away by default: the card is about the connection.
-    await expect(machine.getByText("磁盘已用")).toBeHidden();
-    await machine.locator("summary").click();
+    // Readings are immediately visible in the selected Runner detail.
     await expect(machine.getByText("磁盘已用")).toBeVisible();
     await expect(machine).toContainText("10.0 GiB / 100.0 GiB");
   });
@@ -323,8 +326,8 @@ test.describe("连接", () => {
 test.describe("凭据", () => {
   test("explicit forgetting clears stored credentials and a later password can be saved", async ({ page }, testInfo) => {
     const mock = await installMockApi(page, { runners: [runner({ hasPassword: true, hasPrivateKey: true })] });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
     await test.step("1. Keep saved credentials when fields are blank", async () => {
       await machine.getByRole("button", { name: "登录凭据" }).click();
       await machine.getByRole("button", { name: "保存并测试" }).click();
@@ -362,8 +365,8 @@ test.describe("凭据", () => {
     const mock = await installMockApi(page, {
       runners: [runner({ hasPassword: false, hasPrivateKey: true })],
     });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     await machine.getByRole("button", { name: "登录凭据" }).click();
     await expect(machine.getByLabel("登录密码")).toHaveAttribute("placeholder", "留空则沿用已存的密码");
@@ -385,8 +388,8 @@ test.describe("凭据", () => {
 test.describe("删除", () => {
   test("deleting asks first and removes the machine once confirmed", async ({ page }) => {
     const mock = await installMockApi(page, { runners: [runner()] });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     await machine.getByRole("button", { name: "删除" }).click();
     const confirm = page.getByRole("dialog", { name: "删除机器「gpu-01」？" });
@@ -398,32 +401,41 @@ test.describe("删除", () => {
     await confirm.getByRole("button", { name: "删除" }).press("Enter");
 
     await expect(machine).toHaveCount(0);
-    await expect(dialog).toContainText("没有已登记的 Runner。");
+    await expect(dialog.getByRole("button", { name: "新增远端 Runner" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "返回运行环境", exact: true })).toHaveCount(0);
     expect(calls(mock, "DELETE", "/api/remote-hosts/runner-1")).toHaveLength(1);
   });
 });
 
-test.describe("允许的机器", () => {
-  test("the allowlist is written whole, and this machine is not one of its boxes", async ({ page }) => {
+test.describe("运行环境导航", () => {
+  test("all catalog machines have details without changing project availability", async ({ page }) => {
     const mock = await installMockApi(page, {
-      projects: [{ ...DEFAULT_PROJECT, runnerIds: ["local", "runner-1"] }],
+      projects: [{ ...DEFAULT_PROJECT, runnerIds: ["local"] }],
       runners: [localRunner(), runner()],
-      sessions: [makeSession()],
     });
-    const dialog = await openRemote(page);
+    const dialog = await openRuntimeSettings(page);
 
-    // The machine the app itself runs on always exists and cannot be
-    // un-registered, so it has no card and no box: this page manages the
-    // others, and the allowlist starts with whatever the Project stored.
-    await expect(dialog.getByRole("checkbox", { name: /本地|local/u })).toHaveCount(0);
-    const remote = dialog.getByRole("checkbox", { name: /gpu-01/u });
-    await expect(remote).toBeChecked();
+    await expect(card(dialog, "内置 Runner")).toBeVisible();
+    await expect(card(dialog, "gpu-01")).toBeVisible();
+    await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+    await expect(dialog.getByRole("combobox", { name: "Conda 源", exact: true })).toBeVisible();
 
-    await remote.click();
+    await openRunnerDetails(dialog, "内置 Runner");
+    await expect(dialog.getByRole("combobox", { name: "Conda 源", exact: true })).toHaveCount(0);
+    await expect(dialog.getByText("这台机器上还没有可用环境。", { exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "返回运行环境", exact: true }).click();
 
-    // The whole list goes on every toggle, and the implicit local entry it was
-    // stored with stays in it: only the machine the reader unticked left.
-    expect(calls(mock, "PATCH", "/api/projects/project-1")).toEqual([{ runnerIds: ["local"] }]);
+    await openRunnerDetails(dialog);
+    await expect(card(dialog, "内置 Runner")).toHaveCount(0);
+    await expect(card(dialog, "gpu-01").getByRole("button", { name: "连接", exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "返回运行环境", exact: true }).click();
+    await expect(card(dialog, "内置 Runner")).toBeVisible();
+    for (const endpoint of ["environment-setup", "environments", "environment-revisions"]) {
+      expect(calls(mock, "GET", `/api/runners/local/${endpoint}`)).toHaveLength(1);
+    }
+    expect(calls(mock, "GET", "/api/runners/runner-1/environment-setup")).toEqual([]);
+    expect(calls(mock, "PATCH", "/api/projects/project-1")).toEqual([]);
+    expect(mock.state.projects[0]).toMatchObject({ runnerIds: ["local"] });
   });
 });
 
@@ -438,9 +450,8 @@ test.describe("NPU", () => {
         },
       })],
     });
-    const dialog = await openRemote(page);
-    const machine = card(dialog, "gpu-01");
-    await machine.locator("summary").click();
+    const dialog = await openRuntimeSettings(page);
+    const machine = await openRunnerDetails(dialog);
 
     const npuPanel = machine.locator(".npu-panel");
     await expect(machine).toContainText("本机 2 张 · 沙箱内可用 2 张");

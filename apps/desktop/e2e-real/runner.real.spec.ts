@@ -14,12 +14,12 @@
 
 /**
  * E2E-META
- * Purpose: 设置 › 远程 reads the real Runner catalog: the local Runner is
- *          offered by the allowlist, and a connected remote Runner's own disk,
+ * Purpose: 设置 › 运行环境 reads the real Runner catalog: the local Runner is
+ *          accessible through machine details, and a connected remote Runner's own disk,
  *          memory and NPU readings are drawn from what it reported.
  * Steps:
- *   1. Open 设置 › 远程 against the real stack.
- *   2. Require the local Runner in the project allowlist.
+ *   1. Open 设置 › 运行环境 against the real stack.
+ *   2. Open the local Runner detail and return to the machine overview.
  *   3. When the API reports a ready remote Runner with resources, require its
  *      meter readings — and its NPU rows when it reported cards.
  * Environment: Isolated product stack selected by E2E_BASE_URL, plus the
@@ -47,6 +47,7 @@ interface RunnerResource {
 interface RunnerTarget {
   alias: string;
   id: string;
+  runnerName?: string;
   location: "local" | "remote";
   runnerStatus?: {
     resources?: Record<string, RunnerResource>;
@@ -60,23 +61,27 @@ test.beforeEach(async ({ page }, info) => {
   await seedToken(page);
 });
 
-async function openRemoteSettings(page: Page): Promise<Locator> {
+async function openRuntimeSettings(page: Page): Promise<Locator> {
   await page.goto("/");
   const models = await api<unknown[]>(page, "/api/models");
   if (models.length === 0) test.skip(true, "the shell needs at least one model profile to reach 设置");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByTitle("远端 Runner 与项目可用机器").click();
+  await dialog.getByRole("button", { name: "运行环境", exact: true }).click();
   return dialog;
 }
 
-test("the real Runner catalog offers the local machine to the project", { tag: [...REAL_TAGS] }, async ({ page }) => {
-  const dialog = await openRemoteSettings(page);
+test("the real Runner catalog opens local machine details", { tag: [...REAL_TAGS] }, async ({ page }) => {
+  const dialog = await openRuntimeSettings(page);
 
-  const local = dialog.locator(".runner-choice").filter({ hasText: "本地" });
-  await expect(local.first()).toBeVisible();
-  await expect(local.first().locator("input[type=checkbox]")).toBeChecked();
+  const local = dialog.locator(".settings-card.is-machine").filter({ hasText: "内置 Runner" });
+  await expect(local).toBeVisible();
+  await local.getByRole("button").click();
+  await expect(dialog.getByRole("heading", { name: "内置 Runner", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "新增远端 Runner" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "返回运行环境", exact: true }).click();
+  await expect(local).toBeVisible();
 });
 
 test("a connected remote Runner reports its real resources", { tag: [...REAL_TAGS] }, async ({ page }, info) => {
@@ -86,14 +91,15 @@ test("a connected remote Runner reports its real resources", { tag: [...REAL_TAG
   );
   if (connected === undefined) {
     info.skip(true, "no connected remote Runner with resource readings on this stack");
+    return;
   }
 
-  const dialog = await openRemoteSettings(page);
+  const dialog = await openRuntimeSettings(page);
 
-  const card = dialog.locator(".settings-card.is-machine").filter({ hasText: connected!.alias });
+  const card = dialog.locator(".settings-card.is-machine").filter({ hasText: connected.runnerName ?? connected.alias });
   await expect(card.first()).toBeVisible();
-  // The readings sit behind 机器详情: the card's visible job is the connection.
-  await card.first().getByText("机器详情").click();
+  await card.getByRole("button").click();
+  await expect(dialog.getByRole("button", { name: "返回运行环境", exact: true })).toBeVisible();
   const meters = card.first().getByRole("meter");
   await expect(meters.first()).toBeVisible();
   expect(await meters.count()).toBeGreaterThan(0);

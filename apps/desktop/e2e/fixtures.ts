@@ -1033,6 +1033,25 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/runners" && method === "GET") return json(route, 200, state.runners);
 
+      if (path === "/api/environment-source-settings" && method === "GET") {
+        return json(route, 200, { condaSource: "upstream", pipSource: "upstream" });
+      }
+      const environmentRead = /^\/api\/runners\/([^/]+)\/(environment-setup|environments|environment-revisions)$/.exec(path);
+      if (environmentRead && method === "GET") {
+        if (!state.runners.some(runner => runner.id === environmentRead[1])) {
+          return json(route, 404, { error: "runner not found" });
+        }
+        if (environmentRead[2] !== "environment-setup") return json(route, 200, []);
+        const component = { action: null, completedAt: null, error: null, message: "Ready", phase: "complete", startedAt: null, state: "ready", updatedAt: "" };
+        return json(route, 200, {
+          state: "ready", phase: "complete", allowedChannels: [], completedAt: null,
+          components: { conda: component, micromamba: component }, error: null,
+          managedProvisioner: true, message: "Ready", networkPolicy: "allowed-channels",
+          provisioner: "micromamba", provisionerVersion: "2", startedAt: null,
+          starterPackages: { python: [], r: [] }, updatedAt: "",
+        });
+      }
+
       if (path === "/api/runners/npu" && method === "GET") {
         // The local machine has no connection status to carry its inventory, so
         // its cards and every Runner's selection come from their own read.
