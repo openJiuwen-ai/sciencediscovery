@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { completeChatRequest, normalizeUsage, carriedThinkingControls, rejectedThinkingControlFields, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
+import { completeChatRequest, normalizeUsage, carriedRequestFields, rejectedRequestFields, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
 import { request, type Dispatcher } from "undici";
 import { Readable } from "node:stream";
 import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol, type ModelCompatibilityOutcome, type ModelConnectivityTestCategory, type ModelConnectivityTestResult, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
@@ -145,8 +145,8 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
         // injects nothing here would otherwise send the identical body again and
         // report a strip that never happened.
         const detail = await response.text().catch(() => "");
-        const carried = carriedThinkingControls(sentBody);
-        const named = [...rejectedThinkingControlFields(detail)].filter((field) => carried.has(field));
+        const carried = carriedRequestFields(sentBody);
+        const named = [...rejectedRequestFields(detail)].filter((field) => carried.has(field));
         if (named.length) {
           stripFromBody = named;
           response = await dispatch(endpoint);
