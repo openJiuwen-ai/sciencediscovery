@@ -589,7 +589,20 @@ export interface EvolveTurnContext {
   sessionId: string;
 }
 
-export function skillAuthoringCommandPrompt(content: string): string | undefined {
+/**
+ * The instruction an authoring slash command becomes.
+ *
+ * `hasHistory` is false for a Session with no prior conversation. `/distill-session`
+ * then has nothing to infer, and the unguarded wording ("infer the reusable
+ * workflow from the complete prior Session conversation ... supplied above") sent
+ * the model looking for that conversation with `run_shell` — 28 shell calls, 32
+ * turns and ~89k tokens on an empty Session, with no draft (#1262). The sibling
+ * `/skill-creator` branch already guards its missing description; this mirrors it.
+ */
+export function skillAuthoringCommandPrompt(
+  content: string,
+  options: { hasHistory?: boolean } = {},
+): string | undefined {
   const match = /^\/(skill-creator|distill-session)(?:\s+([\s\S]*))?$/i.exec(content.trim());
   if (!match) return undefined;
   const command = match[1]!.toLowerCase();
@@ -602,6 +615,17 @@ export function skillAuthoringCommandPrompt(content: string): string | undefined
         ? `Workflow description from the user:\n${request}`
         : "No workflow description was supplied. Ask one concise question for the workflow goal, inputs, outputs, and important checks; do not create a generic Skill yet.",
       "When the requirements are sufficient, call create_skill exactly once. The result must remain a pending review draft; tell the user they can open Skills Explorer to inspect the files and diff before confirmation.",
+    ].join("\n\n");
+  }
+  // Nothing to distil: answer, ask for the description, and stay out of the
+  // workspace. `hasHistory` defaults to true so a caller that does not know
+  // behaves as before rather than silently refusing every distill.
+  if (options.hasHistory === false) {
+    return [
+      "The user invoked /distill-session to turn this Session into a reusable Skill, but this Session has no prior conversation and no execution history to distil.",
+      ...(request ? [`The user's direction:\n${request}`] : []),
+      "Do not call create_skill yet. This Session has nothing to distil, so say so in one short paragraph and ask one concise question for what the Skill should capture: the goal, its inputs and outputs, and the checks that make a result acceptable.",
+      "Do not explore for a conversation that is not there: do not read the workspace, the application data directory, project or session folders, and do not run shell commands to look for earlier work. There is nothing to find, and searching burns the user's tokens.",
     ].join("\n\n");
   }
   return [
@@ -992,7 +1016,11 @@ async function executeAgentRun(
   const promptUserMessage = {
     ...userMessage,
     content: [
-      skillAuthoringCommandPrompt(userMessage.content) ?? messagePromptContent(userMessage),
+      skillAuthoringCommandPrompt(userMessage.content, {
+        // "Prior conversation" is what /distill-session infers from. A Session
+        // holding only runtime notices has none either (#1262).
+        hasHistory: previousMessages.some((message) => message.role === "user" || message.role === "assistant"),
+      }) ?? messagePromptContent(userMessage),
       ...(pendingManualNotice ? [
         "A manual Reviewer notice is pending. Address its findings in this response by correcting the work or explaining why a finding does not apply, with record evidence.",
         pendingManualNotice.content,
