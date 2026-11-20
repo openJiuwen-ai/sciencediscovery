@@ -156,7 +156,9 @@ def _artifact_bytes(entry: dict, assets_root: Path, sessions_root: Path) -> Arti
     if not path.is_file():
         return None
     data = path.read_bytes()
-    if data[:2] == b"PK":
+    # A zip (skill archive) and a gzip'd tar (a `.sdresearch`) are already the
+    # package; only a single JSON file needs wrapping.
+    if data[:2] == b"PK" or data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data)):
         return Artifact(data=data, package_name=path.name)
     # A single JSON file (specialist, connector) becomes a one-entry archive so
     # every version has the same shape and the Files tab always has something
