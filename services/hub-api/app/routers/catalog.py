@@ -52,6 +52,17 @@ def categories(kind: str | None = Query(default=None), db: Session = Depends(get
     if kind:
         query = query.where(Asset.kind == kind)
 
+    if kind == "session":
+        rows = db.scalars(
+            select(Asset).where(
+                Asset.status == "active",
+                Asset.visibility == "public",
+                Asset.public_latest_version.is_not(None),
+                Asset.kind == "session",
+            )
+        ).all()
+        return ok({"tree": _session_tree(rows)})
+
     roots: dict[str, dict] = {}
     for path, count in db.execute(query).all():
         segments = [segment for segment in str(path).split("/") if segment]
@@ -93,7 +104,11 @@ def _public_rows(db: Session):
     ).all()
 
 
-def _category_object(kind: str, path: str | None) -> dict:
+def _category_object(asset: Asset) -> dict:
+    stored = (asset.extra or {}).get("category")
+    if isinstance(stored, dict):
+        return stored
+    kind, path = asset.kind, asset.category
     parts = [part for part in str(path or "").split("/") if part]
     if kind in ("skill", "team"):
         return {"domain": parts[0] if parts else "", "subdomain": parts[1] if len(parts) > 1 else ""}
@@ -124,7 +139,7 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
         "source": extra.get("source", "builtin"),
         "author": extra.get("author"),
         "tags": list(asset.tags or []),
-        "category": _category_object(asset.kind, asset.category),
+        "category": _category_object(asset),
         "download": download,
         "readme": f"/api/v1/assets/{asset.id}/readme?format=text",
         "related": extra.get("related"),
@@ -148,6 +163,26 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
         if key in extra:
             payload[key] = extra[key]
     return payload
+
+
+def _session_tree(rows) -> list[dict]:
+    """Sessions group task → domain, the shape the site's sessions tab uses."""
+    tasks: dict[str, dict] = {}
+    for asset in rows:
+        category = (asset.extra or {}).get("category") or {}
+        task = str(category.get("task") or "uncategorized")
+        domain = category.get("domain")
+        node = tasks.setdefault(task, {"id": task, "count": 0, "children": []})
+        node["count"] += 1
+        if domain:
+            child = next((item for item in node["children"] if item["id"] == domain), None)
+            if child is None:
+                child = {"id": str(domain), "count": 0, "children": []}
+                node["children"].append(child)
+            child["count"] += 1
+    for node in tasks.values():
+        node["children"].sort(key=lambda child: child["id"])
+    return [tasks[key] for key in sorted(tasks)]
 
 
 def _tree(rows) -> list[dict]:
@@ -179,10 +214,14 @@ def catalog(db: Session = Depends(get_db)) -> dict:
     from ..models import AssetVersion
 
     rows = _public_rows(db)
+    public_ids = [row.id for row in rows]
     versions = {
         (version.asset_id, version.version): version
         for version in db.scalars(
-            _select(AssetVersion).where(AssetVersion.moderation_status == "approved")
+            _select(AssetVersion).where(
+                AssetVersion.moderation_status == "approved",
+                AssetVersion.asset_id.in_(public_ids),
+            )
         ).all()
     }
     assets = [
@@ -200,7 +239,7 @@ def catalog(db: Session = Depends(get_db)) -> dict:
             "categories": {
                 "skill": _tree(skills),
                 "connector": _tree(connectors),
-                "sessionPackage": _tree(sessions),
+                "sessionPackage": _session_tree(sessions),
             },
             "sources": {},
         }

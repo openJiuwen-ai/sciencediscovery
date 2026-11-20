@@ -57,17 +57,27 @@ def _entries(data: bytes):
         except (tarfile.TarError, EOFError) as exc:
             raise PackageError("the uploaded file is not a readable archive") from exc
         with archive:
-            for member in archive.getmembers():
-                _safe_member(member.name)
-                if member.isdir():
-                    continue
-                if not member.isfile():
-                    raise PackageError(f"non-regular entry: {member.name!r}")
-                _safe_member(member.name)
-                handle = archive.extractfile(member)
-                if handle is None:
-                    raise PackageError(f"unreadable entry: {member.name!r}")
-                yield member.name, member.size, handle
+            # Iterate, don't materialise: `getmembers()` builds the whole
+            # TarInfo list before the entry cap is consulted.
+            count = 0
+            try:
+                for member in archive:
+                    count += 1
+                    if count > MAX_ENTRIES:
+                        raise PackageError(
+                            f"the package has more than {MAX_ENTRIES} entries"
+                        )
+                    _safe_member(member.name)
+                    if member.isdir():
+                        continue
+                    if not member.isfile():
+                        raise PackageError(f"non-regular entry: {member.name!r}")
+                    handle = archive.extractfile(member)
+                    if handle is None:
+                        raise PackageError(f"unreadable entry: {member.name!r}")
+                    yield member.name, member.size, handle
+            except (tarfile.TarError, EOFError) as exc:
+                raise PackageError("the uploaded file is not a readable archive") from exc
         return
 
     try:
