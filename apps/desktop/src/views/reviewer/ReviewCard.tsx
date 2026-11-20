@@ -256,8 +256,9 @@ export function ReviewArtifactBody({
             {/* One shape for every row: what was checked, what it concluded,
                 then one sentence saying what that means. */}
             <header className="review-item-head">
-              <span className="review-item-category" title={row.categoryTip}>{row.category}</span>
-              <span className={`review-badge is-${row.tone}`}>{row.badge}</span>
+              <span className={`review-item-verdict is-${row.tone}`} title={row.categoryTip}>
+                {row.badge}
+              </span>
             </header>
             <p className="review-item-text">{row.body}</p>
             <div className="review-item-foot">
