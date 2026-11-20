@@ -26,7 +26,8 @@ import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
 import { sessionTitle } from "../app/session-title.js";
 import { SidebarToggle } from "./SidebarToggle.js";
-import migrationIcon from "../assets/icons/migration.svg";
+
+const migrationIcon = new URL("../assets/icons/migration.svg", import.meta.url).href;
 
 /** One rename in progress, whichever kind of row it started from. A Project
  *  and a Session both rename from a double-click and from their `⋯` menu, and
