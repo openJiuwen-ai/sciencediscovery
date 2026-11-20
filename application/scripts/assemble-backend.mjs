@@ -1395,6 +1395,13 @@ try {
   repoCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
 } catch { /* not a git checkout — keep "unknown" */ }
 
+// #1254: the payload must be able to answer "which build is this?" without the
+// installer's version resource. `repoCommit` is one half — and the half a build
+// assembled from a tree without git metadata loses. The other half is the
+// number the tree claims, read from the shell's own package.json so the payload
+// cannot disagree with the electron-builder version that names it.
+const shellVersion = JSON.parse(await readFile(join(shellRoot, "package.json"), "utf8")).version;
+
 const pieces = {};
 for (const name of ["backend", "envs-template", "python", "micromamba"]) {
   pieces[name] = Math.round((await dirSizeMb(join(out, name))) * 10) / 10;
@@ -1402,6 +1409,7 @@ for (const name of ["backend", "envs-template", "python", "micromamba"]) {
 const mmBuf = readFileSync(join(out, "micromamba", dialect.micromambaName));
 const manifest = {
   repoCommit,
+  appVersion: shellVersion,
   builtAt: new Date().toISOString(),
   // Target platform of this payload (macOS adaptation, D3 §2) — audit
   // dimension for version.json consumers (a darwin shell must never boot a
