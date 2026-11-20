@@ -122,7 +122,7 @@ test("an endpoint that rejects the variant's thinking control is still reported 
     // model whose streaming chat works must not fail this check.
     assert.equal(tested.ok, true);
     assert.equal(tested.category, "ok");
-    assert.match(tested.message, /retrying without the thinking control/);
+    assert.match(tested.message, /retrying without the field this endpoint rejects/);
     assert.equal(bodies.length, 2, "one rejected attempt plus one retry");
     assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
     assert.equal("thinking" in (bodies[1] ?? {}), false, "the retry must not resend the control the endpoint named");
@@ -165,7 +165,7 @@ test("the retry strips the named control even when the catalog rewrites the thin
         resolveProxy: directProxy,
       });
       assert.equal(tested.ok, true);
-      assert.match(tested.message, /retrying without the thinking control/);
+      assert.match(tested.message, /retrying without the field this endpoint rejects/);
       assert.equal(bodies.length, 2, "one rejected attempt plus one retry");
       assert.equal(bodies[0]?.reasoning_effort, "max", "the catalog turns the requested mode into the declared default");
       assert.equal("reasoning_effort" in (bodies[1] ?? {}), false, "the retry strips the control the endpoint named");

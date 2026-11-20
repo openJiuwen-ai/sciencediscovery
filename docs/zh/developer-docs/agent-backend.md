@@ -118,14 +118,14 @@ Native executor 通过 ScienceDiscovery model package/client 直接调用用户�
 
 JiuwenSwarm 不直接绕过这些产品语义：其模型请求经 ScienceDiscovery 的 per-run model gateway/proxy 路径重新进入产品模型层。
 
-### 被拒绝的 thinking 控制
+### 被拒绝的请求字段
 
-所有发送方共用一条规则：上游用 400 指名了本次请求携带的某个 thinking 控制时，只剔除被指名的那些控制并重试一次。由哪一层执行、以及是否已经执行，按发送方而异。
+所有发送方共用一条规则：上游用 400 指名了本次请求携带的某个字段时，只剔除被指名的那些字段并重试一次。候选集合是六个字段——thinking 控制项（`thinking`、`reasoning_effort`、`reasoning_split`、`chat_template_kwargs`）与采样参数（`temperature`、`top_p`）。由哪一层执行、以及是否已经执行，按发送方而异。
 
-- 流式请求里目前只有 OpenAI-chat 那条发送路径（`streamOpenAiTurn`，`packages/model/src/client.ts`）自己恢复。只有上游的 `param` 指针点名该字段，或拒绝语出现在字段名附近，才算“被拒绝”；对控制项取值、或发送时所处状态的抱怨不算，把请求体回显一遍更不算。重试只剔除被指名的控制，并且只有在剔除后请求成功之后，才把这次拒绝记到该 endpoint 上。
-- 另外两条流式发送路径目前不恢复：`streamAnthropicTurn` 不做重试，所以 `anthropic-messages` 配置下被拒的 `thinking` 仍然失败；`openai-responses` 发的是 `reasoning`，不在那四个控制项名字里，因此永远不会被剔除。让它们也具备同样的有界重试是另一项改动。
+- 流式请求里目前只有 OpenAI-chat 那条发送路径（`streamOpenAiTurn`，`packages/model/src/client.ts`）自己恢复。只有上游的 `param` 指针点名该字段，或拒绝语出现在字段名附近，才算“被拒绝”；对控制项取值、或发送时所处状态的抱怨不算，把请求体回显一遍更不算。重试只剔除被指名的字段，并且只有在剔除后请求成功之后，才把这次拒绝记到该 endpoint 上。对取值的抱怨——超范围、不支持的值、或上游只接受默认值——保留该字段；只有 400 明说“只接受默认值”时例外。
+- 另外两条流式发送路径目前不恢复：`streamAnthropicTurn` 不做重试，所以 `anthropic-messages` 配置下被拒的 `thinking` 仍然失败；`openai-responses` 发的是 `reasoning`，不在那六个候选字段里，因此永远不会被剔除。让它们也具备同样的有界重试是另一项改动。
 - 非流式请求走 `completeChatRequest`（`packages/model/src/completion.ts`），它保持为薄传输层：发什么、返回上游的状态码与正文，仅此而已。在它内部重试会替调用方吃掉那个 400 —— `services/api/src/session-naming.ts` 要在同一个 400 上重试*并且*把 `max_tokens` 从 64 提到 16 384，因为那条路径同时服务于“网关忽略控制项、把标题截断”的情况。
-- 需要恢复的非流式调用方用 `rejectedThinkingControlFields(detail)` 拿到这个 400 证明确实被拒绝的控制项，再用 `carriedThinkingControls(body)` 取交集（400 指的是上游拒绝的字段，不是本次请求发了什么），然后自行决定怎么做。恢复时必须把被指名的字段从已经构建好的请求体里删掉，而不是改请求另一个 thinking 模式：模式先经 catalog 归一（catalog 的 `modes` 不包含请求值时，`constrainCatalogThinking` 会把它改写成模型的声明默认值，`kimi-k3` 就声明了 `modes: ["enabled"]`），所以“换一个模式”完全可能把被拒绝的请求体一字不差地重建出来。Settings 的连通性探针（`services/api/src/model-connectivity.ts`）就是这么做的：删掉被指名的字段后重试一次；请求本来就没带这些字段时，这个 400 仍按上游错误上报。
+- 需要恢复的非流式调用方用 `rejectedRequestFields(detail)` 拿到这个 400 证明确实被拒绝的字段，再用 `carriedRequestFields(body)` 取交集（400 指的是上游拒绝的字段，不是本次请求发了什么），然后自行决定怎么做。恢复时必须把被指名的字段从已经构建好的请求体里删掉，而不是改请求另一个 thinking 模式：模式先经 catalog 归一（catalog 的 `modes` 不包含请求值时，`constrainCatalogThinking` 会把它改写成模型的声明默认值，`kimi-k3` 就声明了 `modes: ["enabled"]`），所以“换一个模式”完全可能把被拒绝的请求体一字不差地重建出来。Settings 的连通性探针（`services/api/src/model-connectivity.ts`）就是这么做的：删掉被指名的字段后重试一次；请求本来就没带这些字段时，这个 400 仍按上游错误上报。
 - `services/api/src/papers.ts` 与 `services/api/src/evolution/llm-proxy.ts` 保留上游错误、不做恢复；这是决定，不是遗漏。
 
 ### 模型请求的线上诊断
