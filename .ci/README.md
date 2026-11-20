@@ -41,9 +41,9 @@ must not be worked around by moving the tag.
 
 The local test profiles remain cumulative. Workflow job selection is separate:
 PR runs build distributions without E2E; the merge queue runs E2E without
-distribution builds; only the nightly workflow (`daily`) and version release
-(`release`) profiles build the Windows desktop installer. `pnpm ci:e2e` still
-runs the mocked slice locally with the default `pr` profile.
+distribution builds. The nightly (`daily`), version release (`release`), and
+on-demand `package` profiles can build the Windows desktop installer.
+`pnpm ci:e2e` still runs the mocked slice locally with the default `pr` profile.
 
 Run only the desired slice, or the complete cumulative profile:
 
@@ -218,6 +218,27 @@ Manual dispatch and reusable workflow calls always run their requested profile,
 even when the caller's event is a documentation-only push. All other diffs
 retain the profile's existing job and artifact requirements.
 
+### On-demand package artifacts
+
+In **Actions → CI → Run workflow**, select the branch, set `profile` to
+`package`, and select `package-platform`.
+
+| Platform | Artifacts |
+| --- | --- |
+| `linux-windows` (default) | Native Linux single-file packages for x86_64 and ARM64, then a Windows x64 NSIS installer |
+| `macos` | Apple Silicon DMG and ZIP with ad-hoc signing |
+| `all` | Both sets of packages. macOS builds in parallel with Linux. Windows starts after the Linux binaries and Runner SEA artifacts pass their checks. |
+
+The profile runs L1 and the selected builds. The **package-gate** check requires
+successful packaging for every selected target. Artifacts carry the revision
+in their names and are retained for seven days. The macOS files are for build
+verification and use ad-hoc signing without notarization. This profile is also
+available to `workflow_call` with `profile: package` and the same platform input.
+
+```bash
+gh workflow run ci.yml --ref <branch> -f profile=package -f package-platform=all
+```
+
 ### Merge queue and credentials: repository setup
 
 The workflow defines a stable **merge-gate** check. In the default branch
@@ -228,8 +249,8 @@ Require approval of the current PR head and dismiss stale approvals. Start
 with queue build concurrency 1 and **Only merge non-failing pull requests**.
 Allow enough queue status-check time for L1/UT/ST + mocked and real setup/testing.
 Linux binary and Docker distribution jobs run in PR and daily/release profiles.
-The Windows desktop installer runs only in the nightly workflow (`daily` profile)
-and version release (`release` profile); PR and merge queue runs skip it. It uses
+The Windows desktop installer runs in `daily`, `release`, and the `linux-windows`
+and `all` package selections. It uses
 the checked-in `application` NSIS build on `windows-latest`, provisioning the
 shared Python environment, the pinned JiuwenSwarm runtime and the verified
 Windows micromamba before uploading the installer. Its Linux Runner SEA inputs

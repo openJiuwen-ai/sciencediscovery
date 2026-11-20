@@ -436,9 +436,10 @@ test("Windows distribution gate builds the native Electron installer", async () 
   // `dist` regex above matches either form, so pin the flag itself.
   assert.match(job, /pnpm --dir application dist --publish never/,
     "the installer gate must build only; implicit publish fails without a token (#1187)");
-  const installer = artifactUploads(job).find((upload) => upload.artifact === "windows-desktop-installer");
+  const installer = artifactUploads(job).find((upload) => upload.artifact.includes("windows-desktop-installer"));
   assert.ok(installer, "Windows installer artifact was not found");
-  assert.deepEqual(installer.paths, ["application/release"]);
+  assert.match(installer.paths[0], /'application\/release\/ScienceDiscovery-\*-win-x64-setup\.exe' \|\| 'application\/release'/);
+  assert.match(job, /Get-Item -LiteralPath "application\/release\/ScienceDiscovery-\$version-win-x64-setup\.exe" -ErrorAction Stop/);
   assert.equal(installer.missing, "error");
 });
 

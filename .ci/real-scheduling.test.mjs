@@ -27,8 +27,10 @@ function results(profile, event = 'workflow_dispatch') {
   for (const name of ['real-merge', 'real-scheduled']) {
     if (name !== (policy.profile === 'merge' ? 'real-merge' : policy.profile === 'pr' ? null : 'real-scheduled')) needs[name].result = 'skipped';
   }
-  if (!policy.distribution) for (const name of ['binary', 'docker']) needs[name].result = 'skipped';
+  if (!policy.binary) needs.binary.result = 'skipped';
+  if (!policy.distribution) needs.docker.result = 'skipped';
   if (!policy.windows_desktop) needs['windows-desktop'].result = 'skipped';
+  if (!policy.macos_desktop) needs['macos-desktop'].result = 'skipped';
   if (!policy.mocked) for (const name of ['e2e-plan', 'e2e']) needs[name].result = 'skipped';
   return needs;
 }

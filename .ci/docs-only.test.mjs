@@ -17,7 +17,7 @@ const jobs = Object.fromEntries(workflow.split('\njobs:\n')[1].split(/\n(?=  [\w
   .map(block => [block.match(/^  ([\w-]+):/)[1], block]));
 const condition = block => block.match(/\bif: (?:>-\s*)?\$\{\{([\s\S]*?)\}\}/)?.[1].trim();
 const dependencies = name => (jobs[name].match(/^    needs: (.+)/m)?.[1] ?? '').replace(/[\[\]]/g, '').split(', ').filter(Boolean);
-const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'binary', 'docker', 'windows-desktop', 'real-merge', 'real-scheduled'];
+const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'binary', 'docker', 'windows-desktop', 'macos-desktop', 'real-merge', 'real-scheduled'];
 
 function eligible(expression, needs, { event = 'pull_request', draft = false, success = true, inputs = {} } = {}) {
   if (!expression) return success;
@@ -30,8 +30,8 @@ function eligible(expression, needs, { event = 'pull_request', draft = false, su
   }, { timeout: 100 });
 }
 
-function selection(event, paths, { draft = false, profile = 'pr' } = {}) {
-  const policy = route(event, profile, 'jiuwenswarm', paths);
+function selection(event, paths, { draft = false, profile = 'pr', packagePlatform, failures = {} } = {}) {
+  const policy = route(event, profile, 'jiuwenswarm', paths, packagePlatform);
   const needs = { policy: { result: 'success', outputs: Object.fromEntries(Object.entries(policy).map(([k, v]) => [k, String(v)])) } };
   const pending = new Set(['l1', ...unaffected, 'merge-gate']);
   while (pending.size) {
@@ -40,11 +40,16 @@ function selection(event, paths, { draft = false, profile = 'pr' } = {}) {
     for (const name of ready) {
       const success = dependencies(name).every(id => needs[id].result === 'success');
       const jobHeader = jobs[name].split('\n    steps:\n')[0];
-      needs[name] = { result: eligible(condition(jobHeader), needs, { event, draft, success }) ? 'success' : 'skipped' };
+      needs[name] = { result: eligible(condition(jobHeader), needs, { event, draft, success }) ? (failures[name] ?? 'success') : 'skipped' };
       pending.delete(name);
     }
   }
   return needs;
+}
+
+function gateName(event, inputs = {}) {
+  const expression = jobs['merge-gate'].match(/^    name: \$\{\{ (.+) \}\}$/m)[1];
+  return runInNewContext(expression, { inputs, github: { event_name: event } });
 }
 
 function fixture(t) {
@@ -234,7 +239,8 @@ test('documentation-only PR, push and queue run docs and merge-gate without heav
   const gateStep = jobs['merge-gate'].split(/\n      - /).find(step => step.includes('node .ci/tier-policy.mjs gate'));
   assert.match(gateStep, /if: always\(\)/);
   assert.match(gateStep, /CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
-  assert.match(jobs['merge-gate'], /name: merge-gate\n/);
+  assert.equal(gateName('pull_request'), 'merge-gate');
+  assert.equal(gateName('merge_group'), 'merge-gate');
   const upload = artifacts.find(step => step.includes('upload-artifact'));
   const normal = selection('merge_group', ['services/api/src/main.ts']);
   assert.equal(eligible(condition(upload), normal, { success: false }), true, 'failed tests must still upload evidence');
@@ -285,4 +291,51 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
       }
     }
   }
+});
+
+
+test('package policy selects the coupled installers, macOS, or all without test layers', () => {
+  const cases = [
+    [undefined, ['binary', 'windows-desktop']],
+    ['linux-windows', ['binary', 'windows-desktop']],
+    ['macos', ['macos-desktop']],
+    ['all', ['binary', 'windows-desktop', 'macos-desktop']],
+  ];
+  for (const event of ['workflow_dispatch', 'push']) {
+    for (const [packagePlatform, platforms] of cases) {
+      const selected = ['policy', 'l1', ...platforms, 'merge-gate'];
+      const needs = selection(event, ['docs/en/guide.md'], { profile: 'package', packagePlatform });
+      assert.equal(needs.policy.outputs.docs_only, 'false');
+      assert.equal(needs.policy.outputs.package_platform, packagePlatform ?? 'linux-windows');
+      assert.equal(gateName(event, { profile: 'package' }), 'package-gate');
+      for (const [name, { result }] of Object.entries(needs)) {
+        assert.equal(result, selected.includes(name) ? 'success' : 'skipped', `${packagePlatform}: ${name}`);
+      }
+      assert.deepEqual(gate('package', needs), []);
+      for (const name of platforms) {
+        for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+          const problems = gate('package', { ...needs, [name]: { result } });
+          assert.ok(problems.some(problem => problem.startsWith(`${name}:`)), `${packagePlatform}: ${name}: ${result}`);
+        }
+      }
+      assert.ok(gate('package', { ...needs, docker: { result: 'success' } }).some(problem => problem.startsWith('docker:')));
+    }
+  }
+  assert.throws(() => route('workflow_dispatch', 'package', undefined, null, 'windows'), /Unknown package platform/);
+  for (const [event, profile] of [['pull_request', 'pr'], ['merge_group', 'merge']]) {
+    const needs = selection(event, ['src/file.ts'], { profile: 'package', packagePlatform: 'all' });
+    assert.equal(needs.policy.outputs.profile, profile);
+    assert.equal(needs['macos-desktop'].result, 'skipped');
+    assert.equal(gateName(event, { profile: 'package' }), 'merge-gate');
+  }
+});
+
+test('failed Linux binary blocks Windows while macOS can finish in package/all', () => {
+  const needs = selection('workflow_dispatch', null, {
+    profile: 'package', packagePlatform: 'all', failures: { binary: 'failure' },
+  });
+  assert.equal(needs['windows-desktop'].result, 'skipped');
+  assert.equal(needs['macos-desktop'].result, 'success');
+  assert.equal(needs['merge-gate'].result, 'success', 'the aggregate still runs');
+  assert.deepEqual(gate('package', needs), ['binary: failure', 'windows-desktop: skipped']);
 });

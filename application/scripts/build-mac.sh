@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # build-mac.sh — local Mac build gate (macOS adaptation, D3 §4 / D5 §2).
 #
-# No CI in this repo (2026-11-10 decision): this script IS the pre-release
-# gate, run manually in a TERMINAL on the local arm64 Mac (not from inside
-# sandboxed agent environments — the brokered-fs shim denies electron-
-# builder's staging writes there; problems W11). When CI arrives, this moves
-# to a macos-14+ runner unchanged (lessons L1).
+# Used by the CI package profile and for local pre-release validation on
+# arm64 macOS. Run local builds from a terminal with access to the file tree.
 #
 # Steps (each gates the next; any failure aborts with exit 1):
 #   0. environment preflight  — uv present, python provisioned, mirrors set
@@ -313,7 +310,7 @@ else
     EB_ARGS=(--mac --config.mac.identity=-)
   fi
 
-  ( cd "$SHELL_ROOT" && npx electron-builder "${EB_ARGS[@]}" ) \
+  ( cd "$SHELL_ROOT" && npx electron-builder "${EB_ARGS[@]}" --publish never ) \
     || die "electron-builder --mac failed"
 
   # --- 5b-bis. version-pinned artifact discovery (review F11) ----------------
@@ -337,6 +334,7 @@ $DMG_LIST"
     || die "expected exactly 1 zip matching *-${APP_VERSION}-mac-*.zip, found ${ZIP_COUNT}:
 $ZIP_LIST"
   ZIP="$(printf '%s\n' "$ZIP_LIST" | sed -n '1p')"
+  [ -s "$DMG" ] && [ -s "$ZIP" ] || die "expected a non-empty DMG and ZIP"
   APP="$SHELL_ROOT/release/mac-arm64/ScienceDiscovery.app"
   [ -d "$APP" ] || die "no packed .app at $APP"
   echo "artifacts: $(basename "$DMG"), $(basename "$ZIP")"
