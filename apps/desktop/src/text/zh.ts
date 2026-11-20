@@ -766,10 +766,15 @@ export const ZH = {
       },
       importAction: "导入",
       importBusy: "正在导入…",
-      importProgress: (done: number, total: number) => `正在导入 ${done} / ${total}…`,
+      backgroundImportRunning: (done: number, total: number) => `正在后台导入 ${done} / ${total}…`,
+      backgroundImportDone: (count: number) => `已导入 ${count} 个技能。`,
+      backgroundImportPartial: (imported: number, failed: number) => `已导入 ${imported} 个，${failed} 个失败。`,
+      backgroundImportFailed: "后台导入失败。",
+      backgroundImportFailures: (names: string, count: number) =>
+        count > 3 ? `失败：${names} 等 ${count} 个` : `失败：${names}`,
+      backgroundImportDismiss: "关闭导入提示",
       importFailed: "导入失败。",
       importSucceeded: (name: string) => `已导入「${name}」。`,
-      importPartial: (imported: number, failed: number) => `成功导入 ${imported} 个，失败 ${failed} 个。`,
       git: {
         title: "从 GitHub 导入",
         description: "先检查仓库里有哪些技能包，再选择要导入的条目；导入会固定在你看到的那次提交上。",

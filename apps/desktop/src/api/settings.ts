@@ -33,7 +33,9 @@ import type {
   GitSkillRepositoryInspection,
   IdeaTreeSettingsDetails,
   ImportSkillFromGitRequest,
+  GitSkillImportJob,
   InspectGitSkillRepositoryRequest,
+  StartGitSkillImportJobRequest,
   McpProxyPolicies,
   McpSource,
   MemoryGraphSettingsDetails,
@@ -209,6 +211,28 @@ export function importSkillFromGit(
   return client.request<SkillDetail>("/api/skills/import-git", {
     body: JSON.stringify(body),
     method: "POST",
+  });
+}
+
+/** Start a background import for an inspected selection. The request returns
+ *  as soon as the job is queued; the job resource carries its progress. */
+export function startGitSkillImportJob(
+  client: ApiClient,
+  body: StartGitSkillImportJobRequest,
+): Promise<GitSkillImportJob> {
+  return client.request<GitSkillImportJob>("/api/skills/import-git/jobs", {
+    body: JSON.stringify(body),
+    method: "POST",
+  });
+}
+
+export function getGitSkillImportJob(client: ApiClient, jobId: string): Promise<GitSkillImportJob> {
+  return client.request<GitSkillImportJob>(`/api/skills/import-git/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function cancelGitSkillImportJob(client: ApiClient, jobId: string): Promise<GitSkillImportJob> {
+  return client.request<GitSkillImportJob>(`/api/skills/import-git/jobs/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
   });
 }
 

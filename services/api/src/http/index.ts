@@ -21,6 +21,7 @@ import { assertResearchPackageExportCapacity, assertResearchPackageResponseExpor
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { prepareSkillSandbox } from "../skill-sandbox.js";
+import { cancelGitSkillImportJob, getGitSkillImportJob, startGitSkillImportJob } from "../skill-import-jobs.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
@@ -192,6 +193,7 @@ import type {
   DeleteResourceRequest,
   ImportSkillFromGitRequest,
   InspectGitSkillRepositoryRequest,
+  StartGitSkillImportJobRequest,
   MergeSkillReviewDraftsRequest,
   InstallEnvironmentRequest,
   UninstallEnvironmentRequest,
@@ -2591,6 +2593,41 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
         return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skills/import-git/jobs") {
+        // The import runs in the API process, not in this request: the reader
+        // may leave 设置 while the packages are installed.
+        let job;
+        try {
+          job = startGitSkillImportJob(
+            skillCatalog,
+            await readJson<StartGitSkillImportJobRequest>(request),
+            () => store.setAvailableSkillIds(skillCatalog.ids()),
+          );
+        } catch (error) {
+          if (error instanceof Error && /already running/.test(error.message)) {
+            throw new ApiStatusError(409, error.message);
+          }
+          throw error;
+        }
+        sendJson(response, 202, job);
+        return;
+      }
+      const gitImportJobMatch = url.pathname.match(/^\/api\/skills\/import-git\/jobs\/([^/]+)$/);
+      if (gitImportJobMatch) {
+        const jobId = decodeURIComponent(gitImportJobMatch[1]!);
+        if (request.method === "GET") {
+          const job = getGitSkillImportJob(jobId);
+          if (!job) throw new ApiStatusError(404, "Git Skill import job not found");
+          sendJson(response, 200, job);
+          return;
+        }
+        if (request.method === "DELETE") {
+          const job = cancelGitSkillImportJob(jobId);
+          if (!job) throw new ApiStatusError(404, "Git Skill import job not found");
+          sendJson(response, 202, job);
+          return;
+        }
       }
       if (request.method === "POST" && url.pathname === "/api/skills/import-git/inspect") {
         sendJson(response, 200, await skillCatalog.inspectGitRepository(

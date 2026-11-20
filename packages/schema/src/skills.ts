@@ -243,6 +243,42 @@ export interface DistillSessionSkillRequest {
   name?: string;
 }
 
+/** One package in a background Git import. The selection came from an
+ *  inspection, so `overwrite`/`expectedRevision` are the same choice a single
+ *  import would carry. */
+export interface GitSkillImportJobItem {
+  expectedRevision?: number;
+  overwrite?: boolean;
+  subdirectory: string;
+}
+
+/** Start a background import for a selection at the commit that was inspected.
+ *  The request returns as soon as the job is queued; progress is read from the
+ *  job resource. */
+export interface StartGitSkillImportJobRequest {
+  commit?: string;
+  items: GitSkillImportJobItem[];
+  ref?: string;
+  repositoryUrl: string;
+}
+
+export type GitSkillImportJobStatus = "queued" | "running" | "done" | "cancelled" | "failed";
+
+/** The observable state of one background Git import. `imported` names the
+ *  packages that arrived; `created` is false for an update of an installation
+ *  that already existed. */
+export interface GitSkillImportJob {
+  commit?: string;
+  done: number;
+  failures: Array<{ message: string; subdirectory: string }>;
+  finishedAt?: string;
+  id: string;
+  imported: Array<{ created: boolean; id: string }>;
+  startedAt: string;
+  status: GitSkillImportJobStatus;
+  total: number;
+}
+
 export interface ImportSkillFromGitRequest {
   /**
    * Commit returned by inspection. When present, the import is rejected if the

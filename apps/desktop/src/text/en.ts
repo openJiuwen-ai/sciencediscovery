@@ -742,10 +742,15 @@ export const EN: Text = {
       },
       importAction: "Import",
       importBusy: "Importing…",
-      importProgress: (done: number, total: number) => `Importing ${done} of ${total}…`,
+      backgroundImportRunning: (done: number, total: number) => `Importing in the background ${done} / ${total}…`,
+      backgroundImportDone: (count: number) => `Imported ${count} skills.`,
+      backgroundImportPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
+      backgroundImportFailed: "The background import failed.",
+      backgroundImportFailures: (names: string, count: number) =>
+        count > 3 ? `Failed: ${names} and ${count - 3} more` : `Failed: ${names}`,
+      backgroundImportDismiss: "Dismiss the import notice",
       importFailed: "The import failed.",
       importSucceeded: (name: string) => `Imported "${name}".`,
-      importPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
       git: {
         title: "Import from GitHub",
         description:

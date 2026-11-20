@@ -42,6 +42,7 @@ import type {
   GitSkillRepositoryInspection,
   ImportSkillFromGitRequest,
   InspectGitSkillRepositoryRequest,
+  StartGitSkillImportJobRequest,
   MergeSkillReviewDraftsRequest,
   SkillDescriptor,
   SkillDetail,
@@ -2105,6 +2106,47 @@ export class SkillCatalog {
     } finally {
       if (reused === undefined) await rm(checkout, { force: true, recursive: true });
     }
+  }
+
+  /** Warm one checkout for every package a background import will read.
+   *
+   *  The inspection leaves a metadata-only checkout holding only SKILL.md
+   *  files. Fetching a package's resources creates a sparse pattern and a checkout; a
+   *  background batch that did that 175 times would spend most of its time
+   *  asking Git the same questions. One expansion over every selected root
+   *  fetches all of them in one operation, and each per-package import then
+   *  finds its files already on disk. */
+  async prepareGitImport(input: StartGitSkillImportJobRequest): Promise<{ commit: string }> {
+    this.assertLoaded();
+    const normalized = validateGitSkillImportRequest(input);
+    const requestedCommit = normalizeGitCommit(input.commit);
+    if (requestedCommit === undefined) {
+      throw validationError("Importing a Git selection requires the commit returned by inspection");
+    }
+    const roots = [...new Set((input.items ?? []).map((item) => {
+      const trimmed = item?.subdirectory?.trim();
+      return !trimmed || trimmed === "." ? "." : normalizedPackagePath(trimmed);
+    }))];
+    if (!roots.length || roots.length > GIT_SKILL_SELECTION_LIMIT) {
+      throw validationError(`Select between 1 and ${GIT_SKILL_SELECTION_LIMIT} Git Skill packages`);
+    }
+    const reused = this.retainedCheckoutFor(normalized, requestedCommit);
+    if (reused === undefined) {
+      throw new SkillCatalogError(
+        "SKILL_CONFLICT",
+        "The Git inspection expired or was replaced; inspect the repository again",
+      );
+    }
+    const { checkout, commit, partial } = checkoutSource(undefined, reused, requestedCommit);
+    if (commit !== requestedCommit) {
+      throw new SkillCatalogError(
+        "SKILL_CONFLICT",
+        `Git ref moved after inspection (expected ${requestedCommit.slice(0, 12)}, found ${commit.slice(0, 12)}); scan again before importing`,
+      );
+    }
+    if (partial) await this.expandCheckout(checkout, roots);
+    await this.retainCheckout(checkout, commit, normalized, partial);
+    return { commit };
   }
 
   async importFromGit(input: ImportSkillFromGitRequest): Promise<SkillDetail> {

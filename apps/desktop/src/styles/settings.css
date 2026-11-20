@@ -109,6 +109,46 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   line-height: 1.5;
 }
 .settings-card-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* A Git import that outlives its page. The banner sits under the list's title
+   and reports the job the API is running, so leaving 从 GitHub 导入 does not
+   hide what is still being installed. */
+.skill-import-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: 10px;
+  background: var(--primary-soft);
+  color: var(--text-strong);
+}
+.skill-import-banner.is-error {
+  border-color: var(--danger-soft);
+  background: var(--danger-soft);
+}
+.skill-import-banner-copy { display: grid; gap: 2px; min-width: 0; }
+.skill-import-banner-copy strong { font-size: 12.5px; font-weight: 600; }
+.skill-import-banner-copy small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-import-banner-close {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1;
+}
+.skill-import-banner-close:hover { background: var(--surface-hover); color: var(--text-strong); }
 /* A Skill export's own outcome, beside the row that produced it: the page's
    notice is above the list and out of view once the reader has scrolled. */
 .skill-export-status {
