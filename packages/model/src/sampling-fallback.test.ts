@@ -197,3 +197,50 @@ test("a provider whose default is the only value strips the field and runs", asy
   assert.equal(requests[1]!.temperature, undefined, "only the unusable field is gone");
   assert.equal(requests[1]!.top_p, 0.95, "everything else is untouched");
 });
+
+test("a default-only refusal strips the field it is about, not the ones it mentions", async () => {
+  // F8: proximity to the claim is not evidence. A body echo names every field the
+  // request carried, and a message may name another field as the way around the
+  // refusal; the stripped set is remembered for the endpoint, so over-stripping
+  // `top_p` or `thinking` would change every later turn.
+  const cases = [
+    {
+      body: '{"error":{"message":"Only the default (1) is supported.","request":{"temperature":0.95,"top_p":0.95}}}',
+      strips: [],
+      why: "nothing in the message names a field, so nothing is identified",
+    },
+    {
+      body: '{"error":{"message":"temperature: only the default (1) is supported. Use top_p to vary the sampling."}}',
+      strips: ["temperature"],
+      why: "top_p is offered as the alternative, not refused",
+    },
+    {
+      body: '{"error":{"message":"Unsupported value: \'temperature\' does not support 0.7 with this model. Only the default (1) is supported.","request":{"thinking":{"type":"enabled"}}}}',
+      strips: ["temperature"],
+      why: "the echoed thinking control is not refused",
+    },
+  ];
+  for (const item of cases) {
+    const requests: Record<string, unknown>[] = [];
+    await withServer(async (request, response) => {
+      requests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(item.body);
+      }, async (baseUrl) => {
+      const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "default-only" };
+      await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], { ...sampling, maxRetries: 0 }, new AbortController().signal)
+        .then(() => null, () => null);
+    });
+    // Nothing stripped means no retry at all; otherwise the retry names exactly
+    // the fields the refusal was about.
+    assert.equal(requests.length, item.strips.length ? 2 : 1, `retries for: ${item.why}`);
+    if (item.strips.length) {
+      const before = requests[0]!;
+      const after = requests[1]!;
+      const removed = Object.keys(before)
+        .filter((key) => before[key] !== undefined && after[key] === undefined)
+        .sort();
+      assert.deepEqual(removed, [...item.strips].sort(), `the fields stripped for: ${item.why}`);
+    }
+  }
+});

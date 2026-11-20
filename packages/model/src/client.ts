@@ -876,21 +876,49 @@ function withoutFields(request: ThinkingControlRequest, fields: readonly string[
   return { ...request, body: JSON.stringify(body) };
 }
 
-/** Whether `field` is named next to a "default is the only value" claim. */
-function fieldNearDefaultOnly(lower: string, field: string): boolean {
-  for (let at = lower.indexOf(field); at !== -1; at = lower.indexOf(field, at + field.length)) {
-    const window = lower.slice(Math.max(0, at - rejectedControlWordingWindow), at + field.length + rejectedControlWordingWindow);
-    if (defaultOnlyWording.test(window)) return true;
-  }
-  return false;
+/**
+ * Whether `field` is the one a "default is the only value" 400 refuses.
+ *
+ * Not a distance test. A body echo names every field the request carried, and a
+ * sentence may name another field as the way around the refusal — either would be
+ * stripped by proximity, and the stripped set is remembered for the endpoint, so
+ * an over-stripped `top_p` or `thinking` stays gone on every later turn.
+ *
+ * Two things count as evidence: the provider's own `param` pointer naming the
+ * field, or the field appearing in the same clause as the claim (clauses are what
+ * `withoutValueComplaints` already splits on).
+ */
+function fieldRefusedByDefaultOnly(lower: string, field: string): boolean {
+  if (rejectsByParamPointer(lower, field)) return true;
+  const message = errorMessageText(lower);
+  const claimAt = message.search(defaultOnlyWording);
+  if (claimAt < 0) return false;
+  const fieldAt = message.indexOf(field);
+  // Before the claim, the field is what the refusal is about. After it, the field
+  // is something the provider is offering instead ("Use top_p to vary the
+  // sampling") — stripping that would change what the caller asked for.
+  return fieldAt >= 0 && fieldAt < claimAt;
 }
+
+/** The provider's own message text, without any echoed request body. */
+function errorMessageText(lower: string): string {
+  const messages = [...lower.matchAll(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/gu)].map((match) => match[1] ?? "");
+  return messages.length ? messages.join(" ") : lower;
+}
+
+/** The provider's `param` pointer naming `field`. */
+function rejectsByParamPointer(lower: string, field: string): boolean {
+  return new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower);
+}
+
+/** The original rejection label is plural: this one is valid without it. */
 
 /** Whether `detail` rejects `field`, not merely mentions it: either the
  *  provider's own `param` pointer names it, or a rejection phrase sits within a
  *  short window of the name. A value or state complaint proves neither, even
  *  when it points at the field. */
 function detailRejectsField(lower: string, field: string): boolean {
-  if (new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower) && !valueComplaintWording.test(lower)) return true;
+  if (rejectsByParamPointer(lower, field) && !valueComplaintWording.test(lower)) return true;
   const claims = withoutValueComplaints(lower);
   for (let at = claims.indexOf(field); at !== -1; at = claims.indexOf(field, at + field.length)) {
     const window = claims.slice(
@@ -931,7 +959,7 @@ export function rejectedRequestFields(detail: string): Set<string> {
   if (!defaultOnly && valueComplaintWording.test(lower)) return new Set();
   return new Set(strippableFields.filter((field) => detailRejectsField(lower, field)
     || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))
-    || (defaultOnly && fieldNearDefaultOnly(lower, field))));
+    || (defaultOnly && fieldRefusedByDefaultOnly(lower, field))));
 }
 
 /**
