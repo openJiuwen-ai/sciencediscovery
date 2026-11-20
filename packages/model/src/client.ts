@@ -885,8 +885,8 @@ function withoutFields(request: ThinkingControlRequest, fields: readonly string[
  * an over-stripped `top_p` or `thinking` stays gone on every later turn.
  *
  * Two things count as evidence: the provider's own `param` pointer naming the
- * field, or the field appearing in the same clause as the claim (clauses are what
- * `withoutValueComplaints` already splits on).
+ * field, or the field being the subject of the claim in the provider's own
+ * message — named before it, or introduced by it with "for"/"of".
  */
 function fieldRefusedByDefaultOnly(lower: string, field: string): boolean {
   if (rejectsByParamPointer(lower, field)) return true;
@@ -914,8 +914,6 @@ function rejectsByParamPointer(lower: string, field: string): boolean {
   return new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower);
 }
 
-/** The original rejection label is plural: this one is valid without it. */
-
 /** Whether `detail` rejects `field`, not merely mentions it: either the
  *  provider's own `param` pointer names it, or a rejection phrase sits within a
  *  short window of the name. A value or state complaint proves neither, even
@@ -937,9 +935,11 @@ function detailRejectsField(lower: string, field: string): boolean {
  * The fields `detail` rejects — thinking controls and sampling knobs alike — judged by
  * the rule the streamed sender
  * uses: the provider's own `param` pointer names the field, or a rejection
- * phrase sits next to it; a complaint about a control's value or the state it
- * was sent in proves nothing, and a body echo names every field without
- * rejecting any.
+ * phrase sits next to it; a complaint about a field's value or the state it was
+ * sent in proves nothing, and a body echo names every field without rejecting
+ * any. The one exception is a provider that says its default is the only value
+ * it takes — every value the caller could send is refused there, so the field is
+ * stripped (see `fieldRefusedByDefaultOnly`).
  *
  * Exported for callers that own their own retry. The non-stream boundary in
  * `completion.ts` deliberately carries no fallback (see its doc comment), so a
@@ -950,14 +950,18 @@ function detailRejectsField(lower: string, field: string): boolean {
  */
 export function rejectedRequestFields(detail: string): Set<string> {
   const lower = detail.toLowerCase();
-  // A body that complains about a value at all strips nothing, whatever else it
-  // says. The per-field rules below are precise about a *rejection*, but a value
+  // A body that complains about a value strips nothing, whatever else it says.
+  // The per-field rules below are precise about a *rejection*, but a value
   // complaint arrives in too many shapes to be matched clause by clause — vLLM
   // answers `{"message":"temperature must be between 0 and 2","param":"temperature"}`
   // and Gemini `"Only the default (1) is supported."` with no `code` field at all.
   // Dropping the field there would run the turn at the provider's default
   // sampling, which is the silent behaviour change this rule exists to avoid, so
   // the conservative answer wins: keep the field and let the request fail.
+  //
+  // The exception is `defaultOnly`: a provider that says its default is the only
+  // value it takes refuses every value the caller could send, so there is nothing
+  // to keep — the field is stripped and the turn runs at that only possible value.
   const defaultOnly = defaultOnlyWording.test(lower);
   if (!defaultOnly && valueComplaintWording.test(lower)) return new Set();
   return new Set(strippableFields.filter((field) => detailRejectsField(lower, field)
