@@ -34,7 +34,7 @@ import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { TurnArtifactStrip } from "./TurnArtifactStrip.js";
-import type { TurnArtifacts } from "../app/turn-artifacts.js";
+import type { TurnArtifact, TurnArtifacts } from "../app/turn-artifacts.js";
 import { ToolCard } from "./ToolCard.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
 
@@ -520,6 +520,7 @@ export const AssistantTurns = memo(function AssistantTurns({
   onOpenArtifactPanel,
   onOpenSubagent,
   onOpenTool,
+  onPreviewArtifact,
   onReferenceClick,
   references,
   run,
@@ -546,6 +547,8 @@ export const AssistantTurns = memo(function AssistantTurns({
   /** The artifacts this turn wrote, already selected per run (#1252). The
    *  strip is only drawn once the run is terminal. */
   artifacts?: TurnArtifacts;
+  /** Show one artifact in the right panel, at the version its card names. */
+  onPreviewArtifact?: (row: TurnArtifact) => void;
   /** Open the right panel's artifact group — the strip's route to the rest. */
   onOpenArtifactPanel?: () => void;
   run: RunStreamState;
@@ -613,7 +616,7 @@ export const AssistantTurns = memo(function AssistantTurns({
         {run.terminal ? (
           <TurnArtifactStrip
             artifacts={artifacts}
-            onOpenArtifact={onReferenceClick}
+            onPreviewArtifact={onPreviewArtifact}
             onOpenArtifactPanel={onOpenArtifactPanel}
           />
         ) : null}
@@ -694,7 +697,7 @@ export const AssistantTurns = memo(function AssistantTurns({
       {run.terminal ? (
         <TurnArtifactStrip
           artifacts={artifacts}
-          onOpenArtifact={onReferenceClick}
+          onPreviewArtifact={onPreviewArtifact}
           onOpenArtifactPanel={onOpenArtifactPanel}
         />
       ) : null}
