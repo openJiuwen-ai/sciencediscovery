@@ -28,6 +28,7 @@ import type { GitSkillImportJob, JiuwenSwarmSkill, SkillDescriptor, SkillDetail 
 import type { ConfirmRequest } from "../../app/use-workspace.js";
 import {
   dismissGitSkillImportJob,
+  enableCreatedSkills,
   startGitSkillImportInBackground,
   subscribeGitSkillImportJob,
 } from "../../app/git-skill-import-job.js";
@@ -179,8 +180,13 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     if (!terminal || handledImportJob.current === backgroundImport.id) return;
     handledImportJob.current = backgroundImport.id;
     // Enabling newly created packages is the job store's work: the pane may
-    // be closed when the import ends. The pane only refreshes what it shows.
-    loaded.reload();
+    // be closed when the import ends. When the pane is open, wait for that
+    // same run before re-reading the switch list; otherwise the reload can
+    // paint the new rows as off while the PUTs are still in flight.
+    void (async () => {
+      await enableCreatedSkills(client, backgroundImport);
+      loaded.reload();
+    })();
   }, [backgroundImport, client, loaded]);
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {

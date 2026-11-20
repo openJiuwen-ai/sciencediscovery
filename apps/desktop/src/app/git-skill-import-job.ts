@@ -30,6 +30,8 @@ let client: ApiClient | undefined;
 let poller: ReturnType<typeof setInterval> | undefined;
 let clearTimer: ReturnType<typeof setTimeout> | undefined;
 let consecutiveFailures = 0;
+/** One enable run per job: the pane and the store may both await it. */
+const enablePromises = new Map<string, Promise<void>>();
 const listeners = new Set<Listener>();
 
 function emit(): void {
@@ -46,6 +48,7 @@ function clearLater(id: string): void {
   clearTimer = setTimeout(() => {
     if (current?.id === id) {
       current = undefined;
+      enablePromises.delete(id);
       emit();
     }
   }, FINISHED_NOTICE_MS);
@@ -134,22 +137,28 @@ export async function startGitSkillImportInBackground(
 /** Switch on the packages this job created, when JiuwenSwarm is the agent
  *  backend. The job store owns this rather than the settings pane: the pane
  *  may be closed by the time the import finishes. */
-export async function enableCreatedSkills(client: ApiClient, job: GitSkillImportJob): Promise<void> {
-  const created = job.imported.filter((entry) => entry.created);
-  if (created.length === 0) return;
-  try {
-    const state = await getJiuwenSwarmSkills(client);
-    if (state.backend !== "jiuwenswarm") return;
-  } catch {
-    return;
-  }
-  for (const entry of created) {
+export function enableCreatedSkills(client: ApiClient, job: GitSkillImportJob): Promise<void> {
+  const existing = enablePromises.get(job.id);
+  if (existing) return existing;
+  const promise = (async () => {
+    const created = job.imported.filter((entry) => entry.created);
+    if (created.length === 0) return;
     try {
-      await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
+      const state = await getJiuwenSwarmSkills(client);
+      if (state.backend !== "jiuwenswarm") return;
     } catch {
-      // The row's switch shows whatever the server actually stored.
+      return;
     }
-  }
+    for (const entry of created) {
+      try {
+        await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
+      } catch {
+        // The row's switch shows whatever the server actually stored.
+      }
+    }
+  })();
+  enablePromises.set(job.id, promise);
+  return promise;
 }
 
 /** Drop the banner (a finished job only). A running job keeps going. */
