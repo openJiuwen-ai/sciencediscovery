@@ -33,22 +33,11 @@
 name: Hub publish
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "skills/**"
-      - "packages/specialist/**"
-      - "packages/mcp-sources/**"
-      - "packages/research-package/**"
-      - "apps/hub/**"
-      - "scripts/hub/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/hub-publish.yml"
-  schedule:
-    # Weekly backstop: the site still refreshes when no repository change
-    # arrived, and it re-reads whatever snapshot the sync workflow uploaded.
-    - cron: "0 3 * * 1"
+  # Manual only. The build is automated, but rewriting the public `site/`
+  # prefix is a production action, so a person triggers it — the same shape as
+  # the release workflow, which stops at a draft Release. Enable the push or
+  # schedule triggers once the bucket, the credentials and the ownership of
+  # the publishing pipeline have been accepted.
   workflow_dispatch:
     inputs:
       publish_sessions:
@@ -63,8 +52,8 @@ on:
 permissions:
   contents: read
 
-# A manual publish must not interleave with an automatic one: both delete and
-# rewrite the same `site/` prefix.
+# Two dispatches must not interleave: each deletes and rewrites the same
+# `site/` prefix.
 concurrency:
   group: hub-publish
   cancel-in-progress: false
