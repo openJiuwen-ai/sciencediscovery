@@ -78,6 +78,29 @@ because Vite copies `public/` into it. A workspace-wide `pnpm build` rebuilds
 two commands again after one; otherwise `/site/catalog.json` falls back to
 `index.html` and the page reports a JSON parse error.
 
+## Service-hosted site (API mode)
+
+When the database is the source of truth, the site reads `GET /api/v1/catalog`
+instead of a build artifact. Build it without the exporter:
+
+```bash
+HUB_BASE_PATH=/site/ VITE_HUB_API_BASE=/api/v1 pnpm hub:build:api
+```
+
+`/api/v1/catalog` returns the same `{assets, categories}` shape the static file
+had, with `readme` and `resources[].url` pointing at
+`/api/v1/assets/{id}/readme?format=text` and
+`/api/v1/assets/{id}/versions/{v}/files/content?path=…`. Asset rows now carry
+`readme` (the rendered description) and `extra` (kind-specific fields: hardware,
+members, tools, benchmark, contents, run). An existing database needs:
+
+```sql
+ALTER TABLE assets ADD COLUMN readme LONGTEXT NOT NULL;
+ALTER TABLE assets ADD COLUMN extra JSON NOT NULL;
+```
+
+then the importer backfills both.
+
 ## Import the existing catalogue
 
 ```bash

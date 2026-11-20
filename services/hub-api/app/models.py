@@ -69,8 +69,15 @@ class Asset(Base):
         String(64), ForeignKey("users.id"), nullable=False
     )
     publisher_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(191), nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    # The rendered description the site shows, stored once at import or upload
+    # time so the read path never touches the repository or the bucket.
+    readme: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Kind-specific fields the catalogue carries (hardware, members, tools,
+    # benchmark, contents, run). One JSON column keeps the schema stable while
+    # the five kinds differ.
+    extra: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="public")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
 

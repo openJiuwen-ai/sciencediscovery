@@ -25,6 +25,8 @@ def _fixture(tmp_path: Path):
     sessions_root = tmp_path / "sessions"
 
     skill = make_zip({"SKILL.md": b"# Skill\n"})
+    (assets_root / "skills").mkdir(parents=True, exist_ok=True)
+    (assets_root / "skills" / "antibody-design.md").write_text("# Antibody\n", encoding="utf-8")
     team = make_zip({"SKILL.md": b"# Team\n"})
     session = make_zip({"manifest.json": b'{"files": []}'})
     specialist = b'{"name": "literature-searcher"}'
@@ -39,6 +41,8 @@ def _fixture(tmp_path: Path):
             "description": "Design antibodies.",
             "category": {"domain": "biology", "subdomain": "protein"},
             "tags": ["protein"],
+            "hardware": "npu",
+            "readme": "skills/antibody-design.md",
             "download": {"url": "packages/antibody-design-1.0.0.zip", **_write(assets_root / "packages/antibody-design-1.0.0.zip", skill)},
         },
         {

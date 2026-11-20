@@ -10,6 +10,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -240,6 +241,63 @@ def read_version_files(
             # rendering garbage, as the static site already does.
             content = None
     return ok({"files": row.manifest, "content_path": with_content, "content": content})
+
+
+@router.get("/{asset_id:path}/versions/{version}/files/content")
+def read_version_file_content(
+    asset_id: str,
+    version: str,
+    path: str = Query(min_length=1),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+    settings=Depends(get_settings),
+    user: User | None = Depends(current_user),
+):
+    """One file's text, for the Files tab, from the stored package."""
+    asset = _get_asset(db, asset_id)
+    if not _visible_to(asset, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    row = db.scalar(
+        select(AssetVersion).where(
+            AssetVersion.asset_id == asset_id, AssetVersion.version == version
+        )
+    )
+    if row is None or (
+        row.moderation_status != "approved" and (user is None or not _owned(asset, user))
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="version not found")
+    entry = next((item for item in row.manifest if item["path"] == path), None)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not in package")
+    if entry["size"] > settings.preview_max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="file is too large to preview",
+        )
+    try:
+        raw = read_member(storage.get(row.storage_key), path, max_bytes=settings.preview_max_bytes)
+    except PackageError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if raw is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not in package")
+    media = "text/markdown" if path.lower().endswith(".md") else "text/plain"
+    return PlainTextResponse(raw.decode("utf-8", "replace"), media_type=media)
+
+
+@router.get("/{asset_id:path}/readme")
+def read_asset_readme(
+    asset_id: str,
+    format: str = Query(default="json", pattern="^(json|text)$"),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+):
+    """The rendered description, stored in the database at import time."""
+    asset = _get_asset(db, asset_id)
+    if not _visible_to(asset, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    if format == "text":
+        return PlainTextResponse(asset.readme, media_type="text/markdown")
+    return ok({"text": asset.readme})
 
 
 @router.get("/{asset_id:path}")

@@ -19,7 +19,7 @@ from .db import Base, make_engine, make_session_factory
 from .models import User
 from .security import hash_password
 from .storage import build_storage
-from .routers import artifacts, assets, auth, files, health, reviews
+from .routers import artifacts, assets, auth, catalog, files, health, reviews
 
 
 def validate_settings(settings) -> None:
@@ -78,6 +78,7 @@ def create_app(settings=None) -> FastAPI:
     app.include_router(health.router, prefix=api)
     app.include_router(auth.router, prefix=api)
     app.include_router(assets.router, prefix=api)
+    app.include_router(catalog.router, prefix=api)
     app.include_router(artifacts.router, prefix=api)
     app.include_router(reviews.router, prefix=api)
     app.include_router(files.router, prefix=api)
