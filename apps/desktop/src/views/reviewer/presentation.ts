@@ -58,10 +58,11 @@ export interface ReviewRow {
   categoryTip: string;
   /** The badge's word, the only coloured part of the row. */
   badge: string;
+  /** What the row is about, when that is not the check itself — for a source
+   *  verdict, the claim the source was compared with. Shown above the sentence. */
+  subject?: string;
   /** One sentence: what the check found, or could not do. Always present. */
   body: string;
-  /** What was checked, for a source verdict; shown inside the evidence fold. */
-  claim?: string;
   /** Source passages the check relied on. Folded: the verdict has to be
    *  readable at a glance, and "why only part of it" is a question the reader
    *  asks on purpose. */
@@ -397,8 +398,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       category: TEXT.reviewer.source,
       categoryTip: labelTipFor("source"),
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
+      // The claim stays in the row: "why is this only partly supported" is a
+      // question about a sentence, and the sentence has to be visible.
+      subject: claimText(assessment.claim),
       body,
-      claim: claimText(assessment.claim),
       evidence: evidence.length > 0 ? evidence : undefined,
       // A contradiction's account is the evidence for the finding, so it is
       // shown with it; every source row keeps it folded.

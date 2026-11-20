@@ -251,9 +251,8 @@ export const EN: Text = {
       computation: "This review did not check the numbers against the computation evidence.",
     } as Record<string, string>,
     gapBodyUnknown: "This review did not run this check.",
-    claimLabel: "Claim",
-    /** A fold with only the reviewer's account, when no passage was quoted. */
-    reviewerNote: "Reviewer's note",
+    /** The fold under a row: the reviewer's account and any quoted passage. */
+    details: "Details",
     sourceSupported: "The source text supports this claim.",
     sourceContradicted: "The source text contradicts this claim.",
     sourcePartly: "The source text supports only part of this claim.",
@@ -323,9 +322,6 @@ export const EN: Text = {
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `${count} queued`,
-    /** A bounded passage in a locked source; "locator" and evidence levels
-     *  are internal vocabulary, so the card says what was found instead. */
-    locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
     sourceInconclusiveSome: "Source text was found, but it is not enough to support this claim.",
     sourceInconclusiveNone: "No source passage was found to support this claim.",
     failedDetail: "The review reported an error.",

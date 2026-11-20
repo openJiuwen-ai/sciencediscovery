@@ -724,9 +724,10 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // account and the claim it answers for are inside the fold.
   const contradicted = contradiction.locator(".review-item").filter({ hasText: "来源原文与这条结论矛盾。" });
   await expect(contradicted.locator(".review-badge")).toHaveText("矛盾");
+  // The claim stays in the row: the verdict is about that sentence.
+  await expect(contradicted.locator(".review-item-subject")).toHaveText("Response was 42%.");
   await contradicted.locator(".review-evidence summary").click();
   await expect(contradicted.locator(".review-evidence")).toContainText("锁定数值不一致。");
-  await expect(contradicted.locator(".review-evidence")).toContainText("Response was 42%.");
 
   // A source service that returned no verdict is not a report defect, and the
   // service's own error text never reaches the card.
