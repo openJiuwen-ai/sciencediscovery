@@ -129,7 +129,6 @@ test("a value complaint in any envelope keeps the field", async () => {
   const bodies = [
     '{"object":"error","message":"temperature must be between 0 and 2","type":"BadRequestError","param":"temperature","code":400}',
     '{"error":{"message":"Invalid parameter: temperature. The value is out of range."}}',
-    '{"error":{"message":"Unsupported value: \'temperature\' does not support 0.7 with this model. Only the default (1) is supported.","param":"temperature","code":"unsupported_value"}}',
     '{"error":{"message":"temperature must be between 0 and 2","param":"temperature","code":"invalid_value"}}',
     '{"error":{"message":"temperature must be between 0 and 2","param":"temperature"}}',
   ];
@@ -169,4 +168,32 @@ test("a real rejection in an envelope with no code still strips", async () => {
   });
   assert.equal(requests.length, 2);
   assert.equal(requests[1]!.temperature, undefined);
+});
+
+test("a provider whose default is the only value strips the field and runs", async () => {
+  // The OpenAI reasoning models' answer. Every value the caller could send is
+  // refused, so keeping the field would fail every turn — the #1265 symptom under
+  // another wording. Dropping it changes nothing that was possible.
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.temperature !== undefined) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: {
+        message: "Unsupported value: 'temperature' does not support 0.7 with this model. Only the default (1) is supported.",
+        param: "temperature",
+        code: "unsupported_value",
+      } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "reasoning" };
+    const turn = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], sampling, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "ok", "an o-series model now runs instead of failing every turn");
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1]!.temperature, undefined, "only the unusable field is gone");
+  assert.equal(requests[1]!.top_p, 0.95, "everything else is untouched");
 });
