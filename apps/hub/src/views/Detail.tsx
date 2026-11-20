@@ -355,10 +355,20 @@ export function SkillDetail({ asset, basePath, catalog, copy, language, onNaviga
 
 export function SpecialistDetail({ asset, basePath, catalog, copy, language, onNavigate }: DetailProps): JSX.Element {
   const specialist = asset as SpecialistAsset;
-  const files: FileRow[] = [
-    { name: basename(specialist.download.url), preview: "text", size: specialist.download.size, url: specialist.download.url },
-    { name: basename(specialist.download.text), preview: "markdown", url: specialist.download.text },
-  ];
+  // The API lists the archive's real entries; the static catalogue only has
+  // the two download URLs, so fall back to their file names there.
+  const archive: FileRow[] = (specialist.resources ?? []).map((entry) => ({
+    name: basename(entry.path),
+    preview: previewOf(entry.path),
+    size: entry.size,
+    url: entry.url,
+  }));
+  const files: FileRow[] = archive.length
+    ? [...archive, { name: `${basename(specialist.id)}.md`, preview: "markdown", url: specialist.download.text }]
+    : [
+      { name: basename(specialist.download.url), preview: "text", size: specialist.download.size, url: specialist.download.url },
+      { name: basename(specialist.download.text), preview: "markdown", url: specialist.download.text },
+    ];
   return (
     <article className="detail">
       <DetailHeader

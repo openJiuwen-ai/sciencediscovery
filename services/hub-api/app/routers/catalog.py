@@ -147,6 +147,18 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
             payload["members"] = extra.get("members", [])
     elif asset.kind == "specialist":
         download["text"] = f"/api/v1/assets/{asset.id}/readme?format=text"
+        manifest = version_row.manifest if version_row else []
+        payload["resources"] = [
+            {
+                "path": item["path"],
+                "size": item["size"],
+                "url": (
+                    f"/api/v1/assets/{asset.id}/versions/{version}"
+                    f"/files/content?path={item['path']}"
+                ),
+            }
+            for item in manifest
+        ]
         payload["connectors"] = extra.get("connectors", [])
         payload["instructions"] = extra.get("instructions", "")
         payload["runtime"] = extra.get("runtime")

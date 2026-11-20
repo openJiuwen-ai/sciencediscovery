@@ -111,6 +111,8 @@ def _settings(tmp_path: Path) -> Settings:
         local_root=str(tmp_path / "store"),
         public_base_url="http://testserver",
         session_secret="test-secret",
+        admin_username="admin",
+        admin_password="admin-test-123",
     )
 
 
@@ -178,6 +180,10 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
         )
         assert specialist_asset["download"]["text"].endswith("/readme?format=text")
         assert specialist_asset["skills"] == []
+        assert [entry["path"] for entry in specialist_asset["resources"]] == [
+            "builtin-literature-searcher.json"
+        ]
+        assert "/files/content?path=" in specialist_asset["resources"][0]["url"]
         connector_asset = next(item for item in catalog["assets"] if item["id"] == "arxiv")
         assert connector_asset["config"] == {}
         assert connector_asset["governance"] == {}
@@ -190,6 +196,32 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
         assert [node["id"] for node in session_tree] == ["compression"]
         assert session_tree[0]["count"] == 1
         assert client.get("/api/v1/stats").json()["data"]["total"] == 6
+
+        # An imported asset carries a stored category; a PATCH must refresh it
+        # as well as the column, or the payload and the tree disagree. The
+        # importer created the publisher without a known password, so use the
+        # administrator account the app bootstraps.
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin-test-123"}
+        )
+        assert login.status_code == 200, login.text
+        admin = {"Authorization": f"Bearer {login.json()['data']['token']}"}
+        patched = client.patch(
+            "/api/v1/assets/antibody-design",
+            headers=admin,
+            json={"category": "genomics/transcriptomics"},
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["data"]["extra"]["category"] == {
+            "domain": "genomics", "subdomain": "transcriptomics",
+        }
+        catalog = client.get("/api/v1/catalog").json()["data"]
+        item = next(entry for entry in catalog["assets"] if entry["id"] == "antibody-design")
+        assert item["category"] == {"domain": "genomics", "subdomain": "transcriptomics"}
+        tree = catalog["categories"]["skill"]
+        genomics = next(node for node in tree if node["id"] == "genomics")
+        assert [child["id"] for child in genomics["children"]] == ["transcriptomics"]
+
 
     # Running it again changes nothing.
     again = import_catalog(
