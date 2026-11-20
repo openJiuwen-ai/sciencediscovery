@@ -173,7 +173,7 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
         payload["toolCount"] = extra.get("toolCount", len(tools))
     elif asset.kind == "session":
         payload["benchmark"] = extra.get("benchmark") or {
-            "caseId": asset.name, "name": "", "score": None, "runAt": None,
+            "caseId": asset.name, "name": "",
         }
         payload["contents"] = extra.get("contents") or {
             "artifacts": 0, "executions": 0, "files": 0,

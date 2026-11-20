@@ -375,7 +375,7 @@ export function SpecialistDetail({ asset, basePath, catalog, copy, language, onN
         actions={(
           <>
             <DownloadButton assetId={specialist.id} basePath={basePath} label={copy("downloadJson")} suggestedName={`${specialist.id.split("/").pop()}.zip`} url={specialist.download.url} version={specialist.version} />
-            <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} url={specialist.download.text} variant="ghost" />
+            <DownloadButton basePath={basePath} label={copy("downloadMarkdown")} suggestedName={`${basename(specialist.id)}.md`} url={specialist.download.text} variant="ghost" />
           </>
         )}
         asset={specialist}
