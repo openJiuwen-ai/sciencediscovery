@@ -26,9 +26,8 @@
 name: Hub skills sync
 
 on:
-  schedule:
-    # Weekly, before the Monday site rebuild reads the snapshot.
-    - cron: "0 2 * * 1"
+  # Manual only, like the publish workflow: it fetches an external repository
+  # with its own token and rewrites `external-skills/` in the bucket.
   workflow_dispatch:
 
 permissions:
