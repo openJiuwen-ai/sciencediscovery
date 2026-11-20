@@ -36,6 +36,7 @@
     "paper:test": "uv run --project services/paper --locked python -m unittest discover -s services/paper/tests",
     "gateway:test": "uv run --project services/gateway python -m unittest discover -s services/gateway/tests -p 'test_*.py'",
     "hub:build": "pnpm hub:deps && pnpm hub:export && node scripts/hub/build-site.mjs",
+    "hub:build:api": "pnpm hub:deps && node scripts/hub/build-site.mjs",
     "hub:deps": "pnpm --filter \"@sciencediscovery/specialist^...\" build",
     "hub:dev": "pnpm --filter @sciencediscovery/hub dev",
     "hub:export": "tsx scripts/hub/export.ts",

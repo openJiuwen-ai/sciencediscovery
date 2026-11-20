@@ -43,6 +43,7 @@ def asset_payload(asset: Asset, *, include_description: bool = False) -> dict:
     }
     if include_description:
         payload["description"] = asset.description
+        payload["extra"] = dict(asset.extra or {})
     return payload
 
 

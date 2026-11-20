@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Catalog } from "./types.js";
+import { hubApiBase, hubApiConfigured } from "./api.js";
+import { DOMAIN_LABELS, SESSION_TASK_LABELS, SUBDOMAIN_LABELS } from "../labels.js";
+
+import type { Catalog, CategoryNode, Label } from "./types.js";
 
 /**
  * Absolute URL for a site-relative path such as `packages/x.zip`.
@@ -47,7 +50,42 @@ export async function fetchTextAsset(basePath: string, relative: string): Promis
   return text;
 }
 
+function pretty(id: string): string {
+  const last = id.split("/").pop() ?? id;
+  return last.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+function labelFor(id: string): Label {
+  const key = id.split("/").pop() ?? id;
+  return DOMAIN_LABELS[key] ?? SUBDOMAIN_LABELS[key] ?? SESSION_TASK_LABELS[key] ?? { en: pretty(key), zh: pretty(key) };
+}
+
+function hydrate(nodes: CategoryNode[]): CategoryNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    children: node.children ? hydrate(node.children) : undefined,
+    label: node.label ?? labelFor(node.id),
+  }));
+}
+
+/** The catalogue from the API, for a deployment whose database is the source. */
+async function loadCatalogFromApi(): Promise<Catalog> {
+  const response = await fetch(`${hubApiBase}/catalog`);
+  if (!response.ok) throw new Error(`Failed to load the catalogue: ${response.status}`);
+  const body = await response.json() as { data: Catalog };
+  const catalog = body.data;
+  return {
+    ...catalog,
+    categories: {
+      skill: hydrate(catalog.categories.skill ?? []),
+      connector: hydrate(catalog.categories.connector ?? []),
+      sessionPackage: hydrate(catalog.categories.sessionPackage ?? []),
+    },
+  };
+}
+
 export async function loadCatalog(basePath: string): Promise<Catalog> {
+  if (hubApiConfigured) return loadCatalogFromApi();
   const response = await fetch(assetUrl(basePath, "catalog.json"));
   if (!response.ok) throw new Error(`Failed to load catalog.json: ${response.status}`);
   return await response.json() as Catalog;

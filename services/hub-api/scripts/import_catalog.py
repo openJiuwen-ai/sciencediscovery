@@ -44,6 +44,13 @@ from app.security import hash_password
 from app.storage import Storage, build_storage, package_key
 from app.validation import PackageError, validate_package
 
+# Kind-specific fields the site renders; stored as one JSON column.
+EXTRA_KEYS = (
+    "author", "source", "hardware", "type", "members", "runtime",
+    "instructions", "tools", "kinds", "publisher", "benchmark",
+    "contents", "run", "related", "connectors", "skills",
+)
+
 KIND_MAP = {
     "skill": "skill",
     "team-skill": "team",
@@ -96,6 +103,24 @@ def _flatten_category(category) -> str | None:
     parts = [category.get(key) for key in ("domain", "subdomain", "source", "task", "function")]
     values = [str(part) for part in parts if part]
     return "/".join(values) or None
+
+
+def _readme_text(entry: dict, assets_root: Path, sessions_root: Path) -> str:
+    """The catalogue's rendered description, read once at import time."""
+    url = str(entry.get("readme") or "")
+    if not url:
+        return ""
+    if url.startswith(("http://", "https://")):
+        candidates = [sessions_root / str(entry.get("id", "")), "README.md"]
+        path = candidates[0] / candidates[1]
+        if not path.is_file():
+            path = sessions_root / Path(url).name
+    else:
+        path = assets_root / url
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _artifact_bytes(entry: dict, assets_root: Path, sessions_root: Path) -> Artifact | None:
@@ -196,6 +221,10 @@ def import_catalog(
 
             asset.summary = str(entry.get("description") or "")[:4096]
             asset.description = str(entry.get("description") or "")
+            asset.readme = _readme_text(entry, assets_root, sessions_root)
+            asset.extra = {
+                key: entry[key] for key in EXTRA_KEYS if entry.get(key) is not None
+            }
             asset.updated_at = utcnow()
 
             existing = session.scalar(
