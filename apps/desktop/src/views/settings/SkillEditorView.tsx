@@ -281,10 +281,14 @@ function EditorBody({
       return;
     }
     setReferenceFailure(undefined);
+    // Decoding is an await, so the pane is disabled before the first read: a
+    // second pick during it would start from the same revision this one is
+    // about to advance.
+    setBusy(true);
     // The package route stores text: a PNG or a non-UTF-8 CSV decoded with
-    // replacement characters would be written back as a corrupted asset. Read
-    // the whole pick first, so one binary file refuses the batch before any
-    // write changes the skill.
+    // replacement characters would be written back as a corrupted asset.
+    // Read the whole pick first, so one binary file refuses the batch before
+    // any write changes the skill.
     const decoded: Array<{ content: string; name: string }> = [];
     for (const file of files) {
       const name = file.name.split(/[\\/]/).pop() ?? file.name;
@@ -293,10 +297,10 @@ function EditorBody({
         decoded.push({ content: new TextDecoder("utf-8", { fatal: true }).decode(bytes), name });
       } catch {
         setReferenceFailure(TEXT.settings.skills.editor.referenceNotText(name));
+        setBusy(false);
         return;
       }
     }
-    setBusy(true);
     onNotice(undefined);
     // Each write bumps the revision, so the next write in the same pick must
     // carry the revision the previous one returned.

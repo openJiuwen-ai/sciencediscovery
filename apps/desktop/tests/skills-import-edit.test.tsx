@@ -509,6 +509,8 @@ test("adding a non-UTF-8 reference file is refused before anything is written", 
     assert.ok(JSON.stringify(view.toJSON())
       .includes(TEXT.settings.skills.editor.referenceNotText("logo.png")));
     assert.equal(stub.calls.some((call) => call.path.includes("/files/")), false);
+    assert.equal(view.root.findAllByType("fieldset")[0]?.props.disabled, false,
+      "a refused pick left the editor disabled");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
