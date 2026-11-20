@@ -110,7 +110,7 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   // 32 turns, ~89k tokens, no draft — so the prompt has to stop it instead.
   const empty = skillAuthoringCommandPrompt("/distill-session 把这次会话里可复用的做法总结成一个技能", { hasHistory: false });
   assert.ok(empty);
-  assert.match(empty, /no prior conversation and no execution history to distil/u, "it says there is nothing to distil");
+  assert.match(empty, /no prior conversation to distil/u, "it says there is nothing to distil");
   assert.match(empty, /Do not call create_skill yet/u, "it does not author a generic Skill");
   assert.match(empty, /do not run shell commands/u, "it forbids looking for the conversation");
   assert.match(empty, /application data directory/u, "it names the directory the run wandered into");
@@ -136,6 +136,15 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   assert.equal(hasConversation([
     { content: "notice", createdAt: "2026-11-20T00:00:00Z", id: "n2", kind: "review_notice", role: "assistant" },
   ]), false, "a review notice is not a conversation");
+  assert.equal(hasConversation([
+    { content: "config", createdAt: "2026-11-20T00:00:00Z", id: "n3", kind: "configuration_notice", role: "user" },
+  ]), false, "a configuration notice is not a conversation");
+  assert.equal(hasConversation([
+    { content: "checkpoint", createdAt: "2026-11-20T00:00:00Z", id: "n4", kind: "reviewer_checkpoint", role: "assistant" },
+  ]), false, "a reviewer checkpoint is not a conversation");
+  assert.equal(hasConversation([
+    { content: "timeout", createdAt: "2026-11-20T00:00:00Z", id: "n5", kind: "timeout_notice", role: "assistant" },
+  ]), false, "a timeout notice is not a conversation");
   assert.equal(hasConversation([
     { content: "hi", createdAt: "2026-11-20T00:00:00Z", id: "m1", role: "user" },
   ]), true);

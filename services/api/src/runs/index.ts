@@ -591,7 +591,9 @@ export interface EvolveTurnContext {
 
 /**
  * Whether a Session holds a conversation — something a Skill could be distilled
- * from.
+ * from. Messages are the only evidence here: a cancelled wake run can leave
+ * executions with no message at all, so this does not speak for execution
+ * history.
  *
  * Not a plain role test: runtime wake and manual-review notices are stored with a
  * user or assistant role and a `kind`, so a Session that has only ever been woken
@@ -637,7 +639,8 @@ export function skillAuthoringCommandPrompt(
   // behaves as before rather than silently refusing every distill.
   if (options.hasHistory === false) {
     return [
-      "The user invoked /distill-session to turn this Session into a reusable Skill, but this Session has no prior conversation and no execution history to distil.",
+      "The user invoked /distill-session to turn this Session into a reusable Skill, but this Session has no prior "
+        + "conversation to distil.",
       ...(request ? [`The user's direction:\n${request}`] : []),
       "Do not call create_skill yet. This Session has nothing to distil, so say so in one short paragraph and ask one concise question for what the Skill should capture: the goal, its inputs and outputs, and the checks that make a result acceptable.",
       "Do not explore for a conversation that is not there: do not read the workspace, the application data directory, project or session folders, and do not run shell commands to look for earlier work. There is nothing to find, and searching burns the user's tokens.",
