@@ -1,10 +1,11 @@
 # Hub backend: design
 
-> Scope: the service in [`services/hub-api`](../services/hub-api) — the step
-> from the static hub (browse + download) to a hub with accounts, uploads,
-> version history and review. It is written against the openJiuwen Agentic Hub
-> reference (`openJiuwen-ai/skillhub`) and keeps the parts of its contract that
-> clients can see; it does not copy its stack wholesale.
+> Scope: the service in [`services/hub-api`](../services/hub-api) and the site
+> it now serves. The database is the source of truth for the browse payload,
+> the site and `/api` share one origin behind nginx, and the static exporter
+> remains only as the migration input. It is written against the openJiuwen
+> Agentic Hub reference (`openJiuwen-ai/skillhub`) and keeps the parts of its
+> contract that clients can see; it does not copy its stack wholesale.
 
 ## Why a backend now
 
@@ -21,6 +22,13 @@ The moment any one of these is true, the static shape stops working:
 
 `services/hub-api` implements those four with the smallest state that can
 carry them: one database, one private bucket, no Redis, no message queue.
+
+The site no longer reads a build artifact. `GET /api/v1/catalog` assembles the
+same `{assets, categories}` payload from the database, and `readme` and
+`resources[].url` point at the API. The site is served by nginx at `/`, which
+proxies `/api/` to the service, so page, catalogue and content share one
+origin. The static publishing workflows are gone: a production write is now a
+deployment, not a push to `main`.
 
 ## Reference: what was studied
 
