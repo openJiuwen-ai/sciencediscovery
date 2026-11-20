@@ -642,6 +642,47 @@ test("an imported script that declares an interpreter stays executable", async (
   }
 });
 
+test("an update keeps allowed-tools declared as a sequence", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const created = await catalog.createPackage({
+      allowedTools: ["Read", "Grep"],
+      description: "A skill with a tool sequence.",
+      instructions: "# Use the tools\n",
+      name: "tool-sequence",
+    });
+    assert.deepEqual(created.frontmatter["allowed-tools"], ["Read", "Grep"]);
+
+    const updated = await catalog.update("tool-sequence", {
+      allowedTools: ["Read", "Grep"],
+      description: "An edited skill with a tool sequence.",
+      expectedRevision: 1,
+      instructions: "# Use the tools\n",
+      name: "tool-sequence",
+    });
+    assert.deepEqual(updated.frontmatter["allowed-tools"], ["Read", "Grep"]);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("a restart clears checkouts an inspection left under .imports", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const stale = resolve(dataDir, "skills", ".imports", "stale-checkout");
+    await mkdir(stale, { recursive: true });
+    await writeFile(resolve(stale, "SKILL.md"), "# stale\n");
+
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    await assert.rejects(readFile(resolve(stale, "SKILL.md")), /ENOENT/);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("an imported name that is taken installs under the next free name", async () => {
   const dataDir = await temporaryDataDir();
   try {

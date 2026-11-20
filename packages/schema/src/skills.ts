@@ -126,7 +126,9 @@ export interface SkillDetail extends SkillDescriptor {
 }
 
 export interface CreateSkillRequest {
-  allowedTools?: string;
+  /** A declaration the runtime preserves: either the comma-string form or the
+   *  YAML sequence some Skills use. */
+  allowedTools?: string | string[];
   compatibility?: string;
   description: string;
   instructions: string;
