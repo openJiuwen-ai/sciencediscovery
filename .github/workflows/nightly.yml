@@ -92,7 +92,7 @@ jobs:
             echo "Gate: **${RESULT}** for \`${GITHUB_SHA}\`"
             echo
             echo "Binaries are attached to this run as \`binary-release-x86_64\`"
-            echo "and \`binary-release-aarch64\`."
+            echo "and \`binary-release-aarch64\`. The macOS DMG and ZIP are in \`package-macos-arm64-${GITHUB_SHA}\`."
             if [[ -f case-execution/case-execution-details.md ]]; then
               echo
               cat case-execution/case-execution-details.md
