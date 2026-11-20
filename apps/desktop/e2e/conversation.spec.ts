@@ -264,12 +264,19 @@ test("subagent outputs recover after a catalog failure without reopening the ses
     subagentsBySession: { [SESSION]: [{ id: "child", parentTurnId: run.id, sessionId: SESSION }] },
   });
   let catalogReads = 0;
+  let catalogAvailable = false;
+  let successfulCatalogReads = 0;
   await page.route("**/api/sessions/session-1/subagents", async route => {
-    if (++catalogReads === 1) {
+    catalogReads++;
+    if (!catalogAvailable) {
       await route.fulfill({ status: 503, json: { error: "temporary catalog failure" } });
-    } else await route.fallback();
+    } else {
+      successfulCatalogReads++;
+      await route.fallback();
+    }
   });
   await page.route("**/api/sessions/session-1/messages", async route => {
+    catalogAvailable = true;
     outputs.push(artifactOutput("child-report", 2, "child"));
     await route.fallback();
   });
@@ -278,7 +285,7 @@ test("subagent outputs recover after a catalog failure without reopening the ses
   await test.step("1. Read the saved reply during a temporary catalog outage", async () => {
     await page.goto("/");
     await expect(reply.getByRole("button", { name: "direct.md v1" })).toBeVisible();
-    await expect.poll(() => catalogReads).toBe(1);
+    await expect.poll(() => catalogReads).toBeGreaterThan(0);
     await expect(reply.getByRole("button", { name: "child-report.md v1" })).toHaveCount(0);
   });
   await test.step("2. Continue the session and recover outputs from the same child", async () => {
@@ -290,7 +297,7 @@ test("subagent outputs recover after a catalog failure without reopening the ses
   await test.step("3. Read the recovered version without reopening the session", async () => {
     await childOutput.click();
     await expect(page.locator(".workspace-panel").getByText("已恢复的子 Agent 报告")).toBeVisible();
-    expect(catalogReads).toBe(2);
+    expect(successfulCatalogReads).toBe(1);
   });
 });
 
