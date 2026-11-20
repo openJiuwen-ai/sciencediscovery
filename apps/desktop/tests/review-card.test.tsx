@@ -285,6 +285,31 @@ describe("a review's rows", () => {
     assert.equal(row.tone, "neutral");
   });
 
+  it("draws the running line for an in-run checkpoint the queue knows nothing about", () => {
+    // An in-run check has no audit task, so `running` is false; its own
+    // message says it is running, and that is what the card must follow.
+    const markup = card([], "running");
+    assert.ok(markup.includes("review-card-running"));
+    assert.ok(!markup.includes("没有产生审查记录"));
+  });
+
+  it("labels a smart review as a Deep review", () => {
+    // `smart` is the server's older name for what the web maps to Deep.
+    assert.equal(TEXT.reviewer.levelPill("smart"), TEXT.reviewer.levelPill("deep"));
+    assert.equal(TEXT.reviewer.levelName("smart"), TEXT.reviewer.levelName("deep"));
+  });
+
+  it("offers one re-run when a review is both stale and failed", () => {
+    const markup = renderToStaticMarkup(
+      <ReviewArtifactBody
+        onRerun={() => undefined}
+        review={review({ stale: true, status: "failed" })}
+        showName={false}
+      />,
+    );
+    assert.equal(markup.split(TEXT.reviewer.rerun).length - 1, 1);
+  });
+
   it("keeps delivery out of the check list, in a note of its own", () => {
     // No completeness record at all: nothing was checked, so nothing is a
     // row; the note says so under the rows.

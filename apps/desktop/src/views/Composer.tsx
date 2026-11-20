@@ -507,6 +507,9 @@ export function SessionSettingsMenu({
             </span>
           </button>
           <div className="session-menu-divider" />
+          {/* The reviewer rows belong to a Session: with none open there is
+              nothing to review, and the handlers would return early. */}
+          {onRunReview === undefined ? null : (<>
           {/* 自动审阅 is a switch, not a flyout: it has one value and no
               choices behind it, exactly as the permission row's neighbour in
               the reference. The level row below is the one with options. */}
@@ -558,22 +561,21 @@ export function SessionSettingsMenu({
               by itself, while this row is the reader asking for one now. The
               label carries the state, so the same row starts and stops. Like
               程序演进实验, an action with nowhere to go is not drawn at all. */}
-          {onRunReview === undefined ? null : (
-            <button
-              className="session-menu-row"
-              disabled={reviewerEnabled === false}
-              onClick={() => (reviewerRunning ? onStopReview?.() : onRunReview())}
-              type="button"
-            >
-              <span className="session-menu-icon">
-                <RunGlyph stop={reviewerRunning} />
-              </span>
-              <span className="session-menu-label">
-                {reviewerRunning ? TEXT.reviewer.stopRun : TEXT.reviewer.runNow}
-              </span>
-            </button>
-          )}
+          <button
+            className="session-menu-row"
+            disabled={reviewerEnabled === false}
+            onClick={() => (reviewerRunning ? onStopReview?.() : onRunReview())}
+            type="button"
+          >
+            <span className="session-menu-icon">
+              <RunGlyph stop={reviewerRunning} />
+            </span>
+            <span className="session-menu-label">
+              {reviewerRunning ? TEXT.reviewer.stopRun : TEXT.reviewer.runNow}
+            </span>
+          </button>
           <div className="session-menu-divider" />
+          </>)}
           <button
             aria-describedby="session-experts-hint"
             aria-expanded={panel === "experts"}

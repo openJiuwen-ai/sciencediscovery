@@ -456,11 +456,11 @@ export const EN: Text = {
     empty: "This checkpoint produced no review record.",
     noReviews: "No reviews yet.",
     tab: "Review",
-    levelName: (level: string): string => (level === "deep" ? "Deep" : "Quick"),
-    levelPill: (level: string): string => (level === "deep" ? "Deep" : "Quick"),
+    levelName: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
+    levelPill: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
     /** The pill only names the level; the tip carries what the name claims.
      *  The two levels differ in whether a source service is consulted. */
-    levelTip: (level: string): string => (level === "deep"
+    levelTip: (level: string): string => (level !== "quick"
       ? "Deep review: on top of the Quick checks, calls the source service to verify each claim against its source."
       : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source service is called."),
   },
