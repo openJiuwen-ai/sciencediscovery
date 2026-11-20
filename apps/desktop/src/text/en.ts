@@ -1432,7 +1432,7 @@ export const EN: Text = {
         uploadFileHint: "The size of each file in an upload.",
         uploadRequest: "Upload request limit",
         uploadRequestHint: "The total size of one upload request.",
-        gib: "GiB",
+        gb: "GB",
       },
       runtime: {
         heading: "Runner",

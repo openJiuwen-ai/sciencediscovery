@@ -62,29 +62,34 @@ export function WriteStatus({ state, pendingLabel, successLabel, quiet = false }
 }
 
 /** Keep empty and fractional input as text until the user finishes editing. */
-export function SettingsNumber({ value, label, disabled, min, max, scale = 1, onCommit }: {
+export function SettingsNumber({ value, label, disabled, min, max, scale = 1, precision, onCommit }: {
   value: number; label: string; disabled?: boolean; min: number; max?: number;
-  scale?: number; onCommit: (value: number) => void;
+  scale?: number; precision?: number; onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value / scale));
+  const displayed = precision === undefined ? String(value / scale) : (value / scale).toFixed(precision);
+  const [draft, setDraft] = useState(displayed);
+  const edited = useRef(false);
   const [invalid, setInvalid] = useState(false);
-  useEffect(() => { setDraft(String(value / scale)); setInvalid(false); }, [value, scale]);
+  useEffect(() => { setDraft(displayed); setInvalid(false); edited.current = false; }, [value, displayed]);
   const commit = () => {
-    if (disabled) return;
-    const number = Number(draft);
+    if (disabled || !edited.current) return;
+    const parsed = Number(draft);
+    const number = precision === undefined ? parsed : Number(parsed.toFixed(precision));
     const stored = Math.round(number * scale);
     if (!draft.trim() || !Number.isFinite(number) || number < min || (max !== undefined && number > max)
       || !Number.isSafeInteger(stored) || (scale === 1 && !Number.isInteger(number))) {
       setInvalid(true); return;
     }
     setInvalid(false);
+    setDraft(precision === undefined ? String(number) : number.toFixed(precision));
     if (stored !== value) onCommit(stored);
+    else edited.current = false;
   };
   return <div className="settings-number">
     <input aria-label={label} aria-invalid={invalid} className="field-input is-number"
-      disabled={disabled} min={min} max={max} step={scale === 1 ? 1 : "any"} type="number"
+      disabled={disabled} min={min} max={max} step={precision === undefined ? scale === 1 ? 1 : "any" : 10 ** -precision} type="number"
       value={disabled && value === 0 ? "" : draft}
-      onChange={event => { setDraft(event.target.value); setInvalid(false); }} onBlur={commit}
+      onChange={event => { edited.current = true; setDraft(event.target.value); setInvalid(false); }} onBlur={commit}
       onKeyDown={event => { if (commitsOnEnter(event)) { event.preventDefault(); event.currentTarget.blur(); } }} />
     {invalid ? <small className="row-note is-error" role="alert">{TEXT.settings.system.migrated.common.invalidNumber}</small> : null}
   </div>;

@@ -1450,7 +1450,7 @@ export const ZH = {
         uploadFileHint: "一次上传中每个文件的大小。",
         uploadRequest: "上传请求上限",
         uploadRequestHint: "一次上传请求的总体积。",
-        gib: "GiB",
+        gb: "GB",
       },
       runtime: {
         heading: "Runner",
