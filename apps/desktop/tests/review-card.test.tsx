@@ -478,7 +478,7 @@ describe("a review's rows", () => {
     // model output: folded, not printed under every partial verdict.
     assert.equal(row?.rationale, "The excerpt supports the first half of the claim, not the second.");
     const markup = renderToStaticMarkup(<ReviewArtifactBody review={checked} showName={false} />);
-    assert.ok(markup.includes(TEXT.reviewer.locators(1)));
+    assert.ok(markup.includes(TEXT.reviewer.details));
     assert.ok(markup.includes("an abstract sentence"));
     assert.ok(markup.includes("supports the first half"));
   });
