@@ -123,6 +123,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [query, setQuery] = useState("");
   const [exportStatus, setExportStatus] = useState<{
     error?: boolean;
     id: string;
@@ -446,12 +447,30 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         </div>
       ) : null}
       {view.kind === "list" ? (
+        <div className="skill-search-row">
+          <input
+            aria-label={TEXT.settings.skills.search}
+            className="skill-search-input"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={TEXT.settings.skills.searchPlaceholder}
+            type="search"
+            value={query}
+          />
+        </div>
+      ) : null}
+      {view.kind === "list" ? (
       <Group>
         <p className="row-note">{TEXT.settings.skills.scope}</p>
         {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
         {notice ? <small className="row-note" role="status">{notice}</small> : null}
         <LoadGate loaded={loaded}>
           {(page) => {
+            const term = query.trim().toLowerCase();
+            const matches = (name: string, description: string) =>
+              term === "" || name.toLowerCase().includes(term) || description.toLowerCase().includes(term);
+            const skills = page.skills.filter((skill) => matches(skill.name, skill.description));
+            const jiuwenSwarmSkills = page.jiuwenSwarmSkills.filter((skill) => matches(skill.name, skill.description));
+            const noMatches = term !== "" && skills.length === 0 && jiuwenSwarmSkills.length === 0;
             return (
               <div className="settings-list">
                 {page.native ? <p className="row-note">{TEXT.settings.skills.jiuwenSwarmOnly}</p> : null}
@@ -463,8 +482,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                 </div> : null}
                 {page.skills.length === 0 && page.jiuwenSwarmSkills.length === 0
                   ? <p className="settings-empty">{TEXT.settings.skills.empty}</p>
-                  : page.switchesAvailable ? <BulkToggles busy={busy} onAll={(next) => void setAll(next)} /> : null}
-                {page.skills.map((skill) => {
+                  : noMatches
+                    ? <p className="settings-empty">{TEXT.settings.skills.noMatches}</p>
+                    : page.switchesAvailable ? <BulkToggles busy={busy} onAll={(next) => void setAll(next)} /> : null}
+                {skills.map((skill) => {
                   const on = page.enabled.includes(skill.id);
                   return (
                     <div className="settings-card" key={skill.id}>
@@ -518,7 +539,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                     </div>
                   );
                 })}
-                {page.jiuwenSwarmSkills.map((skill) => (
+                {jiuwenSwarmSkills.map((skill) => (
                   <div className="settings-card" key={`jiuwenswarm:${skill.name}`}>
                     <span className="settings-card-mark">{skillMark(skill)}</span>
                     <div className="settings-card-main">

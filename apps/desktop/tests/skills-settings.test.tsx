@@ -142,6 +142,22 @@ test("a failed first enable stays visible even when the refreshed catalog is emp
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("the search field narrows the installed list", async () => {
+  const other = { ...skill, id: "draft", name: "draft", description: "A different package." };
+  const stub = new StubClient().reply([skill, other]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(stub.asClient());
+  try {
+    assert.match(text(view), /Review a draft/);
+    assert.match(text(view), /A different package/);
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.search);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: "different" } }); });
+    assert.match(text(view), /A different package/);
+    assert.ok(!text(view).includes("Review a draft"), "the non-matching row stayed");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("bundled skills default on while saved disables and managed defaults remain off", async () => {
   const bundled = { ...skill, id: "evolve-design", source: "built-in" as const };
   const disabled = { ...skill, id: "literature-searcher", source: "built-in" as const };

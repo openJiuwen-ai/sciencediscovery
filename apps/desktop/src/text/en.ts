@@ -648,6 +648,10 @@ export const EN: Text = {
     skills: {
       detail: "Details",
       empty: "No skills found.",
+      search: "Search skills",
+      searchPlaceholder: "Search skills…",
+      noMatches: "No skills match your search.",
+
       heading: "Skills",
       jiuwenSwarmOnly: "The current agent backend is not JiuwenSwarm, so skill switches are unavailable.",
       noProject: "No project is available, so skill choices cannot be read.",
