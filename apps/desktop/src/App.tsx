@@ -103,6 +103,7 @@ import {
 import { Sidebar } from "./views/Sidebar.js";
 import { Toasts } from "./views/Toasts.js";
 import { WorkspacePanel, type PanelGroup } from "./views/WorkspacePanel.js";
+import type { TurnArtifact } from "./app/turn-artifacts.js";
 
 interface Props {
   /** Read once in `main.tsx`, before the tree mounts. */
@@ -157,6 +158,11 @@ export function App({ initialToken }: Props) {
    *  elsewhere in the app lands on the group that lists it; a panel that is
    *  simply being opened lands on 产物, which is what a run produces. */
   const [panelGroup, setPanelGroup] = useState<PanelGroup>("artifacts");
+  /** Latest values for the turn strip's stable callback — see
+   *  `previewTurnArtifact`. Assigned during render, the way `use-workspace`
+   *  keeps its own `tabsRef`. */
+  const openArtifactInPanelRef = useRef<(output: SessionArtifactOutput) => void>(() => {});
+  const outputsRef = useRef<readonly SessionArtifactOutput[]>([]);
   /** The subagent whose execution the panel is showing, if any. It is a
    *  mode of the panel rather than a fourth tab: the transcript's line opens
    *  it, and the panel's own back arrow closes it. */
@@ -617,6 +623,21 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(true);
   }, []);
 
+  /**
+   * A turn strip's card (#1252): read the file in the panel, where files are
+   * read, at the version the card printed.
+   *
+   * The output record is matched on its version id, not on the ordinal alone:
+   * the id is what the card names, and a record that has gone (deleted between
+   * the render and the press) draws nothing rather than quietly opening the
+   * newest version in place of the one asked for.
+   */
+  const previewTurnArtifact = useCallback((row: TurnArtifact) => {
+    const output = outputsRef.current.find((candidate) =>
+      candidate.artifact.id === row.artifact.id && candidate.version.id === row.version.id);
+    if (output !== undefined) openArtifactInPanelRef.current(output);
+  }, []);
+
   /** Back from a child's record or a tool's text to the panel's own groups. */
   const closePanelDetail = useCallback(() => {
     setOpenSubagentId(undefined);
@@ -940,6 +961,8 @@ export function App({ initialToken }: Props) {
   // the grid here, because two things have to agree on it: the shell's third
   // track, and the panel that fills it. `--panel-width` inherits, so setting it
   // once on the shell reaches both, and neither has to be told twice.
+  outputsRef.current = state.outputs;
+
   const shellStyle = { "--panel-width": `${resize.width}px` } as CSSProperties;
 
   const openSettings = (group: SettingsGroup) => {
@@ -1039,6 +1062,11 @@ export function App({ initialToken }: Props) {
       void actions.selectArtifactVersion(openTab.id, output);
     }
   };
+
+  // The strip's door into the panel: `openDependencyInPanel` already focuses an
+  // open tab and moves it to the requested version, which is exactly the gesture
+  // a card asks for.
+  openArtifactInPanelRef.current = openDependencyInPanel;
 
   // The dialog only keeps its offset while the panel is still showing the
   // dependency: pointing the panel at another document or another group ends
@@ -1226,6 +1254,7 @@ export function App({ initialToken }: Props) {
                   onDecidePermission={decidePermission}
                   onOpenArtifactPanel={openArtifactPanel}
                   onOpenSubagent={openSubagentDetails}
+                  onPreviewArtifact={previewTurnArtifact}
                   onOpenTool={openToolDetails}
                   onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
                   onReferenceClick={openReference}

@@ -47,7 +47,7 @@ import { UploadCards } from "./UploadCards.js";
 import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
-import { turnArtifactsByRun, turnLineage } from "../app/turn-artifacts.js";
+import { turnArtifactsByRun, turnLineage, type TurnArtifact } from "../app/turn-artifacts.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
@@ -68,8 +68,11 @@ interface Props {
   /** Open one tool's input or result in the workspace panel. The card shows a
    *  clipped preview of both. */
   onOpenTool?: (detail: ToolDetail) => void;
-  /** Open the right panel's artifact group from a turn strip's overflow row. */
+  /** Open the right panel's artifact group from a turn strip's overflow card. */
   onOpenArtifactPanel?: () => void;
+  /** Show one of a turn's artifacts in the right panel, at the version its card
+   *  names. The strip is a door into the panel, not the dialog. */
+  onPreviewArtifact?: (row: TurnArtifact) => void;
   /** Every artifact version this Session holds; each turn's strip is selected
    *  from it by run id (#1252). The right panel reads the same list. */
   outputs?: readonly SessionArtifactOutput[];
@@ -270,6 +273,7 @@ export function Conversation({
   onOpenSubagent,
   onOpenTool,
   onOpenArtifactPanel,
+  onPreviewArtifact,
   onReferenceClick,
   outputs,
   pending,
@@ -487,6 +491,7 @@ export function Conversation({
                   client={client}
                   onDecide={onDecidePermission}
                   onOpenArtifactPanel={onOpenArtifactPanel}
+                  onPreviewArtifact={onPreviewArtifact}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
                   onReferenceClick={referenceClick}
@@ -511,6 +516,7 @@ export function Conversation({
                   key={replay.runId}
                   onDecide={onDecidePermission}
                   onOpenArtifactPanel={onOpenArtifactPanel}
+                  onPreviewArtifact={onPreviewArtifact}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
                   onReferenceClick={referenceClick}
@@ -530,6 +536,7 @@ export function Conversation({
             key={replay.runId}
             onDecide={onDecidePermission}
             onOpenArtifactPanel={onOpenArtifactPanel}
+            onPreviewArtifact={onPreviewArtifact}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
             onReferenceClick={referenceClick}
@@ -548,6 +555,7 @@ export function Conversation({
             client={client}
             onDecide={onDecidePermission}
             onOpenArtifactPanel={onOpenArtifactPanel}
+            onPreviewArtifact={onPreviewArtifact}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
             onReferenceClick={referenceClick}
