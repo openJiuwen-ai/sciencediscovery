@@ -259,23 +259,19 @@ export function ReviewArtifactBody({
               <span className="review-item-category" title={row.categoryTip}>{row.category}</span>
               <span className={`review-badge is-${row.tone}`}>{row.badge}</span>
             </header>
-            <p className="review-item-text">{row.body}</p>
+            {row.subject === undefined ? null : (
+              <p className="review-item-subject">{row.subject}</p>
+            )}
+            <p className={`review-item-text${row.subject === undefined ? "" : " is-detail"}`}>
+              {row.body}
+            </p>
             {/* "Why only part of it" and "what does that passage say" are
                 questions a reader asks on purpose, so the evidence stays
                 folded: the verdict is the card's default reading, not a wall
                 of quoted source. */}
             {row.evidence === undefined && row.rationale === undefined ? null : (
               <details className="review-evidence">
-                <summary>
-                  {row.evidence === undefined
-                    ? TEXT.reviewer.reviewerNote
-                    : TEXT.reviewer.locators(row.evidence.length)}
-                </summary>
-                {row.claim === undefined ? null : (
-                  <p className="review-evidence-claim">
-                    <span>{TEXT.reviewer.claimLabel}</span>{row.claim}
-                  </p>
-                )}
+                <summary>{TEXT.reviewer.details}</summary>
                 {row.rationale === undefined ? null : (
                   <p className="review-evidence-reason">{row.rationale}</p>
                 )}
