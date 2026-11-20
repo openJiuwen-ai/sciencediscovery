@@ -261,6 +261,8 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
         ? TEXT.reviewer.labelTips.semantics
         : labelTipFor(category ?? "other"),
       badge: finding.severity === "critical" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
+      // The reviewer's own sentence, as written — the web card shows it the
+      // same way; the badge above already says which check it came from.
       body: finding.message,
     });
   }
@@ -304,7 +306,9 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       category: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
       categoryTip: labelTipFor("gaps"),
       badge: TEXT.reviewer.gaps,
-      body: TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
+      body: gap.reason?.trim() !== undefined && gap.reason.trim() !== ""
+        ? gap.reason
+        : TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
     });
   }
 
@@ -346,12 +350,15 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
         return type === "abstract" || type === "paper_metadata";
       });
     const rationale = assessment.assessment.rationale?.trim();
-    const body = inconclusive
-      ? assessment.locators.length === 0
-        ? TEXT.reviewer.sourceInconclusiveNone
-        : secondaryOnly ? TEXT.reviewer.sourceInconclusiveAbstract : TEXT.reviewer.sourceInconclusiveSome
-      : rationale !== undefined && rationale !== ""
-        ? rationale
+    // The reviewer's own account, as written. The web card shows model text the
+    // same way; the badge says the verdict, and the fallback only covers a
+    // record with no account at all.
+    const body = rationale !== undefined && rationale !== ""
+      ? rationale
+      : inconclusive
+        ? assessment.locators.length === 0
+          ? TEXT.reviewer.sourceInconclusiveNone
+          : secondaryOnly ? TEXT.reviewer.sourceInconclusiveAbstract : TEXT.reviewer.sourceInconclusiveSome
         : verdict === "CONTRADICTED"
           ? TEXT.reviewer.sourceContradicted
           : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;

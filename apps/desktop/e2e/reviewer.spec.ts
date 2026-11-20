@@ -163,13 +163,11 @@ test("a confirmed delivery is green, and its checks are one press away", async (
   // The completeness verdict answers for delivery; the two checks that ran
   // are the rows below it, and the third is not repeated.
   await expect(rows).toHaveCount(3);
-  // Every row is the same shape: the check on the left, its verdict on the
-  // right, one sentence below.
-  await expect(rows.nth(0).locator(".review-item-category")).toHaveText("完整性");
+  // Every row is the same shape: a verdict phrase, then one sentence.
+  await expect(rows.nth(0).locator(".review-item-verdict")).toHaveText("通过");
   await expect(rows.nth(0).locator(".review-item-text")).toContainText("交付完整");
-  await expect(rows.nth(1).locator(".review-item-category")).toHaveText("结构");
   await expect(rows.nth(1).locator(".review-item-text")).toContainText("结构检查通过");
-  await expect(rows.nth(2).locator(".review-item-category")).toHaveText("引用");
+  await expect(rows.nth(2).locator(".review-item-text")).toContainText("引用检查通过");
   await expect(rows.nth(0).locator(".review-pill")).toHaveText("快速");
   // Its own section names the file: the card's header reports the worst
   // artifact, so the file in hand has no other place to say which it is.
@@ -289,7 +287,7 @@ test("a delivery that was checked and found incomplete is red", async ({ page })
   await expect(card.locator(".review-summary")).toHaveText("交付不完整");
 
   await card.locator(".review-head").click();
-  const missing = card.locator(".review-item").filter({ has: page.locator(".review-badge.is-fail") }).first();
+  const missing = card.locator(".review-item").filter({ has: page.locator(".review-item-verdict.is-fail") }).first();
   await expect(missing).toContainText("output/predictions.npy");
 });
 
@@ -713,7 +711,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(warning.locator(".review-summary")).toHaveText("1 项提醒");
   await warning.locator(".review-head").click();
   await expect(warning.locator(".review-item-text").first()).toHaveText("缺少可识别的引文标识符。");
-  await expect(warning.locator(".review-item-category").first()).toHaveText("引用");
+  await expect(warning.locator(".review-item-verdict").first()).toHaveText("提醒");
 
   // A computation mismatch is a finding about the report, and the source
   // assessment that produced it is shown with its own verdict.
@@ -723,7 +721,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // The row says what the verdict means in one sentence; the reviewer's own
   // account and the claim it answers for are inside the fold.
   const contradicted = contradiction.locator(".review-item").filter({ hasText: "锁定数值不一致。" });
-  await expect(contradicted.locator(".review-badge")).toHaveText("矛盾");
+  await expect(contradicted.locator(".review-item-verdict")).toHaveText("矛盾");
   // The sentence is the result, the same slot a finding uses for its message.
   await expect(contradicted.locator(".review-item-text")).toHaveText("锁定数值不一致。");
   await expect(contradicted.locator(".review-evidence")).toHaveCount(0);
@@ -734,8 +732,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   await expect(inconclusive).toHaveClass(/is-neutral/u);
   await expect(inconclusive.locator(".review-summary")).toHaveText("未能核对来源");
   await inconclusive.locator(".review-head").click();
-  await expect(inconclusive.locator(".review-item-category", { hasText: "语义" })).toBeVisible();
-  await expect(inconclusive.locator(".review-badge", { hasText: "未确认" })).toBeVisible();
+  await expect(inconclusive.locator(".review-item-verdict", { hasText: "未确认" })).toBeVisible();
   await expect(inconclusive.locator(".review-item-text", { hasText: "没能把结论与来源原文对照" })).toBeVisible();
   await expect(inconclusive).not.toContainText("Paper Reader timeout");
 
