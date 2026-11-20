@@ -5,8 +5,11 @@
 // wrapper sets the variable in the child's environment instead.
 import { spawnSync } from "node:child_process";
 
+// `--root` is the service-hosted deployment: nginx serves the site at `/` and
+// proxies `/api`, so the bundle must not assume a `/site/` prefix.
+const base = process.argv.includes("--root") ? "/" : process.env.HUB_BASE_PATH ?? "/site/";
 const result = spawnSync("pnpm", ["--filter", "@sciencediscovery/hub", "build"], {
-  env: { ...process.env, HUB_BASE_PATH: process.env.HUB_BASE_PATH ?? "/site/" },
+  env: { ...process.env, HUB_BASE_PATH: base },
   shell: process.platform === "win32",
   stdio: "inherit",
 });

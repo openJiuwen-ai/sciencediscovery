@@ -84,7 +84,7 @@ When the database is the source of truth, the site reads `GET /api/v1/catalog`
 instead of a build artifact. Build it without the exporter:
 
 ```bash
-HUB_BASE_PATH=/site/ VITE_HUB_API_BASE=/api/v1 pnpm hub:build:api
+VITE_HUB_API_BASE=/api/v1 pnpm hub:build:api --root
 ```
 
 `/api/v1/catalog` returns the same `{assets, categories}` shape the static file
@@ -139,7 +139,16 @@ signature dated further ahead (`RequestTimeTooSkewed`). Run NTP on the server.
 The smoke script measures and compensates for a drifting development host; the
 service itself does not, on purpose.
 
-`Dockerfile` builds the service; `docker-compose.yml` runs it beside MySQL.
+`Dockerfile` builds the service; `docker-compose.yml` runs it beside MySQL and
+an nginx container that serves `apps/hub/dist` and proxies `/api/` to the
+service. Build the site for the root path first:
+
+```bash
+pnpm hub:build:api --root   # HUB_BASE_PATH=/, no exporter, no catalog.json
+```
+
+Then `docker compose --env-file .env up -d --build` and open
+`http://127.0.0.1:8080/`.
 The bucket is expected to be **private**: every download is a presigned URL
 issued by `GET /api/v1/artifacts/{id}`. Do not put credentials in the image;
 pass them as environment variables from the host's secret store.
