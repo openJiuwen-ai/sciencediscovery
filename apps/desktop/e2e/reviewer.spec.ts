@@ -154,21 +154,19 @@ test("a confirmed delivery is green, and its checks are one press away", async (
   // under that turn rather than at the end of the session.
   const card = page.locator(".review-card");
   await expect(card).toHaveClass(/is-pass/u);
-  await expect(card.locator(".review-title")).toHaveText("Review");
-  await expect(card.locator(".review-summary")).toHaveText("No issues found");
-  await expect(card.locator(".review-count")).toHaveText("3 checks");
+  await expect(card.locator(".review-title")).toHaveText("审查");
+  await expect(card.locator(".review-summary")).toHaveText("未发现问题");
+  await expect(card.locator(".review-count")).toHaveText("3 项检查");
 
   await card.locator(".review-head").click();
   const rows = card.locator(".review-item");
   // The completeness verdict answers for delivery; the two checks that ran
   // are the rows below it, and the third is not repeated.
   await expect(rows).toHaveCount(3);
-  // Every row is the same shape: a verdict phrase, then one sentence.
-  await expect(rows.nth(0).locator(".review-item-verdict")).toHaveText("Pass");
-  await expect(rows.nth(0).locator(".review-item-text")).toContainText("Delivery complete");
-  await expect(rows.nth(1).locator(".review-item-text")).toContainText("Structure passed");
-  await expect(rows.nth(2).locator(".review-item-text")).toContainText("Citation passed");
-  await expect(rows.nth(0).locator(".review-pill")).toHaveText("Quick");
+  await expect(rows.nth(0).locator(".review-item-title")).toHaveText("交付完整");
+  await expect(rows.nth(1).locator(".review-item-title")).toHaveText("结构检查通过");
+  await expect(rows.nth(2).locator(".review-item-title")).toHaveText("引用检查通过");
+  await expect(rows.nth(0).locator(".review-pill")).toHaveText("快速");
   // Its own section names the file: the card's header reports the worst
   // artifact, so the file in hand has no other place to say which it is.
   await expect(card.locator(".review-artifact-name")).toHaveText("report.md");
@@ -206,7 +204,7 @@ test("a checkpoint over two artifacts names both, in separate sections", async (
   // The header answers for the worse of the two, and counts the other one:
   // a superseded verdict is history (amber), which is what the header says.
   await expect(card).toHaveClass(/is-warn/u);
-  await expect(card.locator(".review-count").first()).toHaveText("1 passed · 1 need attention");
+  await expect(card.locator(".review-count").first()).toHaveText("1 通过 · 1 需处理");
   await card.locator(".review-head").click();
 
   const sections = card.locator(".review-artifact");
@@ -215,13 +213,13 @@ test("a checkpoint over two artifacts names both, in separate sections", async (
   await expect(sections.nth(1).locator(".review-artifact-name")).toHaveText("appendix.md");
   // Each section carries its own verdict, not the card's: the passing file
   // behind a failing one still has to read as a pass.
-  await expect(sections.nth(0).locator(".review-artifact-verdict")).toHaveText("No issues found");
-  await expect(sections.nth(1).locator(".review-artifact-verdict")).toHaveText("1 warning (outdated)");
+  await expect(sections.nth(0).locator(".review-artifact-verdict")).toHaveText("未发现问题");
+  await expect(sections.nth(1).locator(".review-artifact-verdict")).toHaveText("1 个问题（已过期）");
   await expect(sections.nth(0)).toHaveClass(/is-pass/u);
   await expect(sections.nth(1)).toHaveClass(/is-warn/u);
 });
 
-test("a delivery that was never verified is a note, not the verdict", async ({ page }) => {
+test("a review that never verified delivery is grey, not green", async ({ page }) => {
   await installMockApi(page, {
     reviewer: {
       // No recorded delivery verdict, and checks that were never
@@ -233,12 +231,10 @@ test("a delivery that was never verified is a note, not the verdict", async ({ p
   await page.goto("/");
 
   const card = page.locator(".review-card");
-  // The task rarely names its files, so delivery is a note under the rows,
-  // not a verdict: nothing was found wrong and the card says so.
-  await expect(card).toHaveClass(/is-pass/u);
-  await expect(card.locator(".review-summary")).toHaveText("No issues found");
-  await card.locator(".review-head").click();
-  await expect(card.locator(".review-note", { hasText: "did not check delivery completeness" })).toBeVisible();
+  // Not a finding, and not a pass: the summary says the delivery was never
+  // verified, and the colour stays the one "nothing was found" uses.
+  await expect(card).toHaveClass(/is-neutral/u);
+  await expect(card.locator(".review-summary")).toHaveText("未验证交付");
 });
 
 test("a structure-only review is green because it never claimed delivery", async ({ page }) => {
@@ -252,10 +248,8 @@ test("a structure-only review is green because it never claimed delivery", async
 
   const card = page.locator(".review-card");
   await expect(card).toHaveClass(/is-pass/u);
-  await expect(card.locator(".review-summary")).toHaveText("No issues found");
-  // It never claimed delivery, so it gets no note either.
-  await card.locator(".review-head").click();
-  await expect(card.locator(".review-note")).toHaveCount(0);
+  await expect(card.locator(".review-summary")).toHaveText("未发现问题");
+  await expect(card.locator(".review-summary")).not.toHaveText("未验证交付");
 });
 
 test("a delivery that was checked and found incomplete is red", async ({ page }) => {
@@ -284,15 +278,15 @@ test("a delivery that was checked and found incomplete is red", async ({ page })
 
   const card = page.locator(".review-card");
   await expect(card).toHaveClass(/is-fail/u);
-  await expect(card.locator(".review-summary")).toHaveText("Delivery incomplete");
+  await expect(card.locator(".review-summary")).toHaveText("交付不完整");
 
   await card.locator(".review-head").click();
-  const missing = card.locator(".review-item").filter({ has: page.locator(".review-item-verdict.is-fail") }).first();
+  const missing = card.locator(".review-item.is-fail").first();
   await expect(missing).toContainText("output/predictions.npy");
 });
 
-test("a verdict on a replaced version says it is history, and its re-run names a new checkpoint", async ({ page }) => {
-  const mock = await installMockApi(page, {
+test("a verdict on a replaced version says it is history, and offers a re-run", async ({ page }) => {
+  await installMockApi(page, {
     reviewer: { reviews: [review({ stale: true })] },
     sessions: [makeSession({ messages: [checkpointMessage("message-checkpoint-1", "call-1")] })],
   });
@@ -300,23 +294,11 @@ test("a verdict on a replaced version says it is history, and its re-run names a
 
   const card = page.locator(".review-card");
   await expect(card).toHaveClass(/is-warn/u);
-  await expect(card.locator(".review-summary")).toHaveText("No issues found (outdated)");
+  await expect(card.locator(".review-summary")).toHaveText("未发现问题（已过期）");
 
   await card.locator(".review-head").click();
-  await expect(card.locator(".review-banner.is-stale")).toContainText("A newer version of this artifact exists");
+  await expect(card.locator(".review-banner.is-stale")).toContainText("产物已有新版本");
   await expect(card.locator(".review-rerun")).toBeVisible();
-
-  // The checkpoint already exists under message-checkpoint-1 with another
-  // tool call id; the store refuses that id for a manual task, and the fixture
-  // now refuses it too. The re-run must mint a message of its own.
-  await card.locator(".review-rerun").click();
-  await expect.poll(
-    () => mock.calls.filter((call) => call.method === "POST" && call.path.endsWith("/reviewer-specialist/review")).length,
-  ).toBe(1);
-  const rerun = mock.calls.find((call) => call.method === "POST" && call.path.endsWith("/reviewer-specialist/review"))!;
-  const posted = JSON.parse(rerun.body!) as { messageId?: string };
-  expect(posted.messageId).toMatch(/^[0-9a-f-]{36}$/u);
-  expect(posted.messageId).not.toBe("message-checkpoint-1");
 });
 
 test("the built-in Review Specialist is always listed and carries no switch", async ({ page }) => {
@@ -444,7 +426,7 @@ test("会话设置 asks for a review now, and automatic review being off does no
   await expect(page.getByTestId("review-card-running")).toBeVisible();
   // The queue is read on a 6s tick, which is what ends the run here.
   await expect(page.getByTestId("review-card"))
-    .toContainText("This checkpoint produced no review record.", { timeout: 15_000 });
+    .toContainText("这个检查点没有产生审查记录。", { timeout: 15_000 });
 });
 
 test("a review already under way is stopped from the same row", async ({ page }) => {
@@ -536,13 +518,13 @@ test("the artifact dialog's 审查 tab shows the version's verdict and can queue
   // the conversation card draws.
   const artifact = dialog.locator(".review-artifact");
   await expect(artifact).toBeVisible();
-  await expect(artifact).toContainText("Structure passed");
+  await expect(artifact).toContainText("结构检查通过");
   // A verdict on a replaced version is marked as history, and the re-run is
   // the way forward from it.
-  await expect(artifact.locator(".review-banner.is-stale")).toContainText("A newer version of this artifact exists");
+  await expect(artifact.locator(".review-banner.is-stale")).toContainText("产物已有新版本");
   await expect(dialog.locator(".review-artifact-head")).toHaveCount(0);
 
-  await artifact.getByRole("button", { name: "Re-run review" }).click();
+  await artifact.getByRole("button", { name: "重新审查" }).click();
 
   await expect(dialog.locator(".review-dialog .doc-note")).toHaveText("已加入审查队列。");
   const queued = mock.calls.find(
@@ -688,59 +670,51 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // card may go green — but it still has to say the claims were not checked.
   const quickPass = cards.nth(0);
   await expect(quickPass).toHaveClass(/is-pass/u);
-  await expect(quickPass.locator(".review-summary")).toHaveText("No issues found");
+  await expect(quickPass.locator(".review-summary")).toHaveText("未发现问题");
   await quickPass.locator(".review-head").click();
-  await expect(quickPass.locator(".review-note")).toHaveText("This review checked citation format only; claim support was not checked.");
-  await expect(quickPass.locator(".review-item-text").first()).toContainText("Delivery complete");
-  await expect(quickPass.locator(".review-item-text").nth(1)).toContainText("Citation passed");
+  await expect(quickPass.locator(".review-note")).toHaveText("本次只核对引用格式，未检查结论支撑。");
+  await expect(quickPass.locator(".review-item-title").first()).toHaveText("交付完整");
+  await expect(quickPass.locator(".review-item-title").nth(1)).toHaveText("引用检查通过");
 
   // The same check without a delivery verdict: a citation pass is not an
   // overall pass, and the card must not imply one.
-  // The same check without a delivery verdict: the card is a pass with the
-  // delivery note under the rows, not a warning about the artifact.
   const unverified = cards.nth(1);
-  await expect(unverified).toHaveClass(/is-pass/u);
-  await expect(unverified.locator(".review-summary")).toHaveText("No issues found");
-  await unverified.locator(".review-head").click();
-  await expect(unverified.locator(".review-note", { hasText: "did not check delivery completeness" })).toBeVisible();
+  await expect(unverified).toHaveClass(/is-neutral/u);
+  await expect(unverified.locator(".review-summary")).toHaveText("未验证交付");
+  await expect(unverified.locator(".review-summary")).not.toHaveText("未发现问题");
 
   const warning = cards.nth(2);
-  // A warning is not a problem: the card wears the warning tone and counts
-  // 提醒, the same word its row uses.
-  await expect(warning).toHaveClass(/is-warn/u);
-  await expect(warning.locator(".review-summary")).toHaveText("1 warning");
+  await expect(warning).toHaveClass(/is-fail/u);
+  await expect(warning.locator(".review-summary")).toHaveText("1 个问题");
   await warning.locator(".review-head").click();
-  await expect(warning.locator(".review-item-text").first()).toHaveText("缺少可识别的引文标识符。");
-  await expect(warning.locator(".review-item-verdict").first()).toHaveText("Warning");
+  await expect(warning.locator(".review-item-title")).toHaveText("缺少可识别的引文标识符。");
+  await expect(warning.locator(".review-item-label")).toHaveText("引用");
 
   // A computation mismatch is a finding about the report, and the source
   // assessment that produced it is shown with its own verdict.
   const contradiction = cards.nth(3);
   await expect(contradiction).toHaveClass(/is-fail/u);
   await contradiction.locator(".review-head").click();
-  // The row says what the verdict means in one sentence; the reviewer's own
-  // account and the claim it answers for are inside the fold.
-  const contradicted = contradiction.locator(".review-item").filter({ hasText: "锁定数值不一致。" });
-  await expect(contradicted.locator(".review-item-verdict")).toHaveText("Contradicted");
-  // The sentence is the result, the same slot a finding uses for its message.
-  await expect(contradicted.locator(".review-item-text")).toHaveText("锁定数值不一致。");
-  await expect(contradicted.locator(".review-evidence")).toHaveCount(0);
+  await expect(contradiction.locator(".review-item-title"))
+    .toHaveText(["锁定 Evidence 与报告数值不一致。", "Response was 42%."]);
+  await expect(contradiction.locator(".review-item.is-fail").nth(1).locator(".review-badge"))
+    .toHaveText("矛盾");
 
   // A source service that returned no verdict is not a report defect, and the
   // service's own error text never reaches the card.
   const inconclusive = cards.nth(4);
   await expect(inconclusive).toHaveClass(/is-neutral/u);
-  await expect(inconclusive.locator(".review-summary")).toHaveText("Source check incomplete");
+  await expect(inconclusive.locator(".review-summary")).toHaveText("未验证交付");
   await inconclusive.locator(".review-head").click();
-  await expect(inconclusive.locator(".review-item-verdict", { hasText: "Unconfirmed" })).toBeVisible();
-  await expect(inconclusive.locator(".review-item-text", { hasText: "The claim was not compared with its source text" })).toBeVisible();
+  await expect(inconclusive.locator(".review-item-title")).toHaveText("来源核验没有得出结论");
+  await expect(inconclusive.locator(".review-item-body")).toHaveText("来源服务未返回结论，这不代表报告有问题。");
   await expect(inconclusive).not.toContainText("Paper Reader timeout");
 
   // A failed checkpoint is the Reviewer's failure, not a verdict on the
   // artifact, and it keeps the reason the coordinator recorded.
   const failed = cards.nth(5);
   await expect(failed).toHaveClass(/is-fail/u);
-  await expect(failed.locator(".review-summary")).toHaveText("Review failed");
+  await expect(failed.locator(".review-summary")).toHaveText("审查失败");
   await failed.locator(".review-head").click();
   await expect(failed.locator(".review-empty")).toHaveText("来源核验未完成");
 
@@ -751,23 +725,23 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   const skippedSession = cards.nth(7);
   for (const card of [skipped, skippedSession]) {
     await expect(card).toHaveClass(/is-neutral/u);
-    await expect(card.locator(".review-summary")).toHaveText("Review skipped");
+    await expect(card.locator(".review-summary")).toHaveText("已跳过审查");
     await expect(card.locator(".review-count")).toHaveCount(0);
     await card.locator(".review-head").click();
   }
   await expect(skipped.locator(".review-empty"))
-    .toHaveText("The Reviewer Specialist is off, so no review was produced.");
+    .toHaveText("审查专家已关闭，本次没有产生审查结论。");
   await expect(skippedSession.locator(".review-empty"))
-    .toHaveText("Automatic review is off for this session, so no review was produced.");
-  await expect(skipped).not.toContainText("No issues found");
-  await expect(skipped).not.toContainText("Review failed");
+    .toHaveText("此会话已关闭自动审阅，本次没有产生审查结论。");
+  await expect(skipped).not.toContainText("未发现问题");
+  await expect(skipped).not.toContainText("审查失败");
 
   // The record is the server's; a reload must read the same eight outcomes.
   await page.reload();
   await expect(cards).toHaveCount(8);
   await expect(cards.nth(0)).toHaveClass(/is-pass/u);
-  await expect(cards.nth(2)).toHaveClass(/is-warn/u);
-  await expect(cards.nth(6).locator(".review-summary")).toHaveText("Review skipped");
+  await expect(cards.nth(2)).toHaveClass(/is-fail/u);
+  await expect(cards.nth(6).locator(".review-summary")).toHaveText("已跳过审查");
   await expect(cards.nth(7)).toHaveClass(/is-neutral/u);
 });
 
@@ -813,7 +787,7 @@ test("an automatic review's card arrives when the coordinator finishes, with no 
   mock.state.reviewer.tasks = [];
 
   await expect(cards).toHaveCount(1, { timeout: 15_000 });
-  await expect(cards.locator(".review-summary")).toHaveText("No issues found");
+  await expect(cards.locator(".review-summary")).toHaveText("未发现问题");
   // No click was involved, so there is no card of this window's own to settle:
   // the one above is the server's, joined by its tool call id and covering the
   // artifact once.

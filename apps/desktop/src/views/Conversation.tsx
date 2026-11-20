@@ -78,8 +78,8 @@ interface Props {
   /** Tool calls whose review is queued or running right now. A checkpoint
    *  with no reviews yet draws its running line only for one of these. */
   reviewerActive?: ReadonlySet<string>;
-  /** Ask for the session's artifacts to be reviewed again. */
-  onReview?: () => void;
+  /** Ask for the checkpoint behind a message to be reviewed again. */
+  onReview?: (messageId: string) => void;
   /** Every finished run of this session, each to be rendered in the place of
    *  the answer it wrote. */
   replays: readonly RunReplay[];
@@ -444,6 +444,7 @@ export function Conversation({
               <ReviewCard
                 checkpoint={checkpoint}
                 key={message.id}
+                messageId={message.id}
                 onReview={onReview}
                 reviews={reviewsByToolCall.get(checkpoint.toolCallId) ?? []}
                 running={reviewerActive?.has(checkpoint.toolCallId) ?? false}
