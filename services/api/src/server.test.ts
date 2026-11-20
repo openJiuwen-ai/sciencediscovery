@@ -608,6 +608,193 @@ test("desktop skill switches persist a disable before first use and preserve glo
   assert.equal(importedPaths.length, 1, "subsequent toggles reuse JiuwenSwarm's installed package");
 });
 
+test("a bulk skill switch is one request, one list read and reports each refusal", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-batch-${randomUUID()}`);
+  const token = randomUUID();
+  // Three installed skills, one of them refused by JiuwenSwarm: the page cannot
+  // let that one refusal hide the switches that landed.
+  const installed = [
+    { name: "alpha", skillId: "sciencediscovery-alpha", enabled: true, source: "sciencediscovery" },
+    { name: "gamma", skillId: "sciencediscovery-gamma", enabled: true, source: "sciencediscovery" },
+    { name: "refused", enabled: true, source: "builtin" },
+    { name: "xlsx", enabled: true, source: "builtin" },
+  ];
+  let listings = 0;
+  const switched: Array<{ enabled: boolean; name: string }> = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      listings += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ skills: installed }));
+      return;
+    }
+    const name = request.url?.endsWith("/enabled") ? decodeURIComponent(request.url.split("/")[3] ?? "") : "";
+    response.writeHead(name === "refused" ? 502 : 200, { "content-type": "application/json" });
+    if (name !== "" && name !== "refused") switched.push({ enabled: body.enabled, name });
+    response.end(name === "refused" ? "no" : "{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const response = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      enabled: false,
+      targets: [
+        { name: "alpha", skillId: "sciencediscovery-alpha" },
+        { name: "xlsx" },
+        { name: "refused" },
+        // Installed, but named only by id: the one listing resolves it.
+        { skillId: "sciencediscovery-gamma" },
+        // Never installed and not bundled: already off, so nothing is imported.
+        { skillId: "never-installed-skill" },
+      ],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const answer = await response.json() as {
+    enabled: boolean;
+    results: Array<{ error?: string; name?: string; ok: boolean; skillId?: string }>;
+  };
+  assert.equal(answer.enabled, false);
+  assert.deepEqual(answer.results.map((result) => result.ok), [true, true, false, true, true]);
+  assert.match(answer.results[2]!.error!, /HTTP 502/);
+  assert.equal(listings, 1, "the bulk write reads the skills list once, not once per skill");
+  assert.deepEqual(switched.sort((left, right) => left.name.localeCompare(right.name)), [
+    { enabled: false, name: "alpha" },
+    { enabled: false, name: "gamma" },
+    { enabled: false, name: "xlsx" },
+  ]);
+  // A page that names every row — what the desktop sends — costs no listing at all.
+  const renamed = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true, targets: [{ name: "alpha" }, { name: "xlsx" }] }),
+  });
+  assert.equal(renamed.status, 200);
+  assert.equal(listings, 1, "no second skills listing for names the page already knows");
+  // A target that names no installed skill and is not in the catalog carries
+  // the catalog's own reason in its row, and the rows beside it still switch.
+  const unknown = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true, targets: [{ name: "xlsx" }, { skillId: "no-such-skill" }] }),
+  });
+  assert.equal(unknown.status, 200);
+  const unknownAnswer = await unknown.json() as { results: Array<{ error?: string; ok: boolean }> };
+  assert.deepEqual(unknownAnswer.results.map((result) => result.ok), [true, false]);
+  assert.equal(unknownAnswer.results[1]!.error, "Skill not found: no-such-skill");
+  assert.equal(switched.at(-1)?.name, "xlsx");
+  assert.equal(switched.at(-1)?.enabled, true);
+  // JiuwenSwarm names a skill after its library directory, so a listed name can
+  // carry a space or another script. The adapter cannot address that name as a
+  // path segment; that is refused for its own row, as the per-skill loop this
+  // route replaces did, and the rows beside it still switch.
+  const mixed = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ enabled: false, targets: [{ name: "xlsx" }, { name: "My Skill" }, { name: "数据分析" }] }),
+  });
+  assert.equal(mixed.status, 200, "one name outside the adapter's form must not reject the batch");
+  const mixedAnswer = await mixed.json() as { results: Array<{ error?: string; name?: string; ok: boolean }> };
+  assert.deepEqual(mixedAnswer.results.map((result) => result.ok), [true, false, false]);
+  assert.deepEqual(
+    mixedAnswer.results.map((result) => result.name),
+    ["xlsx", "My Skill", "数据分析"],
+    "one result per target, in request order",
+  );
+  assert.equal(mixedAnswer.results[1]!.error, "not a skill name");
+  assert.equal(mixedAnswer.results[2]!.error, "not a skill name");
+  assert.equal(switched.at(-1)?.name, "xlsx");
+  assert.equal(switched.at(-1)?.enabled, false);
+  assert.ok(!switched.some((entry) => entry.name === "My Skill" || entry.name === "数据分析"), "an unaddressable name is never sent");
+  // Only the shape of the body is a request-level rejection; a name's form is
+  // that row's result above.
+  const rejected = [
+    { body: { enabled: true, targets: "xlsx" }, error: "targets must be an array of at most 1000 skills" },
+    { body: { enabled: true, targets: Array.from({ length: 1001 }, () => ({ name: "xlsx" })) }, error: "targets must be an array of at most 1000 skills" },
+    { body: { enabled: true, targets: ["xlsx"] }, error: "each target must be an object" },
+    { body: { enabled: true, targets: [{}] }, error: "a target needs a name or a skillId" },
+    { body: { enabled: true, targets: [{ name: 5 }] }, error: "a name must be a string" },
+    { body: { enabled: true, targets: [{ name: "xlsx", skillId: "" }] }, error: "skillId must be a non-empty string" },
+  ];
+  for (const { body, error } of rejected) {
+    const refusal = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assert.equal(refusal.status, 400, JSON.stringify(body));
+    assert.equal((await refusal.json() as { error: string }).error, error);
+  }
+});
+
+test("a bulk enable imports a managed skill JiuwenSwarm does not have yet", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-batch-import-${randomUUID()}`);
+  const token = randomUUID();
+  const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
+  const importedPaths: string[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      response.end(JSON.stringify({ skills: installed }));
+      return;
+    }
+    if (request.url === "/agent/skills" && request.method === "POST") {
+      const skill = body.skills[0];
+      importedPaths.push(skill.path);
+      assert.match(await readFile(resolve(skill.path, "SKILL.md"), "utf8"), /literature-searcher/);
+      installed.push({ name: skill.id, skillId: skill.id, enabled: false, source: "sciencediscovery" });
+      response.end(JSON.stringify({ skills: { [skill.id]: { name: skill.id } } }));
+      return;
+    }
+    if (request.url?.endsWith("/enabled")) installed[0]!.enabled = body.enabled;
+    response.end("{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const response = await fetch(`${origin}/api/jiuwenswarm/skills-batch`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    // The page knows no JiuwenSwarm name for a skill it has never imported: the
+    // bulk action resolves it by id and imports it once, as the single switch does.
+    body: JSON.stringify({ enabled: true, targets: [{ skillId: "literature-searcher" }] }),
+  });
+  assert.equal(response.status, 200);
+  const answer = await response.json() as { results: Array<{ ok: boolean; error?: string }> };
+  assert.deepEqual(answer.results.map((result) => result.ok), [true], JSON.stringify(answer));
+  assert.equal(importedPaths.length, 1);
+  assert.equal(installed[0]?.enabled, true);
+});
+
 test("API health exposes details only with a valid token on both routes", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-health-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });

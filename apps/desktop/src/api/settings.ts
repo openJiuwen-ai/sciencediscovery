@@ -40,6 +40,8 @@ import type {
   ConnectorManifest,
   CreateSkillPackageRequest,
   JiuwenSwarmSkillsResponse,
+  JiuwenSwarmSkillSwitchTarget,
+  JiuwenSwarmSkillsStateResponse,
   CreateSpecialistRequest,
   CustomMcpServerDetails,
   CustomMcpServerInput,
@@ -169,6 +171,26 @@ export function setJiuwenSwarmSkillEnabled(client: ApiClient, name: string, enab
 export function setJiuwenSwarmSkillEnabledById(client: ApiClient, skillId: string, enabled: boolean): Promise<void> {
   return client.request<void>(`/api/jiuwenswarm/skills-by-id/${encodeURIComponent(skillId)}`, {
     body: JSON.stringify({ enabled }),
+    method: "PUT",
+  });
+}
+
+/**
+ * Switch a whole page of skills to one state in a single request.
+ *
+ * Each target names JiuwenSwarm's own name for a skill the page already lists,
+ * so the server needs no per-skill lookup; an id it does not have yet is
+ * resolved (and, to enable it, imported) on the server. The answer carries one
+ * result per target, which is how the page rolls back only the rows that
+ * failed instead of all of them.
+ */
+export function setJiuwenSwarmSkillsEnabled(
+  client: ApiClient,
+  targets: readonly JiuwenSwarmSkillSwitchTarget[],
+  enabled: boolean,
+): Promise<JiuwenSwarmSkillsStateResponse> {
+  return client.request<JiuwenSwarmSkillsStateResponse>("/api/jiuwenswarm/skills-batch", {
+    body: JSON.stringify({ enabled, targets }),
     method: "PUT",
   });
 }

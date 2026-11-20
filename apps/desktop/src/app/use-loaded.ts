@@ -42,9 +42,10 @@ export interface RememberedAnswer {
  *
  * Every settings page follows the same shape: the server owns the value, the
  * page shows it, a write goes back through the server rather than through
- * local state. That is why there is no "optimistic" path here — after any
- * write the page reloads, so what is on screen is always something the server
- * confirmed.
+ * local state. The hook itself paints only what a load answered, so it has no
+ * "optimistic" path. That is not a promise about the whole page: a page may
+ * paint a pressed intent before its write settles (the Skills switches do) and
+ * is expected to reload afterwards, so the server's answer replaces it.
  *
  * With `remember`, the dialog's habit of unmounting a pane when another group
  * is selected stops costing a loading frame: the page paints the last answer

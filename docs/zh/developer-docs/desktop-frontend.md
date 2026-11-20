@@ -139,7 +139,7 @@ Mol* 及其依赖约 3.2 MB，因此这个视图是一个动态 import 的独立
 | 设置项 | 路由 | 为什么是这条 |
 |---|---|---|
 | 默认模型、沙箱网络 | `PUT /api/settings` 或各自的专用路由 | 全局设置，且整体替换写必须先读、合并、再发回 |
-| 技能 | `GET /api/jiuwenswarm/skills`, `PUT /api/jiuwenswarm/skills/:name`, `PUT /api/jiuwenswarm/skills-by-id/:skillId` | JiuwenSwarm 管理全局开关；ScienceDiscovery 内置技能默认启用，任务启动时在首轮模型请求前导入所选且已启用的内置技能包；自建目录技能包在首次启用时导入。运行不会把 Project/Session 选择同步到这些开关。native 模式保留目录浏览和新建功能，不提供这些开关。 |
+| 技能 | `GET /api/jiuwenswarm/skills`, `PUT /api/jiuwenswarm/skills/:name`, `PUT /api/jiuwenswarm/skills-by-id/:skillId`, `PUT /api/jiuwenswarm/skills-batch` | JiuwenSwarm 管理全局开关；ScienceDiscovery 内置技能默认启用，任务启动时在首轮模型请求前导入所选且已启用的内置技能包；自建目录技能包在首次启用时导入。运行不会把 Project/Session 选择同步到这些开关。native 模式保留目录浏览和新建功能，不提供这些开关。 |
 | 远端机器的登记、登录凭据、主机密钥 | `POST /api/remote-hosts`、`PUT /api/remote-hosts/:id/credentials`、`POST /api/remote-hosts/:id/trust-host-key` | 凭据只进不出，写入后的响应本身就是一次新探测的结果；接受主机密钥是独立的一步，不能混在别的一次写里 |
 | 项目可用的执行机器 | `PATCH /api/projects/:id`（`runnerIds`） | 这是 Project 自身的字段，而且必须整份发回——它是一条完整名单，不是增量 |
 

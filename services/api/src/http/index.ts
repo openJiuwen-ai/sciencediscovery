@@ -34,8 +34,8 @@ import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { sessionTrajectory, trajectoryMaxEvents } from "../trajectory.js";
-import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
-import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
+import { jiuwenSwarmConfigFromEnv, type JiuwenSwarmAgentConfig } from "../agent-run/jiuwenswarm-agent.js";
+import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled, setJiuwenSwarmSkillsEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
 import { dirname, join, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
@@ -234,6 +234,9 @@ import type {
   PromptManifest,
   SubagentStep,
   UpdateSpecialistRequest,
+  JiuwenSwarmSkill,
+  JiuwenSwarmSkillSwitchResult,
+  JiuwenSwarmSkillSwitchTarget,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
@@ -527,6 +530,97 @@ async function answerSpecialistRoute<T>(
     });
     sendError(response, 500, "Internal server error");
   }
+}
+
+/**
+ * Import one catalog skill package into JiuwenSwarm and answer the name it lists
+ * it under. The single-skill and the bulk route share this so both persist the
+ * same first use.
+ */
+async function importJiuwenSwarmSkill(config: JiuwenSwarmAgentConfig, snapshot: RuntimeSkillSnapshot): Promise<string> {
+  const tempRoot = join(tmpdir(), randomUUID());
+  const packagesRoot = join(tempRoot, "packages");
+  try {
+    await prepareSkillSandbox(packagesRoot, join(tempRoot, "workspace"), [snapshot]);
+    const imported = await importSkillsToJiuwenSwarm(config, [{ hash: snapshot.hash, id: snapshot.id }], packagesRoot);
+    const name = imported.get(snapshot.id);
+    if (!name) throw new Error("JiuwenSwarm did not import the skill");
+    return name;
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+}
+
+/**
+ * The skill names the adapter accepts as one URL path segment.
+ *
+ * JiuwenSwarm's own `_validate_skill_name` is wider (letters of any script,
+ * digits, dots, dashes, underscores and spaces) because a skill name is its
+ * library directory; the adapter's management route is narrower and answers
+ * anything else with HTTP 400. Kept beside `switchJiuwenSwarmSkills` because it
+ * is a per-target refusal there, not a rejection of the request.
+ */
+const JIUWENSWARM_SWITCHABLE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/**
+ * Apply one on/off state to every target of a bulk switch.
+ *
+ * Answers one result per target, in request order, instead of one HTTP status
+ * for the page: a bulk action over a list must not let a single refused skill
+ * hide the ones that were switched. A target that brings its own `name` is
+ * switched without any lookup, which is every row a page already lists; only a
+ * `skillId` JiuwenSwarm does not have yet costs the one skills listing (shared
+ * by all such targets) and, for an enable, an import. A disable of a skill that
+ * was never installed is already the requested state (`skills-by-id` says the
+ * same), so it is not imported just to be switched off.
+ *
+ * A name is checked for the form the adapter can address as one path segment
+ * before it is sent, but that refusal is the row's own `ok: false`: JiuwenSwarm
+ * names a skill after its library directory and accepts letters of any script
+ * and spaces, so a listing can carry a name this route cannot switch without
+ * every other row in the same page failing too.
+ */
+async function switchJiuwenSwarmSkills(options: {
+  bundledSkillIds: readonly string[];
+  config: JiuwenSwarmAgentConfig;
+  resolveSkill: (id: string) => RuntimeSkillSnapshot;
+  targets: readonly JiuwenSwarmSkillSwitchTarget[];
+  enabled: boolean;
+}): Promise<JiuwenSwarmSkillSwitchResult[]> {
+  const { bundledSkillIds, config, enabled, resolveSkill, targets } = options;
+  const results: JiuwenSwarmSkillSwitchResult[] = targets.map((target) => ({
+    ...(target.name === undefined ? {} : { name: target.name }),
+    ...(target.skillId === undefined ? {} : { skillId: target.skillId }),
+    ok: true,
+  }));
+  let installed: Promise<JiuwenSwarmSkill[]> | undefined;
+  const installedOnce = (): Promise<JiuwenSwarmSkill[]> => (installed ??= listJiuwenSwarmSkills(config));
+  const toSwitch: Array<{ index: number; name: string }> = [];
+  for (const [index, target] of targets.entries()) {
+    try {
+      if (target.name !== undefined && !JIUWENSWARM_SWITCHABLE_NAME.test(target.name)) {
+        throw new Error("not a skill name");
+      }
+      const name = target.name
+        ?? (await installedOnce()).find((skill) => skill.skillId === target.skillId)?.name;
+      if (name !== undefined) {
+        toSwitch.push({ index, name });
+        continue;
+      }
+      if (!enabled && !bundledSkillIds.some((id) => id === target.skillId)) continue;
+      toSwitch.push({ index, name: await importJiuwenSwarmSkill(config, resolveSkill(target.skillId!)) });
+    } catch (error) {
+      results[index] = { ...results[index]!, ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const switched = await setJiuwenSwarmSkillsEnabled(config, toSwitch.map(({ name }) => name), enabled);
+  for (const [position, outcome] of switched.entries()) {
+    const index = toSwitch[position]!.index;
+    results[index] = outcome.error === undefined
+      ? { ...results[index]!, ok: true }
+      : { ...results[index]!, ok: false, error: outcome.error };
+  }
+  return results;
 }
 
 /**
@@ -1977,6 +2071,61 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         return;
       }
+      // One write for a whole list (the page's "Enable all"/"Disable all"): every row a
+      // page lists brings the name JiuwenSwarm knows it by, so this stays a single
+      // request instead of one per skill, and only ids JiuwenSwarm does not have cost
+      // the shared skills listing. `skills-batch` rather than a `/skills/state` child
+      // because the by-name route below is one path segment wide and a skill may
+      // itself be named `state`.
+      if (url.pathname === "/api/jiuwenswarm/skills-batch" && request.method === "PUT") {
+        if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
+        const body = await readJson<{ enabled?: unknown; targets?: unknown }>(request);
+        if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
+        if (!Array.isArray(body.targets) || body.targets.length > 1000) {
+          throw new ApiStatusError(400, "targets must be an array of at most 1000 skills");
+        }
+        const targets = body.targets.map((raw): JiuwenSwarmSkillSwitchTarget => {
+          if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+            throw new ApiStatusError(400, "each target must be an object");
+          }
+          const { name, skillId } = raw as { name?: unknown; skillId?: unknown };
+          if (name === undefined && skillId === undefined) {
+            throw new ApiStatusError(400, "a target needs a name or a skillId");
+          }
+          // Only the shape of the body is checked here. Whether the name can be
+          // switched is a result for that target, because a listed JiuwenSwarm
+          // name may carry a space or another script and must not fail the batch.
+          if (name !== undefined && typeof name !== "string") {
+            throw new ApiStatusError(400, "a name must be a string");
+          }
+          if (skillId !== undefined && (typeof skillId !== "string" || skillId === "")) {
+            throw new ApiStatusError(400, "skillId must be a non-empty string");
+          }
+          return {
+            ...(name === undefined ? {} : { name }),
+            ...(skillId === undefined ? {} : { skillId }),
+          };
+        });
+        sendJson(response, 200, {
+          enabled: body.enabled,
+          results: await switchJiuwenSwarmSkills({
+            bundledSkillIds: BUNDLED_SKILL_IDS,
+            config: jiuwenSwarm,
+            enabled: body.enabled,
+            resolveSkill: (id) => {
+              const snapshot = skillCatalog.resolve([id])[0];
+              // `resolve` throws its own `Skill not found: <id>`, so this only
+              // keeps the row's message named instead of a TypeError if a
+              // catalog ever answers an empty list. The throw stays inside the
+              // per-target try, which is what turns it into a result row.
+              if (!snapshot) throw new Error(`Skill not found: ${id}`);
+              return snapshot;
+            },
+            targets,
+          }),
+        });
+        return;
+      }
       const jiuwenSwarmSkillMatch = url.pathname.match(/^\/api\/jiuwenswarm\/skills\/([^/]+)$/);
       if (jiuwenSwarmSkillMatch && request.method === "PUT") {
         if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
@@ -2028,19 +2177,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sendJson(response, 200, { enabled: false, name: null, skillId });
           return;
         }
-        const tempRoot = join(tmpdir(), randomUUID());
-        const packagesRoot = join(tempRoot, "packages");
         try {
-          await prepareSkillSandbox(packagesRoot, join(tempRoot, "workspace"), [snapshot]);
-          const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], packagesRoot);
-          const name = imported.get(snapshot.id);
-          if (!name) throw new ApiStatusError(502, "JiuwenSwarm did not import the skill");
+          const name = await importJiuwenSwarmSkill(jiuwenSwarm, snapshot);
           await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, body.enabled);
           sendJson(response, 200, { enabled: body.enabled, name, skillId });
         } catch (error) {
           throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
-        } finally {
-          await rm(tempRoot, { force: true, recursive: true });
         }
         return;
       }

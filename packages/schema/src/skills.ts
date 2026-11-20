@@ -588,3 +588,28 @@ export interface JiuwenSwarmSkillsResponse {
   backend: "jiuwenswarm" | "native";
   skills: JiuwenSwarmSkill[];
 }
+
+/**
+ * One row of a bulk switch (`PUT /api/jiuwenswarm/skills-batch`).
+ *
+ * `name` is JiuwenSwarm's own name for a skill the page already lists, so the
+ * common case needs no lookup; `skillId` is ScienceDiscovery's id, used to
+ * resolve (and, for an enable, import) a skill JiuwenSwarm does not have yet.
+ */
+export interface JiuwenSwarmSkillSwitchTarget {
+  name?: string;
+  skillId?: string;
+}
+
+/** What became of one bulk target: one result per target, in request order. */
+export interface JiuwenSwarmSkillSwitchResult extends JiuwenSwarmSkillSwitchTarget {
+  /** Why this target was not switched; absent when `ok` is true. */
+  error?: string;
+  ok: boolean;
+}
+
+/** `PUT /api/jiuwenswarm/skills-batch`: one state applied to many skills. */
+export interface JiuwenSwarmSkillsStateResponse {
+  enabled: boolean;
+  results: JiuwenSwarmSkillSwitchResult[];
+}

@@ -85,6 +85,20 @@ describe("skills", () => {
     assert.deepEqual(json(stub.calls[1]!), { enabled: true });
   });
 
+  it("sends a whole page of skill switches as one request", async () => {
+    const answer = { enabled: false, results: [] };
+    const stub = new StubClient().reply(answer);
+    const targets = [
+      { skillId: "review", name: "sciencediscovery-review" },
+      { name: "xlsx" },
+    ];
+    assert.deepEqual(await settings.setJiuwenSwarmSkillsEnabled(stub.asClient(), targets, false), answer);
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0]!.path, "/api/jiuwenswarm/skills-batch");
+    assert.equal(stub.calls[0]!.init.method, "PUT");
+    assert.deepEqual(json(stub.calls[0]!), { enabled: false, targets });
+  });
+
   it("reads connectors and the installed skill catalog", async () => {
     const stub = new StubClient().reply([]).reply([]);
     const client = stub.asClient();

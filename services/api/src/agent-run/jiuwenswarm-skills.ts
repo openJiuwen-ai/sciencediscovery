@@ -102,8 +102,58 @@ export async function listJiuwenSwarmSkills(
 /** Switch one of JiuwenSwarm's skills on or off. It is one setting for every session; sessions started afterwards see it. */
 export async function setJiuwenSwarmSkillEnabled(
   config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">, name: string, enabled: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await adapterCall(config, `/agent/skills/${encodeURIComponent(name)}/enabled`, { enabled });
+  await adapterCall(config, `/agent/skills/${encodeURIComponent(name)}/enabled`, { enabled }, signal);
+}
+
+/**
+ * How many switches one bulk action sends at once.
+ *
+ * The adapter toggles one skill per management call, so a page of 31 skills is
+ * 31 switches however the request is shaped. Sent one after another they took
+ * seconds, which is what made the bulk buttons feel frozen. Bounded rather
+ * than unbounded: they share one JiuwenSwarm, and a page can list hundreds of
+ * skills.
+ */
+export const SKILL_SWITCH_CONCURRENCY = 6;
+
+/** One switched skill and, when JiuwenSwarm refused it, why. */
+export interface JiuwenSwarmSkillSwitchOutcome {
+  error?: string;
+  name: string;
+}
+
+/**
+ * Switch several installed skills to one state at once, and report every
+ * refusal instead of stopping at the first.
+ *
+ * A bulk action is a UI convenience over one setting: one skill JiuwenSwarm
+ * refuses must not leave the rest unswitched. The caller reports the failures
+ * per skill so the page can roll back exactly those rows; nothing here retries.
+ */
+export async function setJiuwenSwarmSkillsEnabled(
+  config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">,
+  names: readonly string[],
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<JiuwenSwarmSkillSwitchOutcome[]> {
+  const outcomes: JiuwenSwarmSkillSwitchOutcome[] = new Array(names.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < names.length) {
+      const index = next++;
+      const name = names[index]!;
+      try {
+        await setJiuwenSwarmSkillEnabled(config, name, enabled, signal);
+        outcomes[index] = { name };
+      } catch (error) {
+        outcomes[index] = { name, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SKILL_SWITCH_CONCURRENCY, names.length) }, worker));
+  return outcomes;
 }
 
 /**
