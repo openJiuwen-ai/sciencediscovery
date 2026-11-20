@@ -120,3 +120,53 @@ test("a state complaint about temperature does not strip it either", async () =>
   });
   assert.equal(requests.length, 1, "a state complaint is not a rejection");
 });
+
+test("a value complaint in any envelope keeps the field", async () => {
+  // The shapes providers actually send. The earlier rule was clause-based and the
+  // `param`-pointer shortcut ignored the message when they were in different
+  // clauses, so four of these five were stripped — silently running the turn at
+  // the provider default.
+  const bodies = [
+    '{"object":"error","message":"temperature must be between 0 and 2","type":"BadRequestError","param":"temperature","code":400}',
+    '{"error":{"message":"Invalid parameter: temperature. The value is out of range."}}',
+    '{"error":{"message":"Unsupported value: \'temperature\' does not support 0.7 with this model. Only the default (1) is supported.","param":"temperature","code":"unsupported_value"}}',
+    '{"error":{"message":"temperature must be between 0 and 2","param":"temperature","code":"invalid_value"}}',
+    '{"error":{"message":"temperature must be between 0 and 2","param":"temperature"}}',
+  ];
+  for (const body of bodies) {
+    const requests: Record<string, unknown>[] = [];
+    await withServer(async (request, response) => {
+      requests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(body);
+    }, async (baseUrl) => {
+      const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "value" };
+      const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], { ...sampling, maxRetries: 0 }, new AbortController().signal)
+        .then(() => null, (error: unknown) => error);
+      assert.ok(failure instanceof ModelRequestError, `the 400 must surface: ${body}`);
+    });
+    assert.equal(requests.length, 1, `not retried, and the field not stripped: ${body}`);
+    assert.equal(requests[0]!.temperature, 0.95, `temperature was dropped for: ${body}`);
+  }
+});
+
+test("a real rejection in an envelope with no code still strips", async () => {
+  // The other side of the same guard: no value phrase, so the field goes.
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.temperature !== undefined) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "`temperature` is deprecated for this model.", param: "temperature" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "plain" };
+    const turn = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], sampling, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "ok");
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1]!.temperature, undefined);
+});

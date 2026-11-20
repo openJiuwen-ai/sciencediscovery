@@ -842,7 +842,7 @@ const rejectedControlWording = /unsupported|not supported|does not support|unkno
  * Stripping the control would silently change the requested mode, so clauses
  * carrying these words are dropped before any rejection wording is looked for.
  */
-const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
+const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|must be between|must be (?:less|greater) than|should be between|only the default|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
 /** How close the rejection word must be to the field name to describe it. */
 const rejectedControlWordingWindow = 80;
 const rejectedFieldsByEndpoint = new Map<string, Set<string>>();
@@ -901,6 +901,15 @@ function detailRejectsField(lower: string, field: string): boolean {
  */
 export function rejectedRequestFields(detail: string): Set<string> {
   const lower = detail.toLowerCase();
+  // A body that complains about a value at all strips nothing, whatever else it
+  // says. The per-field rules below are precise about a *rejection*, but a value
+  // complaint arrives in too many shapes to be matched clause by clause — vLLM
+  // answers `{"message":"temperature must be between 0 and 2","param":"temperature"}`
+  // and Gemini `"Only the default (1) is supported."` with no `code` field at all.
+  // Dropping the field there would run the turn at the provider's default
+  // sampling, which is the silent behaviour change this rule exists to avoid, so
+  // the conservative answer wins: keep the field and let the request fail.
+  if (valueComplaintWording.test(lower)) return new Set();
   return new Set(strippableFields.filter((field) => detailRejectsField(lower, field)
     || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))));
 }
