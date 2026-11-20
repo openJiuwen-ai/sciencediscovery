@@ -73,6 +73,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     id: fixture.project.id,
     name: fixture.project.name,
     remoteRunnerHostIds: [],
+    // Start with an explicit local-only selection: an unset runnerIds now
+    // follows the usable catalog and would already select the remote Runners.
+    runnerIds: ["local"],
     settingsOverrides: {},
   };
   const authenticationError = "SSH authentication failed for operator@ssh.example.test:22.\nServer offered: publickey, password.\nActually tried: none, password, publickey (none is method discovery).\nStored credentials: password yes; key yes.\nThe server did not accept authentication. Check the credentials and the server\'s account/login policy.";
@@ -687,8 +690,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const dialog = await openProjectSettings();
         await expect(dialog.getByText("Runner", { exact: true })).toBeVisible();
         const allowedHost = dialog.getByRole("checkbox", { name: /institution-linux/ });
-        await allowedHost.click();
+        await expect(allowedHost).not.toBeChecked();
+        await allowedHost.check();
         await expect.poll(() => project.remoteRunnerHostIds).toEqual([hostId]);
+        expect(project.runnerIds).toEqual(["local", hostId]);
         await expect(allowedHost).toBeChecked();
         // Checkbox and machine name share one reading line.
         const label = dialog.locator(".settings-choices label", { hasText: "institution-linux" });
