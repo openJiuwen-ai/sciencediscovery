@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ApiClient } from "../api/client.js";
-import { getGitSkillImportJob, startGitSkillImportJob } from "../api/settings.js";
+import { ApiRequestError, type ApiClient } from "../api/client.js";
+import { getGitSkillImportJob, getJiuwenSwarmSkills, setJiuwenSwarmSkillEnabledById, startGitSkillImportJob } from "../api/settings.js";
 import type { GitSkillImportJob, StartGitSkillImportJobRequest } from "../api/types.js";
 
 /** How often a running job is read. The import installs one package per step,
@@ -29,6 +29,7 @@ let current: GitSkillImportJob | undefined;
 let client: ApiClient | undefined;
 let poller: ReturnType<typeof setInterval> | undefined;
 let clearTimer: ReturnType<typeof setTimeout> | undefined;
+let consecutiveFailures = 0;
 const listeners = new Set<Listener>();
 
 function emit(): void {
@@ -57,14 +58,33 @@ async function poll(): Promise<void> {
     const next = await getGitSkillImportJob(client, id);
     // A newer job may have replaced this one while the read was in flight.
     if (current?.id !== id) return;
+    consecutiveFailures = 0;
     current = next;
     emit();
     if (next.status !== "queued" && next.status !== "running") {
       stopPolling();
+      void enableCreatedSkills(client, next);
       clearLater(id);
     }
-  } catch {
-    // A transient read failure does not end the import; the next tick retries.
+  } catch (reason) {
+    // A job the API no longer knows (a restart or its 30-minute cleanup) is
+    // terminal: leaving it here would block every later import forever.
+    if (reason instanceof ApiRequestError && reason.status === 404) {
+      stopPolling();
+      current = undefined;
+      client = undefined;
+      emit();
+      return;
+    }
+    // A transient read failure does not end the import; a few are tolerated,
+    // but a permanently unreachable watcher must not keep the banner alive.
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= 5) {
+      stopPolling();
+      current = undefined;
+      client = undefined;
+      emit();
+    }
   }
 }
 
@@ -103,11 +123,33 @@ export async function startGitSkillImportInBackground(
   if (clearTimer !== undefined) clearTimeout(clearTimer);
   clearTimer = undefined;
   const started = await startGitSkillImportJob(api, request);
+  consecutiveFailures = 0;
   client = api;
   current = started;
   emit();
   startPolling();
   return started;
+}
+
+/** Switch on the packages this job created, when JiuwenSwarm is the agent
+ *  backend. The job store owns this rather than the settings pane: the pane
+ *  may be closed by the time the import finishes. */
+export async function enableCreatedSkills(client: ApiClient, job: GitSkillImportJob): Promise<void> {
+  const created = job.imported.filter((entry) => entry.created);
+  if (created.length === 0) return;
+  try {
+    const state = await getJiuwenSwarmSkills(client);
+    if (state.backend !== "jiuwenswarm") return;
+  } catch {
+    return;
+  }
+  for (const entry of created) {
+    try {
+      await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
+    } catch {
+      // The row's switch shows whatever the server actually stored.
+    }
+  }
 }
 
 /** Drop the banner (a finished job only). A running job keeps going. */

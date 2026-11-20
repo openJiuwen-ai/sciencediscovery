@@ -157,7 +157,9 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
         commit: inspection.commit,
         cursor: inspection.nextCursor,
         ...(inspection.ref ? { ref: inspection.ref } : {}),
-        repositoryUrl: inspection.repositoryUrl,
+        // Re-send what the user typed: a /tree/<ref>/<subdir> URL carries a
+        // derived subdirectory that the inspection response does not echo.
+        repositoryUrl: url.trim(),
         ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
       });
       setInspection((current) => current

@@ -23,6 +23,9 @@ interface Props {
   /** Whether the current package may still be edited. A built-in is never
    *  offered the entry, and neither is a manager package marked read-only. */
   canEdit: boolean;
+  /** A built-in is read-only but still copyable: it keeps 导出 and loses
+   *  both 编辑 and 删除. */
+  canDelete?: boolean;
   disabled?: boolean;
   name: string;
   onAction: (action: SkillRowAction) => void;
@@ -67,13 +70,14 @@ const DeleteGlyph = () => (
  * Export, edit and delete are the three things a user can do to a package they
  * brought in, and drawing them as three buttons would make every row a toolbar
  * and push the description narrow. The entries follow the package's own state:
- * a built-in has no menu at all, and a read-only package is not offered 编辑.
+ * a built-in keeps only 导出 (it is copyable, not editable or deletable),
+ *  and a read-only package is not offered 编辑.
  *
  * The popover is drawn in the tree rather than portalled: the card is its
  * containing block, so scrolling the pane brings it into view, and staying in
  * the tree keeps it usable where there is no document body to portal into.
  */
-export function SkillRowMenu({ canEdit, disabled, name, onAction }: Props) {
+export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onAction }: Props) {
   const [open, setOpen] = useState(false);
   /** Whether the popover opens upwards, because the row sits too close to the
    *  bottom of the pane to show it below. */
@@ -182,8 +186,8 @@ export function SkillRowMenu({ canEdit, disabled, name, onAction }: Props) {
         >
           {entry("export", <ExportGlyph />, TEXT.settings.skills.rowMenu.export)}
           {canEdit ? entry("edit", <EditGlyph />, TEXT.settings.skills.rowMenu.edit) : null}
-          <div className="skill-row-menu-divider" />
-          {entry("delete", <DeleteGlyph />, TEXT.settings.skills.rowMenu.delete, true)}
+          {canDelete ? <div className="skill-row-menu-divider" /> : null}
+          {canDelete ? entry("delete", <DeleteGlyph />, TEXT.settings.skills.rowMenu.delete, true) : null}
         </div>
       ) : null}
     </div>

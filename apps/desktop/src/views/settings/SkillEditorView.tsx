@@ -298,11 +298,11 @@ function EditorBody({
     }
     setBusy(true);
     onNotice(undefined);
+    // Each write bumps the revision, so the next write in the same pick must
+    // carry the revision the previous one returned.
+    let revision = detail.currentRevision;
+    let latest = detail;
     try {
-      // Each write bumps the revision, so the next write in the same pick must
-      // carry the revision the previous one returned.
-      let revision = detail.currentRevision;
-      let latest = detail;
       for (const file of decoded) {
         const path = directory ? `${directory}/${file.name}` : file.name;
         latest = await updateSkillFile(client, detail.id, path, {
@@ -313,6 +313,9 @@ function EditorBody({
       }
       onSaved(latest);
     } catch (reason) {
+      // A later file can fail after an earlier one was stored. Surface the last
+      // stored revision so the next save does not present a stale one.
+      if (latest.currentRevision !== detail.currentRevision) onSaved(latest);
       setReferenceFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.editor.addReferenceFailed);
     } finally {
       setBusy(false);

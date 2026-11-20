@@ -181,7 +181,9 @@ export function createSkill(
 export function importSkillFile(client: ApiClient, file: File): Promise<SkillDetail> {
   const form = new FormData();
   form.set("file", file);
-  return client.request<SkillDetail>("/api/skills/import", {
+  // The desktop imports under the next free name when one is taken; web and
+  // CLI keep the historical 409 by omitting this flag.
+  return client.request<SkillDetail>("/api/skills/import?onDuplicate=rename", {
     body: form,
     method: "POST",
   });

@@ -178,21 +178,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       || backgroundImport.status === "failed";
     if (!terminal || handledImportJob.current === backgroundImport.id) return;
     handledImportJob.current = backgroundImport.id;
-    const page = loaded.value;
-    const reload = loaded.reload;
-    void (async () => {
-      if (page?.switchesAvailable) {
-        for (const entry of backgroundImport.imported) {
-          if (!entry.created) continue;
-          try {
-            await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
-          } catch {
-            // The row's switch shows the state the server actually stored.
-          }
-        }
-      }
-      reload();
-    })();
+    // Enabling newly created packages is the job store's work: the pane may
+    // be closed when the import ends. The pane only refreshes what it shows.
+    loaded.reload();
   }, [backgroundImport, client, loaded]);
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
@@ -505,9 +493,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                         </span>
                       ) : null}
                       <div className="settings-card-actions">
-                        {skill.source === "managed" ? (
+                        {skill.source === "managed" || skill.source === "built-in" ? (
                           <SkillRowMenu
-                            canEdit={!skill.readOnly}
+                            canDelete={skill.source === "managed"}
+                            canEdit={skill.source === "managed" && !skill.readOnly}
                             disabled={busy}
                             name={skill.name}
                             onAction={(action) => chooseRowAction(skill, action)}
