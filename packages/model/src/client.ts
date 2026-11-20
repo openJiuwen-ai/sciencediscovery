@@ -842,7 +842,16 @@ const rejectedControlWording = /unsupported|not supported|does not support|unkno
  * Stripping the control would silently change the requested mode, so clauses
  * carrying these words are dropped before any rejection wording is looked for.
  */
-const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|must be between|must be (?:less|greater) than|should be between|only the default|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
+const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|must be between|must be (?:less|greater) than|should be between|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
+/**
+ * A provider saying its default is the *only* value it takes. Every value the
+ * caller could have sent is refused, so dropping the field changes nothing that
+ * was possible and is a rejection, not a value complaint — the OpenAI reasoning
+ * models answer `Unsupported value: 'temperature' does not support 0.7 with this
+ * model. Only the default (1) is supported.` A bare "does not support 0.7" is not
+ * enough: another value might work there.
+ */
+const defaultOnlyWording = /only the default|default (?:value )?is the only|only its default/;
 /** How close the rejection word must be to the field name to describe it. */
 const rejectedControlWordingWindow = 80;
 const rejectedFieldsByEndpoint = new Map<string, Set<string>>();
@@ -865,6 +874,15 @@ function withoutFields(request: ThinkingControlRequest, fields: readonly string[
   if (!fields.some((field) => field in body)) return undefined;
   for (const field of fields) delete body[field];
   return { ...request, body: JSON.stringify(body) };
+}
+
+/** Whether `field` is named next to a "default is the only value" claim. */
+function fieldNearDefaultOnly(lower: string, field: string): boolean {
+  for (let at = lower.indexOf(field); at !== -1; at = lower.indexOf(field, at + field.length)) {
+    const window = lower.slice(Math.max(0, at - rejectedControlWordingWindow), at + field.length + rejectedControlWordingWindow);
+    if (defaultOnlyWording.test(window)) return true;
+  }
+  return false;
 }
 
 /** Whether `detail` rejects `field`, not merely mentions it: either the
@@ -909,9 +927,11 @@ export function rejectedRequestFields(detail: string): Set<string> {
   // Dropping the field there would run the turn at the provider's default
   // sampling, which is the silent behaviour change this rule exists to avoid, so
   // the conservative answer wins: keep the field and let the request fail.
-  if (valueComplaintWording.test(lower)) return new Set();
+  const defaultOnly = defaultOnlyWording.test(lower);
+  if (!defaultOnly && valueComplaintWording.test(lower)) return new Set();
   return new Set(strippableFields.filter((field) => detailRejectsField(lower, field)
-    || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))));
+    || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))
+    || (defaultOnly && fieldNearDefaultOnly(lower, field))));
 }
 
 /**
