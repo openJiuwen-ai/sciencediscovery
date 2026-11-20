@@ -306,3 +306,27 @@ def test_a_truncated_stored_tar_is_a_package_error():
     payload = make_tar_gz({"a.txt": b"x" * 4096})
     with pytest.raises(PackageError):
         read_member(payload[: len(payload) // 2], "a.txt")
+
+
+def test_a_session_created_through_the_api_lands_in_the_tree(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(
+        client,
+        headers,
+        kind="session",
+        name="gw-session",
+        category="physics/gravitational_waves",
+    )
+    assert _upload(client, headers, asset["id"], payload=make_zip({"manifest.json": b"{}"})).status_code == 201
+    client.post(
+        f"/api/v1/admin/reviews/{asset['id']}/1.0.0",
+        headers=headers,
+        json={"decision": "approve"},
+    )
+    catalog = client.get("/api/v1/catalog").json()["data"]
+    session = next(item for item in catalog["assets"] if item["id"] == asset["id"])
+    assert session["category"] == {"source": "physics", "task": "gravitational_waves"}
+    tree = catalog["categories"]["sessionPackage"]
+    assert tree[0]["id"] == "gravitational_waves"
+    assert tree[0]["count"] == 1
