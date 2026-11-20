@@ -594,6 +594,57 @@ test("recognizes a rejection worded as an unrecognized request argument", async 
   assert.equal(requests[2]!.reasoning_effort, "high");
 });
 
+test("a 400 that deprecates a sampling field strips it instead of failing the run", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.temperature !== undefined) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: {
+        code: null, message: "`temperature` is deprecated for this model.", param: "", type: "<nil>",
+      } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, baseUrl, model: "deprecated-temperature" };
+    const sampling = { ...policy, temperature: 0.95, topP: 0.9 };
+    const turn = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      sampling, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "ok", "the turn continues without the rejected field");
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], sampling,
+      new AbortController().signal);
+  });
+  assert.equal(requests.length, 3, "one rejected attempt, the stripped retry, then no rejection");
+  assert.equal(requests[0]!.temperature, 0.95);
+  assert.equal(requests[1]!.temperature, undefined, "the field the 400 named is stripped");
+  assert.equal(requests[1]!.top_p, 0.9, "a sampling field the 400 did not name is kept");
+  assert.equal(requests[2]!.temperature, undefined, "and the rejection is remembered for the endpoint");
+  assert.equal(requests[2]!.top_p, 0.9);
+});
+
+test("a complaint about the state temperature was sent in does not strip it", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: {
+      message: "temperature is not supported when thinking is enabled", param: "temperature", type: "invalid_request_error",
+    } }));
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "state-complaint", thinkingMode: "enabled" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, temperature: 0.95, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 400);
+  });
+  assert.equal(requests.length, 1, "a state complaint is not a rejection of the parameter");
+  assert.equal(requests[0]!.temperature, 0.95);
+});
+
 test("a value complaint that points at a control does not suppress it", async () => {
   const requests: Record<string, unknown>[] = [];
   await withServer(async (request, response) => {

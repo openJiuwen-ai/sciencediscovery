@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { completeChatRequest, normalizeUsage, carriedThinkingControls, rejectedThinkingControlFields, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
+import { completeChatRequest, normalizeUsage, carriedRetryableControls, rejectedRetryableControlFields, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
 import { request, type Dispatcher } from "undici";
 import { Readable } from "node:stream";
 import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol, type ModelCompatibilityOutcome, type ModelConnectivityTestCategory, type ModelConnectivityTestResult, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
@@ -86,7 +86,7 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
     // may rewrite `auto` to the model's declared default, and `kimi-k3` declares
     // `modes: ["enabled"]`), so `thinkingMode: "auto"` can rebuild the very body
     // the endpoint just refused. The streamed sender strips the named fields for
-    // the same reason (`withoutThinkingControls`).
+    // the same reason (`withoutNamedFields`).
     let stripFromBody: string[] = [];
     let sentBody = "";
     const dispatch = async (target: ModelEndpoint) => {
@@ -145,8 +145,8 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
         // injects nothing here would otherwise send the identical body again and
         // report a strip that never happened.
         const detail = await response.text().catch(() => "");
-        const carried = carriedThinkingControls(sentBody);
-        const named = [...rejectedThinkingControlFields(detail)].filter((field) => carried.has(field));
+        const carried = carriedRetryableControls(sentBody);
+        const named = [...rejectedRetryableControlFields(detail)].filter((field) => carried.has(field));
         if (named.length) {
           stripFromBody = named;
           response = await dispatch(endpoint);

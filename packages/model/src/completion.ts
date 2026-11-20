@@ -54,7 +54,7 @@ export class InvalidModelResponseError extends Error {
  *   evolution proxies keep the provider's error).
  *
  * A caller that wants the shared classification logic without the policy uses
- * {@link rejectedThinkingControlFields} from `client.ts`: it names exactly the
+ * {@link rejectedRetryableControlFields} from `client.ts`: it names exactly the
  * controls a 400 proves were rejected, so the caller can strip them and retry
  * once. No protocol probing or fallback happens in this function.
  */
