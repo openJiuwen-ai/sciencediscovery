@@ -20,7 +20,7 @@ import type { SkillDescriptor, SkillDetail } from "../src/api/types.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
-import { StubClient } from "./api-stub.js";
+import { StubClient, json } from "./api-stub.js";
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
@@ -179,5 +179,124 @@ test("bundled skills default on while saved disables and managed defaults remain
     assert.equal(write?.path, "/api/jiuwenswarm/skills-by-id/evolve-design");
     assert.deepEqual(JSON.parse(String(write?.init.body)), { enabled: false });
     assert.deepEqual(view.root.findAllByProps({ role: "switch" }).map((node) => node.props["aria-checked"]), [false, false, false]);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+const installedSkill = (id: string, enabled = true, name = id) => ({
+  name, skillId: id, enabled, description: `${id} skill`, source: "sciencediscovery",
+});
+const builtinSkill = (name: string, enabled = true) => ({
+  name, enabled, description: `${name} skill`, source: "builtin",
+});
+const switchValues = (view: ReactTestRenderer) =>
+  view.root.findAllByProps({ role: "switch" }).map((node) => node.props["aria-checked"]);
+const bulkButton = (view: ReactTestRenderer, label: string) => {
+  const found = view.root.findAllByType("button").find((node) => node.children.includes(label));
+  assert.ok(found, `no ${label} button`);
+  return found;
+};
+
+test("Disable all is one write for the whole page and every switch moves on the press", async () => {
+  // The reported shape: 17 ScienceDiscovery skills and 14 JiuwenSwarm built-ins.
+  const catalog = Array.from({ length: 17 }, (_, index) => ({ ...skill, id: `sd-${index}`, name: `sd-${index}` }));
+  const installed = catalog.map((descriptor) => installedSkill(
+    descriptor.id,
+    true,
+    // A name clash renames the import; the page still knows the name it is installed as.
+    descriptor.id === "sd-3" ? "sciencediscovery-sd-3" : descriptor.id,
+  ));
+  const theirs = Array.from({ length: 14 }, (_, index) => builtinSkill(`jw-${index}`));
+  const page = { backend: "jiuwenswarm", skills: [...installed, ...theirs] };
+  const stub = new StubClient().reply(catalog).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    assert.equal(switchValues(view).length, 31);
+    // Queued before the click: the batch write is issued synchronously, and the
+    // page then re-reads the list once to reconcile.
+    stub.reply({ enabled: false, results: [] }).reply(catalog).reply(page);
+    void act(() => { bulkButton(view, TEXT.settings.disableAll).props.onClick(); });
+    // Still before the write settles: the intent, not the server, is on screen.
+    assert.deepEqual(switchValues(view), Array(31).fill(false));
+    const writes = stub.calls.filter((call) => call.init.method === "PUT");
+    assert.equal(writes.length, 1, "one bulk write, not one per skill");
+    assert.equal(writes[0]!.path, "/api/jiuwenswarm/skills-batch");
+    const body = json(writes[0]!) as { enabled: boolean; targets: Array<Record<string, unknown>> };
+    assert.equal(body.enabled, false);
+    assert.equal(body.targets.length, 31);
+    assert.deepEqual(body.targets[3], { skillId: "sd-3", name: "sciencediscovery-sd-3" });
+    assert.deepEqual(body.targets[17], { name: "jw-0" });
+    assert.equal(stub.calls.some((call) => call.path.includes("skills-by-id")), false);
+    await act(async () => {});
+    // Mount read the list once; the bulk action read it once more. No per-skill read.
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills").length, 2);
+    assert.deepEqual(switchValues(view), Array(31).fill(false));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("row switches wait for the bulk write instead of racing it", async () => {
+  const alpha = { ...skill, id: "alpha", name: "alpha" };
+  const page = { backend: "jiuwenswarm", skills: [installedSkill("alpha")] };
+  const stub = new StubClient().reply([alpha]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    stub.reply({ enabled: false, results: [{ name: "alpha", ok: true }] }).reply([alpha]).reply({
+      backend: "jiuwenswarm",
+      skills: [installedSkill("alpha", false)],
+    });
+    void act(() => { bulkButton(view, TEXT.settings.disableAll).props.onClick(); });
+    // The intent is on screen before the write settles, and the row is closed
+    // to a second write until the list read reconciles it.
+    assert.deepEqual(switchValues(view), [false]);
+    assert.equal(view.root.findAllByProps({ role: "switch" })[0]!.props.disabled, true);
+    await act(async () => {});
+    assert.equal(view.root.findAllByProps({ role: "switch" })[0]!.props.disabled, false);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a refused row in a bulk action goes back while the accepted rows keep the intent", async () => {
+  const first = { ...skill, id: "alpha", name: "alpha" };
+  const second = { ...skill, id: "beta", name: "beta" };
+  const theirs = builtinSkill("xlsx");
+  const page = {
+    backend: "jiuwenswarm",
+    skills: [installedSkill("alpha"), installedSkill("beta"), theirs],
+  };
+  const stub = new StubClient().reply([first, second]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    assert.deepEqual(switchValues(view), [true, true, true]);
+    stub.reply({
+      enabled: false,
+      results: [
+        { skillId: "alpha", name: "alpha", ok: true },
+        { skillId: "beta", name: "beta", ok: true },
+        { name: "xlsx", ok: false, error: "JiuwenSwarm refused" },
+      ],
+    }).reply([first, second]).reply({
+      backend: "jiuwenswarm",
+      skills: [installedSkill("alpha", false), installedSkill("beta", false), theirs],
+    });
+    await act(async () => { bulkButton(view, TEXT.settings.disableAll).props.onClick(); });
+    assert.deepEqual(switchValues(view), [false, false, true], "only the refused row is back");
+    assert.match(text(view), /xlsx: JiuwenSwarm refused/);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a single switch moves on the press and returns when JiuwenSwarm refuses it", async () => {
+  const alpha = { ...skill, id: "alpha", name: "alpha" };
+  const page = { backend: "jiuwenswarm", skills: [installedSkill("alpha")] };
+  const stub = new StubClient().reply([alpha]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    stub.fail(new Error("switch refused")).reply([alpha]).reply(page);
+    void act(() => { view.root.findAllByProps({ role: "switch" })[0]!.props.onClick(); });
+    assert.deepEqual(switchValues(view), [false]);
+    assert.equal(view.root.findAllByProps({ role: "switch" })[0]!.props.disabled, true);
+    await act(async () => {});
+    assert.deepEqual(switchValues(view), [true], "the refused value is not left on screen");
+    assert.match(text(view), /switch refused/);
+    const write = stub.calls.find((call) => call.path.includes("skills-by-id"));
+    assert.equal(write?.path, "/api/jiuwenswarm/skills-by-id/alpha");
+    assert.deepEqual(json(write!), { enabled: false });
   } finally { await act(async () => { view.unmount(); }); }
 });

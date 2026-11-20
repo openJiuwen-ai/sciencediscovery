@@ -176,6 +176,11 @@ export interface MockOptions {
   skills?: JsonRecord[];
   jiuwenSwarmSkills?: JsonRecord[];
   skillToggleFailures?: string[];
+  /** Skills the mock's bulk route refuses, by JiuwenSwarm name or skill id.
+   *  The single-switch route uses `skillToggleFailures`; a bulk action reaches
+   *  the same adapter through `PUT /api/jiuwenswarm/skills-batch`, where the
+   *  refusal is one `ok: false` result instead of an HTTP error. */
+  skillBatchFailures?: string[];
   specialists?: JsonRecord[];
   mcpServers?: JsonRecord[];
   mcpSources?: JsonRecord[];
@@ -547,6 +552,35 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/jiuwenswarm/skills" && method === "GET") {
         return json(route, 200, { backend: "jiuwenswarm", skills: state.jiuwenSwarmSkills });
+      }
+      // One write for a whole page, answering one result per target. The two
+      // single-switch routes below are still the paths a row's own switch uses,
+      // so a bulk action cannot silently be proved by a per-skill request.
+      if (path === "/api/jiuwenswarm/skills-batch" && method === "PUT") {
+        const input = JSON.parse(body ?? "{}") as {
+          enabled?: boolean;
+          targets?: Array<{ name?: string; skillId?: string }>;
+        };
+        const enabled = input.enabled === true;
+        const results = (input.targets ?? []).map((target) => {
+          const installed = state.jiuwenSwarmSkills.find((skill) => (
+            target.name === undefined ? skill.skillId === target.skillId : skill.name === target.name
+          ));
+          const name = target.name ?? (installed?.name as string | undefined) ?? target.skillId;
+          const refused = name !== undefined
+            && (options.skillBatchFailures?.includes(name) === true
+              || (target.skillId !== undefined && options.skillBatchFailures?.includes(target.skillId) === true));
+          if (!refused && name !== undefined) {
+            if (installed) installed.enabled = enabled;
+            else if (enabled) state.jiuwenSwarmSkills.push({ skillId: target.skillId ?? name, name, enabled, source: "sciencediscovery", description: "" });
+          }
+          return {
+            ...(target.name === undefined ? {} : { name: target.name }),
+            ...(target.skillId === undefined ? {} : { skillId: target.skillId }),
+            ...(refused ? { error: "Skill switch failed", ok: false } : { ok: true }),
+          };
+        });
+        return json(route, 200, { enabled, results });
       }
       const namedSkillSwitch = path.match(/^\/api\/jiuwenswarm\/skills\/([^/]+)$/u);
       if (namedSkillSwitch && method === "PUT") {

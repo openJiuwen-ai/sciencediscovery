@@ -604,6 +604,58 @@ test.describe("技能", () => {
     });
   });
 
+  test("a bulk press moves every row before the write answers", async ({ page }, testInfo) => {
+    const catalog = Array.from({ length: 4 }, (_, index) => skill({
+      description: `A catalog skill ${index + 1}`,
+      id: `skill-${index + 1}`,
+      name: `技能 ${index + 1}`,
+    }));
+    const mock = await installMockApi(page, {
+      // The write is held open: what the page shows while it is in flight is
+      // the thing the press promises, not something the answer painted.
+      hold: { method: "PUT", path: "/api/jiuwenswarm/skills-batch" },
+      models: MODELS,
+      skills: catalog,
+      jiuwenSwarmSkills: [
+        ...catalog.map((entry) => ({
+          description: entry.description,
+          enabled: true,
+          name: entry.id,
+          skillId: entry.id,
+          source: "sciencediscovery",
+        })),
+        { name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" },
+        { name: "pdf", description: "Read papers", enabled: true, source: "builtin" },
+      ],
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(6);
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(6);
+    // The whole list is in the shot: a screenshot of a scrolled pane would
+    // say "every switch moved" while showing a few rows.
+    await expect(dialog.locator(".settings-card").last()).toBeInViewport();
+
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+
+    // Still before the batch answers: every switch and tag already reads Off,
+    // both bulk buttons are busy, and no row accepts a second writable press.
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
+    await expect(dialog.locator(".settings-tag.is-on")).toHaveCount(0);
+    await expect(dialog.locator(".settings-tag.is-off")).toHaveCount(6);
+    await expect(dialog.getByRole("button", { name: "一键启用", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "一键关闭", exact: true })).toBeDisabled();
+    await expect(dialog.locator(".switch:disabled")).toHaveCount(6);
+    await dialog.locator(".settings-group-detail").screenshot({
+      animations: "disabled",
+      path: testInfo.outputPath("disable-all-in-flight.png"),
+    });
+
+    mock.release();
+    await expect(dialog.getByRole("button", { name: "一键关闭", exact: true })).toBeEnabled();
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
+  });
+
   test("same-named skills use separate switches and bulk actions include built-ins", async ({ page }) => {
     const mock = await installMockApi(page, {
       models: MODELS,
@@ -621,25 +673,45 @@ test.describe("技能", () => {
     expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills\/xlsx$/u)).toEqual({ enabled: false });
     await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
     await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
-    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/xlsx$/u)).toEqual({ enabled: false });
+    // One write for both rows, not one per skill: the catalog row brings the
+    // JiuwenSwarm name it is installed as, and the built-in its own name.
+    expect(writeCall(mock, "PUT", "/api/jiuwenswarm/skills-batch")).toMatchObject({
+      enabled: false,
+      targets: [{ name: "sciencediscovery-xlsx", skillId: "xlsx" }, { name: "xlsx" }],
+    });
+    expect(mock.calls.some((call) => call.path.includes("skills-by-id"))).toBe(false);
     await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
     await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(2);
+    expect(lastWriteCall(mock, "PUT", "/api/jiuwenswarm/skills-batch")).toMatchObject({ enabled: true });
   });
 
-  test("a refused built-in switch keeps its saved state and reports the failure", async ({ page }) => {
-    await installMockApi(page, {
-      models: MODELS, skills, skillToggleFailures: ["xlsx"],
+  test("a refused built-in switch keeps its saved state and reports the failure", async ({ page }, testInfo) => {
+    const mock = await installMockApi(page, {
+      models: MODELS, skills, skillBatchFailures: ["xlsx"], skillToggleFailures: ["xlsx"],
       jiuwenSwarmSkills: [{ name: "xlsx", description: "Native spreadsheets", enabled: true, source: "builtin" }],
     });
+    await page.setViewportSize({ width: 1440, height: 900 });
     const dialog = await openSettings(page, "技能");
     await expect(dialog.locator(".settings-card")).toHaveCount(3);
     await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    // The bulk answer is per target: only the refused row reports, and it is
+    // back at the value the server still holds while the rest moved.
     await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已启用");
     await expect(dialog).toContainText("xlsx: Skill switch failed");
     await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "文献检索" })).toContainText("已停用");
+    expect(writeCall(mock, "PUT", "/api/jiuwenswarm/skills-batch")).toMatchObject({ enabled: false });
+    await dialog.locator(".settings-group-detail").screenshot({
+      animations: "disabled",
+      path: testInfo.outputPath("bulk-refused-row.png"),
+    });
     await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
     await expect(dialog).toContainText("Skill switch failed");
     await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toBeChecked();
+    await dialog.locator(".settings-group-detail").screenshot({
+      animations: "disabled",
+      path: testInfo.outputPath("single-switch-refused.png"),
+    });
   });
 
   test("a bundled skill defaults on and its first disable survives a reload", async ({ page }) => {
@@ -670,7 +742,7 @@ test.describe("技能", () => {
 
   test("bulk enable continues after one skill fails and shows the saved state", async ({ page }) => {
     const mock = await installMockApi(page, {
-      models: MODELS, skills, skillToggleFailures: ["skill-1"],
+      models: MODELS, skills, skillBatchFailures: ["skill-1"],
       jiuwenSwarmSkills: [{ skillId: "skill-1", name: "skill-1", description: "", enabled: false, source: "sciencediscovery" }],
     });
     const dialog = await openSettings(page, "技能");
@@ -681,7 +753,12 @@ test.describe("技能", () => {
     await expect(dialog).toContainText("Skill switch failed");
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-1")?.enabled).toBe(false);
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
-    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: true });
+    const batch = writeCall(mock, "PUT", "/api/jiuwenswarm/skills-batch") as { enabled: boolean; targets: unknown[] };
+    expect(batch.enabled).toBe(true);
+    // The second row had no JiuwenSwarm name yet, so the bulk write carries
+    // only its id; the server imports it because the action enables it.
+    expect(batch.targets).toEqual([{ name: "skill-1", skillId: "skill-1" }, { skillId: "skill-2" }]);
+    expect(mock.calls.some((call) => call.path.includes("skills-by-id"))).toBe(false);
   });
 
   test("a card opens to the skill's source, version and file count", async ({ page }) => {

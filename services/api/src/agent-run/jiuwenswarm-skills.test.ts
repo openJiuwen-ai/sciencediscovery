@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
-import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled, skillLoadedBy } from "./jiuwenswarm-skills.js";
+import { SKILL_SWITCH_CONCURRENCY, importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled, setJiuwenSwarmSkillsEnabled, skillLoadedBy } from "./jiuwenswarm-skills.js";
 
 const ids = new Map([["evolve-design", "evolve-design"], ["sciencediscovery-skill-creator", "skill-creator"]]);
 
@@ -57,6 +57,38 @@ test("the skill list and the on/off switch go to the adapter with its token", as
 test("a refused switch is an error, not silence", async () => {
   const refusing = (async () => new Response("no", { status: 502 })) as unknown as typeof fetch;
   await assert.rejects(setJiuwenSwarmSkillEnabled({ adapterUrl: "http://a", fetch: refusing }, "xlsx", false), /HTTP 502/);
+});
+
+test("a bulk switch sends a page of skills a few at a time, not one after another", async () => {
+  const names = Array.from({ length: 9 }, (_, index) => `skill-${index}`);
+  let inFlight = 0;
+  let peak = 0;
+  const calls: string[] = [];
+  const fake = (async (url: string) => {
+    calls.push(url);
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    // Long enough for the next worker to start, which a serial loop never does.
+    await new Promise((done) => setTimeout(done, 5));
+    inFlight -= 1;
+    return url.includes("/skill-3/") ? new Response("no", { status: 502 }) : new Response("{}");
+  }) as unknown as typeof fetch;
+  const outcomes = await setJiuwenSwarmSkillsEnabled({ adapterUrl: "http://a", fetch: fake }, names, false);
+  assert.equal(calls.length, 9);
+  assert.equal(peak, SKILL_SWITCH_CONCURRENCY, "switches overlap, up to the bound");
+  assert.deepEqual(outcomes.map((outcome) => outcome.name), names, "one outcome per skill, in request order");
+  const refused = outcomes.filter((outcome) => outcome.error !== undefined);
+  assert.equal(refused.length, 1, "one refusal does not hide the others' work");
+  assert.equal(refused[0]!.name, "skill-3");
+  assert.match(refused[0]!.error!, /HTTP 502/);
+  assert.equal(outcomes[0]!.error, undefined);
+});
+
+test("a bulk switch with no skills sends nothing", async () => {
+  let calls = 0;
+  const fake = (async () => { calls += 1; return new Response("{}"); }) as unknown as typeof fetch;
+  assert.deepEqual(await setJiuwenSwarmSkillsEnabled({ adapterUrl: "http://a", fetch: fake }, [], true), []);
+  assert.equal(calls, 0);
 });
 
 test("the UI's language is sent to the adapter as JiuwenSwarm's", async () => {

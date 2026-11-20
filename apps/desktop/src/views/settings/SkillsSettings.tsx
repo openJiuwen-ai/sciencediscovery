@@ -23,8 +23,16 @@ import {
   listSkills,
   setJiuwenSwarmSkillEnabled,
   setJiuwenSwarmSkillEnabledById,
+  setJiuwenSwarmSkillsEnabled,
 } from "../../api/settings.js";
-import type { GitSkillImportJob, JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/types.js";
+import type {
+  GitSkillImportJob,
+  JiuwenSwarmSkill,
+  JiuwenSwarmSkillSwitchResult,
+  JiuwenSwarmSkillSwitchTarget,
+  SkillDescriptor,
+  SkillDetail,
+} from "../../api/types.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
 import {
   dismissGitSkillImportJob,
@@ -73,8 +81,76 @@ interface SkillPage {
   switchError?: string;
   native: boolean;
   enabled: string[];
+  /** JiuwenSwarm's own name for each installed ScienceDiscovery skill. It can
+   *  differ from the id: a name JiuwenSwarm already uses renames the import. */
+  installedNames: Record<string, string>;
   jiuwenSwarmSkills: JiuwenSwarmSkill[];
   skills: SkillDescriptor[];
+}
+
+/** One row a bulk switch covers: its stable key, the target to send, and the
+ *  value the page currently shows. */
+interface SkillRow {
+  key: string;
+  name: string;
+  skillId?: string;
+  target: JiuwenSwarmSkillSwitchTarget;
+}
+
+/** The key a row's optimistic intent is kept under. Ids and JiuwenSwarm names
+ *  are separate namespaces: a catalog skill and a JiuwenSwarm skill can share a name. */
+function catalogKey(skillId: string): string {
+  return `id:${skillId}`;
+}
+
+function jiuwenKey(name: string): string {
+  return `name:${name}`;
+}
+
+function withoutKey(intent: Record<string, boolean>, key: string): Record<string, boolean> {
+  const next = { ...intent };
+  delete next[key];
+  return next;
+}
+
+/** What the last server answer says about a row, or undefined if the row is gone. */
+function serverValue(page: SkillPage, key: string): boolean | undefined {
+  if (key.startsWith("id:")) return page.enabled.includes(key.slice(3));
+  return page.jiuwenSwarmSkills.find((skill) => skill.name === key.slice(5))?.enabled;
+}
+
+/**
+ * Every row a bulk action covers, with the target to send for it.
+ *
+ * A catalog skill brings the JiuwenSwarm name it is installed as when the page
+ * knows it, which is what keeps the bulk write free of a lookup per skill. A
+ * skill JiuwenSwarm does not have yet goes by id, and the server imports it
+ * only if the action needs it there.
+ */
+function skillRows(page: SkillPage): SkillRow[] {
+  return [
+    ...page.skills.map((skill): SkillRow => ({
+      key: catalogKey(skill.id),
+      name: skill.name,
+      skillId: skill.id,
+      target: {
+        skillId: skill.id,
+        ...(page.installedNames?.[skill.id] === undefined ? {} : { name: page.installedNames[skill.id] }),
+      },
+    })),
+    ...page.jiuwenSwarmSkills.map((skill): SkillRow => ({
+      key: jiuwenKey(skill.name),
+      name: skill.name,
+      target: { name: skill.name },
+    })),
+  ];
+}
+
+/** The result that belongs to a row: by id when its target had one, else by name. */
+function resultFor(row: SkillRow, results: readonly JiuwenSwarmSkillSwitchResult[]): JiuwenSwarmSkillSwitchResult | undefined {
+  return row.skillId === undefined
+    ? results.find((result) => result.skillId === undefined && result.name === row.name)
+    : results.find((result) => result.skillId === row.skillId);
 }
 
 function setSkillEnabled(client: ApiClient, skill: SkillDescriptor | JiuwenSwarmSkill, enabled: boolean): Promise<void> {
@@ -121,7 +197,12 @@ function subviewCopy(view: Exclude<SkillView, { kind: "list" }>): { description:
  */
 export function SkillsSettings({ client, onConfirm }: Props) {
   const [busy, setBusy] = useState(false);
+  const [bulkPending, setBulkPending] = useState(false);
   const [failure, setFailure] = useState<string>();
+  // A switch moves the moment it is pressed, on the intent the user expressed;
+  // the server's answer replaces that intent, and a refusal puts the row back.
+  const [intent, setIntent] = useState<Record<string, boolean>>({});
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const [notice, setNotice] = useState<string>();
   const [query, setQuery] = useState("");
   const [exportStatus, setExportStatus] = useState<{
@@ -160,6 +241,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         const installed = jiuwenSwarm?.skills.find((entry) => entry.skillId === skill.id);
         return (installed ? installed.enabled : skill.source === "built-in") ? [skill.id] : [];
       }),
+      installedNames: Object.fromEntries((jiuwenSwarm?.skills ?? []).flatMap((skill) => (
+        skill.skillId === undefined ? [] : [[skill.skillId, skill.name]]
+      ))),
       jiuwenSwarmSkills: jiuwenSwarm?.skills.filter((skill) => skill.source !== "sciencediscovery") ?? [],
       native: jiuwenSwarm?.backend === "native",
       skills: catalog.value,
@@ -190,43 +274,82 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     })();
   }, [backgroundImport, client, loaded]);
 
-  const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
+  // A fresh server answer is the truth: an intent it already agrees with is
+  // spent, and one it still disagrees with belongs to a write in flight (or to
+  // a row whose write failed, which was put back explicitly).
+  const page = loaded.value;
+  useEffect(() => {
+    if (!page) return;
+    setIntent((current) => Object.fromEntries(
+      Object.entries(current).filter(([key, value]) => serverValue(page, key) !== value),
+    ));
+  }, [page]);
+
+  const toggle = async (key: string, skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
     if (!page?.switchesAvailable) return;
-    setBusy(true);
     setFailure(undefined);
+    setIntent((current) => ({ ...current, [key]: next }));
+    setPending((current) => new Set(current).add(key));
     try {
       await setSkillEnabled(client, skill, next);
     } catch (reason) {
+      // Back to the value the server last confirmed: a refused switch must not
+      // leave the row showing a state JiuwenSwarm does not have.
+      setIntent((current) => withoutKey(current, key));
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
-      setBusy(false);
+      setPending((current) => {
+        const remaining = new Set(current);
+        remaining.delete(key);
+        return remaining;
+      });
       loaded.reload();
     }
   };
 
   /**
-   * Enable or disable every installed skill. Each toggle is its own request:
-   * JiuwenSwarm is the authority, and a single failing skill must not stop the
-   * rest from being applied.
+   * Enable or disable every listed skill in one request.
+   *
+   * The rows move first, on the intent, and the single write follows; its
+   * per-target answer puts back exactly the rows JiuwenSwarm refused, and one
+   * list read afterwards reconciles the page. The row switches stay disabled
+   * while `bulkPending` is set, that is until the batch write settles: a switch
+   * pressed in that window would race the batch. Once it settles a switch is an
+   * ordinary single write, and the reload started below reconciles the page.
+   * A page of 31 skills used to be 31 awaited requests plus its own reload,
+   * which is what froze it for seconds.
    */
   const setAll = async (next: boolean) => {
     const page = loaded.value;
     if (!page?.switchesAvailable) return;
-    setBusy(true);
+    const rows = skillRows(page);
+    if (!rows.length) return;
     setFailure(undefined);
+    setBulkPending(true);
+    setIntent(Object.fromEntries(rows.map((row) => [row.key, next])));
     try {
-      const failures: string[] = [];
-      for (const skill of [...page.skills, ...page.jiuwenSwarmSkills]) {
-        try {
-          await setSkillEnabled(client, skill, next);
-        } catch (reason) {
-          failures.push(`${skill.name}: ${reason instanceof Error ? reason.message : TEXT.settings.saveFailed}`);
-        }
+      const answer = await setJiuwenSwarmSkillsEnabled(client, rows.map((row) => row.target), next);
+      const refused = rows.flatMap((row) => {
+        const result = resultFor(row, answer.results);
+        return result?.ok === false ? [{ key: row.key, name: row.name, reason: result.error }] : [];
+      });
+      if (refused.length) {
+        const refusedKeys = new Set(refused.map((entry) => entry.key));
+        setIntent((current) => Object.fromEntries(
+          Object.entries(current).filter(([key]) => !refusedKeys.has(key)),
+        ));
+        setFailure(refused
+          .map((entry) => `${entry.name}: ${entry.reason ?? TEXT.settings.saveFailed}`)
+          .join("\n"));
       }
-      if (failures.length) setFailure(failures.join("\n"));
+    } catch (reason) {
+      // The write did not land as a whole: every row goes back to the server's
+      // value, and the reload below paints what the server actually holds.
+      setIntent({});
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
-      setBusy(false);
+      setBulkPending(false);
       loaded.reload();
     }
   };
@@ -484,9 +607,12 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                   ? <p className="settings-empty">{TEXT.settings.skills.empty}</p>
                   : noMatches
                     ? <p className="settings-empty">{TEXT.settings.skills.noMatches}</p>
-                    : page.switchesAvailable ? <BulkToggles busy={busy} onAll={(next) => void setAll(next)} /> : null}
+                    : page.switchesAvailable
+                      ? <BulkToggles busy={busy || bulkPending} onAll={(next) => void setAll(next)} />
+                      : null}
                 {skills.map((skill) => {
-                  const on = page.enabled.includes(skill.id);
+                  const key = catalogKey(skill.id);
+                  const on = intent[key] ?? page.enabled.includes(skill.id);
                   return (
                     <div className="settings-card" key={skill.id}>
                       <span className="settings-card-mark">{skillMark(skill)}</span>
@@ -530,40 +656,44 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                           />
                         ) : null}
                         <Switch
-                          disabled={busy || !page.switchesAvailable}
+                          disabled={busy || !page.switchesAvailable || bulkPending || pending.has(key)}
                           label={TEXT.settings.skills.toggle(skill.name)}
-                          onChange={(next) => void toggle(skill, next)}
+                          onChange={(next) => void toggle(key, skill, next)}
                           value={on}
                         />
                       </div>
                     </div>
                   );
                 })}
-                {jiuwenSwarmSkills.map((skill) => (
-                  <div className="settings-card" key={`jiuwenswarm:${skill.name}`}>
-                    <span className="settings-card-mark">{skillMark(skill)}</span>
-                    <div className="settings-card-main">
-                      <strong>
-                        {skill.name}
-                        <Tag tone={skill.enabled ? "on" : "off"}>
-                          {skill.enabled ? TEXT.settings.skills.on : TEXT.settings.skills.off}
-                        </Tag>
-                      </strong>
-                      <small>{skill.description}</small>
-                      <span className={`skill-source-badge ${skill.source === "builtin" ? "is-jiuwenswarm" : "is-managed"}`}>
-                        {skill.source === "builtin" ? TEXT.settings.skills.source.jiuwenBuiltIn : TEXT.settings.skills.source.jiuwenLocal}
-                      </span>
+                {jiuwenSwarmSkills.map((skill) => {
+                  const key = jiuwenKey(skill.name);
+                  const on = intent[key] ?? skill.enabled;
+                  return (
+                    <div className="settings-card" key={`jiuwenswarm:${skill.name}`}>
+                      <span className="settings-card-mark">{skillMark(skill)}</span>
+                      <div className="settings-card-main">
+                        <strong>
+                          {skill.name}
+                          <Tag tone={on ? "on" : "off"}>
+                            {on ? TEXT.settings.skills.on : TEXT.settings.skills.off}
+                          </Tag>
+                        </strong>
+                        <small>{skill.description}</small>
+                        <span className={`skill-source-badge ${skill.source === "builtin" ? "is-jiuwenswarm" : "is-managed"}`}>
+                          {skill.source === "builtin" ? TEXT.settings.skills.source.jiuwenBuiltIn : TEXT.settings.skills.source.jiuwenLocal}
+                        </span>
+                      </div>
+                      <div className="settings-card-actions">
+                        <Switch
+                          disabled={busy || !page.switchesAvailable || bulkPending || pending.has(key)}
+                          label={TEXT.settings.skills.toggle(skill.name)}
+                          onChange={(next) => void toggle(key, skill, next)}
+                          value={on}
+                        />
+                      </div>
                     </div>
-                    <div className="settings-card-actions">
-                      <Switch
-                        disabled={busy || !page.switchesAvailable}
-                        label={TEXT.settings.skills.toggle(skill.name)}
-                        onChange={(next) => void toggle(skill, next)}
-                        value={skill.enabled}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             );
           }}
