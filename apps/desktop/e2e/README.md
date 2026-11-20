@@ -11,6 +11,10 @@ PR without credentials. The real-model counterpart lives in
 [`../e2e-real`](../e2e-real/README.md) and is tagged `tier:l3`; the two must not
 be counted as each other's evidence.
 
+The [MCP stack journey](../e2e-stack/README.md) uses a real local API, Runner,
+and SDK MCP server with a deterministic local model. It covers creation,
+editing, chat invocation, and deletion through the desktop UI.
+
 ## What runs
 
 `playwright.config.ts` starts the desktop Vite app on port 4175. `fixtures.ts`
