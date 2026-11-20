@@ -375,24 +375,14 @@ export const EN: Text = {
       citation: "Checking the citations",
     } as Record<string, string>,
     summaryPass: "No issues found",
-    /** The count uses the same nouns as the rows: Issue for a critical
-     *  finding, Warning for a warning. Counting both as issues promised a
-     *  problem the reader could not find below. */
-    summaryProblems: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
-    summaryWarnings: (count: number) => `${count} ${count === 1 ? "warning" : "warnings"}`,
-    summaryMixed: (problems: number, warnings: number) =>
-      `${problems} ${problems === 1 ? "issue" : "issues"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
-    /** Short verdict words, the same ones the rows use. */
-    summaryContradicted: "Contradicted",
-    summaryPartlySupported: "Partly supported",
-    summaryInconclusive: "Source check incomplete",
+    summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
     summarySkipped: "Review skipped",
     /** Nothing was raised, but the review itself said part of the claim was
      *  never examined. "No issues found" alone would read as a pass. */
-    summaryPartial: (count: number) => `${count} ${count === 1 ? "check" : "checks"} not run`,
+    summaryPartial: (count: number) => `No issues found, but ${count} ${count === 1 ? "check was" : "checks were"} not run`,
     checks: (count: number) => `${count} ${count === 1 ? "check" : "checks"}`,
     /** One checkpoint can cover several artifacts; when their verdicts differ,
      *  the header's worst-of phrase would hide the clean ones. */
@@ -432,21 +422,9 @@ export const EN: Text = {
       citation_identity: "Citation identity",
       computation: "Computation",
     } as Record<string, string>,
-    /** What the unperformed check would have covered, and what to do next.
-     *  The server's own reason is an English template; the card keeps its
-     *  language and says the same thing in the reader's words. */
-    gapBodies: {
-      claim_support: "This review did not check the claims against their sources. Use Deep review to check that.",
-      citation_identity: "This review did not check the papers' identity (authors, journal, year).",
-      computation: "This review did not check the numbers against the computation evidence.",
-    } as Record<string, string>,
-    gapBodyUnknown: "This review did not run this check.",
-    sourceSupported: "The source text supports this claim.",
-    sourceContradicted: "The source text contradicts this claim.",
-    sourcePartly: "The source text supports only part of this claim.",
     /** A source check that could not conclude is not a report defect. */
-    inconclusive: "Could not check this claim against its source",
-    inconclusiveBody: "The claim was not compared with its source text because the external source service returned no result — it may have timed out or been temporarily unavailable. This is not a problem with the report.",
+    inconclusive: "Source verification reached no conclusion",
+    inconclusiveBody: "The source service returned no verdict; this is not a problem with the report.",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "This review checked citation format only; claim support was not checked.",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -470,12 +448,10 @@ export const EN: Text = {
     completeness: {
       complete: "Delivery complete",
       incomplete: "Delivery incomplete",
-      sourceBrief: "Checked against the files this task named as deliverables.",
-      sourceSession: "This task named none, so the session's own declarations were used.",
-      sourceNone: "Checked against the deliverables this task declared.",
-      /** A note under the rows, not a check result: the task named no files. */
-      unconfirmedNote: "Delivery completeness was not checked: the task said what to produce, but not which files or paths.",
-      notCheckedNote: "This review did not check delivery completeness.",
+      unconfirmed: "No deliverable list declared",
+      sourceBrief: "Checked against the deliverables this task declared.",
+      sourceSession: "This task declared nothing; checked against the session's own declarations.",
+      sourceNone: "No deliverable declaration was available, so delivery could not be confirmed.",
       missing: "Missing",
       empty: "Empty",
     },
@@ -487,8 +463,12 @@ export const EN: Text = {
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `${count} queued`,
-    sourceInconclusiveSome: "Source text was found, but it is not enough to support this claim.",
-    sourceInconclusiveAbstract: "Only the abstract or paper metadata was found, not the body text, so this claim could not be checked.",
+    /** A bounded passage in a locked source; "locator" and evidence levels
+     *  are internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
+    sourceInconclusiveWith: (count: number) => count === 1
+      ? "Found 1 source passage, but it is not enough to support this claim."
+      : `Found ${count} source passages, but they are not enough to support this claim.`,
     sourceInconclusiveNone: "No source passage was found to support this claim.",
     failedDetail: "The review reported an error.",
     empty: "This checkpoint produced no review record.",

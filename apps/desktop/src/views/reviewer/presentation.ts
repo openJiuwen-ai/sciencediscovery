@@ -34,39 +34,26 @@
  */
 
 import type { ArtifactReviewRun, ChatMessage, ReviewClaim } from "../../api/types.js";
-import { EN } from "../../text/en.js";
-
-/** The review card is English, as the web client's is: the reviewer writes
- *  English, and a card that switches language while its sentences do not mixes
- *  two languages in one line. Settings and menus stay localized. */
-const CARD = EN.reviewer;
+import { TEXT } from "../../text.js";
 
 export type ReviewTone = "pass" | "warn" | "fail" | "pending" | "neutral";
 
 type CheckpointStatus = NonNullable<ChatMessage["reviewerCheckpoint"]>["status"];
 
-/** One card inside an expanded review, in the one shape every row shares:
- *  which check it is (`category`), what it concluded (`badge`), and one
- *  sentence saying what that means (`body`). Anything longer — the reviewer's
- *  own account, the passages it read — is folded under it.
- *
- *  The shape is fixed on purpose: a reader learns it once. Nothing here may
- *  add a second heading or a differently coloured block. */
+/** One card inside an expanded review. `label` is the small category line the
+ *  handoff puts above the claim; `title` is the claim; `body` is the evidence. */
 export interface ReviewRow {
   id: string;
   tone: ReviewTone;
-  /** 结构 / 引用 / 计算 / 完整性 / 来源 …, in the same slot on every row. */
-  category: string;
-  /** What the category means, as a hover hint. "计算" is a category name, not
-   *  a sentence: a first-time reader cannot tell whether it checks the numbers
-   *  or computes them. */
-  categoryTip: string;
-  /** The badge's word, the only coloured part of the row. */
+  label: string;
+  /** What the label means, as a hover hint. "计算" is a category name, not a
+   *  sentence: a first-time reader cannot tell whether it checks the numbers or
+   *  computes them. The label stays one word; the hint carries the explanation. */
+  labelTip: string;
+  title: string;
+  body?: string;
+  /** The badge's word, when it is not simply the tone. */
   badge: string;
-  /** One sentence: what the check found, or could not do. Always present.
-   *  For a source verdict it is the reviewer's own account of what the source
-   *  said — the same slot a finding uses for its message. */
-  body: string;
 }
 
 const DELIVERY_CODES = new Set(["DELIVERABLE_MISSING", "DELIVERABLE_EMPTY"]);
@@ -83,7 +70,7 @@ function findingCategory(code: string): "structure" | "citation" | "computation"
 }
 
 function labelFor(category: string): string {
-  return CARD.checkNames[category] ?? CARD.title;
+  return TEXT.reviewer.checkNames[category] ?? TEXT.reviewer.title;
 }
 
 /** The hover explanation behind a label. A category the card has no separate
@@ -92,8 +79,8 @@ function labelFor(category: string): string {
 function labelTipFor(category: string): string {
   // The record's keys are named so the `other` fallback is a known string; the
   // lookup itself stays open because a check name comes off the wire.
-  const tips: Record<string, string | undefined> = CARD.labelTips;
-  return tips[category] ?? CARD.labelTips.other;
+  const tips: Record<string, string | undefined> = TEXT.reviewer.labelTips;
+  return tips[category] ?? TEXT.reviewer.labelTips.other;
 }
 
 /**
@@ -118,22 +105,6 @@ export function unverifiedDelivery(review: ArtifactReviewRun): boolean {
  * verdict is not a pass. The web client counts these separately for the same
  * reason.
  */
-/**
- * What the card says about delivery when there is no verdict to show.
- *
- * A task written the way people write tasks ("生成一篇报告") names no files,
- * so the completeness check has nothing to verify against. That is a
- * property of the request, not a result, and it must not turn the whole card
- * into "unconfirmed": the reviewer still checked what it could. The note
- * under the rows says what was not checked, in one line. A structure-only
- * review never claimed delivery at all, so it gets no note.
- */
-export function deliveryNote(review: ArtifactReviewRun): string | undefined {
-  if (review.completeness?.status === "unconfirmed") return CARD.completeness.unconfirmedNote;
-  if (review.completeness === undefined && unverifiedDelivery(review)) return CARD.completeness.notCheckedNote;
-  return undefined;
-}
-
 export function declaredGap(review: Pick<ArtifactReviewRun, "notChecked">): boolean {
   return (review.notChecked?.length ?? 0) > 0;
 }
@@ -162,18 +133,16 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
  *  `incomplete`. Amber means the verdict itself cannot be taken at face value:
  *  the review failed, or the version it answered for is no longer current.
  *  Grey means nothing was found wrong and nothing was claimed either: the
- *  checkpoint was skipped, the review declared a check it did not perform, or
- *  a source lookup reached no conclusion. Green means this level ran its
- *  checks, raised nothing, and delivery was confirmed or never claimed — a
- *  statement about the checks, not about the conclusions.
+ *  checkpoint was skipped, or the review ran but never verified delivery or
+ *  declared a check it did not perform. Green means this level ran its checks,
+ *  raised nothing, and delivery was confirmed or never claimed — a statement
+ *  about the checks, not about the conclusions.
  *
- *  An unperformed check is not a finding, so it does not paint the card
- *  amber; the rows below say what was not checked, in the same grey, and the
- *  header counts them (N 项未检查). A delivery the task never named is not a
- *  colour at all: it is a note under the rows (`deliveryNote`), because it is a
- *  property of the request rather than a result. Amber stays for "this verdict
- *  is about something else" — a failure, history, or a source check that could
- *  not support the claim.
+ *  An unverified delivery or an unperformed check is not a finding, so it does
+ *  not paint the card amber: the rows below say what was not checked, in the
+ *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
+ *  N 项未检查). Amber stays for "this verdict is about something else" — a
+ *  failure, or history.
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged
@@ -184,21 +153,8 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.decision === "SKIPPED") return "neutral";
   if (review.stale === true) return "warn";
   if (review.completeness?.status === "incomplete") return "fail";
-  // A problem is a critical finding. A warning is something to look at, not a
-  // failure, and the row for it says 提醒; colouring the card red while its
-  // own rows say 提醒 made the card contradict itself.
-  if (review.findings.some((finding) => finding.severity === "critical")) return "fail";
-  if (review.findings.length > 0) return "warn";
-  // A source check is a result about the claim even when it raised no finding:
-  // a contradiction, or a passage that only partly supports what the report
-  // says, is what the reader opened the card for. Without this the card could
-  // sit grey while the row inside it was amber.
-  const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
-  if (verdicts.includes("CONTRADICTED")) return "fail";
-  if (verdicts.includes("PARTIALLY_SUPPORTED")) return "warn";
-  // A source lookup that never concluded is an absence: it must not let the
-  // header say the review found nothing to worry about.
-  if (review.smartStatus === "inconclusive") return "neutral";
+  if (review.findings.length > 0) return "fail";
+  if (unverifiedDelivery(review)) return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
   // is an absence of a verdict, not a warning about the artifact.
   if (declaredGap(review)) return "neutral";
@@ -207,31 +163,22 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
 
 export function reviewSummary(review: ArtifactReviewRun): string {
   const summary = ((): string => {
-    if (review.status === "failed") return CARD.summaryFailed;
-    if (review.decision === "SKIPPED") return CARD.summarySkipped;
-    if (review.completeness?.status === "incomplete") return CARD.summaryIncomplete;
-    // Say what the rows say: 问题 for a critical finding, 提醒 for a warning.
-    // Counting both as 问题 promised a problem the reader could not find.
-    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code));
-    const problems = raised.filter((finding) => finding.severity === "critical").length;
-    const warnings = raised.length - problems;
-    if (problems > 0 && warnings > 0) return CARD.summaryMixed(problems, warnings);
-    if (problems > 0) return CARD.summaryProblems(problems);
-    if (warnings > 0) return CARD.summaryWarnings(warnings);
-    // A source verdict is a result even when no finding was raised, and the
-    // header has to name it: the card is amber because of it.
-    const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
-    const contradicted = verdicts.filter((verdict) => verdict === "CONTRADICTED").length;
-    // The header uses the row's own word, not a sentence about the row.
-    if (contradicted > 0) return CARD.summaryContradicted;
-    if (verdicts.includes("PARTIALLY_SUPPORTED")) return CARD.summaryPartlySupported;
-    if (review.smartStatus === "inconclusive") return CARD.summaryInconclusive;
-    if (declaredGap(review)) return CARD.summaryPartial(review.notChecked?.length ?? 0);
-    return CARD.summaryPass;
+    if (review.status === "failed") return TEXT.reviewer.summaryFailed;
+    if (review.decision === "SKIPPED") return TEXT.reviewer.summarySkipped;
+    if (review.completeness?.status === "incomplete") return TEXT.reviewer.summaryIncomplete;
+    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code)).length;
+    if (raised > 0) return TEXT.reviewer.summaryFindings(raised);
+    if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
+    if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
+    return TEXT.reviewer.summaryPass;
   })();
   // A verdict on a version that has since been replaced says what it found and
   // that it is history: the reader must not take it for the current state.
-  return review.stale === true && review.status !== "failed" ? `${summary}${CARD.outdated}` : summary;
+  return review.stale === true && review.status !== "failed" ? `${summary}${TEXT.reviewer.outdated}` : summary;
+}
+
+function claimText(claim: ReviewClaim | undefined): string | undefined {
+  return claim?.text?.trim() || undefined;
 }
 
 /** Where a row sits in the card: problems, then results, then absences. */
@@ -259,61 +206,53 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: finding.id,
       tone: finding.severity === "critical" ? "fail" : "warn",
-      category: category === "semantics" ? CARD.deepSemantic : category === undefined
-        ? CARD.title
+      label: category === "semantics" ? TEXT.reviewer.deepSemantic : category === undefined
+        ? TEXT.reviewer.title
         : labelFor(category),
-      categoryTip: category === "semantics"
-        ? CARD.labelTips.semantics
+      labelTip: category === "semantics"
+        ? TEXT.reviewer.labelTips.semantics
         : labelTipFor(category ?? "other"),
-      badge: finding.severity === "critical" ? CARD.finding : CARD.warning,
-      // The reviewer's own sentence, as written — the web card shows it the
-      // same way; the badge above already says which check it came from.
-      body: finding.message,
+      title: finding.message,
+      badge: finding.severity === "critical" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
     });
   }
 
   const completeness = review.completeness;
   if (completeness !== undefined) {
     covered.add("completeness");
-    const text = CARD.completeness;
+    const text = TEXT.reviewer.completeness;
     const source = completeness.source === "brief"
       ? text.sourceBrief
       : completeness.source === "session-fallback" ? text.sourceSession : text.sourceNone;
     const missing = completeness.required
       .filter((entry) => entry.state !== "present")
       .map((entry) => `${entry.state === "empty" ? text.empty : text.missing}：${entry.path}`);
-    // Only a verdict the check actually reached is a row. "Unconfirmed"
-    // means the task never named the files it should produce, which is how
-    // people normally write a task — it is a fact about the request, not a
-    // result of the check, so it is a note under the row list instead (see
-    // `deliveryNote`).
-    if (completeness.status !== "unconfirmed") {
-      rows.push({
-        id: `${review.id}:completeness`,
-        tone: completeness.status === "complete" ? "pass" : "fail",
-        category: labelFor("completeness"),
-        categoryTip: labelTipFor("completeness"),
-        badge: completeness.status === "complete" ? CARD.badgePass : CARD.finding,
-        body: completeness.status === "complete"
-          ? `${text.complete}. ${source}`
-          : `${text.incomplete}. ${missing.length > 0 ? missing.join("; ") : source}`,
-      });
-    }
+    rows.push({
+      id: `${review.id}:completeness`,
+      tone: completeness.status === "complete"
+        ? "pass"
+        : completeness.status === "incomplete" ? "fail" : "neutral",
+      label: labelFor("completeness"),
+      labelTip: labelTipFor("completeness"),
+      title: completeness.status === "complete"
+        ? text.complete
+        : completeness.status === "incomplete" ? text.incomplete : text.unconfirmed,
+      body: missing.length > 0 ? `${source}\n${missing.join("\n")}` : source,
+      badge: completeness.status === "complete"
+        ? TEXT.reviewer.summaryPass
+        : completeness.status === "incomplete" ? TEXT.reviewer.finding : TEXT.reviewer.badgeUnconfirmed,
+    });
   }
 
   for (const [index, gap] of (review.notChecked ?? []).entries()) {
     rows.push({
       id: `${review.id}:gap:${index}`,
       tone: "neutral",
-      // The category is the check that was skipped; the badge says it did not
-      // run. The server's own `gap.reason` is an English template and stays in
-      // the record; the card says the same thing in one sentence.
-      category: CARD.gapChecks[gap.check] ?? gap.check,
-      categoryTip: labelTipFor("gaps"),
-      badge: CARD.gaps,
-      body: gap.reason?.trim() !== undefined && gap.reason.trim() !== ""
-        ? gap.reason
-        : CARD.gapBodies[gap.check] ?? CARD.gapBodyUnknown,
+      label: TEXT.reviewer.gaps,
+      labelTip: labelTipFor("gaps"),
+      title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
+      body: gap.reason,
+      badge: TEXT.reviewer.gaps,
     });
   }
 
@@ -326,16 +265,16 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:smart`,
       tone: "neutral",
-      category: CARD.deepSemantic,
-      categoryTip: labelTipFor("semantics"),
-      badge: CARD.badgeUnconfirmed,
-      body: CARD.inconclusiveBody,
+      label: TEXT.reviewer.deepSemantic,
+      labelTip: labelTipFor("semantics"),
+      title: TEXT.reviewer.inconclusive,
+      body: TEXT.reviewer.inconclusiveBody,
+      badge: TEXT.reviewer.badgeUnconfirmed,
     });
   }
 
   for (const assessment of review.sourceAssessments ?? []) {
     const verdict = assessment.assessment.assessment;
-    const snapshots = new Map((assessment.snapshots ?? []).map((snapshot) => [snapshot.id, snapshot]));
     // An assessment that reached no conclusion is an absence again, not a
     // warning, and its rationale is the policy's own words — "No issued E3
     // source locator is available for this claim." names an evidence level
@@ -344,38 +283,22 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // found, and that it was not enough to check the claim. The raw reason
     // stays in the review record.
     const inconclusive = verdict === "INCONCLUSIVE";
-    // The sentence is the result, like a finding's: the reviewer's own account
-    // of what the source said ("the abstract supports the gravimetric part but
-    // not the stronger claim"). The policy's own words for an inconclusive
-    // lookup are replaced: they name evidence levels and locators, and what a
-    // reader needs is whether any source text existed and at what depth.
-    const secondaryOnly = assessment.locators.length > 0
-      && assessment.locators.every((locator) => {
-        const type = snapshots.get(locator.snapshotId)?.sourceType;
-        return type === "abstract" || type === "paper_metadata";
-      });
-    const rationale = assessment.assessment.rationale?.trim();
-    // The reviewer's own account, as written. The web card shows model text the
-    // same way; the badge says the verdict, and the fallback only covers a
-    // record with no account at all.
-    const body = rationale !== undefined && rationale !== ""
-      ? rationale
-      : inconclusive
-        ? assessment.locators.length === 0
-          ? CARD.sourceInconclusiveNone
-          : secondaryOnly ? CARD.sourceInconclusiveAbstract : CARD.sourceInconclusiveSome
-        : verdict === "CONTRADICTED"
-          ? CARD.sourceContradicted
-          : verdict === "SUPPORTED" ? CARD.sourceSupported : CARD.sourcePartly;
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
       tone: inconclusive
         ? "neutral"
         : verdict === "SUPPORTED" ? "pass" : verdict === "CONTRADICTED" ? "fail" : "warn",
-      category: CARD.source,
-      categoryTip: labelTipFor("source"),
-      badge: CARD.assessments[verdict] ?? verdict,
-      body,
+      label: TEXT.reviewer.source,
+      labelTip: labelTipFor("source"),
+      title: claimText(assessment.claim) ?? TEXT.reviewer.source,
+      body: inconclusive
+        ? assessment.locators.length > 0
+          ? TEXT.reviewer.sourceInconclusiveWith(assessment.locators.length)
+          : TEXT.reviewer.sourceInconclusiveNone
+        : assessment.locators.length > 0
+          ? `${assessment.assessment.rationale}\n${TEXT.reviewer.locators(assessment.locators.length)}`
+          : assessment.assessment.rationale,
+      badge: TEXT.reviewer.assessments[verdict] ?? verdict,
     });
   }
 
@@ -393,10 +316,11 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:check:${check}`,
       tone: "pass",
-      category: labelFor(check),
-      categoryTip: labelTipFor(check),
-      badge: CARD.badgePass,
-      body: `${CARD.checkPass(labelFor(check))}. ${CARD.passBody}`,
+      label: labelFor(check),
+      labelTip: labelTipFor(check),
+      title: TEXT.reviewer.checkPass(labelFor(check)),
+      body: TEXT.reviewer.passBody,
+      badge: TEXT.reviewer.badgePass,
     });
   }
 
@@ -427,12 +351,10 @@ export function mixedOutcomeCounts(reviews: readonly ArtifactReviewRun[]): strin
   const passed = tones.filter((tone) => tone === "pass").length;
   const attention = tones.filter((tone) => tone === "fail" || tone === "warn").length;
   if (passed === 0 || attention === 0) return undefined;
-  return CARD.outcomeCounts(passed, attention);
+  return TEXT.reviewer.outcomeCounts(passed, attention);
 }
 
-/* A review that could not confirm something outranks one that passed: the
- * header must not say "passed" for a card whose own row says 未确认. */
-const TONE_RANK: Record<ReviewTone, number> = { fail: 4, warn: 3, neutral: 2, pass: 1, pending: 0 };
+const TONE_RANK: Record<ReviewTone, number> = { fail: 4, warn: 3, pending: 2, pass: 1, neutral: 0 };
 
 /** The worst thing among the artifacts a checkpoint reviewed. One failing
  *  report is not hidden behind three green ones.
@@ -448,7 +370,7 @@ export function checkpointTone(
   return reviews.reduce<ReviewTone>((worst, review) => {
     const tone = reviewTone(review);
     return TONE_RANK[tone] > TONE_RANK[worst] ? tone : worst;
-  }, "pass");
+  }, "neutral");
 }
 
 /** Why a checkpoint produced no verdict, in words a reader can act on.
@@ -457,14 +379,14 @@ export function checkpointTone(
  *  reader nothing about where to turn it back on. */
 export function skipReasonText(reason: string | undefined): string | undefined {
   if (reason === undefined) return undefined;
-  return CARD.skipReasons[reason] ?? CARD.skipUnknown;
+  return TEXT.reviewer.skipReasons[reason] ?? TEXT.reviewer.skipUnknown;
 }
 
 export function checkpointSummary(reviews: readonly ArtifactReviewRun[], status: CheckpointStatus): string {
   if (reviews.length === 0) {
-    if (status === "failed") return CARD.summaryFailed;
-    if (status === "skipped") return CARD.summarySkipped;
-    return CARD.empty;
+    if (status === "failed") return TEXT.reviewer.summaryFailed;
+    if (status === "skipped") return TEXT.reviewer.summarySkipped;
+    return TEXT.reviewer.empty;
   }
   const worst = reviews.reduce((chosen, review) =>
     TONE_RANK[reviewTone(review)] > TONE_RANK[reviewTone(chosen)] ? review : chosen);
