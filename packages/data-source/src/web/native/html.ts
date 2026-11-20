@@ -22,13 +22,7 @@
  * changes: no blocks matched → no results → the aggregation moves on.
  */
 
-const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
-  ["amp", "&"],
-  ["lt", "<"],
-  ["gt", ">"],
-  ["quot", '"'],
-  ["nbsp", " "],
-]);
+import { NAMED_ENTITIES_PACKED } from "./html-entities.ts";
 
 /** Matches one reference in the source; its replacement is never scanned again,
  *  which is what keeps `&amp;lt;` at the two characters `&lt;`. */
@@ -77,3 +71,20 @@ export function sliceBlocks(html: string, opening: RegExp): string[] {
 export function firstMatch(fragment: string, pattern: RegExp): string | undefined {
   return fragment.match(pattern)?.[1];
 }
+
+/** `name;code point;…` → the lookup the decoder uses. Split once, at load. */
+function buildNamedEntities(packed: string): Map<string, string> {
+  const entities = new Map<string, string>();
+  const fields = packed.split(";");
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const name = fields[index];
+    const encoded = fields[index + 1];
+    if (name === undefined || encoded === undefined) continue;
+    const points = encoded.split(" ").map((hex) => Number.parseInt(hex, 16));
+    entities.set(name, String.fromCodePoint(...points));
+  }
+  return entities;
+}
+
+/** Exported so `html.test.ts` can guard the table size and a two-scalar value. */
+export const NAMED_ENTITIES: ReadonlyMap<string, string> = buildNamedEntities(NAMED_ENTITIES_PACKED).set("nbsp", " ");
