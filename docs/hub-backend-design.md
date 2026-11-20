@@ -216,3 +216,5 @@ wrapper.
   published version)
 - A migration tool: a fresh database is created at startup, an existing one
   needs the `ALTER TABLE` shown in the service README
+- A publishing UI: the site is read-only; accounts, uploads and review are
+  served by `/api/v1` only
