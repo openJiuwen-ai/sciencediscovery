@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..categories import parse_session_category
 from ..deps import get_db
 from ..models import Asset
 from ..serializers import ok
@@ -115,11 +116,7 @@ def _category_object(asset: Asset) -> dict:
     if kind == "connector":
         return {"function": parts[0] if parts else ""}
     if kind == "session":
-        return {
-            "domain": parts[0] if parts else "",
-            "source": parts[-1] if parts else "",
-            "task": parts[1] if len(parts) > 1 else "",
-        }
+        return parse_session_category(path)
     return {}
 
 
@@ -169,7 +166,9 @@ def _session_tree(rows) -> list[dict]:
     """Sessions group task → domain, the shape the site's sessions tab uses."""
     tasks: dict[str, dict] = {}
     for asset in rows:
-        category = (asset.extra or {}).get("category") or {}
+        category = (asset.extra or {}).get("category")
+        if not isinstance(category, dict):
+            category = parse_session_category(asset.category)
         task = str(category.get("task") or "uncategorized")
         domain = category.get("domain")
         node = tasks.setdefault(task, {"id": task, "count": 0, "children": []})
