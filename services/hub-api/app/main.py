@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
+from .clock import apply_clock_offset
 from .config import DEFAULT_SESSION_SECRET, get_settings
 from .db import Base, make_engine, make_session_factory
 from .models import User
@@ -42,6 +43,7 @@ def validate_settings(settings) -> None:
 def create_app(settings=None) -> FastAPI:
     settings = settings or get_settings()
     validate_settings(settings)
+    apply_clock_offset(settings)
 
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)

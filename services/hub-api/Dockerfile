@@ -6,9 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --upgrade pip && pip install .
+COPY scripts ./scripts
+RUN pip install --upgrade pip && pip install --index-url "$PIP_INDEX_URL" .
 
 RUN useradd --system --uid 10001 hub
 USER hub

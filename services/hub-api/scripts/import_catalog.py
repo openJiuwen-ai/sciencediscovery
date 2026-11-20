@@ -38,6 +38,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import apply_clock_offset
 from app.config import get_settings
 from app.db import Base, make_engine, make_session_factory
 from app.models import Asset, AssetVersion, AuditLog, User, utcnow
@@ -355,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = get_settings()
+    apply_clock_offset(settings)
     database_url = args.database_url or settings.database_url
     storage = build_storage(settings)
     sessions_root = args.sessions_root or args.assets_root
