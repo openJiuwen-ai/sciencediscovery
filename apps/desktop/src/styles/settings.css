@@ -1029,32 +1029,47 @@ a.secondary-button {
   gap: 16px;
 }
 .skill-editor-content-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
-/* Editing a file beside SKILL.md: the path is the title, and the way back is
-   beside it. The form above changes what 保存 writes. */
-/* `.skill-editor-content-head > div:first-child` makes the normal header a
-   grid; this header is the same slot but keeps its own row layout. */
-.skill-editor-content-head > .skill-editor-editing-head {
+/* A reference file opens in its own panel inside 高级设置; the page's 内容
+   editor stays SKILL.md, so saving the document and saving a file are two
+   separate presses. */
+.skill-editor-reference-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.skill-editor-reference-head {
   display: flex;
-  flex: 1;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  min-width: 0;
+  gap: 12px;
 }
-.skill-editor-editing-head > div { display: grid; gap: 2px; min-width: 0; }
-.skill-editor-editing-head .settings-field-label {
+.skill-editor-reference-head > div { display: grid; gap: 2px; min-width: 0; }
+.skill-editor-reference-head .settings-field-label {
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.skill-editor-back-to-skill {
+.skill-editor-reference-close {
   flex: 0 0 auto;
-  min-height: 30px;
-  padding: 4px 12px;
-  font-size: 12px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
 }
+.skill-editor-reference-close:hover { background: var(--surface-hover); color: var(--text-strong); }
+.skill-editor-reference-body { min-height: 180px; font-family: var(--font-mono); font-size: 12.5px; }
+.skill-editor-reference-actions { display: flex; justify-content: flex-end; }
+.skill-editor-reference-actions .primary-button { min-height: 32px; padding: 5px 14px; font-size: 12.5px; }
 /* 撰写 / 上传: one choice about the content below, drawn as one control. */
 .skill-editor-mode {
   display: inline-flex;
@@ -1129,6 +1144,9 @@ a.secondary-button {
 .skill-editor-references-head > div { display: grid; gap: 2px; }
 .skill-editor-usage { color: var(--text-faint); font-size: 11.5px; }
 .skill-editor-resources { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+/* The selected file opens in place, under its own row, so the editor appears
+   where the reader pressed rather than at the end of a long list. */
+.skill-editor-resources > li > .skill-editor-reference-editor { margin: 6px 0 10px; }
 .skill-editor-resource {
   display: flex;
   align-items: center;

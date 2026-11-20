@@ -392,7 +392,9 @@ test("a resource file is read and written through its own route", async () => {
     const file = textareaWithLabel(view, "references/guide.md");
     assert.equal(file.props.value, "guide");
     await act(async () => { file.props.onChange({ target: { value: "guide v2" } }); });
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.editor.saveFile).props.onClick();
+    });
 
     const write = stub.calls[2];
     assert.ok(write);

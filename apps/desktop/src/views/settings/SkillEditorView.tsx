@@ -180,7 +180,7 @@ export function SkillEditorView({ client, onCancel, onSaved, skillId }: Props) {
         activePath={activePath}
         client={client}
         detail={detail}
-        key={`${detail.id}:${detail.currentRevision}`}
+        key={detail.id}
         onActivePath={setActivePath}
         onCancel={onCancel}
         onNotice={setNotice}
@@ -217,7 +217,8 @@ function EditorBody({
   const [contentMode, setContentMode] = useState<"write" | "upload">("write");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [referenceDirectory, setReferenceDirectory] = useState("references");
-  const contentRef = useRef<HTMLElement>(null);
+  const [referenceFailure, setReferenceFailure] = useState<string>();
+  const referenceEditorRef = useRef<HTMLDivElement>(null);
   const contentInput = useRef<HTMLInputElement>(null);
   const referenceInput = useRef<HTMLInputElement>(null);
 
@@ -226,6 +227,7 @@ function EditorBody({
     let cancelled = false;
     setFileText(undefined);
     setBinary(false);
+    setReferenceFailure(undefined);
     readSkillResource(client, detail.id, activePath).then(
       (content) => { if (!cancelled) setFileText(content.content); },
       (reason: unknown) => {
@@ -234,7 +236,7 @@ function EditorBody({
         // edited here, which is the whole of what went wrong.
         const notText = reason instanceof Error && /not valid UTF-8/.test(reason.message);
         setBinary(notText);
-        setFailure(notText ? undefined : messageOf(reason));
+        setReferenceFailure(notText ? undefined : messageOf(reason));
       },
     );
     return () => { cancelled = true; };
@@ -263,11 +265,11 @@ function EditorBody({
     if (files.length === 0) return;
     const directory = normalizedReferenceDirectory(referenceDirectory);
     if (directory === null) {
-      setFailure(TEXT.settings.skills.editor.referenceDirectoryInvalid);
+      setReferenceFailure(TEXT.settings.skills.editor.referenceDirectoryInvalid);
       return;
     }
     setBusy(true);
-    setFailure(undefined);
+    setReferenceFailure(undefined);
     onNotice(undefined);
     try {
       // Each write bumps the revision, so the next write in the same pick must
@@ -285,7 +287,7 @@ function EditorBody({
       }
       onSaved(latest);
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.editor.addReferenceFailed);
+      setReferenceFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.editor.addReferenceFailed);
     } finally {
       setBusy(false);
     }
@@ -320,7 +322,7 @@ function EditorBody({
   const saveResource = async () => {
     if (fileText === undefined) return;
     setBusy(true);
-    setFailure(undefined);
+    setReferenceFailure(undefined);
     onNotice(undefined);
     try {
       onSaved(await updateSkillFile(client, detail.id, activePath, {
@@ -328,16 +330,13 @@ function EditorBody({
         expectedRevision: detail.currentRevision,
       }));
     } catch (reason) {
-      setFailure(messageOf(reason));
+      setReferenceFailure(messageOf(reason));
     } finally {
       setBusy(false);
     }
   };
 
-  const savingSkill = activePath === SKILL_FILE;
-  const saveDisabled = savingSkill
-    ? busy || readOnly || description.trim() === "" || instructions.trim() === ""
-    : busy || readOnly || binary || fileText === undefined;
+  const saveDisabled = busy || readOnly || description.trim() === "" || instructions.trim() === "";
   const resourceCount = detail.resources.length;
   const usedBytes = packageBytes(detail, instructions);
 
@@ -364,110 +363,70 @@ function EditorBody({
           <span className="settings-field-hint">{TEXT.settings.skills.editor.descriptionHint}</span>
         </label>
 
-        <section className="skill-editor-content" ref={contentRef}>
+        <section className="skill-editor-content">
           <div className="skill-editor-content-head">
-            {activePath === SKILL_FILE ? (
-              <div>
-                <span className="settings-field-label">{TEXT.settings.skills.editor.content}</span>
-                <span className="settings-field-hint">{TEXT.settings.skills.editor.contentHint}</span>
-              </div>
-            ) : (
-              <div className="skill-editor-editing-head">
-                <div>
-                  <span className="settings-field-label">
-                    {TEXT.settings.skills.editor.editingResource(activePath)}
-                  </span>
-                  <span className="settings-field-hint">
-                    {TEXT.settings.skills.editor.referenceEditingHint}
-                  </span>
-                </div>
-                <button
-                  className="secondary-button skill-editor-back-to-skill"
-                  onClick={() => onActivePath(SKILL_FILE)}
-                  type="button"
-                >
-                  {TEXT.settings.skills.editor.backToSkill}
-                </button>
-              </div>
-            )}
-            {activePath === SKILL_FILE ? (
-              <div aria-label={TEXT.settings.skills.editor.content} className="skill-editor-mode" role="group">
-                <button
-                  aria-pressed={contentMode === "write"}
-                  className={contentMode === "write" ? "is-active" : ""}
-                  onClick={() => setContentMode("write")}
-                  type="button"
-                >
-                  {TEXT.settings.skills.editor.write}
-                </button>
-                <button
-                  aria-pressed={contentMode === "upload"}
-                  className={contentMode === "upload" ? "is-active" : ""}
-                  onClick={() => setContentMode("upload")}
-                  type="button"
-                >
-                  {TEXT.settings.skills.editor.upload}
-                </button>
-              </div>
-            ) : null}
-          </div>
-
-          {activePath === SKILL_FILE ? (
-            contentMode === "write" ? (
-              <>
-                <textarea
-                  aria-label={TEXT.settings.skills.editor.instructions}
-                  className="field-textarea skill-editor-body"
-                  disabled={busy || readOnly}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  onPaste={(event) => {
-                    const pasted = event.clipboardData.getData("text/plain");
-                    if (!pasted.startsWith("---")) return;
-                    // Only a paste that is the whole document opts into
-                    // frontmatter semantics; pasting a block into the middle
-                    // of the body must not rewrite the fields above.
-                    const replacesAll = instructions.length === 0
-                      || (event.currentTarget.selectionStart === 0
-                        && event.currentTarget.selectionEnd === instructions.length);
-                    if (!replacesAll) return;
-                    event.preventDefault();
-                    importContent(pasted);
-                  }}
-                  rows={16}
-                  spellCheck={false}
-                  value={instructions}
-                />
-                <span className="settings-field-hint">{TEXT.settings.skills.editor.pasteHint}</span>
-              </>
-            ) : (
+            <div>
+              <span className="settings-field-label">{TEXT.settings.skills.editor.content}</span>
+              <span className="settings-field-hint">{TEXT.settings.skills.editor.contentHint}</span>
+            </div>
+            <div aria-label={TEXT.settings.skills.editor.content} className="skill-editor-mode" role="group">
               <button
-                className="skill-editor-drop"
-                onClick={() => contentInput.current?.click()}
+                aria-pressed={contentMode === "write"}
+                className={contentMode === "write" ? "is-active" : ""}
+                onClick={() => setContentMode("write")}
                 type="button"
               >
-                <svg aria-hidden="true" fill="none" height="22" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="22">
-                  <path d="M12 15V4m-4 4 4-4 4 4M5 16v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
-                </svg>
-                <span className="skill-editor-drop-title">{TEXT.settings.skills.editor.uploadTitle}</span>
-                <span className="skill-editor-drop-hint">{TEXT.settings.skills.editor.uploadHint}</span>
+                {TEXT.settings.skills.editor.write}
               </button>
-            )
-          ) : (
-            <div className="settings-field">
-              {binary ? (
-                <p className="row-note">{TEXT.settings.skills.editor.binary}</p>
-              ) : (
-                <textarea
-                  aria-label={activePath}
-                  className="field-textarea skill-editor-body"
-                  disabled={busy || readOnly || fileText === undefined}
-                  onChange={(event) => setFileText(event.target.value)}
-                  rows={16}
-                  spellCheck={false}
-                  value={fileText ?? ""}
-                />
-              )}
+              <button
+                aria-pressed={contentMode === "upload"}
+                className={contentMode === "upload" ? "is-active" : ""}
+                onClick={() => setContentMode("upload")}
+                type="button"
+              >
+                {TEXT.settings.skills.editor.upload}
+              </button>
             </div>
+          </div>
+
+          {contentMode === "write" ? (
+            <>
+              <textarea
+                aria-label={TEXT.settings.skills.editor.instructions}
+                className="field-textarea skill-editor-body"
+                disabled={busy || readOnly}
+                onChange={(event) => setInstructions(event.target.value)}
+                onPaste={(event) => {
+                  const pasted = event.clipboardData.getData("text/plain");
+                  if (!pasted.startsWith("---")) return;
+                  // Only a paste that is the whole document opts into
+                  // frontmatter semantics; pasting a block into the middle
+                  // of the body must not rewrite the fields above.
+                  const replacesAll = instructions.length === 0
+                    || (event.currentTarget.selectionStart === 0
+                      && event.currentTarget.selectionEnd === instructions.length);
+                  if (!replacesAll) return;
+                  event.preventDefault();
+                  importContent(pasted);
+                }}
+                rows={16}
+                spellCheck={false}
+                value={instructions}
+              />
+              <span className="settings-field-hint">{TEXT.settings.skills.editor.pasteHint}</span>
+            </>
+          ) : (
+            <button
+              className="skill-editor-drop"
+              onClick={() => contentInput.current?.click()}
+              type="button"
+            >
+              <svg aria-hidden="true" fill="none" height="22" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="22">
+                <path d="M12 15V4m-4 4 4-4 4 4M5 16v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
+              </svg>
+              <span className="skill-editor-drop-title">{TEXT.settings.skills.editor.uploadTitle}</span>
+              <span className="skill-editor-drop-hint">{TEXT.settings.skills.editor.uploadHint}</span>
+            </button>
           )}
 
           <input
@@ -602,19 +561,17 @@ function EditorBody({
                           aria-pressed={activePath === resource.path}
                           className={`skill-editor-resource${activePath === resource.path ? " is-active" : ""}`}
                           onClick={() => {
-                            onActivePath(resource.path);
-                            // The editor is above this list; bring it back into
-                            // view instead of leaving the reader looking at the
-                            // row they just pressed.
-                            const reveal = () => contentRef.current?.scrollIntoView?.({
+                            // Pressing the open file again folds its editor.
+                            const next = activePath === resource.path ? SKILL_FILE : resource.path;
+                            onActivePath(next);
+                            if (next === SKILL_FILE) return;
+                            // The editor opens under this row; bring it into
+                            // view when the row sits near the bottom.
+                            const reveal = () => referenceEditorRef.current?.scrollIntoView?.({
                               behavior: "smooth",
-                              block: "start",
+                              block: "nearest",
                             });
-                            if (typeof requestAnimationFrame === "function") {
-                              requestAnimationFrame(reveal);
-                            } else {
-                              reveal();
-                            }
+                            if (typeof requestAnimationFrame === "function") requestAnimationFrame(reveal);
                           }}
                           title={TEXT.settings.skills.editor.editResource(resource.path)}
                           type="button"
@@ -625,11 +582,60 @@ function EditorBody({
                             {TEXT.settings.skills.editor.edit}
                           </span>
                         </button>
+                        {activePath === resource.path ? (
+                          <div className="skill-editor-reference-editor" ref={referenceEditorRef}>
+                            <div className="skill-editor-reference-head">
+                              <div>
+                                <span className="settings-field-label">
+                                  {TEXT.settings.skills.editor.editingResource(resource.path)}
+                                </span>
+                                <span className="settings-field-hint">
+                                  {TEXT.settings.skills.editor.referenceEditingHint}
+                                </span>
+                              </div>
+                              <button
+                                aria-label={TEXT.settings.skills.editor.closeReferenceEditor}
+                                className="skill-editor-reference-close"
+                                onClick={() => onActivePath(SKILL_FILE)}
+                                type="button"
+                              >
+                                ×
+                              </button>
+                            </div>
+                            {binary ? (
+                              <p className="row-note">{TEXT.settings.skills.editor.binary}</p>
+                            ) : (
+                              <textarea
+                                aria-label={resource.path}
+                                className="field-textarea skill-editor-reference-body"
+                                disabled={busy || readOnly || fileText === undefined}
+                                onChange={(event) => setFileText(event.target.value)}
+                                rows={10}
+                                spellCheck={false}
+                                value={fileText ?? ""}
+                              />
+                            )}
+                            {referenceFailure ? (
+                              <small className="row-note is-error" role="alert">{referenceFailure}</small>
+                            ) : null}
+                            <div className="skill-editor-reference-actions">
+                              <button
+                                className="primary-button"
+                                disabled={busy || readOnly || binary || fileText === undefined}
+                                onClick={() => void saveResource()}
+                                type="button"
+                              >
+                                {busy ? TEXT.settings.skills.editor.saving : TEXT.settings.skills.editor.saveFile}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
                 </>
               ) : null}
+
             </section>
           ) : null}
         </div>
@@ -649,7 +655,7 @@ function EditorBody({
         <button
           className="pill-button is-dark"
           disabled={saveDisabled}
-          onClick={() => void (savingSkill ? saveSkill() : saveResource())}
+          onClick={() => void saveSkill()}
           type="button"
         >
           {busy ? TEXT.settings.skills.editor.saving : TEXT.settings.skills.editor.save}
