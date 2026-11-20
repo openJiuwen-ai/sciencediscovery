@@ -511,7 +511,7 @@ jobs:
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, sciencediscovery]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
