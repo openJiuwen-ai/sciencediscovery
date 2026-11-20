@@ -45,6 +45,10 @@ on:
         type: choice
         options: ['1', '2', '4']
         default: '2'
+      skip-real:
+        description: "Set to 1 to keep this manual run off paid real E2E"
+        type: string
+        default: "0"
   workflow_call:
     inputs:
       release-version:
@@ -198,6 +202,7 @@ jobs:
     needs: [policy, l1, ut, st, e2e-plan, e2e]
     if: >-
       ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && github.event_name != 'pull_request' &&
+          inputs.skip-real != '1' &&
           needs.policy.outputs.profile == 'merge' && needs.policy.result == 'success' &&
           needs.l1.result == 'success' && needs.ut.result == 'success' && needs.st.result == 'success' &&
           needs.e2e-plan.result == 'success' && needs.e2e.result == 'success' }}
@@ -213,6 +218,7 @@ jobs:
     needs: [policy]
     if: >-
       ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && github.event_name != 'pull_request' && needs.policy.result == 'success' &&
+          inputs.skip-real != '1' &&
           (needs.policy.outputs.profile == 'daily' || needs.policy.outputs.profile == 'release') }}
     uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
@@ -529,13 +535,27 @@ jobs:
 
       # Mocked journeys start the product stack, whose Runner executes
       # bubblewrap, and Chromium's own sandbox needs the same capability.
+      # On one machine several shards provision at once and contend for the
+      # apt lock. Skip apt when bubblewrap already works; otherwise retry.
       - name: Provision the bubblewrap sandbox
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --ro-bind / / --dev /dev true
-          bwrap --version
+          if bwrap --ro-bind / / --dev /dev true && bwrap --version; then
+            echo "bubblewrap already usable"
+          else
+            ok=0
+            for attempt in 1 2 3 4 5 6; do
+              if sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap; then
+                ok=1
+                break
+              fi
+              echo "apt attempt ${attempt} failed; retrying" >&2
+              sleep $((attempt * 5))
+            done
+            test "$ok" -eq 1
+            sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+            bwrap --ro-bind / / --dev /dev true
+            bwrap --version
+          fi
 
       # Keyed on the committed E2E lockfile, which pins the only Playwright
       # version .ci/run-e2e.sh is allowed to install.
@@ -571,7 +591,23 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
           E2E_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm ci:e2e -- --profile ${{ needs.policy.outputs.profile }} --shard ${{ matrix.shard }}
+        run: |
+          # Four runners share one kernel. run-e2e.sh's default block is
+          # 4410/4411/17774, so each runner takes its own block. An explicit
+          # SCIENCE_AGENT_PORT override is how two runs share one machine.
+          slot="${RUNNER_NAME##*-}"
+          case "$slot" in
+            1) api=4410; mem=17774 ;;
+            2) api=4610; mem=17794 ;;
+            3) api=4810; mem=17814 ;;
+            4) api=5010; mem=17834 ;;
+            *) echo "runner ${RUNNER_NAME} has no port block" >&2; exit 1 ;;
+          esac
+          export SCIENCE_AGENT_PORT="$api"
+          export SCIENCE_AGENT_RUNNER_PORT="$((api + 1))"
+          export SCIENCE_AGENT_MEMORY_GRAPH_PORT="$mem"
+          echo "runner=${RUNNER_NAME} api=${SCIENCE_AGENT_PORT} runner_port=${SCIENCE_AGENT_RUNNER_PORT} memory=${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
+          pnpm ci:e2e -- --profile ${{ needs.policy.outputs.profile }} --shard ${{ matrix.shard }}
 
       # Playwright exits 0 on skips and produces no results.json at all when
       # the stack never came up, so neither its exit code nor its report can be
