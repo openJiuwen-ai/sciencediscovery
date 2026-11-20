@@ -244,9 +244,14 @@ def import_catalog(
             asset.summary = str(entry.get("description") or "")[:4096]
             asset.description = str(entry.get("description") or "")
             asset.readme = _readme_text(entry, assets_root, sessions_root)
-            asset.extra = {
+            extra = {
                 key: entry[key] for key in EXTRA_KEYS if entry.get(key) is not None
             }
+            # The flattened path loses which segment is the task and which the
+            # source for a session; keep the catalogue's own object.
+            if isinstance(entry.get("category"), dict):
+                extra["category"] = entry["category"]
+            asset.extra = extra
             asset.updated_at = utcnow()
 
             existing = session.scalar(

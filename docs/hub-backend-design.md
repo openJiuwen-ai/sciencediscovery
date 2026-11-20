@@ -147,10 +147,9 @@ One bucket, private throughout. The key is composed in exactly one function
 different layout is a one-line change plus a migration script.
 
 The bucket policy grants the IAM sub-user `PutObject` and the service nothing
-else at the anonymous level: there is no anonymous read at all. If public
-static assets remain published to the bucket by the existing workflow, they
-live under their own prefix (`site/`) and keep their own policy; the backend
-never reads them.
+else at the anonymous level: there is no anonymous read at all. The static
+publishing workflow is retired, so the bucket holds only `assets/…`; the site
+is served by nginx beside the API.
 
 ## Security decisions
 
@@ -208,10 +207,12 @@ wrapper.
 
 - OAuth / SSO (the reference uses GitCode OAuth; the hub can add an OIDC
   provider behind the same token interface)
-- Search and category trees (the static exporter's tree can move server-side)
+- Server-side search: the catalogue is small enough that the site filters the
+  fetched list in memory; `/api/v1/categories` already serves the trees
 - Rate limiting and abuse controls on login, upload and download
 - Download analytics beyond a counter
 - Group permissions (the reference's `visibility=private` plus groups)
-- The admin UI; until then the API's `/docs` page is the operator console
-- An upload form in the site: the download path is wired to the API, but
-  publishing still goes through the API or `curl` until the UI lands
+- Version history in the UI (the version endpoints exist; the page shows the
+  published version)
+- A migration tool: a fresh database is created at startup, an existing one
+  needs the `ALTER TABLE` shown in the service README
