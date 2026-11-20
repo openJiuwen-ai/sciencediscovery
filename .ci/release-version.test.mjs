@@ -257,6 +257,7 @@ test('every metadata file is read from the pull request head, and the base from 
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
     payload: { pull_request: { base: { sha: base }, head: { sha: head }, title: 'fix(mcp): reconnect' } },
+    mergeBase: () => base,
     showFile: (sha, path) => {
       asked.push(`${sha.slice(0, 1)}:${path}`);
       if (path === VERSION_FILE) return sha === head ? '{"version": "0.4.1"}' : '{"version": "0.4.0"}';
@@ -285,6 +286,7 @@ test('a branch behind main is not a version bump (#1271)', () => {
         title: 'fix(api): tell /distill-session it has nothing to distil',
       },
     },
+    mergeBase: () => 'a'.repeat(40),
     showFile: (sha, path) => {
       asked.push(`${sha.slice(0, 1)}:${path}`);
       // Both commits say 0.4.1; only a merge with the new main would say otherwise.
@@ -296,11 +298,51 @@ test('a branch behind main is not a version bump (#1271)', () => {
     'an unchanged version reads no metadata at all');
 });
 
+test('a base branch that moved is not a version bump either (#1271)', () => {
+  // The mirror image: `pull_request.base.sha` is the base branch tip at the pull
+  // request's last update, so once main moves it carries a version this branch
+  // never had. Only the merge base says what the branch itself changed.
+  const mergeBase = 'c'.repeat(40);
+  const asked = [];
+  const problems = versionProblemsFromEvent({
+    event: 'pull_request',
+    payload: {
+      pull_request: {
+        base: { sha: 'a'.repeat(40) },   // current main: 0.4.0-rc1
+        head: { sha: 'b'.repeat(40) },   // the branch: still 0.4.1
+        title: 'fix(desktop): a normal feature',
+      },
+    },
+    mergeBase: () => mergeBase,
+    showFile: (sha, path) => {
+      asked.push(`${sha.slice(0, 1)}:${path}`);
+      if (path === VERSION_FILE) return sha === 'a' ? '{"version": "0.4.0-rc1"}' : '{"version": "0.4.1"}';
+      return files('0.4.1')[path] ?? files('0.4.0-rc1')[path];
+    },
+  });
+  assert.deepEqual(problems, [], 'the pull request did not touch the version');
+  assert.ok(asked.includes(`c:${VERSION_FILE}`), 'the before side came from the merge base');
+  assert.equal(asked.some(entry => entry.startsWith('a:')), false, 'the event base is never read');
+});
+
+test('a missing merge base is an error, not a silent pass', () => {
+  assert.throws(
+    () => versionProblemsFromEvent({
+      event: 'pull_request',
+      payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) }, title: 'x' } },
+      mergeBase: () => '',
+      showFile: () => '{}',
+    }),
+    /could not compute the merge base/u,
+  );
+});
+
 test('a pull request that removes a metadata file is not stopped when the version did not move', () => {
   const asked = [];
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
     payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) }, title: 'docs: drop a stale README' } },
+    mergeBase: () => 'a'.repeat(40),
     showFile: (sha, path) => {
       asked.push(path);
       if (path === VERSION_FILE) return '{"version": "0.4.0-rc1"}';
@@ -318,6 +360,7 @@ test('a missing metadata file is reported by name when the version did move', ()
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
     payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: head }, title: 'chore(release): bump' } },
+    mergeBase: () => 'a'.repeat(40),
     showFile: (sha, path) => {
       if (path === VERSION_FILE) return sha === head ? '{"version": "0.5.0-rc1"}' : '{"version": "0.4.0-rc1"}';
       if (path === 'application/build/nsh-syntax-check-stub.nsi') {

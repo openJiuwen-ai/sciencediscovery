@@ -53,6 +53,7 @@ export function versionProblems({ baseVersion, event, files, headVersion, title 
 export function versionProblemsFromEvent({
   event,
   payload,
+  mergeBase = (a, b) => execFileSync('git', ['merge-base', a, b], { encoding: 'utf8' }).trim(),
   showFile = (sha, path) => execFileSync('git', ['show', `${sha}:${path}`], { encoding: 'utf8' }),
 }) {
   if (event !== 'pull_request') return [];
@@ -65,8 +66,19 @@ export function versionProblemsFromEvent({
       throw new Error(`release version: the event carries no usable pull_request.${name}.sha`);
     }
   }
+  // "Before" is where the branch left the base branch, not the base branch's
+  // current tip. `pull_request.base.sha` is the tip at the pull request's last
+  // update: once main moves it carries a version this branch never had, and
+  // comparing against it reports a release change the branch did not make — the
+  // same defect in the other direction (#1271).
+  const ancestor = mergeBase(base, head);
+  if (typeof ancestor !== 'string' || !/^[a-f\d]{40}$/i.test(ancestor)) {
+    // Without it there is nothing honest to compare; a missing answer must not
+    // quietly disable the rule.
+    throw new Error('release version: could not compute the merge base of the pull request');
+  }
   const headVersion = versionOf(showFile(head, VERSION_FILE));
-  const baseVersion = versionOf(showFile(base, VERSION_FILE));
+  const baseVersion = versionOf(showFile(ancestor, VERSION_FILE));
   // Compare first, read the metadata after: a pull request that deletes or
   // renames one of those files has nothing to do with this rule, and must not be
   // stopped by it. A missing file then becomes `undefined` rather than a throw,
