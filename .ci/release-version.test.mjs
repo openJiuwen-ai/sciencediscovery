@@ -150,7 +150,15 @@ test('the release prefix has to start the title', () => {
 });
 
 test('the dot spelling is rejected with a suggestion that differs from it', () => {
-  for (const [given, wanted] of [['0.4.0.rc1', '0.4.0-rc1'], ['0.4.0.1', '0.4.0-1'], ['v0.4.0', '0.4.0']]) {
+  for (const [given, wanted] of [
+    ['0.4.0.rc1', '0.4.0-rc1'],
+    ['0.4.0.1', '0.4.0-1'],
+    ['v0.4.0', '0.4.0'],
+    // Both rewrites, in order: a leading `v` and then an inner dot. Running only
+    // one of them is what echoed `0.4.0.rc1` back for this input.
+    ['v0.4.0.rc1', '0.4.0-rc1'],
+    ['v0.4.0.1', '0.4.0-1'],
+  ]) {
     assert.equal(semverSuggestion(given), wanted);
     const result = verdict({ headVersion: given });
     assert.equal(result.ok, false);
@@ -244,19 +252,58 @@ test('the policy job actually calls the rule', () => {
 
 test('the checkout read covers every metadata file, and the base commit', () => {
   const asked = [];
-  const contents = { ...files('0.4.0'), [VERSION_FILE]: '{"version": "0.4.0"}' };
+  const contents = { ...files('0.4.1'), [VERSION_FILE]: '{"version": "0.4.1"}' };
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
     payload: { pull_request: { base: { sha: 'a'.repeat(40) }, title: 'fix(mcp): reconnect' } },
     readFile: path => { asked.push(path); return contents[path]; },
     showFile: (sha, path) => { asked.push(`${sha.slice(0, 7)}:${path}`); return '{"version": "0.4.0"}'; },
   });
-  assert.deepEqual(problems, [], 'an unchanged version is not blocked');
+  assert.equal(problems.length, 1, 'the version moved, so the rule applies');
   for (const { path } of requirementsFor('0.4.0')) {
     assert.ok(asked.includes(path), `${path} was never read`);
   }
   assert.equal(asked.filter(entry => entry.includes(':')).length, 1, 'the base commit is read once');
   assert.ok(asked.some(entry => entry.endsWith(':application/package.json')));
+});
+
+test('a pull request that removes a metadata file is not stopped when the version did not move', () => {
+  // F11: the rule read every metadata file before comparing versions, so deleting
+  // or renaming one failed the policy job on an unrelated pull request.
+  const asked = [];
+  const problems = versionProblemsFromEvent({
+    event: 'pull_request',
+    payload: { pull_request: { base: { sha: 'b'.repeat(40) }, title: 'docs: drop a stale README' } },
+    readFile: path => {
+      asked.push(path);
+      if (path === VERSION_FILE) return '{"version": "0.4.0-rc1"}';
+      const error = new Error(`ENOENT: no such file or directory, open '${path}'`);
+      error.code = 'ENOENT';
+      throw error;
+    },
+    showFile: () => '{"version": "0.4.0-rc1"}',
+  });
+  assert.deepEqual(problems, [], 'an unchanged version applies no rule, so nothing may throw');
+  assert.equal(asked.includes('application/build/nsh-syntax-check-stub.nsi'), false, 'the metadata is not even read');
+});
+
+test('a missing metadata file is reported by name when the version did move', () => {
+  const problems = versionProblemsFromEvent({
+    event: 'pull_request',
+    payload: { pull_request: { base: { sha: 'c'.repeat(40) }, title: 'chore(release): bump' } },
+    readFile: path => {
+      if (path === VERSION_FILE) return '{"version": "0.5.0-rc1"}';
+      if (path === 'application/build/nsh-syntax-check-stub.nsi') {
+        const error = new Error('ENOENT');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return files('0.5.0-rc1')[path];
+    },
+    showFile: () => '{"version": "0.4.0-rc1"}',
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /nsh-syntax-check-stub\.nsi could not be read/u);
 });
 
 test('the checkout read refuses an event it cannot compare against', () => {
