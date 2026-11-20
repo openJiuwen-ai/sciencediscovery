@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# CI profiles: PR L1/L2 and builds; merge_group L3 E2E; daily L4; release L5.
+# CI profiles: PR L1/L2 and builds; merge_group L3 E2E; daily L4; release L5; manual packaging.
 # The shared source catalog owns selection. backend selects execution only.
 # Configure the stable merge-gate check as required on PRs and merge groups.
 # Reviewed queue candidates receive scoped test credentials without a second
@@ -58,9 +58,13 @@ on:
         type: string
         default: ""
       profile:
-        description: "CI policy: pr=L2 and builds, merge=L3 E2E, daily=L4, release=L5"
+        description: "CI policy: pr=L2 and builds, merge=L3 E2E, daily=L4, release=L5, package=distribution artifacts"
         type: string
         default: pr
+      package-platform:
+        description: "Package targets: linux-windows, macos or all"
+        type: string
+        default: linux-windows
       backend:
         description: "Independent E2E backend; legacy selects the native loop"
         type: string
@@ -75,7 +79,7 @@ on:
 # they would share a group and cancel each other. In a called workflow
 # `github.workflow` is the caller's name, so each pipeline gets its own lane.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ inputs.profile == 'package' && format('-package-{0}', inputs['package-platform'] || 'linux-windows') || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -96,8 +100,12 @@ jobs:
       backend: ${{ steps.policy.outputs.backend }}
       mocked: ${{ steps.policy.outputs.mocked }}
       real: ${{ steps.policy.outputs.real }}
+      test_layers: ${{ steps.policy.outputs.test_layers }}
+      binary: ${{ steps.policy.outputs.binary }}
       distribution: ${{ steps.policy.outputs.distribution }}
       windows_desktop: ${{ steps.policy.outputs.windows_desktop }}
+      macos_desktop: ${{ steps.policy.outputs.macos_desktop }}
+      package_platform: ${{ steps.policy.outputs.package_platform }}
       docs_only: ${{ steps.policy.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
@@ -109,6 +117,7 @@ jobs:
       - id: policy
         env:
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'pr' }}
+          CI_REQUESTED_PACKAGE_PLATFORM: ${{ inputs['package-platform'] }}
           CI_REQUESTED_BACKEND: ${{ inputs.backend || vars.CI_E2E_BACKEND || 'jiuwenswarm' }}
           # Dispatch/call always have a profile input, even if explicitly empty.
           # A called workflow retains its caller's event_name (for example push).
@@ -215,7 +224,7 @@ jobs:
   ut:
     needs: [policy, l1]
     name: UT
-    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -314,7 +323,7 @@ jobs:
     # nothing to report. Release calls skip it: a tagged build publishes no
     # coverage.
     needs: [policy, ut, st]
-    if: ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
+    if: ${{ !cancelled() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -391,7 +400,7 @@ jobs:
   st:
     needs: [policy, l1]
     name: ST
-    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -614,7 +623,7 @@ jobs:
   # the four entry points end to end.
   binary:
     needs: [policy, l1]
-    if: ${{ needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
+    if: ${{ needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.binary == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -660,7 +669,7 @@ jobs:
       # artifact's own name, so a caller that publishes what comes out has to
       # supply it; a merge-gate run leaves it empty and takes the script's
       # `git describe` default.
-      - name: Build both architectures
+      - name: Build the native Linux binary
         env:
           RELEASE_VERSION: ${{ inputs.release-version }}
         run: |
@@ -683,12 +692,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the release binaries
-        if: always()
+        if: ${{ always() && (needs.policy.outputs.profile != 'package' || success()) }}
         uses: actions/upload-artifact@v4
         with:
-          name: binary-release-${{ matrix.arch }}
+          name: ${{ needs.policy.outputs.profile == 'package' && format('package-linux-{0}-{1}', matrix.arch, github.sha) || format('binary-release-{0}', matrix.arch) }}
           path: dist/binary-release
-          if-no-files-found: warn
+          if-no-files-found: ${{ needs.policy.outputs.profile == 'package' && 'error' || 'warn' }}
           retention-days: 7
 
       - name: Stage Runner SEA for the Windows desktop package
@@ -986,18 +995,98 @@ jobs:
         # no token (#1187 review F1). Publishing stays manual.
         run: pnpm --dir application dist --publish never
 
-      - name: Verify and upload the Windows installer
-        if: always()
+      - name: Verify the Windows installer
+        if: ${{ success() && needs.policy.outputs.profile == 'package' }}
+        run: |
+          # electron-builder may use a literal artifact version that differs from package.json.
+          $installers = @(Get-ChildItem -Path 'application/release/ScienceDiscovery-*-win-x64-setup.exe' -File -ErrorAction Stop)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)"
+          }
+          if ($installers[0].Length -le 0) {
+            throw "Installer is empty: $($installers[0].FullName)"
+          }
+
+      - name: Upload the Windows installer
+        if: ${{ always() && (needs.policy.outputs.profile != 'package' || success()) }}
         uses: actions/upload-artifact@v4
         with:
-          name: windows-desktop-installer
-          path: application/release
+          name: ${{ needs.policy.outputs.profile == 'package' && format('package-windows-x64-{0}', github.sha) || 'windows-desktop-installer' }}
+          path: ${{ needs.policy.outputs.profile == 'package' && 'application/release/ScienceDiscovery-*-win-x64-setup.exe' || 'application/release' }}
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-desktop:
+    name: macOS desktop installer (arm64)
+    needs: [policy, l1]
+    if: ${{ needs.policy.outputs.macos_desktop == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      UV_MANAGED_PYTHON: "1"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      SD_MAC_SIGN: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            application/pnpm-lock.yaml
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.7"
+          enable-cache: true
+
+      - name: Install the backend workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the backend workspace
+        run: pnpm build
+
+      - name: Provision the shared Python environment
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.sciencediscovery-data/envs/sd-services
+        run: uv sync --locked --extra candidates --python 3.12
+
+      - name: Install the pinned JiuwenSwarm runtime
+        run: node scripts/jiuwenswarm.mjs setup
+
+      - name: Fetch the pinned macOS micromamba
+        run: >-
+          node scripts/fetch-managed-micromamba.mjs
+          --arch arm64 --platform darwin
+          --output .sciencediscovery-data/scientific-envs/bin/micromamba
+
+      - name: Install the Electron workspace
+        run: pnpm --dir application install --frozen-lockfile
+
+      - name: Build and verify the macOS installer
+        run: bash application/scripts/build-mac.sh
+
+      - name: Upload the macOS installer and archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-macos-arm64-${{ github.sha }}
+          path: |
+            application/release/ScienceDiscovery-*-mac-arm64.dmg
+            application/release/ScienceDiscovery-*-mac-arm64.zip
           if-no-files-found: error
           retention-days: 7
 
   merge-gate:
-    name: merge-gate
-    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker, windows-desktop]
+    # Keep the required check name for PR and queue events. Manual package
+    # runs report a distinct check even if the policy fails to resolve inputs.
+    name: ${{ inputs.profile == 'package' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && 'package-gate' || 'merge-gate' }}
+    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -321,13 +321,14 @@ mirror: nothing runs there.
 | --- | --- |
 | L1 | Every PR, including drafts, on open, update, reopen and ready for review: light static/catalog/document checks |
 | L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: hermetic UT/ST and Linux binary/Docker distribution gates; no E2E |
-| L3 / `merge` | Reviewed PR enters merge queue: rerun L1/UT/ST on group SHA, mocked E2E and basic real APIs; Linux binary, Windows desktop and Docker jobs are skipped |
-| L4 / `daily` | Nightly at 16:00 UTC: L3 plus Linux binary, Windows desktop installer and Docker distribution gates and all ten previously eligible nightly cases (17 real cases total) |
-| L5 / `release` | Version release tag: same current cases and evaluation modes as L4, including the Windows desktop installer; independent profile for future additions; no historical baseline gate |
+| L3 / `merge` | Reviewed PR enters merge queue: rerun L1/UT/ST on group SHA, mocked E2E and basic real APIs; Linux binary, Windows desktop, macOS desktop and Docker jobs are skipped |
+| L4 / `daily` | Nightly at 16:00 UTC: L3 plus Linux binary, Windows desktop installer, macOS ARM64 DMG/ZIP and Docker distribution gates and all ten previously eligible nightly cases (17 real cases total) |
+| L5 / `release` | Version release tag: same current cases, evaluation modes and distribution gates as L4, including macOS ARM64 DMG/ZIP; independent profile for future additions; no historical baseline gate |
+| `package` | Manual Package workflow: L1 and builds for `linux-windows`, `macos`, or `all`; the `package-gate` check covers the selected builds |
 
-`nightly.yml` and `release.yml` reuse `ci.yml`. The stable required check is
-`merge-gate`; queue success merges automatically, without Environment approval
-or a final approval job.
+`nightly.yml`, `release.yml`, and `package.yml` reuse `ci.yml`. The stable required
+check for PRs and merge groups is `merge-gate`. Queue success merges automatically,
+without Environment approval or a final approval job.
 
 The `policy` job also enforces one content rule, and it is the only thing that
 can fail a pull request before L1: a change to `application/package.json`'s
@@ -335,7 +336,9 @@ can fail a pull request before L1: a change to `application/package.json`'s
 every place the release is spelled carries the new number (the NSIS stub and both
 READMEs, plus the Windows artifact name in `electron-builder.yml`). See
 [.ci/README.md](.ci/README.md) for the exact spellings. A functional change must
-not touch the version at all. Configure branch rules and scoped Environments as
+not touch the version at all.
+
+Configure branch rules and scoped Environments as
 specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
 L5 failure blocks creating the draft Release and its assets while leaving the already-created tag intact. A person with write access reviews and publishes the draft from the Releases page before it becomes public.
 

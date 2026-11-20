@@ -40,26 +40,27 @@ removal cost, and nothing has replaced, is the externally registered code-check
 child (SCA, anti-poison, static analysis, blacklist); nothing runs those on a
 change today.
 
-One workflow defines the gate. `nightly.yml` and `release.yml` are not a second
-and third definition: both call `ci.yml` through `workflow_call`, so what they
-run is defined by the profiles below.
+`ci.yml` defines the gates. `nightly.yml`, `release.yml`, and `package.yml`
+reuse it through `workflow_call` with the profiles below.
 
 | Tier / profile | Trigger | Cumulative coverage and gate |
 | --- | --- | --- |
 | L1 / `l1` | Every CI run, including draft PRs; required before L2 | Lightweight architecture, docs, catalog and E2E metadata checks, without starting services or browsers; required before L2 |
-| L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; push to `main` or `master`; default manual dispatch | L1 + hermetic UT/ST and mocked browser E2E; no model credentials or distribution jobs |
-| L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/L2 on the group SHA + basic real API journeys, x86_64/aarch64 binary smoke and Docker deployment checks; required before automatic merge |
-| L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging; records the nightly outcome and artifacts |
-| L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases and evaluation modes as L4; retains its own extension tier. Failure blocks creating the draft Release and its assets, not creation of the already-pushed tag. A person publishes the draft from the Releases page before it becomes public |
+| L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; push to `main` or `master`; default manual dispatch | L1 + hermetic UT/ST, x86_64/aarch64 binary smoke and Docker deployment checks; no model credentials |
+| L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/UT/ST on the group SHA plus mocked browser E2E and basic real API journeys; distribution jobs are skipped; required before automatic merge |
+| L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging, Linux binary smoke, Windows installer, macOS ARM64 DMG/ZIP, and Docker deployment checks |
+| L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases, evaluation modes, and distribution gates as L4, including macOS ARM64 DMG/ZIP. Failure blocks creating the draft Release and its assets while leaving the pushed tag intact. A person publishes the draft from the Releases page |
+| `package` | Actions → Package → Run workflow | L1 and builds for `linux-windows`, `macos`, or `all`; `package-gate` covers the selected builds; Actions retains their artifacts for seven days |
 
-`ci.yml` also accepts `workflow_dispatch` and `workflow_call` profiles
-`pr`, `merge`, `daily`, and `release`. [.ci/tier-policy.mjs](../../../.ci/tier-policy.mjs)
+`ci.yml` accepts `pr`, `merge`, `daily`, and `release` for direct dispatch.
+Reusable callers can also select `package`, which selects workflow jobs
+without defining a new local test profile. [.ci/tier-policy.mjs](../../../.ci/tier-policy.mjs)
 forces PR events to `pr` and merge-group events to `merge`, including a queue
 with one PR. Default-branch push does not repeat the paid suite. UT and ST
 record coverage outside Release runs; Coverage merges those records and runs
 no tests.
 
-The binary and Docker jobs are distribution gates and sit outside the plan: the
+The binary, desktop and Docker jobs are distribution gates and sit outside the plan. The
 four-entry smoke that proves a built binary boots is a job's exit code, not a
 planned identity, so `planned == executed == passed` says nothing about it.
 
