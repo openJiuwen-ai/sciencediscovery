@@ -6,10 +6,13 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from sqlalchemy import select
+
 from app.config import Settings
 from app.db import make_engine, make_session_factory
 from app.main import create_app
-from app.storage import LocalStorage
+from app.models import AssetVersion
+from app.storage import LocalStorage, StorageError
 from scripts.import_catalog import import_catalog
 from tests.support import make_tar_gz, make_zip
 
@@ -263,3 +266,68 @@ def test_import_refuses_a_checksum_mismatch(tmp_path):
         assert session.get(Asset, "antibody-design").public_latest_version is None
     finally:
         session.close()
+
+
+def test_reimport_repairs_a_session_wrapped_by_the_old_importer(tmp_path):
+    catalog_path, assets_root, sessions_root = _fixture(tmp_path)
+    settings = _settings(tmp_path)
+    storage = LocalStorage(root=tmp_path / "store", base_url="http://testserver")
+    import_catalog(
+        catalog_path=catalog_path,
+        assets_root=assets_root,
+        sessions_root=sessions_root,
+        publisher="hub-publisher",
+        database_url=settings.database_url,
+        storage=storage,
+        settings=settings,
+    )
+
+    # Simulate the earlier importer: the session row points at a zip wrapper.
+    engine = make_engine(settings.database_url)
+    session = make_session_factory(engine)()
+    try:
+        row = session.scalar(
+            select(AssetVersion).where(
+                AssetVersion.asset_id == "compression-algorithm-20261117"
+            )
+        )
+        old_key = "assets/session/old/wrapped.zip"
+        storage.put(old_key, b"wrapped", "application/zip")
+        row.filename = "wrapped.zip"
+        row.storage_key = old_key
+        session.commit()
+    finally:
+        session.close()
+
+    stats = import_catalog(
+        catalog_path=catalog_path,
+        assets_root=assets_root,
+        sessions_root=sessions_root,
+        publisher="hub-publisher",
+        database_url=settings.database_url,
+        storage=storage,
+        settings=settings,
+    )
+    assert stats.failed == []
+
+    session = make_session_factory(engine)()
+    try:
+        row = session.scalar(
+            select(AssetVersion).where(
+                AssetVersion.asset_id == "compression-algorithm-20261117"
+            )
+        )
+        assert row.filename.endswith(".sdresearch")
+        assert row.storage_key != old_key
+        assert [item["path"] for item in row.manifest][:2] == ["README.md", "manifest.json"]
+        from app.models import Asset
+
+        asset = session.get(Asset, "compression-algorithm-20261117")
+        assert asset.readme == "# Session\n"
+    finally:
+        session.close()
+    try:
+        storage.get(old_key)
+        raise AssertionError("the wrapped object should have been deleted")
+    except StorageError:
+        pass

@@ -136,12 +136,28 @@ export function ListView(props: ListViewProps): JSX.Element {
   );
   const cards = visible.map(card);
 
-  const groups = props.groupByCategory && !route.params.get("function") && categories
-    ? categories.map((category) => ({
-      cards: visible.filter((asset) => categoryFields(asset).function === category.id).map(card),
-      id: category.id,
-      label: category.label[language],
-    })).filter((group) => group.cards.length)
+  // An empty tree must not turn the tab into "grouped by nothing": fall back
+  // to the flat grid, and keep assets whose category matches no node visible.
+  const grouped = props.groupByCategory && !route.params.get("function") && categories && categories.length > 0;
+  const groups = grouped
+    ? (() => {
+      const tree = categories ?? [];
+      const known = new Set(tree.map((category) => category.id));
+      const result: { cards: JSX.Element[]; id: string; label: string }[] = tree.map((category) => ({
+        cards: visible.filter((asset) => categoryFields(asset).function === category.id).map(card),
+        id: category.id,
+        label: category.label[language],
+      })).filter((group) => group.cards.length);
+      const rest = visible.filter((asset) => !known.has(categoryFields(asset).function ?? ""));
+      if (rest.length) {
+        result.push({
+          cards: rest.map(card),
+          id: "__other",
+          label: language === "zh" ? "未分类" : "Uncategorized",
+        });
+      }
+      return result;
+    })()
     : null;
 
   return (
