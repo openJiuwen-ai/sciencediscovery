@@ -188,7 +188,18 @@ workers start as soon as their own plan is ready, without waiting for UT, ST
 or mocked E2E. They do not download or reconcile mocked results as a prerequisite.
 The two callers are mutually exclusive, so each run executes the real suite once.
 A separate credential-free `policy` job selects the profile/backend before L1,
-so a failed L1 check cannot hide the requested real suite. Real workers still
+so a failed L1 check cannot hide the requested real suite. It also enforces one
+content rule, because it is the only job that checks out the pull request's
+history: a change to `application/package.json`'s `version` must be a release
+change — the title starts with `chore(release):` and every place the release is
+spelled carries the new number (the dot form in `electron-builder.yml` and the
+NSIS stub, plus the badge and the tag link in both READMEs; at GA the
+`${version}` macro is accepted in the artifact name, per
+`scripts/package-sd-windows.sh`). A violation fails `policy`, which every other
+job depends on, so the run stops before L1 with the reason in the log. Pull
+requests only: a push and the merge queue re-verify a commit whose pull request
+already answered. The rule is `.ci/release-version.mjs`; its cases carry
+`category:ut` and run in the UT slice like every other `.ci` case. Real workers still
 require a successfully frozen real plan and respect workflow cancellation.
 This changes execution eligibility, not the final verdict: `merge-gate` still
 requires every selected job and complete mocked/real accounting; any failure

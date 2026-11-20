@@ -36,8 +36,20 @@ export function versionProblems({ baseVersion, event, files, headVersion, title 
   return verdict.ok ? [] : [verdict.reason];
 }
 
-/** Reads what `versionProblems` needs from this checkout. */
-function versionProblemsFromCheckout(event, payload) {
+/**
+ * Reads what `versionProblems` needs from this checkout.
+ *
+ * The two readers are injectable so a case can drive this without a repository,
+ * and so a case can assert that every metadata path is actually read — a
+ * mapping that quietly skipped one would leave that file unchecked while the
+ * rule still looked in place.
+ */
+export function versionProblemsFromEvent({
+  event,
+  payload,
+  readFile = path => readFileSync(path, 'utf8'),
+  showFile = (sha, path) => execFileSync('git', ['show', `${sha}:${path}`], { encoding: 'utf8' }),
+}) {
   if (event !== 'pull_request') return [];
   const base = payload?.pull_request?.base?.sha;
   if (typeof base !== 'string' || !/^[a-f\d]{40}$/i.test(base)) {
@@ -45,13 +57,12 @@ function versionProblemsFromCheckout(event, payload) {
     // better than passing a rule nobody can evaluate.
     throw new Error('release version: the event carries no usable pull_request.base.sha');
   }
-  const baseVersion = versionOf(execFileSync('git', ['show', `${base}:${VERSION_FILE}`], { encoding: 'utf8' }));
-  const files = Object.fromEntries(RELEASE_METADATA.map(({ path }) => [path, readFileSync(path, 'utf8')]));
+  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readFile(path)]));
   return versionProblems({
-    baseVersion,
+    baseVersion: versionOf(showFile(base, VERSION_FILE)),
     event,
     files,
-    headVersion: versionOf(readFileSync(VERSION_FILE, 'utf8')),
+    headVersion: versionOf(readFile(VERSION_FILE)),
     title: payload?.pull_request?.title ?? '',
   });
 }
@@ -99,7 +110,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } catch { /* Unreadable event data keeps the full profile. */ }
     // Before anything is selected: a version bump that is not a release change
     // fails the policy job, and every job downstream depends on it.
-    const version = versionProblemsFromCheckout(process.env.GITHUB_EVENT_NAME, event);
+    const version = versionProblemsFromEvent({ event: process.env.GITHUB_EVENT_NAME, payload: event });
     if (version.length) throw new Error(`CI policy failed: ${version.join('; ')}`);
     // Said out loud even when it passes: a gate that is only visible on failure
     // can be half-wired and still look green (#1254).
