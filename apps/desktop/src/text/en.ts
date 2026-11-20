@@ -323,6 +323,7 @@ export const EN: Text = {
     /** Short verdict words, the same ones the rows use. */
     summaryContradicted: "Contradicted",
     summaryPartlySupported: "Partly supported",
+    summaryInconclusive: "Source check incomplete",
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",
@@ -429,12 +430,12 @@ export const EN: Text = {
     completeness: {
       complete: "Delivery complete",
       incomplete: "Delivery incomplete",
-      unconfirmed: "Delivery could not be checked",
       sourceBrief: "Checked against the files this task named as deliverables.",
       sourceSession: "This task named none, so the session's own declarations were used.",
-      sourceNone: "The task did not name the files and paths it should produce, so there was nothing to check the artifacts against. Naming the files and paths in the task is what makes this checkable.",
-      notChecked: "Delivery completeness was not checked",
-      notCheckedBody: "This review recorded no delivery check, so nothing here says the right files were delivered.",
+      sourceNone: "Checked against the deliverables this task declared.",
+      /** A note under the rows, not a check result: the task named no files. */
+      unconfirmedNote: "Delivery completeness was not checked: the task said what to produce, but not which files or paths.",
+      notCheckedNote: "This review did not check delivery completeness.",
       missing: "Missing",
       empty: "Empty",
     },

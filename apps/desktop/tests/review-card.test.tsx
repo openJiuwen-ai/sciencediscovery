@@ -27,6 +27,7 @@ import {
   checkpointSummary,
   checkpointTone,
   declaredGap,
+  deliveryNote,
   mixedOutcomeCounts,
   reviewRowCount,
   reviewRows,
@@ -82,14 +83,17 @@ describe("a review's verdict", () => {
     assert.equal(reviewTone(parsed), "pass");
   });
 
-  it("is grey when delivery was never verified: nothing was found, nothing was claimed", () => {
+  it("does not turn an unverified delivery into the card's verdict", () => {
     const unconfirmed = review({
       completeness: undefined,
       checks: ["structure", "citation"],
     });
     assert.equal(unverifiedDelivery(unconfirmed), true);
-    assert.equal(reviewTone(unconfirmed), "neutral");
-    assert.equal(reviewSummary(unconfirmed), TEXT.reviewer.summaryUnverified);
+    // Nothing was found wrong, so the card is a pass; delivery is a note
+    // under the rows, not a verdict — the task rarely names its files.
+    assert.equal(reviewTone(unconfirmed), "pass");
+    assert.equal(reviewSummary(unconfirmed), TEXT.reviewer.summaryPass);
+    assert.equal(deliveryNote(unconfirmed), TEXT.reviewer.completeness.notCheckedNote);
   });
 
   it("is red when a declared deliverable is missing", () => {
@@ -281,26 +285,30 @@ describe("a review's rows", () => {
     assert.equal(row.tone, "neutral");
   });
 
-  it("draws the delivery row it could not check, so the header is not alone", () => {
-    // No completeness record at all: the header says 未验证交付, and this row
-    // is what tells the reader which check is missing.
+  it("keeps delivery out of the check list, in a note of its own", () => {
+    // No completeness record at all: nothing was checked, so nothing is a
+    // row; the note says so under the rows.
     const unrecorded = review({ checks: ["citation"], completeness: undefined });
-    const row = reviewRows(unrecorded).find((candidate) => candidate.id === "review-1:completeness-unchecked");
-    assert.equal(row?.tone, "neutral");
-    assert.equal(row?.title, TEXT.reviewer.completeness.notChecked);
-    assert.equal(row?.body, TEXT.reviewer.completeness.notCheckedBody);
+    assert.equal(reviewRows(unrecorded).some((row) => row.id.endsWith(":completeness")), false);
+    assert.equal(deliveryNote(unrecorded), TEXT.reviewer.completeness.notCheckedNote);
   });
 
-  it("draws an unconfirmed delivery in grey, not as a warning", () => {
+  it("treats an unconfirmed delivery as a note about the request, not a result", () => {
     const unconfirmed = review({
       checks: ["structure", "citation"],
       completeness: { required: [], source: "none", status: "unconfirmed" },
     });
-    const row = reviewRows(unconfirmed).find((candidate) => candidate.id.endsWith(":completeness"));
-    assert.ok(row);
-    assert.equal(row.tone, "neutral");
-    assert.equal(row.badge, TEXT.reviewer.badgeUnconfirmed);
-    assert.equal(row.title, TEXT.reviewer.completeness.unconfirmed);
+    // The task said what to produce, not which files: the check has nothing
+    // to verify against, so it stays out of the rows and the verdict.
+    assert.equal(reviewRows(unconfirmed).some((row) => row.id.endsWith(":completeness")), false);
+    assert.equal(reviewTone(unconfirmed), "pass");
+    assert.equal(deliveryNote(unconfirmed), TEXT.reviewer.completeness.unconfirmedNote);
+  });
+
+  it("gives a structure-only review no delivery note", () => {
+    // It never claimed delivery, so there is nothing to explain.
+    const parsed = review({ checks: ["structure"], completeness: undefined });
+    assert.equal(deliveryNote(parsed), undefined);
   });
 
   it("says an inconclusive source check in plain words, not in evidence levels", () => {

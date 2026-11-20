@@ -219,7 +219,7 @@ test("a checkpoint over two artifacts names both, in separate sections", async (
   await expect(sections.nth(1)).toHaveClass(/is-warn/u);
 });
 
-test("a review that never verified delivery is grey, not green", async ({ page }) => {
+test("a delivery that was never verified is a note, not the verdict", async ({ page }) => {
   await installMockApi(page, {
     reviewer: {
       // No recorded delivery verdict, and checks that were never
@@ -231,10 +231,12 @@ test("a review that never verified delivery is grey, not green", async ({ page }
   await page.goto("/");
 
   const card = page.locator(".review-card");
-  // Not a finding, and not a pass: the summary says the delivery was never
-  // verified, and the colour stays the one "nothing was found" uses.
-  await expect(card).toHaveClass(/is-neutral/u);
-  await expect(card.locator(".review-summary")).toHaveText("未验证交付");
+  // The task rarely names its files, so delivery is a note under the rows,
+  // not a verdict: nothing was found wrong and the card says so.
+  await expect(card).toHaveClass(/is-pass/u);
+  await expect(card.locator(".review-summary")).toHaveText("未发现问题");
+  await card.locator(".review-head").click();
+  await expect(card.locator(".review-note", { hasText: "没有核对交付完整性" })).toBeVisible();
 });
 
 test("a structure-only review is green because it never claimed delivery", async ({ page }) => {
@@ -249,7 +251,9 @@ test("a structure-only review is green because it never claimed delivery", async
   const card = page.locator(".review-card");
   await expect(card).toHaveClass(/is-pass/u);
   await expect(card.locator(".review-summary")).toHaveText("未发现问题");
-  await expect(card.locator(".review-summary")).not.toHaveText("未验证交付");
+  // It never claimed delivery, so it gets no note either.
+  await card.locator(".review-head").click();
+  await expect(card.locator(".review-note")).toHaveCount(0);
 });
 
 test("a delivery that was checked and found incomplete is red", async ({ page }) => {
@@ -675,10 +679,13 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
 
   // The same check without a delivery verdict: a citation pass is not an
   // overall pass, and the card must not imply one.
+  // The same check without a delivery verdict: the card is a pass with the
+  // delivery note under the rows, not a warning about the artifact.
   const unverified = cards.nth(1);
-  await expect(unverified).toHaveClass(/is-neutral/u);
-  await expect(unverified.locator(".review-summary")).toHaveText("未验证交付");
-  await expect(unverified.locator(".review-summary")).not.toHaveText("未发现问题");
+  await expect(unverified).toHaveClass(/is-pass/u);
+  await expect(unverified.locator(".review-summary")).toHaveText("未发现问题");
+  await unverified.locator(".review-head").click();
+  await expect(unverified.locator(".review-note", { hasText: "没有核对交付完整性" })).toBeVisible();
 
   const warning = cards.nth(2);
   // A warning is not a problem: the card wears the warning tone and counts
@@ -703,7 +710,7 @@ test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async
   // service's own error text never reaches the card.
   const inconclusive = cards.nth(4);
   await expect(inconclusive).toHaveClass(/is-neutral/u);
-  await expect(inconclusive.locator(".review-summary")).toHaveText("未验证交付");
+  await expect(inconclusive.locator(".review-summary")).toHaveText("未能核对来源");
   await inconclusive.locator(".review-head").click();
   await expect(inconclusive.locator(".review-item-title", { hasText: "没能核对结论来源" })).toBeVisible();
   await expect(inconclusive.locator(".review-item-body", { hasText: "没能把结论与来源原文对照" })).toBeVisible();
