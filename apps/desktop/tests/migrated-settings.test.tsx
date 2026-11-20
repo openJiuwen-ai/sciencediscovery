@@ -102,11 +102,34 @@ test("quota edits keep empty input local, preserve other fields and notify uploa
     assert.equal(writes(client).length, 0); assert.match(markup(view), new RegExp(TEXT.settings.system.migrated.common.invalidNumber));
     await act(async () => { handler(view.root.findByProps({ "aria-label": label }), "onChange", { target: { value: "1.5" } }); });
     await act(async () => { handler(view.root.findByProps({ "aria-label": label }), "onBlur"); });
-    assert.deepEqual(writes(client)[0]?.body, { ...quotas, uploadMaxFileBytes: 1.5 * 1024 ** 3 });
-    assert.equal(saved[0]?.uploadMaxFileBytes, 1.5 * 1024 ** 3);
+    assert.deepEqual(writes(client)[0]?.body, { ...quotas, uploadMaxFileBytes: 1_500_000_000 });
+    assert.equal(saved[0]?.uploadMaxFileBytes, 1_500_000_000);
     const unlimited = `${label} · ${TEXT.settings.system.timeouts.unlimited}`;
     await act(async () => { handler(view.root.findByProps({ role: "switch", "aria-label": unlimited }), "onClick"); });
     assert.equal(saved[1]?.uploadMaxFileBytes, 0);
+  } finally { await close(view); }
+});
+
+test("quota GB values use two decimals without rounding stored bytes on an untouched blur", async () => {
+  let current = { ...quotas };
+  const client = new Client(call => { if (call.method === "PUT") current = call.body as SystemQuotaSettings; return current; });
+  const view = await mount(<QuotaSettings client={client} onSaved={() => {}} />);
+  try {
+    const text = TEXT.settings.system.quotas;
+    const input = () => view.root.findByProps({ "aria-label": text.uploadFile });
+    assert.equal(input().props.value, "1.07");
+    assert.equal(input().props.step, 0.01);
+    assert.equal(view.root.findByProps({ "aria-label": text.workspace }).props.value, "10.74");
+    assert.equal(view.root.findByProps({ "aria-label": text.subagents }).props.value, "4");
+    await act(async () => { handler(input(), "onBlur"); });
+    assert.equal(writes(client).length, 0);
+    assert.equal(current.uploadMaxFileBytes, 1024 ** 3);
+    await act(async () => { handler(input(), "onChange", { target: { value: "1.23456789" } }); });
+    await act(async () => { handler(input(), "onBlur"); });
+    assert.equal(current.uploadMaxFileBytes, 1_230_000_000);
+    assert.equal(input().props.value, "1.23");
+    await act(async () => { handler(input(), "onBlur"); });
+    assert.equal(writes(client).length, 1);
   } finally { await close(view); }
 });
 

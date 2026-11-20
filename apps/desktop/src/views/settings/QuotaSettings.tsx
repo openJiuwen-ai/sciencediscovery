@@ -20,7 +20,7 @@ import { TEXT } from "../../text.js";
 import { Group, LoadGate, Row, Switch } from "./rows.js";
 import { SettingsNumber, useSettingsWrite, WriteStatus } from "./setting-controls.js";
 
-const GIB = 1024 ** 3;
+const GB = 1_000_000_000;
 type ByteField = Exclude<keyof SystemQuotaSettings, "maxConcurrentSubagents">;
 
 export function QuotaSettings({ client, onSaved }: {
@@ -37,10 +37,10 @@ export function QuotaSettings({ client, onSaved }: {
       loaded.reload();
     });
     const fields: { field: ByteField; title: string; hint: string; fallback: number }[] = [
-      { field: "runnerMaxWorkspaceBytes", title: text.workspace, hint: text.workspaceHint, fallback: 10 * GIB },
-      { field: "runnerMaxOutputBytes", title: text.output, hint: text.outputHint, fallback: GIB },
-      { field: "uploadMaxFileBytes", title: text.uploadFile, hint: text.uploadFileHint, fallback: GIB },
-      { field: "uploadMaxRequestBytes", title: text.uploadRequest, hint: text.uploadRequestHint, fallback: 10 * GIB },
+      { field: "runnerMaxWorkspaceBytes", title: text.workspace, hint: text.workspaceHint, fallback: 10 * GB },
+      { field: "runnerMaxOutputBytes", title: text.output, hint: text.outputHint, fallback: GB },
+      { field: "uploadMaxFileBytes", title: text.uploadFile, hint: text.uploadFileHint, fallback: GB },
+      { field: "uploadMaxRequestBytes", title: text.uploadRequest, hint: text.uploadRequestHint, fallback: 10 * GB },
     ];
     return <>
       <Group><p className="settings-note">{text.help}</p>
@@ -52,9 +52,9 @@ export function QuotaSettings({ client, onSaved }: {
       {[fields.slice(0, 2), fields.slice(2)].map((group, index) => <Group key={index}>
         {group.map(({ field, title, hint, fallback }) => <Row key={field} title={title} hint={hint}>
           <div className="row-inline-control">
-            <SettingsNumber label={title} value={settings[field]} scale={GIB} min={1 / GIB}
+            <SettingsNumber label={title} value={settings[field]} scale={GB} precision={2} min={0.01}
               disabled={disabled || settings[field] === 0} onCommit={value => save({ [field]: value })} />
-            <small>{text.gib}</small>
+            <small>{text.gb}</small>
             <label className="settings-toggle-line"><span>{TEXT.settings.system.timeouts.unlimited}</span>
               <Switch label={`${title} · ${TEXT.settings.system.timeouts.unlimited}`} disabled={disabled}
                 value={settings[field] === 0} onChange={unlimited => save({ [field]: unlimited ? 0 : fallback })} />
