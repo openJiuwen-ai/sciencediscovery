@@ -37,6 +37,9 @@ export function dotForm(version) {
   return hyphen < 0 ? version : `${version.slice(0, hyphen)}.${version.slice(hyphen + 1)}`;
 }
 
+/** electron-builder's expansion of the version field. */
+export const VERSION_MACRO = "${version}";
+
 /**
  * SemVer-shaped, optionally pre-release and build metadata.
  *
@@ -46,16 +49,39 @@ export function dotForm(version) {
  */
 export const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
-/** Where the release number is written by hand, and in which spelling. */
-export const RELEASE_METADATA = Object.freeze([
-  // The artifact name is a file name, so it takes the dot form; the version
-  // field beside it is the source of truth and is checked separately.
-  { path: "application/electron-builder.yml", spellings: ["dot"] },
-  { path: "application/build/nsh-syntax-check-stub.nsi", spellings: ["dot"] },
-  // The badge is read by a person (dot form) and links the tag (hyphen form).
-  { path: "README.md", spellings: ["dot", "tag"] },
-  { path: "README_zh.md", spellings: ["dot", "tag"] },
-]);
+/**
+ * Every place the release number is written by hand, and what it must say.
+ *
+ * An entry lists requirement *groups*: every group has to be satisfied, and a
+ * group is satisfied by any one of its spellings. That shape is what lets the
+ * README need two different strings (the badge and the tag it links) while the
+ * artifact name has a choice.
+ */
+export function requirementsFor(version) {
+  const preRelease = version.includes("-");
+  return [
+    {
+      path: "application/electron-builder.yml",
+      groups: preRelease
+        // A pre-release is spelled with a dot in the file name — a form SemVer
+        // forbids in the version field — so the literal is the only thing that can
+        // stand for it: `${version}` would expand to the hyphen form and rename
+        // the installer.
+        ? [["dot"]]
+        // At GA the documented policy (`scripts/package-sd-windows.sh`) puts the
+        // `${version}` macro back. The macro cannot drift from the field it
+        // expands, so either spelling is accepted here.
+        : [["dot", "macro"]],
+    },
+    { groups: [["dot"]], path: "application/build/nsh-syntax-check-stub.nsi" },
+    // The badge is read by a person (dot form) and links the tag (hyphen form).
+    { groups: [["dot"], ["tag"]], path: "README.md" },
+    { groups: [["dot"], ["tag"]], path: "README_zh.md" },
+  ];
+}
+
+/** The paths `requirementsFor` covers, for messages. */
+export const RELEASE_METADATA = Object.freeze(requirementsFor("0.0.0").map(({ path }) => path));
 
 export const VERSION_FILE = "application/package.json";
 export const RELEASE_TITLE = /^chore\(release\):/u;
@@ -65,10 +91,11 @@ export function versionOf(text) {
   return JSON.parse(text).version;
 }
 
-function spellingOf(kind, version) {
+export function spellingOf(kind, version) {
   if (kind === "dot") return dotForm(version);
   if (kind === "tag") return `v${version}`;
-  return version;
+  if (kind === "macro") return VERSION_MACRO;
+  throw new Error(`unknown spelling: ${kind}`);
 }
 
 /**
@@ -95,18 +122,20 @@ export function assessVersionChange({ baseVersion, files, headVersion, title }) 
   if (!RELEASE_TITLE.test(trimmed)) {
     problems.push(`the title "${trimmed}" does not start with "chore(release):"`);
   }
-  for (const { path, spellings } of RELEASE_METADATA) {
+  for (const { groups, path } of requirementsFor(headVersion)) {
     const text = files[path];
     if (typeof text !== "string") {
       problems.push(`${path} could not be read`);
       continue;
     }
-    for (const kind of spellings) {
-      const expected = spellingOf(kind, headVersion);
-      if (!text.includes(expected)) {
-        problems.push(`${path} does not carry "${expected}"`);
+    groups.forEach((alternatives, index) => {
+      const wanted = alternatives.map((kind) => `"${spellingOf(kind, headVersion)}"`);
+      const satisfied = alternatives.some((kind) => text.includes(spellingOf(kind, headVersion)));
+      if (!satisfied) {
+        const which = groups.length > 1 ? (index === 0 ? " (its spelling)" : " (its tag link)") : "";
+        problems.push(`${path}${which} does not carry ${wanted.join(" or ")}`);
       }
-    }
+    });
   }
   if (problems.length === 0) {
     return {
@@ -120,7 +149,7 @@ export function assessVersionChange({ baseVersion, files, headVersion, title }) 
     reason: `${VERSION_FILE} moves ${baseVersion} -> ${headVersion}, which is a release change, but `
       + `${problems.join("; ")}. `
       + "A version bump belongs to a release: title the pull request `chore(release): …` and move every "
-      + `place the release is spelled, with the new number in it (${RELEASE_METADATA.map((entry) => entry.path).join(", ")}). `
+      + `place the release is spelled, with the new number in it (${RELEASE_METADATA.join(", ")}). `
       + "A functional change must not touch the version at all.",
   };
 }
