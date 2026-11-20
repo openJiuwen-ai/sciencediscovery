@@ -11,7 +11,7 @@ from app.db import make_engine, make_session_factory
 from app.main import create_app
 from app.storage import LocalStorage
 from scripts.import_catalog import import_catalog
-from tests.support import make_zip
+from tests.support import make_tar_gz, make_zip
 
 
 def _write(path: Path, data: bytes) -> dict:
@@ -28,7 +28,7 @@ def _fixture(tmp_path: Path):
     (assets_root / "skills").mkdir(parents=True, exist_ok=True)
     (assets_root / "skills" / "antibody-design.md").write_text("# Antibody\n", encoding="utf-8")
     team = make_zip({"SKILL.md": b"# Team\n"})
-    session = make_zip({"manifest.json": b'{"files": []}'})
+    session = make_tar_gz({"manifest.json": b'{"files": []}', "README.md": b"# Session\n"})
     specialist = b'{"name": "literature-searcher"}'
     connector = b'{"id": "arxiv"}'
 

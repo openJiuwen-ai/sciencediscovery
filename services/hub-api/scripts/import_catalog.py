@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import io
 import json
+import tarfile
 import sys
 import zipfile
 from dataclasses import dataclass, field
@@ -121,6 +122,24 @@ def _readme_text(entry: dict, assets_root: Path, sessions_root: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def _readme_from_package(data: bytes) -> str:
+    """Sessions carry their README inside the package rather than beside it."""
+    try:
+        if data[:2] == b"\x1f\x8b" or tarfile.is_tarfile(io.BytesIO(data)):
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+                for member in archive:
+                    if member.name in ("README.md", "./README.md") and member.isfile():
+                        handle = archive.extractfile(member)
+                        return handle.read().decode("utf-8") if handle else ""
+        else:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                if "README.md" in archive.namelist():
+                    return archive.read("README.md").decode("utf-8")
+    except (tarfile.TarError, EOFError, zipfile.BadZipFile, KeyError):
+        return ""
+    return ""
 
 
 def _artifact_bytes(entry: dict, assets_root: Path, sessions_root: Path) -> Artifact | None:
@@ -239,6 +258,8 @@ def import_catalog(
                 continue
 
             artifact = _artifact_bytes(entry, assets_root, sessions_root)
+            if artifact is not None and not asset.readme:
+                asset.readme = _readme_from_package(artifact.data)
             if artifact is None:
                 stats.skipped.append(f"{asset_id}@{version}: artifact not found on disk")
                 continue
