@@ -66,9 +66,21 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Where the release number is written by hand. A literal list on purpose: a new
+ *  place to write the number should force somebody to come back to this file.
+ *
+ *  The Windows matcher is pinned to `-win-x64-setup.`, the suffix
+ *  `electron-builder.yml` uses today. A second installer target would have to be
+ *  added here, which is the moment to read this comment. */
+export const RELEASE_METADATA = Object.freeze([
+  "application/electron-builder.yml",
+  "application/build/nsh-syntax-check-stub.nsi",
+  "README.md",
+  "README_zh.md",
+]);
+
 /**
- * Every place the release number is written by hand, and the exact token it must
- * contain.
+ * The exact token each metadata file must contain.
  *
  * Each entry is `{path, checks}`; every check has to pass, and a check is one
  * literal with its delimiter, so `0.4.0` never satisfies a file that says
@@ -80,24 +92,28 @@ export function requirementsFor(version) {
   // At GA the documented policy puts `${version}` back in the artifact name; it
   // cannot drift from the field it expands, so either spelling is accepted.
   const names = preRelease ? [dot] : [dot, VERSION_MACRO];
-  return [
-    {
-      checks: [{
-        expected: names.map((name) => `ScienceDiscovery-${name}-`).join(" or "),
-        matches: new RegExp(`ScienceDiscovery-(?:${names.map(escapeRegExp).join("|")})-win-x64-setup\\.`, "u"),
-      }],
-      path: "application/electron-builder.yml",
-    },
-    {
-      checks: [{
-        expected: `!define VERSION "${dot}"`,
-        matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
-      }],
-      path: "application/build/nsh-syntax-check-stub.nsi",
-    },
+  return RELEASE_METADATA.map((path) => {
+    if (path === "application/electron-builder.yml") {
+      return {
+        checks: [{
+          expected: names.map((name) => `ScienceDiscovery-${name}-`).join(" or "),
+          matches: new RegExp(`ScienceDiscovery-(?:${names.map(escapeRegExp).join("|")})-win-x64-setup\\.`, "u"),
+        }],
+        path,
+      };
+    }
+    if (path === "application/build/nsh-syntax-check-stub.nsi") {
+      return {
+        checks: [{
+          expected: `!define VERSION "${dot}"`,
+          matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
+        }],
+        path,
+      };
+    }
     // The badge is read by a person (dot form, hyphen-delimited in the badge URL)
     // and links the tag (hyphen form, boundary after it).
-    {
+    return {
       checks: [
         { expected: `Release-${dot}-`, matches: new RegExp(`Release-${escapeRegExp(dot)}-`, "u") },
         {
@@ -105,23 +121,10 @@ export function requirementsFor(version) {
           matches: new RegExp(`releases/tag/v${escapeRegExp(version)}(?![0-9A-Za-z.-])`, "u"),
         },
       ],
-      path: "README.md",
-    },
-    {
-      checks: [
-        { expected: `Release-${dot}-`, matches: new RegExp(`Release-${escapeRegExp(dot)}-`, "u") },
-        {
-          expected: `releases/tag/v${version}`,
-          matches: new RegExp(`releases/tag/v${escapeRegExp(version)}(?![0-9A-Za-z.-])`, "u"),
-        },
-      ],
-      path: "README_zh.md",
-    },
-  ];
+      path,
+    };
+  });
 }
-
-/** The paths `requirementsFor` covers, for messages. */
-export const RELEASE_METADATA = Object.freeze(requirementsFor("0.0.0").map(({ path }) => path));
 
 export const VERSION_FILE = "application/package.json";
 export const RELEASE_TITLE = /^chore\(release\):/u;
@@ -134,15 +137,18 @@ export function versionOf(text) {
 /**
  * The spelling to write instead of a rejected one.
  *
- * General on purpose: an earlier version of this only rewrote `.rcN`/`.betaN`/
- * `.alphaN`, so `0.4.0.1` was told to use `0.4.0.1` — the value just rejected.
+ * Both rewrites run in order — a leading `v` first, then a fourth dot segment —
+ * because running only one of them is how `0.4.0.1` was once told to use
+ * `0.4.0.1` and `v0.4.0.rc1` was told to use `0.4.0.rc1`: the rejected value
+ * echoed back. The result always differs from the input, or it is the shape to
+ * write instead of a guess.
  */
 export function semverSuggestion(version) {
-  const dotSuffixed = /^(\d+\.\d+\.\d+)\.(.+)$/u.exec(version);
+  const withoutPrefix = /^v(.+)$/u.exec(version)?.[1] ?? version;
+  const dotSuffixed = /^(\d+\.\d+\.\d+)\.(.+)$/u.exec(withoutPrefix);
   if (dotSuffixed) return `${dotSuffixed[1]}-${dotSuffixed[2]}`;
-  const leadingV = /^v(.+)$/u.exec(version);
-  if (leadingV) return leadingV[1];
-  return `<major>.<minor>.<patch>[-<suffix>]`;
+  if (withoutPrefix !== version) return withoutPrefix;
+  return "<major>.<minor>.<patch>[-<suffix>]";
 }
 
 /**
@@ -150,7 +156,8 @@ export function semverSuggestion(version) {
  *
  * Pure: `files` maps each metadata path to its text as it stands in the pull
  * request, so the rule can be tested without a repository and the caller can
- * supply whatever it read.
+ * supply whatever it read. A path mapped to `undefined` is a file that is not
+ * there; it is reported rather than thrown.
  */
 export function assessVersionChange({ baseVersion, files, headVersion, title }) {
   const trimmed = (title ?? "").trim();

@@ -57,12 +57,22 @@ export function versionProblemsFromEvent({
     // better than passing a rule nobody can evaluate.
     throw new Error('release version: the event carries no usable pull_request.base.sha');
   }
-  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readFile(path)]));
+  const headVersion = versionOf(readFile(VERSION_FILE));
+  const baseVersion = versionOf(showFile(base, VERSION_FILE));
+  // Compare first, read the metadata after: a pull request that deletes or
+  // renames one of those files has nothing to do with this rule, and must not be
+  // stopped by it. A missing file then becomes `undefined` rather than a throw,
+  // and the rule reports it by name if a version really did move.
+  if (headVersion === baseVersion) return [];
+  const readOrUndefined = path => {
+    try { return readFile(path); } catch { return undefined; }
+  };
+  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readOrUndefined(path)]));
   return versionProblems({
-    baseVersion: versionOf(showFile(base, VERSION_FILE)),
+    baseVersion,
     event,
     files,
-    headVersion: versionOf(readFile(VERSION_FILE)),
+    headVersion,
     title: payload?.pull_request?.title ?? '',
   });
 }
