@@ -73,6 +73,18 @@ function frontmatterMetadata(detail: SkillDetail): Record<string, unknown> | und
     : undefined;
 }
 
+/** `allowed-tools` as the package declared it. Skills use both the comma
+ *  string and the YAML sequence, and the editor must hand back whichever it
+ *  found: sending an empty string for a sequence makes the server delete the
+ *  key when it rebuilds SKILL.md. */
+function frontmatterAllowedTools(detail: SkillDetail): string | string[] | undefined {
+  const value = detail.frontmatter["allowed-tools"];
+  if (typeof value === "string") return value;
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+}
+
 /** Bytes in the package: the SKILL.md the form will write plus its resources.
  *  A reader weighs a package; counting only the files beside SKILL.md would
  *  make a skill whose package is one document read `0 B`. */
@@ -268,19 +280,33 @@ function EditorBody({
       setReferenceFailure(TEXT.settings.skills.editor.referenceDirectoryInvalid);
       return;
     }
-    setBusy(true);
     setReferenceFailure(undefined);
+    // The package route stores text: a PNG or a non-UTF-8 CSV decoded with
+    // replacement characters would be written back as a corrupted asset. Read
+    // the whole pick first, so one binary file refuses the batch before any
+    // write changes the skill.
+    const decoded: Array<{ content: string; name: string }> = [];
+    for (const file of files) {
+      const name = file.name.split(/[\\/]/).pop() ?? file.name;
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        decoded.push({ content: new TextDecoder("utf-8", { fatal: true }).decode(bytes), name });
+      } catch {
+        setReferenceFailure(TEXT.settings.skills.editor.referenceNotText(name));
+        return;
+      }
+    }
+    setBusy(true);
     onNotice(undefined);
     try {
       // Each write bumps the revision, so the next write in the same pick must
       // carry the revision the previous one returned.
       let revision = detail.currentRevision;
       let latest = detail;
-      for (const file of files) {
-        const name = file.name.split(/[\\/]/).pop() ?? file.name;
-        const path = directory ? `${directory}/${name}` : name;
+      for (const file of decoded) {
+        const path = directory ? `${directory}/${file.name}` : file.name;
         latest = await updateSkillFile(client, detail.id, path, {
-          content: await file.text(),
+          content: file.content,
           expectedRevision: revision,
         });
         revision = latest.currentRevision;
@@ -299,7 +325,7 @@ function EditorBody({
     onNotice(undefined);
     try {
       const metadata = frontmatterMetadata(detail);
-      const allowedTools = frontmatterString(detail, "allowed-tools");
+      const allowedTools = frontmatterAllowedTools(detail);
       const trimmedLicense = license.trim();
       const trimmedCompatibility = compatibility.trim();
       onSaved(await updateSkill(client, detail.id, {
@@ -310,7 +336,7 @@ function EditorBody({
         ...(trimmedCompatibility ? { compatibility: trimmedCompatibility } : {}),
         ...(trimmedLicense ? { license: trimmedLicense } : {}),
         ...(metadata ? { metadata } : {}),
-        ...(allowedTools ? { allowedTools } : {}),
+        ...(allowedTools === undefined ? {} : { allowedTools }),
       }));
     } catch (reason) {
       setFailure(messageOf(reason));
@@ -537,6 +563,7 @@ function EditorBody({
                 </span>
               </button>
               <input
+                accept="text/*,.md,.markdown,.txt,.py,.json,.csv,.yaml,.yml,.toml,.sh,.js,.ts,.r,.ipynb,.tex"
                 aria-label={TEXT.settings.skills.editor.references}
                 className="skill-editor-hidden-input"
                 multiple
@@ -549,6 +576,9 @@ function EditorBody({
                 tabIndex={-1}
                 type="file"
               />
+              {referenceFailure ? (
+                <small className="row-note is-error" role="alert">{referenceFailure}</small>
+              ) : null}
 
               {resourceCount > 0 ? (
                 <>
@@ -615,9 +645,6 @@ function EditorBody({
                                 value={fileText ?? ""}
                               />
                             )}
-                            {referenceFailure ? (
-                              <small className="row-note is-error" role="alert">{referenceFailure}</small>
-                            ) : null}
                             <div className="skill-editor-reference-actions">
                               <button
                                 className="primary-button"

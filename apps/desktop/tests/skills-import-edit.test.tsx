@@ -210,7 +210,7 @@ function twoPageInspection(): { commit: string; stub: StubClient; url: string } 
 
 test("a repository larger than one page reads the rest on request", async () => {
   const { commit, stub, url } = twoPageInspection();
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(input);
@@ -241,7 +241,7 @@ test("a repository larger than one page reads the rest on request", async () => 
 
 test("loading more does not re-tick what the user unticked", async () => {
   const { stub, url } = twoPageInspection();
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(input);
@@ -266,7 +266,7 @@ test("a checkout that cannot reach the repository names the network and the prox
   const stub = new StubClient().fail(
     new Error("Git skill checkout timed out; retry, or narrow the import with a Ref or subdirectory"),
   );
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onImported={() => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input")
       .find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
@@ -294,7 +294,7 @@ test("a slow inspection says what it is doing and can be cancelled", async () =>
       });
     }),
   } as unknown as ApiClient;
-  const view = await mount(<SkillGitImportView client={client} onImported={() => {}} />);
+  const view = await mount(<SkillGitImportView client={client} onStart={async () => {}} />);
   try {
     const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(url);
@@ -339,6 +339,23 @@ test("the editor submits the revision it read and hands back the keys its form d
       name: "review",
     });
     assert.equal(saved[0]?.currentRevision, 2);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the editor forwards a list-valued allowed-tools unchanged", async () => {
+  const listed = {
+    ...detail,
+    frontmatter: { ...detail.frontmatter, "allowed-tools": ["Read", "Grep"] },
+  };
+  const stub = new StubClient().reply(listed).reply({ ...listed, currentRevision: 2 });
+  const view = await mount(
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
+  );
+  try {
+    const instructions = textareaWithLabel(view, TEXT.settings.skills.editor.instructions);
+    await act(async () => { instructions.props.onChange({ target: { value: "Review twice" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    assert.deepEqual(json(stub.calls[1]!).allowedTools, ["Read", "Grep"]);
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -424,6 +441,26 @@ test("a resource that is not UTF-8 is shown as uneditable rather than decoded", 
         .some((node) => node.props["aria-label"] === "assets/logo.png"),
       false,
     );
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("adding a non-UTF-8 reference file is refused before anything is written", async () => {
+  const stub = new StubClient().reply(detail);
+  const view = await mount(
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
+  );
+  try {
+    await openAdvancedSettings(view);
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.references);
+    assert.ok(input);
+    const file = new File([new Uint8Array([0xff, 0xfe, 0x00, 0x01])], "logo.png", { type: "image/png" });
+    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+    await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
+
+    assert.ok(JSON.stringify(view.toJSON())
+      .includes(TEXT.settings.skills.editor.referenceNotText("logo.png")));
+    assert.equal(stub.calls.some((call) => call.path.includes("/files/")), false);
   } finally { await act(async () => { view.unmount(); }); }
 });
 

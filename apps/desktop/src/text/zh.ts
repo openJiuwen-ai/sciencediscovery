@@ -852,6 +852,7 @@ export const ZH = {
         saveFile: "保存文件",
         closeReferenceEditor: "关闭参考文件编辑器",
         referenceEditingHint: "修改后点「保存文件」。",
+        referenceNotText: (name: string) => `「${name}」不是 UTF-8 文本，不能作为参考文件导入。`,
         addReferenceFailed: "没有读入这个参考文件。",
       },
     },

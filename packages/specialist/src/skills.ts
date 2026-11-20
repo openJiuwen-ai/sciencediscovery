@@ -1125,7 +1125,7 @@ export class SkillCatalog {
 
   private async recoverManagedStorage(): Promise<void> {
     for (const entry of await readdir(this.root, { withFileTypes: true })) {
-      if (entry.name === "catalog.json" || entry.name === ".drafts" || entry.name === ".staging") continue;
+      if (entry.name === "catalog.json" || entry.name === ".drafts" || entry.name === ".imports" || entry.name === ".staging") continue;
       if (entry.name.startsWith(".catalog-")) {
         await rm(resolve(this.root, entry.name), { force: true, recursive: true });
         continue;
@@ -1156,6 +1156,10 @@ export class SkillCatalog {
     if (this.loaded) return;
     await mkdir(this.root, { recursive: true });
     await rm(resolve(this.root, ".staging"), { force: true, recursive: true });
+    // Inspections keep a checkout for the imports that follow them. A process
+    // that exited since then cannot use it, so a restart starts clean rather
+    // than accumulating partial clones under the data directory.
+    await rm(resolve(this.root, ".imports"), { force: true, recursive: true });
     await mkdir(resolve(this.root, ".staging"), { recursive: true });
     await mkdir(this.reviewDraftRoot, { recursive: true });
     for (const id of BUNDLED_SKILL_IDS) {

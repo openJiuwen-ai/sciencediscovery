@@ -830,6 +830,7 @@ export const EN: Text = {
         saveFile: "Save file",
         closeReferenceEditor: "Close reference editor",
         referenceEditingHint: "Change it, then press Save file.",
+        referenceNotText: (name: string) => `"${name}" is not UTF-8 text and cannot be imported as a reference file.`,
         addReferenceFailed: "The reference file could not be read.",
       },
     },
