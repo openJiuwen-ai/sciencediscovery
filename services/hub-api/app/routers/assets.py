@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..categories import parse_session_category
+from ..categories import parse_category_object
 from ..deps import current_user, get_db, get_settings, get_storage, require_user
 from ..models import Asset, AssetVersion, AuditLog, User, utcnow
 from ..schemas import CreateAssetRequest, UpdateAssetRequest
@@ -113,8 +113,8 @@ def create_asset(
             detail="you already publish an asset with that kind and name",
         )
     extra: dict = {}
-    if body.kind == "session" and body.category:
-        extra["category"] = parse_session_category(body.category)
+    if body.category:
+        extra["category"] = parse_category_object(body.kind, body.category)
     asset = Asset(
         kind=body.kind,
         name=body.name,
@@ -148,8 +148,13 @@ def update_asset(
         value = getattr(body, field)
         if value is not None:
             setattr(asset, field, value)
-    if asset.kind == "session" and body.category is not None:
-        asset.extra = {**(asset.extra or {}), "category": parse_session_category(body.category)}
+    if body.category is not None:
+        # The stored object is what `/api/v1/catalog` prefers, so a category
+        # edit must refresh it for every kind, not only sessions.
+        asset.extra = {
+            **(asset.extra or {}),
+            "category": parse_category_object(asset.kind, body.category),
+        }
     if body.tags is not None:
         asset.tags = body.tags
     asset.updated_at = utcnow()

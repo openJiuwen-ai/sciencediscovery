@@ -95,6 +95,8 @@ export interface SpecialistAsset extends BaseAsset {
   download: Required<Pick<DownloadRef, "sha256" | "size" | "text" | "url">>;
   instructions: string;
   kind: "specialist";
+  /** Archive inventory, served by the API in service-hosted mode. */
+  resources?: SkillResource[];
   runtime: Record<string, unknown> | null;
   skills: string[];
 }
