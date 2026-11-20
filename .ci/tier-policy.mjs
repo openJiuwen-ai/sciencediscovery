@@ -101,6 +101,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // fails the policy job, and every job downstream depends on it.
     const version = versionProblemsFromCheckout(process.env.GITHUB_EVENT_NAME, event);
     if (version.length) throw new Error(`CI policy failed: ${version.join('; ')}`);
+    // Said out loud even when it passes: a gate that is only visible on failure
+    // can be half-wired and still look green (#1254).
+    if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+      console.log(`release version OK: ${VERSION_FILE} at ${versionOf(readFileSync(VERSION_FILE, 'utf8'))}`);
+    }
     const result = route(process.env.GITHUB_EVENT_NAME, process.env.CI_REQUESTED_PROFILE || 'pr', process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm', paths);
     for (const [key,value] of Object.entries(result)) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   }
