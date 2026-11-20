@@ -32,6 +32,7 @@ import {
   cloneRunEventDetails,
   computeSettingsSnapshot,
   firstUserAuthoredMessage,
+  hasConversation,
   skillAuthoringCommandPrompt,
   splitArtifactVersionSuffix,
 } from "./index.js";
@@ -124,6 +125,23 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   assert.ok(withHistory);
   assert.match(withHistory, /Infer the reusable workflow from the complete prior Session conversation/u);
   assert.equal(/no prior conversation/u.test(withHistory), false);
+
+  // A notice-only Session has no conversation either. Runtime wake and review
+  // notices are stored with a user or assistant role and a `kind`, so a plain
+  // role test said "has history" for a Session that had only ever been woken.
+  assert.equal(hasConversation([]), false);
+  assert.equal(hasConversation([
+    { content: "wake", createdAt: "2026-11-20T00:00:00Z", id: "n1", kind: "wake_notice", role: "user" },
+  ]), false, "a wake notice is not a conversation");
+  assert.equal(hasConversation([
+    { content: "notice", createdAt: "2026-11-20T00:00:00Z", id: "n2", kind: "review_notice", role: "assistant" },
+  ]), false, "a review notice is not a conversation");
+  assert.equal(hasConversation([
+    { content: "hi", createdAt: "2026-11-20T00:00:00Z", id: "m1", role: "user" },
+  ]), true);
+  assert.equal(hasConversation([
+    { content: "hi", createdAt: "2026-11-20T00:00:00Z", id: "m2", kind: "message", role: "assistant" },
+  ]), true);
 
   // The sibling command is untouched by the distill guard.
   const creatorEmpty = skillAuthoringCommandPrompt("/skill-creator", { hasHistory: false });
