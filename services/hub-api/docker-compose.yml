@@ -53,8 +53,11 @@ services:
       HUB_ADMIN_USERNAME: ${HUB_ADMIN_USERNAME:-}
       HUB_ADMIN_PASSWORD: ${HUB_ADMIN_PASSWORD:-}
       HUB_PRESIGN_SECONDS: ${HUB_PRESIGN_SECONDS:-600}
+      # Development escape hatch for a host with a drifting clock; leave unset
+      # in production.
+      HUB_CLOCK_OFFSET_SECONDS: ${HUB_CLOCK_OFFSET_SECONDS:-0}
     ports:
-      - "127.0.0.1:8100:8100"
+      - "127.0.0.1:${API_HOST_PORT:-8100}:8100"
     depends_on:
       mysql:
         condition: service_healthy

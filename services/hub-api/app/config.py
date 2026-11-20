@@ -96,6 +96,12 @@ class Settings:
         default_factory=lambda: _bool("HUB_ALLOW_DEV_SECRET", False)
     )
 
+    # Development-only: this host's clock may drift; sign with a corrected
+    # time. Never set this in production, where NTP keeps the clock right.
+    clock_offset_seconds: int = field(
+        default_factory=lambda: _int("HUB_CLOCK_OFFSET_SECONDS", 0)
+    )
+
     # Off by default: a public server should not let anyone create an account.
     # The first account can always register, which is how a fresh deployment
     # gets its administrator.
