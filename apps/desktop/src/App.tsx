@@ -1338,17 +1338,24 @@ export function App({ initialToken }: Props) {
     // The session's own mode, else the reader's last choice, else the project/global
   // default the service would apply — never a third "follow settings" state (#1204).
   approvalMode: state.detail?.approvalMode ?? lastApprovalMode ?? state.defaultApprovalMode ?? "ask_for_dangerous",
-    automaticReviewEnabled: state.reviewerSettings?.automaticReviewEnabled,
-    reviewerEnabled: state.reviewerEnabled,
+    // A review is something a Session does. On the welcome or draft composer
+    // there is nothing to review, and the rows would answer a click by
+    // returning early; they are not drawn at all.
+    automaticReviewEnabled: state.sessionId === undefined ? undefined : state.reviewerSettings?.automaticReviewEnabled,
+    reviewerEnabled: state.sessionId === undefined ? undefined : state.reviewerEnabled,
     // The same queued-or-running test the cards use: one notion of "a review
     // is happening now", so the menu's 停止审查 and the running lines cannot
     // disagree about whether there is anything to stop.
-    reviewerRunning: reviewerActive.size > 0,
-    reviewLevel: state.reviewerSettings?.level,
-    onAutomaticReview: (enabled) => void actions.setAutomaticReview(enabled),
-    onReviewLevel: (level) => void actions.setReviewLevel(level),
-    onRunReview: () => void actions.runReview(),
-    onStopReview: () => void actions.stopReview(),
+    reviewerRunning: state.sessionId !== undefined && reviewerActive.size > 0,
+    reviewLevel: state.sessionId === undefined ? undefined : state.reviewerSettings?.level,
+    onAutomaticReview: state.sessionId === undefined
+      ? undefined
+      : (enabled) => void actions.setAutomaticReview(enabled),
+    onReviewLevel: state.sessionId === undefined
+      ? undefined
+      : (level) => void actions.setReviewLevel(level),
+    onRunReview: state.sessionId === undefined ? undefined : () => void actions.runReview(),
+    onStopReview: state.sessionId === undefined ? undefined : () => void actions.stopReview(),
     attachBlocked: canUpload ? undefined : TEXT.composer.attachArchived,
     attachLimit,
     attachments: state.attachments,
@@ -1529,7 +1536,7 @@ export function App({ initialToken }: Props) {
                   pending={state.pendingMessage}
                   reviews={state.reviews}
                   reviewerActive={reviewerActive}
-                  onReview={(messageId) => void actions.reviewCheckpoint(messageId)}
+                  onReview={() => void actions.reviewCheckpoint()}
                   replays={state.replays}
                   run={state.run}
                   workspaceFiles={state.panelFiles}

@@ -163,16 +163,18 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
  *  `incomplete`. Amber means the verdict itself cannot be taken at face value:
  *  the review failed, or the version it answered for is no longer current.
  *  Grey means nothing was found wrong and nothing was claimed either: the
- *  checkpoint was skipped, or the review ran but never verified delivery or
- *  declared a check it did not perform. Green means this level ran its checks,
- *  raised nothing, and delivery was confirmed or never claimed — a statement
- *  about the checks, not about the conclusions.
+ *  checkpoint was skipped, the review declared a check it did not perform, or
+ *  a source lookup reached no conclusion. Green means this level ran its
+ *  checks, raised nothing, and delivery was confirmed or never claimed — a
+ *  statement about the checks, not about the conclusions.
  *
- *  An unverified delivery or an unperformed check is not a finding, so it does
- *  not paint the card amber: the rows below say what was not checked, in the
- *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
- *  N 项未检查). Amber stays for "this verdict is about something else" — a
- *  failure, history, or a source check that could not support the claim.
+ *  An unperformed check is not a finding, so it does not paint the card
+ *  amber; the rows below say what was not checked, in the same grey, and the
+ *  header counts them (N 项未检查). A delivery the task never named is not a
+ *  colour at all: it is a note under the rows (`deliveryNote`), because it is a
+ *  property of the request rather than a result. Amber stays for "this verdict
+ *  is about something else" — a failure, history, or a source check that could
+ *  not support the claim.
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged

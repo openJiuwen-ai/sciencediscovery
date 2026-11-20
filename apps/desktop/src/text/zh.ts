@@ -514,11 +514,11 @@ export const ZH = {
     empty: "这个检查点没有产生审查记录。",
     noReviews: "还没有审查记录。",
     tab: "审查",
-    levelName: (level: string): string => (level === "deep" ? "深度" : "快速"),
-    levelPill: (level: string): string => (level === "deep" ? "深度" : "快速"),
+    levelName: (level: string): string => (level === "quick" ? "快速" : "深度"),
+    levelPill: (level: string): string => (level === "quick" ? "快速" : "深度"),
     /** The pill only names the level; the tip carries what the name claims.
      *  The two levels differ in whether a source service is consulted. */
-    levelTip: (level: string): string => (level === "deep"
+    levelTip: (level: string): string => (level !== "quick"
       ? "深度审查：在快速检查之外，调用来源服务逐条核对结论与原文是否一致。"
       : "快速审查：只在本机做确定性的结构、引用格式和交付完整性检查，不调用外部来源服务。"),
   },

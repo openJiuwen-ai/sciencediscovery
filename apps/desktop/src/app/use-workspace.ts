@@ -274,9 +274,9 @@ export interface WorkspaceActions {
   setAutomaticReview: (enabled: boolean) => Promise<void>;
   /** Choose how much the open session's reviews check. */
   setReviewLevel: (level: ReviewerSpecialistLevel) => Promise<void>;
-  /** Ask for the artifacts behind one checkpoint message to be reviewed
-   *  again. The review itself lands later, through the queue. */
-  reviewCheckpoint: (messageId: string) => Promise<void>;
+  /** Ask for the session's artifacts to be reviewed again. The review itself
+   *  lands later, through the queue, on a new checkpoint card. */
+  reviewCheckpoint: () => Promise<void>;
   /** Review the open session's current artifacts now, without waiting for a
    *  new version to arrive. */
   runReview: () => Promise<void>;
@@ -1880,39 +1880,22 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   );
 
   /**
-   * Ask for a checkpoint to be reviewed again.
-   *
-   * The request names the transcript message, which is the only handle the
-   * route accepts. The reviews land through the queue, so this reads the queue
-   * back at once: the card then draws its running line instead of pretending
-   * the old verdict is still current.
-   */
-  const reviewCheckpoint = useCallback(
-    async (messageId: string) => {
-      const target = sessionRef.current;
-      if (!target) return;
-      try {
-        await requestReview(client, target, messageId);
-        toast(TEXT.reviewer.rerunQueued);
-        void refreshReviewer(target);
-      } catch (reason) {
-        report(reason);
-      }
-    },
-    [client, refreshReviewer, report, toast],
-  );
-
-  /**
-   * Review the session's current artifacts without waiting for a new version.
+   * Start a manual review and draw its checkpoint card.
    *
    * The route takes the id of the checkpoint message it will append, so this
    * mints one — and draws that message itself. Without it the click would be a
    * toast and nothing else: the review runs in the coordinator, nothing pushes
    * a new transcript at this window, and the verdict's place in the
    * conversation would appear only after reopening the session.
+   *
+   * A re-run must not reuse the checkpoint it was pressed on. The store
+   * refuses an existing id whose tool call id differs, and every existing
+   * checkpoint has a different one (`automatic-review:` for an audit, the
+   * agent's own call id for an in-run check), so the re-run mints a new id and
+   * its verdict lands on a new card rather than rewriting the old one.
    */
-  const runReview = useCallback(
-    async () => {
+  const startReview = useCallback(
+    async (kind: "run" | "rerun") => {
       const target = sessionRef.current;
       if (!target) return;
       const messageId = crypto.randomUUID();
@@ -1944,13 +1927,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         });
         // A confirmation, not a failure: the toast's default tone is the one
         // failures use, and it would put an alert icon on a working request.
-        toast(TEXT.reviewer.runStarted, "info");
+        toast(kind === "run" ? TEXT.reviewer.runStarted : TEXT.reviewer.rerunQueued, "info");
       } catch (reason) {
         report(reason);
       }
     },
     [client, report, toast],
   );
+
+  /** Review the session's current artifacts now, without a new version. */
+  const runReview = useCallback(() => startReview("run"), [startReview]);
+
+  /** Review them again after a verdict was superseded or failed. */
+  const reviewCheckpoint = useCallback(() => startReview("rerun"), [startReview]);
 
   /**
    * Stop whatever the coordinator is running for this session.
