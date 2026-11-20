@@ -227,7 +227,9 @@ test("a default-only refusal strips the field it is about, not the ones it menti
       response.writeHead(400, { "content-type": "application/json" });
       response.end(item.body);
       }, async (baseUrl) => {
-      const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "default-only" };
+      // `deepseek` + enabled sends `thinking` (and `reasoning_effort`), so the
+      // echoed control is actually carried and the assertion can fail.
+      const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const, baseUrl, model: "default-only", thinkingMode: "enabled" as const };
       await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], { ...sampling, maxRetries: 0 }, new AbortController().signal)
         .then(() => null, () => null);
     });
@@ -241,6 +243,40 @@ test("a default-only refusal strips the field it is about, not the ones it menti
         .filter((key) => before[key] !== undefined && after[key] === undefined)
         .sort();
       assert.deepEqual(removed, [...item.strips].sort(), `the fields stripped for: ${item.why}`);
+      // The control this request really carried must still be there: over-stripping
+      // it would silently disable the mode the reader asked for, and the endpoint
+      // remembers the strip.
+      if (before.thinking !== undefined) {
+        assert.notEqual(after.thinking, undefined, `thinking was stripped: ${item.why}`);
+      }
     }
+  }
+});
+
+test("a default-only claim that names the field in the same phrase strips it", async () => {
+  // F9: before/after the claim was too coarse. "the default value for temperature"
+  // still makes the field the subject of the refusal.
+  const bodies = [
+    "Only the default value for temperature is supported.",
+    "Only the default (1) is supported for temperature.",
+  ];
+  for (const message of bodies) {
+    const requests: Record<string, unknown>[] = [];
+    await withServer(async (request, response) => {
+      const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+      requests.push(body);
+      if (body.temperature !== undefined) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message } }));
+        return;
+      }
+      sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+    }, async (baseUrl) => {
+      const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "openai" as const, baseUrl, model: "wording" };
+      const turn = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], sampling, new AbortController().signal);
+      assert.equal(turn.assistantMessage.content, "ok", `the run continues for: ${message}`);
+    });
+    assert.equal(requests.length, 2, `retried after stripping for: ${message}`);
+    assert.equal(requests[1]!.temperature, undefined, `temperature stripped for: ${message}`);
   }
 });

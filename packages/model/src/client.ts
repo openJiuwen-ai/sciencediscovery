@@ -894,10 +894,13 @@ function fieldRefusedByDefaultOnly(lower: string, field: string): boolean {
   const claimAt = message.search(defaultOnlyWording);
   if (claimAt < 0) return false;
   const fieldAt = message.indexOf(field);
-  // Before the claim, the field is what the refusal is about. After it, the field
-  // is something the provider is offering instead ("Use top_p to vary the
-  // sampling") — stripping that would change what the caller asked for.
-  return fieldAt >= 0 && fieldAt < claimAt;
+  if (fieldAt < 0) return false;
+  // Before the claim, the field is what the refusal is about.
+  if (fieldAt < claimAt) return true;
+  // After it, the field is only the subject when the claim introduces it —
+  // "the default value for temperature is supported" — and not when the provider
+  // is offering it instead, which is "Use top_p to vary the sampling".
+  return /\b(?:for|of)\s+[\s"'[(]*$/u.test(message.slice(claimAt, fieldAt));
 }
 
 /** The provider's own message text, without any echoed request body. */
