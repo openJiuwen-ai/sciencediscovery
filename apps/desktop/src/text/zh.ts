@@ -192,6 +192,7 @@ export const ZH = {
     /** Short verdict words, the same ones the rows use. */
     summaryContradicted: "矛盾",
     summaryPartlySupported: "部分支持",
+    summaryInconclusive: "未能核对来源",
     summaryIncomplete: "交付不完整",
     summaryUnverified: "未验证交付",
     summaryFailed: "审查失败",
@@ -297,12 +298,12 @@ export const ZH = {
     completeness: {
       complete: "交付完整",
       incomplete: "交付不完整",
-      unconfirmed: "无法核对交付文件",
       sourceBrief: "对照的是本次任务里写明的交付文件。",
       sourceSession: "本次任务没写明，对照的是会话里已有的交付声明。",
-      sourceNone: "任务里没有写明要交付的文件名和路径，所以没法逐项核对该交的是否都交了。在任务里写明要生成的文件名和路径，才能检查这一点。",
-      notChecked: "没有核对交付完整性",
-      notCheckedBody: "这次审查没有记录交付核对的结果，所以没法确认该交的是否都交了。",
+      sourceNone: "对照的是本任务声明的交付文件。",
+      /** A note under the rows, not a check result: the task named no files. */
+      unconfirmedNote: "交付完整性没有核对：任务里只说明了要生成什么，没有指定具体文件名或路径。",
+      notCheckedNote: "这次审查没有核对交付完整性。",
       missing: "缺失",
       empty: "空文件",
     },

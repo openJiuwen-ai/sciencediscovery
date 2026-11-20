@@ -20,6 +20,7 @@ import {
   checkpointSummary,
   checkpointTone,
   citationOnlyReview,
+  deliveryNote,
   mixedOutcomeCounts,
   reviewRowCount,
   reviewRows,
@@ -289,8 +290,14 @@ export function ReviewArtifactBody({
         ))}
       </div>
 
+      {/* Delivery is not a check result when the task named no files: it is
+          one line saying what was not checked, under the rows. */}
+      {deliveryNote(review) === undefined ? null : (
+        <p className="review-note">{deliveryNote(review)}</p>
+      )}
+
       {/* A failed review that produced no rows still needs a way back. */}
-      {rows.length === 0 && review.status !== "failed" ? (
+      {rows.length === 0 && review.status !== "failed" && deliveryNote(review) === undefined ? (
         <p className="review-empty">{TEXT.reviewer.empty}</p>
       ) : null}
     </section>
