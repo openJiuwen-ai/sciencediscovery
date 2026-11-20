@@ -181,6 +181,21 @@ test("each completed reply keeps its artifact version through live replay and re
   await expect(firstList.getByRole("listitem")).toHaveCount(5);
   await firstList.getByRole("button", { name: "展开全部 6 项产物" }).click();
   await expect(firstList.getByRole("listitem")).toHaveCount(6);
+  await test.step("artifact rows fill the card and meet without gaps", async () => {
+    const header = await firstList.locator("header").boundingBox();
+    const rows = await firstList.locator(".run-artifact-row").evaluateAll(elements =>
+      elements.map(element => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      })
+    );
+    expect(header).not.toBeNull();
+    for (const [index, row] of rows.entries()) {
+      expect(row.x).toBeCloseTo(header!.x, 0);
+      expect(row.width).toBeCloseTo(header!.width, 0);
+      if (index > 0) expect(row.y).toBeCloseTo(rows[index - 1]!.y + rows[index - 1]!.height, 0);
+    }
+  });
   await firstList.getByRole("button", { name: "收起产物" }).click();
   await expect(reply("很高兴能帮到你。").getByRole("region", { name: "本轮产物" })).toHaveCount(0);
 
@@ -216,6 +231,67 @@ test("each completed reply keeps its artifact version through live replay and re
   await expect(lists).toHaveCount(0);
   await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
   await expect(lists).toHaveCount(2);
+});
+
+/**
+ * E2E-META
+ * Purpose: A temporary lineage read failure recovers on the next outputs refresh.
+ * Steps:
+ *   1. Open a saved reply while its subagent catalog is unavailable.
+ *   2. Send a follow-up that refreshes a version from the same child.
+ *   3. Open the recovered output without reopening the Session.
+ * Environment: Desktop Vite harness on 4175; page-owned API routes and data.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: fixture-only token
+ * CostSideEffects: no cost; page-local records only
+ */
+test("subagent outputs recover after a catalog failure without reopening the session", { tag: "@mocked" }, async ({ page }) => {
+  const run = { id: "saved-run", userMessageId: "question", assistantMessageId: "answer", status: "completed" };
+  const outputs = [artifactOutput("direct", 1, run.id), artifactOutput("child-report", 1, "child")];
+  await installMockApi(page, {
+    artifactsBySession: { [SESSION]: outputs },
+    artifactContents: { "child-report-v2": "已恢复的子 Agent 报告" },
+    runsBySession: { [SESSION]: [{ run, events: [] }] },
+    sessions: [makeSession({ messages: [
+      { content: "汇总实验", createdAt: CREATED_AT, id: "question", role: "user" },
+      { content: "实验汇总完成。", createdAt: CREATED_AT, id: "answer", role: "assistant" },
+    ] })],
+    subagentsBySession: { [SESSION]: [{ id: "child", parentTurnId: run.id, sessionId: SESSION }] },
+  });
+  let catalogReads = 0;
+  await page.route("**/api/sessions/session-1/subagents", async route => {
+    if (++catalogReads === 1) {
+      await route.fulfill({ status: 503, json: { error: "temporary catalog failure" } });
+    } else await route.fallback();
+  });
+  await page.route("**/api/sessions/session-1/messages", async route => {
+    outputs.push(artifactOutput("child-report", 2, "child"));
+    await route.fallback();
+  });
+  const reply = page.locator(".message.assistant").filter({ hasText: "实验汇总完成。" });
+  const childOutput = reply.getByRole("button", { name: "child-report.md v2" });
+  await test.step("1. Read the saved reply during a temporary catalog outage", async () => {
+    await page.goto("/");
+    await expect(reply.getByRole("button", { name: "direct.md v1" })).toBeVisible();
+    await expect.poll(() => catalogReads).toBe(1);
+    await expect(reply.getByRole("button", { name: "child-report.md v1" })).toHaveCount(0);
+  });
+  await test.step("2. Continue the session and recover outputs from the same child", async () => {
+    await page.locator("#composer-textarea").fill("继续检查实验结果");
+    await page.locator("#composer-textarea").press("Enter");
+    await expect(childOutput).toBeVisible();
+    await expect(reply.getByRole("button", { name: "child-report.md v1" })).toHaveCount(0);
+  });
+  await test.step("3. Read the recovered version without reopening the session", async () => {
+    await childOutput.click();
+    await expect(page.locator(".workspace-panel").getByText("已恢复的子 Agent 报告")).toBeVisible();
+    expect(catalogReads).toBe(2);
+  });
 });
 
 test("only terminal runs show their saved artifacts, even without a reply", async ({ page }) => {

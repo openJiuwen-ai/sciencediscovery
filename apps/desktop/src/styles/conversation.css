@@ -95,11 +95,14 @@
   background: var(--surface-soft);
   font-size: 12px;
 }
-.run-artifacts > ul {
+.run-artifacts > ul,
+.message .text .run-artifacts > ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
+.run-artifacts > ul > li,
+.message .text .run-artifacts > ul > li { margin: 0; }
 .run-artifact-row,
 .run-artifact-toggle {
   width: 100%;

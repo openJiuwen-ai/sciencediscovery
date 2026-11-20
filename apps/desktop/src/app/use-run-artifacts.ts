@@ -38,26 +38,32 @@ export function useRunArtifactOutputs(
     () => liveRunId ? [...terminalRuns, { id: liveRunId }] : terminalRuns,
     [liveRunId, terminalRuns],
   );
-  // A main-agent output needs no catalog read. Compare the distinct unknown
-  // origins so adding a version from the same child does not trigger a read.
+  // A main-agent output needs no catalog read. Reuse a successful catalog for
+  // the same origins; a failed read retries on the next outputs refresh.
   const unresolvedOrigins = useMemo(() => {
     const runIds = new Set(runs.map(({ id }) => id));
     return [...new Set(sessionOutputs.flatMap(({ version }) =>
       version.turnId && !runIds.has(version.turnId) ? [version.turnId] : []
     ))].sort().join("\n");
   }, [runs, sessionOutputs]);
-  const [catalog, setCatalog] = useState<{ sessionId: string; subagents: Subagent[] }>();
+  const [catalog, setCatalog] = useState<{
+    client: ApiClient;
+    sessionId: string;
+    origins: string;
+    subagents: Subagent[];
+  }>();
   useEffect(() => {
     if (!sessionId || !unresolvedOrigins) return;
+    if (catalog?.client === client && catalog.sessionId === sessionId && catalog.origins === unresolvedOrigins) return;
     let current = true;
     void listSubagents(client, sessionId).then((subagents) => {
-      if (current) setCatalog({ sessionId, subagents });
+      if (current) setCatalog({ client, sessionId, origins: unresolvedOrigins, subagents });
     }).catch(() => {
       // Direct outputs still have their exact attribution.
     });
     return () => { current = false; };
-  }, [client, sessionId, unresolvedOrigins]);
-  const subagents = catalog?.sessionId === sessionId ? catalog?.subagents ?? NO_SUBAGENTS : NO_SUBAGENTS;
+  }, [catalog, client, sessionId, sessionOutputs, unresolvedOrigins]);
+  const subagents = catalog?.client === client && catalog.sessionId === sessionId ? catalog.subagents : NO_SUBAGENTS;
   return useMemo(
     () => groupArtifactOutputsByRun(sessionOutputs, runs, subagents),
     [runs, sessionOutputs, subagents],
