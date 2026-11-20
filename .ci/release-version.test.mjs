@@ -12,7 +12,7 @@ import {
   RELEASE_METADATA,
   requirementsFor,
   SEMVER,
-  spellingOf,
+  semverSuggestion,
   VERSION_FILE,
   versionOf,
 } from './release-version.mjs';
@@ -25,8 +25,9 @@ const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux',
 const REPOSITORY = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TITLE = 'chore(release): reset the Windows desktop package to the 0.4.0-rc1 line';
 
-const readme = (version, dot = dotForm(version)) =>
-  `[![Release](https://img.shields.io/badge/Release-${dot}-1f6feb)](https://github.com/o/r/releases/tag/v${version})\n`;
+function readme(version, dot) {
+  return `[![Release](https://img.shields.io/badge/Release-${dot}-1f6feb)](https://github.com/o/r/releases/tag/v${version})\n`;
+}
 
 /** The repository as a pre-release leaves it: the artifact name is the literal. */
 function files(version = '0.4.0-rc1') {
@@ -44,8 +45,8 @@ function gaFiles(version = '0.4.0') {
   return {
     'application/electron-builder.yml': 'win:\n  artifactName: ScienceDiscovery-${version}-win-x64-setup.${ext}\n',
     'application/build/nsh-syntax-check-stub.nsi': `!define VERSION "${version}"\n`,
-    'README.md': readme(version),
-    'README_zh.md': readme(version),
+    'README.md': readme(version, version),
+    'README_zh.md': readme(version, version),
   };
 }
 
@@ -72,19 +73,41 @@ test('a release change moves the version with every place it is spelled', () => 
 
 test('the GA shape passes: the macro is the documented form for a final release', () => {
   // `scripts/package-sd-windows.sh` says the literal is pinned only for the rc
-  // cycle, and that at GA `artifactName` goes back to `${version}`. Requiring the
-  // literal unconditionally would have blocked #1198 while following the policy.
+  // cycle, and that at GA `artifactName` goes back to `${version}`.
   const result = verdict({ baseVersion: '0.4.0-rc1', files: gaFiles(), headVersion: '0.4.0' });
   assert.equal(result.ok, true, result.reason);
   // A GA release that keeps the literal is fine too: same string, same file name.
   assert.equal(verdict({ baseVersion: '0.4.0-rc1', files: files('0.4.0'), headVersion: '0.4.0' }).ok, true);
 });
 
-test('a pre-release still needs the literal, because the macro cannot spell the dot form', () => {
-  const macroFiles = gaFiles('0.5.0-rc1');
-  const result = verdict({ baseVersion: '0.4.1', files: macroFiles, headVersion: '0.5.0-rc1' });
+test('a GA bump that leaves the rc metadata in place fails', () => {
+  // The substring trap: `0.4.0` is a prefix of `0.4.0.rc1`, so a plain includes()
+  // check passed while the installer was still named for the pre-release.
+  const result = verdict({ baseVersion: '0.4.0-rc1', files: files('0.4.0-rc1'), headVersion: '0.4.0' });
+  assert.equal(result.ok, false, result.reason);
+  assert.match(result.reason, /electron-builder\.yml does not carry ScienceDiscovery-0\.4\.0- or ScienceDiscovery-\$\{version\}-/u);
+  assert.match(result.reason, /nsh-syntax-check-stub\.nsi does not carry !define VERSION "0\.4\.0"/u);
+  assert.match(result.reason, /README\.md does not carry Release-0\.4\.0-/u);
+  assert.match(result.reason, /README_zh\.md does not carry releases\/tag\/v0\.4\.0/u);
+});
+
+test('a version that merely starts with the expected one does not satisfy it', () => {
+  // Same class as `0.4.0` / `0.4.0.rc1`: `0.4.0.rc10` must not pass for `0.4.0-rc1`.
+  const rc10 = {
+    'application/electron-builder.yml': 'win:\n  artifactName: ScienceDiscovery-0.4.0.rc10-win-x64-setup.${ext}\n',
+    'application/build/nsh-syntax-check-stub.nsi': '!define VERSION "0.4.0.rc10"\n',
+    'README.md': readme('0.4.0-rc10', '0.4.0.rc10'),
+    'README_zh.md': readme('0.4.0-rc10', '0.4.0.rc10'),
+  };
+  const result = verdict({ files: rc10 });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /electron-builder\.yml does not carry "0\.5\.0\.rc1"/u);
+  assert.match(result.reason, /electron-builder\.yml does not carry ScienceDiscovery-0\.4\.0\.rc1-/u);
+});
+
+test('a pre-release still needs the literal, because the macro cannot spell the dot form', () => {
+  const result = verdict({ baseVersion: '0.4.1', files: gaFiles('0.5.0-rc1'), headVersion: '0.5.0-rc1' });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /electron-builder\.yml does not carry ScienceDiscovery-0\.5\.0\.rc1-/u);
 });
 
 test('a functional change that bumps the version is rejected, like #1197 was', () => {
@@ -96,20 +119,13 @@ test('a functional change that bumps the version is rejected, like #1197 was', (
   });
   assert.equal(result.ok, false);
   assert.match(result.reason, /does not start with "chore\(release\):"/u);
-  assert.match(result.reason, /electron-builder\.yml does not carry "0\.4\.1"/u);
+  assert.match(result.reason, /electron-builder\.yml does not carry/u);
 });
 
 test('the title alone is not enough', () => {
   const result = verdict({ baseVersion: '0.4.0', files: files('0.4.0'), headVersion: '0.4.1' });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /README\.md \(its spelling\) does not carry "0\.4\.1"/u);
-});
-
-test('touching the files without the new number is still the drift', () => {
-  const result = verdict({ headVersion: '0.5.0' });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /electron-builder\.yml does not carry "0\.5\.0" or "\$\{version\}"/u);
-  assert.match(result.reason, /README_zh\.md \(its tag link\) does not carry "v0\.5\.0"/u);
+  assert.match(result.reason, /README\.md does not carry Release-0\.4\.1-/u);
 });
 
 test('one file left behind is named, with the string it is missing', () => {
@@ -117,7 +133,7 @@ test('one file left behind is named, with the string it is missing', () => {
   stale['application/build/nsh-syntax-check-stub.nsi'] = '!define VERSION "0.4.0.rc1"\n';
   const result = verdict({ files: stale, headVersion: '0.5.0-rc1' });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /nsh-syntax-check-stub\.nsi does not carry "0\.5\.0\.rc1"/u);
+  assert.match(result.reason, /nsh-syntax-check-stub\.nsi does not carry !define VERSION "0\.5\.0\.rc1"/u);
   assert.equal(/electron-builder\.yml does not carry/u.test(result.reason), false);
 });
 
@@ -133,11 +149,23 @@ test('the release prefix has to start the title', () => {
   assert.equal(verdict({ title: '' }).ok, false);
 });
 
-test('the dot spelling is rejected with the spelling to use instead', () => {
-  const result = verdict({ headVersion: '0.4.0.rc1' });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /not a SemVer version/u);
-  assert.match(result.reason, /"0\.4\.0-rc1"/u);
+test('the dot spelling is rejected with a suggestion that differs from it', () => {
+  for (const [given, wanted] of [['0.4.0.rc1', '0.4.0-rc1'], ['0.4.0.1', '0.4.0-1'], ['v0.4.0', '0.4.0']]) {
+    assert.equal(semverSuggestion(given), wanted);
+    const result = verdict({ headVersion: given });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /not a SemVer version/u);
+    // The suggestion clause must name a different string: an earlier version of
+    // this check told `0.4.0.1` to write `0.4.0.1`.
+    const suggestion = /write it "([^"]+)"/u.exec(result.reason);
+    assert.ok(suggestion, `${given}: the message carries no suggestion`);
+    assert.equal(suggestion[1], wanted, `${given} should be told to use ${wanted}`);
+    assert.notEqual(suggestion[1], given, `${given} must not be told to use itself`);
+  }
+});
+
+test('an unrecognizable spelling gets the shape to write, not itself', () => {
+  assert.equal(semverSuggestion('0.4.0 rc1'), '<major>.<minor>.<patch>[-<suffix>]');
 });
 
 test('an unreadable metadata file is reported, not ignored', () => {
@@ -165,15 +193,13 @@ test('the version is read from the field, not from the text around it', () => {
   assert.equal(versionOf('{"name":"sd-shell","version":"0.4.0-rc1"}'), '0.4.0-rc1');
 });
 
-test('every requirement declares a spelling the checker knows', () => {
+test('every requirement declares a delimiter and a matcher', () => {
   for (const version of ['0.4.0-rc1', '0.4.0']) {
-    for (const { groups, path } of requirementsFor(version)) {
-      assert.ok(groups.length > 0, `${path} declares no requirement`);
-      for (const alternatives of groups) {
-        assert.ok(alternatives.length > 0, `${path} declares an empty group`);
-        for (const kind of alternatives) {
-          assert.doesNotThrow(() => spellingOf(kind, version), `${path} declares an unknown spelling: ${kind}`);
-        }
+    for (const { checks, path } of requirementsFor(version)) {
+      assert.ok(checks.length > 0, `${path} declares no requirement`);
+      for (const { expected, matches } of checks) {
+        assert.equal(typeof expected, 'string', `${path} has a requirement without a label`);
+        assert.ok(matches instanceof RegExp, `${path} has a requirement without a matcher`);
       }
     }
   }
@@ -188,33 +214,19 @@ test('every requirement declares a spelling the checker knows', () => {
 // ---- the policy job's own half of the rule --------------------------------
 
 test('the policy verdict is the rule, and only for pull requests', () => {
-  const failing = versionProblems({
-    baseVersion: '0.4.1',
-    event: 'pull_request',
-    files: files(),
-    headVersion: '0.4.1',
-    title: 'fix(mcp): reconnect',
-  });
-  assert.deepEqual(failing, []);
+  assert.deepEqual(versionProblems({
+    baseVersion: '0.4.1', event: 'pull_request', files: files(), headVersion: '0.4.1', title: 'fix(mcp): reconnect',
+  }), []);
 
   const rejected = versionProblems({
-    baseVersion: '0.4.0',
-    event: 'pull_request',
-    files: files('0.4.0'),
-    headVersion: '0.4.1',
-    title: 'fix(mcp): reconnect',
+    baseVersion: '0.4.0', event: 'pull_request', files: files('0.4.0'), headVersion: '0.4.1', title: 'fix(mcp): reconnect',
   });
   assert.equal(rejected.length, 1);
   assert.match(rejected[0], /does not start with "chore\(release\):"/u);
 
-  // A push or a merge group re-verifies a commit whose pull request answered this.
   for (const event of ['push', 'merge_group', 'workflow_dispatch']) {
     assert.deepEqual(versionProblems({
-      baseVersion: '0.4.0',
-      event,
-      files: {},
-      headVersion: '0.4.1',
-      title: 'fix(mcp): reconnect',
+      baseVersion: '0.4.0', event, files: {}, headVersion: '0.4.1', title: 'fix(mcp): reconnect',
     }), [], `${event} must not be checked`);
   }
 });
@@ -227,18 +239,12 @@ test('the policy job actually calls the rule', () => {
   assert.match(policy, /versionProblemsFromEvent\(/u, 'the policy CLI no longer calls the version check');
   assert.match(policy, /CI policy failed: /u, 'a violation no longer fails the policy job');
   assert.match(policy, /release version OK: /u, 'a passing gate is no longer reported');
-  // It must run with the event and the checkout, not a constant.
   assert.match(policy, /versionProblemsFromEvent\(\{ event: process\.env\.GITHUB_EVENT_NAME, payload: event \}\)/u);
 });
 
 test('the checkout read covers every metadata file, and the base commit', () => {
-  // A mapping that silently skipped a file would leave that file unchecked while
-  // the rule still looked wired; the readers are injected so this can be seen.
   const asked = [];
-  const contents = {
-    ...files('0.4.0'),
-    [VERSION_FILE]: '{"version": "0.4.0"}',
-  };
+  const contents = { ...files('0.4.0'), [VERSION_FILE]: '{"version": "0.4.0"}' };
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
     payload: { pull_request: { base: { sha: 'a'.repeat(40) }, title: 'fix(mcp): reconnect' } },
@@ -250,14 +256,15 @@ test('the checkout read covers every metadata file, and the base commit', () => 
     assert.ok(asked.includes(path), `${path} was never read`);
   }
   assert.equal(asked.filter(entry => entry.includes(':')).length, 1, 'the base commit is read once');
-  assert.ok(asked.some(entry => entry.endsWith(':application/package.json')), 'the base version is read from the base commit');
+  assert.ok(asked.some(entry => entry.endsWith(':application/package.json')));
 });
 
 test('the checkout read refuses an event it cannot compare against', () => {
-  const withoutBase = { pull_request: { title: 'chore(release): x' } };
   assert.throws(
-    () => versionProblemsFromEvent({ event: 'pull_request', payload: withoutBase, readFile: () => '{}', showFile: () => '{}' }),
+    () => versionProblemsFromEvent({
+      event: 'pull_request', payload: { pull_request: { title: 'chore(release): x' } },
+      readFile: () => '{}', showFile: () => '{}',
+    }),
     /no usable pull_request\.base\.sha/u,
   );
 });
-

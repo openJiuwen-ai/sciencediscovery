@@ -15,12 +15,17 @@
  *
  *  1. the pull request says it is a release change — title `chore(release): …`;
  *  2. every place the release number is written by hand carries the **new**
- *     number, not merely a diff that touched the file.
+ *     number, not merely a diff that touched the file, and carries it as a whole
+ *     token.
  *
- * The second half is the one that is easy to get wrong. Touching
- * `electron-builder.yml` while leaving `ScienceDiscovery-0.4.0.rc1-…` in place
- * is the original defect wearing a release title: an installer named for a
- * version it does not have, and a README badge linking a tag that 404s.
+ * Both halves of (2) are easy to get wrong. Touching `electron-builder.yml`
+ * while leaving `ScienceDiscovery-0.4.0.rc1-…` in place is the original defect
+ * wearing a release title. And a plain substring test is not enough either:
+ * `0.4.0` is a prefix of `0.4.0.rc1`, so a GA release moving `0.4.0-rc1 ->
+ * 0.4.0` would pass while the installer stayed named `0.4.0.rc1` and the badges
+ * still linked `v0.4.0-rc1` — the same drift. Every check below therefore
+ * matches a whole token with its delimiter (`ScienceDiscovery-<v>-`, `!define
+ * VERSION "<v>"`, `Release-<v>-`, `releases/tag/v<v>` followed by a boundary).
  *
  * This lives in `.ci/` rather than as a `ci.yml` step because the repository has
  * one frozen test plan: a command check gets a planned identity there and is
@@ -29,6 +34,14 @@
  * still looking green. The verdict is computed by the policy job, the only job
  * with the pull request's history, and its own cases run in the UT slice with
  * every other `.ci/*.test.mjs`.
+ *
+ * Known gap, deliberate: the title half is checked when the pull request runs.
+ * Retitling afterwards does not re-run this (that would re-run the whole suite on
+ * every body edit), and the merge queue is not checked — its base has moved, so
+ * there is nothing stable to compare the version against. A retitled pull
+ * request can therefore merge with release-note classification that disagrees
+ * with its title; the version and its metadata cannot drift the same way,
+ * because changing them needs a push, which re-runs everything.
  */
 
 /** `0.4.0-rc1` -> `0.4.0.rc1`: the form a file name may take. */
@@ -49,34 +62,61 @@ export const VERSION_MACRO = "${version}";
  */
 export const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Every place the release number is written by hand, and what it must say.
+ * Every place the release number is written by hand, and the exact token it must
+ * contain.
  *
- * An entry lists requirement *groups*: every group has to be satisfied, and a
- * group is satisfied by any one of its spellings. That shape is what lets the
- * README need two different strings (the badge and the tag it links) while the
- * artifact name has a choice.
+ * Each entry is `{path, checks}`; every check has to pass, and a check is one
+ * literal with its delimiter, so `0.4.0` never satisfies a file that says
+ * `0.4.0.rc1`.
  */
 export function requirementsFor(version) {
+  const dot = dotForm(version);
   const preRelease = version.includes("-");
+  // At GA the documented policy puts `${version}` back in the artifact name; it
+  // cannot drift from the field it expands, so either spelling is accepted.
+  const names = preRelease ? [dot] : [dot, VERSION_MACRO];
   return [
     {
+      checks: [{
+        expected: names.map((name) => `ScienceDiscovery-${name}-`).join(" or "),
+        matches: new RegExp(`ScienceDiscovery-(?:${names.map(escapeRegExp).join("|")})-win-x64-setup\\.`, "u"),
+      }],
       path: "application/electron-builder.yml",
-      groups: preRelease
-        // A pre-release is spelled with a dot in the file name — a form SemVer
-        // forbids in the version field — so the literal is the only thing that can
-        // stand for it: `${version}` would expand to the hyphen form and rename
-        // the installer.
-        ? [["dot"]]
-        // At GA the documented policy (`scripts/package-sd-windows.sh`) puts the
-        // `${version}` macro back. The macro cannot drift from the field it
-        // expands, so either spelling is accepted here.
-        : [["dot", "macro"]],
     },
-    { groups: [["dot"]], path: "application/build/nsh-syntax-check-stub.nsi" },
-    // The badge is read by a person (dot form) and links the tag (hyphen form).
-    { groups: [["dot"], ["tag"]], path: "README.md" },
-    { groups: [["dot"], ["tag"]], path: "README_zh.md" },
+    {
+      checks: [{
+        expected: `!define VERSION "${dot}"`,
+        matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
+      }],
+      path: "application/build/nsh-syntax-check-stub.nsi",
+    },
+    // The badge is read by a person (dot form, hyphen-delimited in the badge URL)
+    // and links the tag (hyphen form, boundary after it).
+    {
+      checks: [
+        { expected: `Release-${dot}-`, matches: new RegExp(`Release-${escapeRegExp(dot)}-`, "u") },
+        {
+          expected: `releases/tag/v${version}`,
+          matches: new RegExp(`releases/tag/v${escapeRegExp(version)}(?![0-9A-Za-z.-])`, "u"),
+        },
+      ],
+      path: "README.md",
+    },
+    {
+      checks: [
+        { expected: `Release-${dot}-`, matches: new RegExp(`Release-${escapeRegExp(dot)}-`, "u") },
+        {
+          expected: `releases/tag/v${version}`,
+          matches: new RegExp(`releases/tag/v${escapeRegExp(version)}(?![0-9A-Za-z.-])`, "u"),
+        },
+      ],
+      path: "README_zh.md",
+    },
   ];
 }
 
@@ -91,11 +131,18 @@ export function versionOf(text) {
   return JSON.parse(text).version;
 }
 
-export function spellingOf(kind, version) {
-  if (kind === "dot") return dotForm(version);
-  if (kind === "tag") return `v${version}`;
-  if (kind === "macro") return VERSION_MACRO;
-  throw new Error(`unknown spelling: ${kind}`);
+/**
+ * The spelling to write instead of a rejected one.
+ *
+ * General on purpose: an earlier version of this only rewrote `.rcN`/`.betaN`/
+ * `.alphaN`, so `0.4.0.1` was told to use `0.4.0.1` — the value just rejected.
+ */
+export function semverSuggestion(version) {
+  const dotSuffixed = /^(\d+\.\d+\.\d+)\.(.+)$/u.exec(version);
+  if (dotSuffixed) return `${dotSuffixed[1]}-${dotSuffixed[2]}`;
+  const leadingV = /^v(.+)$/u.exec(version);
+  if (leadingV) return leadingV[1];
+  return `<major>.<minor>.<patch>[-<suffix>]`;
 }
 
 /**
@@ -114,7 +161,7 @@ export function assessVersionChange({ baseVersion, files, headVersion, title }) 
     return {
       ok: false,
       reason: `${VERSION_FILE} moves to "${headVersion}", which is not a SemVer version. `
-        + `The dot spelling belongs in file names only; write it "${headVersion.replace(/\.(rc|beta|alpha)(\d+)$/u, "-$1$2")}" instead.`,
+        + `The dot spelling belongs in file names only; write it "${semverSuggestion(headVersion)}" instead.`,
     };
   }
 
@@ -122,20 +169,17 @@ export function assessVersionChange({ baseVersion, files, headVersion, title }) 
   if (!RELEASE_TITLE.test(trimmed)) {
     problems.push(`the title "${trimmed}" does not start with "chore(release):"`);
   }
-  for (const { groups, path } of requirementsFor(headVersion)) {
+  for (const { checks, path } of requirementsFor(headVersion)) {
     const text = files[path];
     if (typeof text !== "string") {
       problems.push(`${path} could not be read`);
       continue;
     }
-    groups.forEach((alternatives, index) => {
-      const wanted = alternatives.map((kind) => `"${spellingOf(kind, headVersion)}"`);
-      const satisfied = alternatives.some((kind) => text.includes(spellingOf(kind, headVersion)));
-      if (!satisfied) {
-        const which = groups.length > 1 ? (index === 0 ? " (its spelling)" : " (its tag link)") : "";
-        problems.push(`${path}${which} does not carry ${wanted.join(" or ")}`);
+    for (const { expected, matches } of checks) {
+      if (!matches.test(text)) {
+        problems.push(`${path} does not carry ${expected}`);
       }
-    });
+    }
   }
   if (problems.length === 0) {
     return {
