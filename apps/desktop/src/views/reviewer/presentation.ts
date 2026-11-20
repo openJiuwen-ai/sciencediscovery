@@ -40,23 +40,31 @@ export type ReviewTone = "pass" | "warn" | "fail" | "pending" | "neutral";
 
 type CheckpointStatus = NonNullable<ChatMessage["reviewerCheckpoint"]>["status"];
 
-/** One card inside an expanded review. `label` is the small category line the
- *  handoff puts above the claim; `title` is the claim; `body` is the evidence. */
+/** One card inside an expanded review, in the one shape every row shares:
+ *  which check it is (`category`), what it concluded (`badge`), and one
+ *  sentence saying what that means (`body`). Anything longer — the reviewer's
+ *  own account, the passages it read — is folded under it.
+ *
+ *  The shape is fixed on purpose: a reader learns it once. Nothing here may
+ *  add a second heading or a differently coloured block. */
 export interface ReviewRow {
   id: string;
   tone: ReviewTone;
-  label: string;
-  /** What the label means, as a hover hint. "计算" is a category name, not a
-   *  sentence: a first-time reader cannot tell whether it checks the numbers or
-   *  computes them. The label stays one word; the hint carries the explanation. */
-  labelTip: string;
-  title: string;
-  body?: string;
-  /** The badge's word, when it is not simply the tone. */
+  /** 结构 / 引用 / 计算 / 完整性 / 来源 …, in the same slot on every row. */
+  category: string;
+  /** What the category means, as a hover hint. "计算" is a category name, not
+   *  a sentence: a first-time reader cannot tell whether it checks the numbers
+   *  or computes them. */
+  categoryTip: string;
+  /** The badge's word, the only coloured part of the row. */
   badge: string;
-  /** Source passages the check relied on. The card keeps them folded: the
-   *  verdict has to be readable at a glance, and "why only part of it" is a
-   *  question the reader asks on purpose. */
+  /** One sentence: what the check found, or could not do. Always present. */
+  body: string;
+  /** What was checked, for a source verdict; shown inside the evidence fold. */
+  claim?: string;
+  /** Source passages the check relied on. Folded: the verdict has to be
+   *  readable at a glance, and "why only part of it" is a question the reader
+   *  asks on purpose. */
   evidence?: ReviewEvidence[];
   /** The reviewer's own account of the evidence. Folded with it — this is
    *  model output, so it is opt-in, not the card's default copy. */
@@ -283,14 +291,14 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: finding.id,
       tone: finding.severity === "critical" ? "fail" : "warn",
-      label: category === "semantics" ? TEXT.reviewer.deepSemantic : category === undefined
+      category: category === "semantics" ? TEXT.reviewer.deepSemantic : category === undefined
         ? TEXT.reviewer.title
         : labelFor(category),
-      labelTip: category === "semantics"
+      categoryTip: category === "semantics"
         ? TEXT.reviewer.labelTips.semantics
         : labelTipFor(category ?? "other"),
-      title: finding.message,
       badge: finding.severity === "critical" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
+      body: finding.message,
     });
   }
 
@@ -313,11 +321,12 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       rows.push({
         id: `${review.id}:completeness`,
         tone: completeness.status === "complete" ? "pass" : "fail",
-        label: labelFor("completeness"),
-        labelTip: labelTipFor("completeness"),
-        title: completeness.status === "complete" ? text.complete : text.incomplete,
-        body: missing.length > 0 ? `${source}\n${missing.join("\n")}` : source,
-        badge: completeness.status === "complete" ? TEXT.reviewer.summaryPass : TEXT.reviewer.finding,
+        category: labelFor("completeness"),
+        categoryTip: labelTipFor("completeness"),
+        badge: completeness.status === "complete" ? TEXT.reviewer.badgePass : TEXT.reviewer.finding,
+        body: completeness.status === "complete"
+          ? `${text.complete}。${source}`
+          : `${text.incomplete}。${missing.length > 0 ? missing.join("；") : source}`,
       });
     }
   }
@@ -326,15 +335,13 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:gap:${index}`,
       tone: "neutral",
-      label: TEXT.reviewer.gaps,
-      // The server's `gap.reason` is an English template ("Quick review parses
-      // citation format and provenance only; ..."). Printing it put an English
-      // paragraph in a Chinese card and told the reader nothing they could act
-      // on. The record keeps it; the card names the check and the next step.
-      labelTip: labelTipFor("gaps"),
-      title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
-      body: TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
+      // The category is the check that was skipped; the badge says it did not
+      // run. The server's own `gap.reason` is an English template and stays in
+      // the record; the card says the same thing in one sentence.
+      category: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
+      categoryTip: labelTipFor("gaps"),
       badge: TEXT.reviewer.gaps,
+      body: TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
     });
   }
 
@@ -347,11 +354,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:smart`,
       tone: "neutral",
-      label: TEXT.reviewer.deepSemantic,
-      labelTip: labelTipFor("semantics"),
-      title: TEXT.reviewer.inconclusive,
-      body: TEXT.reviewer.inconclusiveBody,
+      category: TEXT.reviewer.deepSemantic,
+      categoryTip: labelTipFor("semantics"),
       badge: TEXT.reviewer.badgeUnconfirmed,
+      body: TEXT.reviewer.inconclusiveBody,
     });
   }
 
@@ -366,17 +372,16 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // found, and that it was not enough to check the claim. The raw reason
     // stays in the review record.
     const inconclusive = verdict === "INCONCLUSIVE";
-    // Only a contradiction quotes the reviewer's own account of the source —
-    // that is the evidence for a claim about the report. A supported or partly
-    // supported check says what it found in the card's language: its rationale
-    // is model output and arrived in whichever language the source did, so it
-    // goes inside the evidence fold with the passages it talks about.
+    // The row says what the verdict means in one sentence, in the card's
+    // language. The reviewer's own account and the passages it read — model
+    // output, in whichever language the source was — are folded below with the
+    // claim they answer for.
     const body = inconclusive
       ? assessment.locators.length > 0
         ? TEXT.reviewer.sourceInconclusiveSome
         : TEXT.reviewer.sourceInconclusiveNone
       : verdict === "CONTRADICTED"
-        ? assessment.assessment.rationale
+        ? TEXT.reviewer.sourceContradicted
         : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;
     const evidence = assessment.locators.map((locator) => {
       const kind = TEXT.reviewer.sourceTypes[snapshots.get(locator.snapshotId)?.sourceType ?? ""];
@@ -389,18 +394,15 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       tone: inconclusive
         ? "neutral"
         : verdict === "SUPPORTED" ? "pass" : verdict === "CONTRADICTED" ? "fail" : "warn",
-      label: TEXT.reviewer.source,
-      labelTip: labelTipFor("source"),
-      title: claimText(assessment.claim) ?? TEXT.reviewer.source,
-      body,
-      evidence: evidence.length > 0 ? evidence : undefined,
-      // A contradiction is printed inline; the other verdicts keep the
-      // reviewer's account folded, so the "why only part of it" question has
-      // an answer without an English paragraph in every card.
-      rationale: verdict === "CONTRADICTED" || inconclusive
-        ? undefined
-        : assessment.assessment.rationale || undefined,
+      category: TEXT.reviewer.source,
+      categoryTip: labelTipFor("source"),
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
+      body,
+      claim: claimText(assessment.claim),
+      evidence: evidence.length > 0 ? evidence : undefined,
+      // A contradiction's account is the evidence for the finding, so it is
+      // shown with it; every source row keeps it folded.
+      rationale: inconclusive ? undefined : assessment.assessment.rationale || undefined,
     });
   }
 
@@ -418,11 +420,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:check:${check}`,
       tone: "pass",
-      label: labelFor(check),
-      labelTip: labelTipFor(check),
-      title: TEXT.reviewer.checkPass(labelFor(check)),
-      body: TEXT.reviewer.passBody,
+      category: labelFor(check),
+      categoryTip: labelTipFor(check),
       badge: TEXT.reviewer.badgePass,
+      body: `${TEXT.reviewer.checkPass(labelFor(check))}。${TEXT.reviewer.passBody}`,
     });
   }
 

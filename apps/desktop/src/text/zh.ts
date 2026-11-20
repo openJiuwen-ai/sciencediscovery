@@ -247,7 +247,11 @@ export const ZH = {
       computation: "这次审查没有核对数字与计算依据。",
     } as Record<string, string>,
     gapBodyUnknown: "这次审查没有执行这一项。",
+    claimLabel: "结论",
+    /** A fold with only the reviewer's account, when no passage was quoted. */
+    reviewerNote: "评审说明",
     sourceSupported: "来源原文支持这条结论。",
+    sourceContradicted: "来源原文与这条结论矛盾。",
     sourcePartly: "来源原文只支持这条结论的一部分。",
     /** Where a source passage sits, for the evidence list under a source row. */
     locatorAt: {

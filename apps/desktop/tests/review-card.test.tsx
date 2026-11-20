@@ -225,7 +225,7 @@ describe("a review's rows", () => {
     assert.equal(rows[0]?.id, "finding-1");
     assert.equal(rows[0]?.tone, "warn");
     // The category that raised a finding is not repeated as a pass below it.
-    assert.equal(rows.filter((row) => row.label === TEXT.reviewer.checkNames.citation).length, 1);
+    assert.equal(rows.filter((row) => row.category === TEXT.reviewer.checkNames.citation).length, 1);
   });
 
   it("lets the completeness card answer for the delivery finding", () => {
@@ -269,7 +269,7 @@ describe("a review's rows", () => {
       notChecked: [{ check: "claim_support", reason: "No source was read to confirm the claims." }],
     });
     const rows = reviewRows(unreachable);
-    assert.equal(rows.some((row) => row.label === "引文任务"), false);
+    assert.equal(rows.some((row) => row.category === "引文任务"), false);
     assert.ok(rows.some((row) => row.id === "review-1:gap:0"));
   });
 
@@ -277,7 +277,9 @@ describe("a review's rows", () => {
     const gapped = review({ notChecked: [{ check: "claim_support", reason: "no source text" }] });
     const row = reviewRows(gapped).find((candidate) => candidate.id === "review-1:gap:0");
     assert.ok(row);
-    assert.equal(row.label, TEXT.reviewer.gaps);
+    // The category is the check that was skipped; the badge says it did not run.
+    assert.equal(row.category, TEXT.reviewer.gapChecks.claim_support);
+    assert.equal(row.badge, TEXT.reviewer.gaps);
     // The server's own reason stays in the record; the card says the same
     // thing in the UI's language, and in words a reader can act on.
     assert.equal(row.body, TEXT.reviewer.gapBodies.claim_support);
@@ -490,7 +492,7 @@ describe("a review's rows", () => {
     const rows = reviewRows(partial);
     // The citation check ran and passed; the claim check did not run at all.
     assert.equal(rows[0]?.tone, "pass");
-    assert.equal(rows[0]?.label, TEXT.reviewer.checkNames.citation);
+    assert.equal(rows[0]?.category, TEXT.reviewer.checkNames.citation);
     assert.equal(rows.at(-1)?.id, "review-1:gap:0");
     assert.equal(rows.at(-1)?.tone, "neutral");
   });
@@ -514,9 +516,9 @@ describe("a review's rows", () => {
 describe("the hint behind a label", () => {
   it("explains each row's category, so a one-word label is readable", () => {
     const rows = reviewRows(review());
-    for (const row of rows) assert.ok(row.labelTip.length > 0, `no hint for ${row.label}`);
-    const structure = rows.find((row) => row.label === TEXT.reviewer.checkNames.structure);
-    assert.equal(structure?.labelTip, TEXT.reviewer.labelTips.structure);
+    for (const row of rows) assert.ok(row.categoryTip.length > 0, `no hint for ${row.category}`);
+    const structure = rows.find((row) => row.category === TEXT.reviewer.checkNames.structure);
+    assert.equal(structure?.categoryTip, TEXT.reviewer.labelTips.structure);
   });
 
   it("explains a finding the card has no category for", () => {
@@ -530,7 +532,7 @@ describe("the hint behind a label", () => {
         status: "open",
       }],
     });
-    assert.equal(reviewRows(generic)[0]?.labelTip, TEXT.reviewer.labelTips.other);
+    assert.equal(reviewRows(generic)[0]?.categoryTip, TEXT.reviewer.labelTips.other);
   });
 
   it("draws the explanation as a hover title, on the label and on the level pill", () => {
