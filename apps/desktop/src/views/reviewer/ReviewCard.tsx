@@ -15,7 +15,7 @@
 import { useState } from "react";
 
 import type { ArtifactReviewRun, ChatMessage } from "../../api/types.js";
-import { TEXT } from "../../text.js";
+import { EN } from "../../text/en.js";
 import {
   checkpointSummary,
   checkpointTone,
@@ -28,6 +28,11 @@ import {
   reviewTone,
   skipReasonText,
 } from "./presentation.js";
+
+/** The review card is English, as the web client's is: the reviewer writes
+ *  English, and a card that switches language while its sentences do not mixes
+ *  two languages in one line. Settings and menus stay localized. */
+const CARD = EN.reviewer;
 
 type Checkpoint = NonNullable<ChatMessage["reviewerCheckpoint"]>;
 
@@ -69,7 +74,7 @@ export function ReviewCard({
     // for one source at a time. The phase is the only thing that separates
     // "working" from "stuck"; finished-over-total is the only thing that says
     // how much of it is left.
-    const phase = progress?.phase === undefined ? undefined : TEXT.reviewer.phase[progress.phase];
+    const phase = progress?.phase === undefined ? undefined : CARD.phase[progress.phase];
     // A Quick run counts artifacts and leaves the check counters at zero, so the
     // progress has to come from whichever counter is actually moving.
     const checksTotal = progress?.total ?? 0;
@@ -83,22 +88,22 @@ export function ReviewCard({
           <span className="review-mark is-pending">
             <ShieldGlyph />
           </span>
-          <span className="review-title">{TEXT.reviewer.title}</span>
+          <span className="review-title">{CARD.title}</span>
           <span className="review-sep">·</span>
-          <span className="review-summary">{phase ?? TEXT.reviewer.running}</span>
+          <span className="review-summary">{phase ?? CARD.running}</span>
           {progress === undefined ? null : (
             <>
               <span className="review-sep">·</span>
               <span className="review-progress">
                 {progress.artifactLogicalName}
-                {counted.total > 0 ? ` ${TEXT.reviewer.progress(counted.done, counted.total)}` : ""}
+                {counted.total > 0 ? ` ${CARD.progress(counted.done, counted.total)}` : ""}
               </span>
             </>
           )}
           {queued > 0 ? (
             <>
               <span className="review-sep">·</span>
-              <span className="review-progress">{TEXT.reviewer.queued(queued)}</span>
+              <span className="review-progress">{CARD.queued(queued)}</span>
             </>
           ) : null}
           <span aria-hidden="true" className="review-dots">
@@ -133,7 +138,7 @@ export function ReviewCard({
         <span className={`review-mark is-${tone}`}>
           <ShieldGlyph />
         </span>
-        <span className="review-title">{TEXT.reviewer.title}</span>
+        <span className="review-title">{CARD.title}</span>
         <span className="review-sep">·</span>
         <span className="review-summary">{checkpointSummary(reviews, checkpoint.status)}</span>
         {/* The summary reports the worst artifact; when they disagree, the
@@ -147,7 +152,7 @@ export function ReviewCard({
         {count > 0 ? (
           <>
             <span className="review-sep">·</span>
-            <span className="review-count">{TEXT.reviewer.checks(count)}</span>
+            <span className="review-count">{CARD.checks(count)}</span>
           </>
         ) : null}
         {/* A re-run keeps the old verdict readable; the line says another one
@@ -155,7 +160,7 @@ export function ReviewCard({
         {running ? (
           <>
             <span className="review-sep">·</span>
-            <span className="review-progress">{TEXT.reviewer.running}</span>
+            <span className="review-progress">{CARD.running}</span>
           </>
         ) : null}
         <span aria-hidden="true" className="review-chev">
@@ -166,7 +171,7 @@ export function ReviewCard({
       {open ? (
         <div className="review-body">
           {reviews.length === 0 ? (
-            <p className="review-empty">{checkpoint.error ?? skipReasonText(checkpoint.skipReason) ?? TEXT.reviewer.empty}</p>
+            <p className="review-empty">{checkpoint.error ?? skipReasonText(checkpoint.skipReason) ?? CARD.empty}</p>
           ) : null}
           {reviews.map((review) => (
             <ReviewArtifactBody
@@ -201,7 +206,7 @@ export function ReviewArtifactBody({
   const tone = reviewTone(review);
   const rerun = onRerun === undefined ? null : (
     <button className="review-rerun" onClick={onRerun} type="button">
-      {TEXT.reviewer.rerun}
+      {CARD.rerun}
     </button>
   );
 
@@ -227,27 +232,27 @@ export function ReviewArtifactBody({
           stays readable as history, and the re-run is the way forward. */}
       {review.stale ? (
         <div className="review-banner is-stale">
-          <span>{TEXT.reviewer.stale}</span>
+          <span>{CARD.stale}</span>
           {rerun}
         </div>
       ) : null}
 
       {review.status === "failed" ? (
         <div className="review-banner is-fail">
-          <span>{TEXT.reviewer.failedDetail}</span>
+          <span>{CARD.failedDetail}</span>
           {/* A stale failed review already offers the re-run above. */}
           {review.stale ? null : rerun}
         </div>
       ) : null}
 
       {review.reusedFromReviewId === undefined ? null : (
-        <p className="review-note">{TEXT.reviewer.reused}</p>
+        <p className="review-note">{CARD.reused}</p>
       )}
 
       {/* A citation-format pass did not look at whether the claims hold, and
           the header must not be the only thing the reader sees. */}
       {citationOnlyReview(review) && review.status !== "failed" && !review.stale ? (
-        <p className="review-note">{TEXT.reviewer.citationOnlyNote}</p>
+        <p className="review-note">{CARD.citationOnlyNote}</p>
       ) : null}
 
       <div className="review-items">
@@ -264,9 +269,9 @@ export function ReviewArtifactBody({
             <div className="review-item-foot">
               <span
                 className="review-pill"
-                title={TEXT.reviewer.levelTip(review.reviewLevel ?? "quick")}
+                title={CARD.levelTip(review.reviewLevel ?? "quick")}
               >
-                {TEXT.reviewer.levelPill(review.reviewLevel ?? "quick")}
+                {CARD.levelPill(review.reviewLevel ?? "quick")}
               </span>
             </div>
           </article>
@@ -281,7 +286,7 @@ export function ReviewArtifactBody({
 
       {/* A failed review that produced no rows still needs a way back. */}
       {rows.length === 0 && review.status !== "failed" && deliveryNote(review) === undefined ? (
-        <p className="review-empty">{TEXT.reviewer.empty}</p>
+        <p className="review-empty">{CARD.empty}</p>
       ) : null}
     </section>
   );
