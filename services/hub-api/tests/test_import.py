@@ -24,7 +24,7 @@ def _fixture(tmp_path: Path):
     assets_root = tmp_path / "site"
     sessions_root = tmp_path / "sessions"
 
-    skill = make_zip({"SKILL.md": b"# Skill\n"})
+    skill = make_zip({"SKILL.md": b"# Skill\n", "scripts/search.py": b"print(1)\n"})
     (assets_root / "skills").mkdir(parents=True, exist_ok=True)
     (assets_root / "skills" / "antibody-design.md").write_text("# Antibody\n", encoding="utf-8")
     team = make_zip({"SKILL.md": b"# Team\n"})
@@ -152,7 +152,8 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
 
         artifact = client.get("/api/v1/artifacts/antibody-design").json()["data"]
         assert artifact["version"] == "1.0.0"
-        assert client.get(artifact["url"]).content == make_zip({"SKILL.md": b"# Skill\n"})
+        expected = (assets_root / "packages/antibody-design-1.0.0.zip").read_bytes()
+        assert client.get(artifact["url"]).content == expected
 
         specialist = client.get("/api/v1/artifacts/builtin-literature-searcher").json()["data"]
         assert specialist["version"] == "1.0.0"
@@ -160,6 +161,35 @@ def test_import_preserves_ids_and_publishes_every_kind(tmp_path):
             "/api/v1/assets/builtin-literature-searcher/versions/1.0.0/files"
         ).json()["data"]["files"]
         assert [entry["path"] for entry in files] == ["builtin-literature-searcher.json"]
+
+        session_readme = client.get(
+            "/api/v1/assets/compression-algorithm-20261117/readme"
+        ).json()["data"]
+        assert session_readme["text"] == "# Session\n"
+
+        catalog = client.get("/api/v1/catalog").json()["data"]
+        skill_asset = next(item for item in catalog["assets"] if item["id"] == "antibody-design")
+        assert [entry["path"] for entry in skill_asset["resources"]] == ["scripts/search.py"]
+        skill_tree = catalog["categories"]["skill"]
+        biology = next(node for node in skill_tree if node["id"] == "biology")
+        assert [child["id"] for child in biology["children"]] == ["protein"]
+        specialist_asset = next(
+            item for item in catalog["assets"] if item["id"] == "builtin-literature-searcher"
+        )
+        assert specialist_asset["download"]["text"].endswith("/readme?format=text")
+        assert specialist_asset["skills"] == []
+        connector_asset = next(item for item in catalog["assets"] if item["id"] == "arxiv")
+        assert connector_asset["config"] == {}
+        assert connector_asset["governance"] == {}
+        assert connector_asset["toolCount"] == 0
+        session_asset = next(
+            item for item in catalog["assets"] if item["id"] == "compression-algorithm-20261117"
+        )
+        assert session_asset["category"] == {"source": "manual", "task": "compression"}
+        session_tree = catalog["categories"]["sessionPackage"]
+        assert [node["id"] for node in session_tree] == ["compression"]
+        assert session_tree[0]["count"] == 1
+        assert client.get("/api/v1/stats").json()["data"]["total"] == 6
 
     # Running it again changes nothing.
     again = import_catalog(

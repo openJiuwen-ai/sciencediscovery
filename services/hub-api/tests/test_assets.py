@@ -330,3 +330,27 @@ def test_a_session_created_through_the_api_lands_in_the_tree(client, register):
     tree = catalog["categories"]["sessionPackage"]
     assert tree[0]["id"] == "gravitational_waves"
     assert tree[0]["count"] == 1
+
+
+def test_patching_a_non_session_category_keeps_the_payload_in_sync(client, register):
+    token, _ = register("publisher")
+    headers = {"Authorization": f"Bearer {token}"}
+    asset = _create_asset(client, headers)
+    assert _upload(client, headers, asset["id"]).status_code == 201
+    client.post(
+        f"/api/v1/admin/reviews/{asset['id']}/1.0.0",
+        headers=headers,
+        json={"decision": "approve"},
+    )
+    patched = client.patch(
+        f"/api/v1/assets/{asset['id']}",
+        headers=headers,
+        json={"category": "genomics/transcriptomics"},
+    )
+    assert patched.status_code == 200
+    catalog = client.get("/api/v1/catalog").json()["data"]
+    item = next(entry for entry in catalog["assets"] if entry["id"] == asset["id"])
+    assert item["category"] == {"domain": "genomics", "subdomain": "transcriptomics"}
+    tree = catalog["categories"]["skill"]
+    genomics = next(node for node in tree if node["id"] == "genomics")
+    assert [child["id"] for child in genomics["children"]] == ["transcriptomics"]
