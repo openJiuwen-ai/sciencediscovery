@@ -1,5 +1,6 @@
 .side-new-split { display:flex; flex-direction:column; gap:2px; }
 .side-new-split .side-new { flex:1; min-width:0; margin-top:0; }
+.side-import-button img { width:16px; height:16px; flex:0 0 16px; }
 .research-package-notice { color:var(--muted); font-size:12px; line-height:1.6; margin:8px 0; }
 .research-package-dialog { width:min(680px,calc(100vw - 32px)); max-height:85vh; overflow:hidden; display:flex; flex-direction:column; }
 .research-package-dialog .modal-body { min-height:0; overflow:auto; overflow-wrap:anywhere; }
@@ -184,8 +185,6 @@
 .research-toast.is-error .research-toast-icon { background: #f5222d; }
 
 .research-package-upload.is-dragging { border-color: #1677ff; background: #eff6ff; }
-.research-scope-help { width: 16px; height: 16px; margin-left: 4px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font-size: 11px; line-height: 14px; cursor: help; }
-.research-package-dialog .research-dialog-title { display: flex; align-items: center; gap: 6px; }
 .research-package-resume { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 28px 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-1); }
 .research-package-resume strong { font-size: 15px; }
 .research-package-dialog.is-import { width: min(700px, calc(100vw - 32px)); }

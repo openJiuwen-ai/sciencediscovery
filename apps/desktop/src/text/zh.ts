@@ -32,7 +32,7 @@ export const ZH = {
   researchPackage: {
     continueUnavailable: "此导入记录尚未完整恢复，暂不能继续聊天。请恢复缺失的服务后重新导入。", sourceUnavailable: "会话或所属项目已不存在。请刷新会话列表后重试。",
     projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入「会话」，也可以选择一个已有项目。",
-    projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", sessionScope: "导出整个会话及其研究材料，不只是页面上的聊天文字。", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
+    projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
     title: "科研证据包", import: "导入会话", export: "导出会话", continue: "继续聊天", branch: "创建新分支聊天", source: "返回来源会话",
     readOnly: "导入证据快照 · 只读。创建独立副本后，可使用已有材料继续研究。", copying: "正在复制研究记录，可切换会话…", failed: "操作失败",
     recalculating: "正在重算…",
