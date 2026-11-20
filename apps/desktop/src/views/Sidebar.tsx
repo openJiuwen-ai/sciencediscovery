@@ -26,6 +26,7 @@ import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
 import { sessionTitle } from "../app/session-title.js";
 import { SidebarToggle } from "./SidebarToggle.js";
+import migrationIcon from "../assets/icons/migration.svg";
 
 /** One rename in progress, whichever kind of row it started from. A Project
  *  and a Session both rename from a double-click and from their `⋯` menu, and
@@ -257,7 +258,7 @@ export function Sidebar({
         <span>{TEXT.sidebar.newTask}</span>
       </button>
         <button className="side-new side-import-button" onClick={() => onImportSession?.()} type="button">
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12v4M4 4v16h12v-4M9 12h11m-4-4 4 4-4 4" /></svg><span>{TEXT.researchPackage.import}</span>
+          <img alt="" aria-hidden="true" src={migrationIcon} /><span>{TEXT.researchPackage.import}</span>
         </button>
       </div>
 
