@@ -1,9 +1,11 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { backendName } from '../test/support/tagged/execution.mjs';
 import { changedPaths, documentationOnly } from './changed-paths.mjs';
+import { assessVersionChange, RELEASE_METADATA, VERSION_FILE, versionOf } from './release-version.mjs';
 
 const distributionProfiles = ['pr', 'daily', 'release'];
 const windowsDesktopProfiles = ['daily', 'release'];
@@ -15,6 +17,43 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = 
   const profile = event === 'pull_request' ? 'pr' : event === 'merge_group' ? 'merge' : requested;
   const docs_only = ['pull_request', 'push', 'merge_group'].includes(event) && documentationOnly(paths);
   return { profile, backend: backendName(backend), mocked: profile !== 'pr', real: profile !== 'pr', distribution: distributionProfiles.includes(profile), windows_desktop: windowsDesktopProfiles.includes(profile), docs_only };
+}
+
+/**
+ * A version bump is a release change (#1254).
+ *
+ * Kept here because the policy job is the only one that checks out the pull
+ * request's history: the version it moved *from* lives in a commit a shallow
+ * clone does not have. The rule itself is `release-version.mjs`, and its cases
+ * run in the UT slice with the rest of `.ci`.
+ *
+ * Only a pull request is checked. A push to `main` and the merge queue re-verify
+ * a commit whose pull request already answered this.
+ */
+export function versionProblems({ baseVersion, event, files, headVersion, title }) {
+  if (event !== 'pull_request') return [];
+  const verdict = assessVersionChange({ baseVersion, files, headVersion, title });
+  return verdict.ok ? [] : [verdict.reason];
+}
+
+/** Reads what `versionProblems` needs from this checkout. */
+function versionProblemsFromCheckout(event, payload) {
+  if (event !== 'pull_request') return [];
+  const base = payload?.pull_request?.base?.sha;
+  if (typeof base !== 'string' || !/^[a-f\d]{40}$/i.test(base)) {
+    // Without the base commit there is nothing to compare against; saying so is
+    // better than passing a rule nobody can evaluate.
+    throw new Error('release version: the event carries no usable pull_request.base.sha');
+  }
+  const baseVersion = versionOf(execFileSync('git', ['show', `${base}:${VERSION_FILE}`], { encoding: 'utf8' }));
+  const files = Object.fromEntries(RELEASE_METADATA.map(({ path }) => [path, readFileSync(path, 'utf8')]));
+  return versionProblems({
+    baseVersion,
+    event,
+    files,
+    headVersion: versionOf(readFileSync(VERSION_FILE, 'utf8')),
+    title: payload?.pull_request?.title ?? '',
+  });
 }
 
 export function gate(profile, needs) {
@@ -53,10 +92,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`PASS: ${process.env.CI_PROFILE} at ${process.env.GITHUB_SHA}`);
   } else {
     let paths = null;
+    let event = {};
     try {
-      paths = changedPaths(process.env.GITHUB_EVENT_NAME, JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')),
-        { enabled: process.env.CI_DIFF_ENABLED === 'true' });
+      event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+      paths = changedPaths(process.env.GITHUB_EVENT_NAME, event, { enabled: process.env.CI_DIFF_ENABLED === 'true' });
     } catch { /* Unreadable event data keeps the full profile. */ }
+    // Before anything is selected: a version bump that is not a release change
+    // fails the policy job, and every job downstream depends on it.
+    const version = versionProblemsFromCheckout(process.env.GITHUB_EVENT_NAME, event);
+    if (version.length) throw new Error(`CI policy failed: ${version.join('; ')}`);
     const result = route(process.env.GITHUB_EVENT_NAME, process.env.CI_REQUESTED_PROFILE || 'pr', process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm', paths);
     for (const [key,value] of Object.entries(result)) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   }
