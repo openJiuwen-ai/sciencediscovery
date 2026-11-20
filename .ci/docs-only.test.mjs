@@ -17,7 +17,7 @@ const jobs = Object.fromEntries(workflow.split('\njobs:\n')[1].split(/\n(?=  [\w
   .map(block => [block.match(/^  ([\w-]+):/)[1], block]));
 const condition = block => block.match(/\bif: (?:>-\s*)?\$\{\{([\s\S]*?)\}\}/)?.[1].trim();
 const dependencies = name => (jobs[name].match(/^    needs: (.+)/m)?.[1] ?? '').replace(/[\[\]]/g, '').split(', ').filter(Boolean);
-const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'binary', 'docker', 'windows-desktop', 'real-merge', 'real-scheduled'];
+const unaffected = ['ut', 'st', 'e2e-plan', 'e2e', 'e2e-desktop', 'coverage', 'binary', 'docker', 'windows-desktop', 'real-merge', 'real-scheduled'];
 
 function eligible(expression, needs, { event = 'pull_request', draft = false, success = true, inputs = {} } = {}) {
   if (!expression) return success;
@@ -271,6 +271,8 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
         const selectedProfile = needs.policy.outputs.profile;
         for (const name of ['l1', 'ut', 'st', 'coverage', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
         for (const name of ['e2e-plan', 'e2e']) assert.equal(needs[name].result, selectedProfile === 'pr' ? 'skipped' : 'success');
+        // Mocked and credential-free: the desktop journeys gate every profile.
+        assert.equal(needs['e2e-desktop'].result, 'success');
         for (const name of ['binary', 'docker']) assert.equal(needs[name].result, selectedProfile === 'merge' ? 'skipped' : 'success');
         assert.equal(needs['windows-desktop'].result, ['daily', 'release'].includes(selectedProfile) ? 'success' : 'skipped');
         assert.equal(needs['real-merge'].result, selectedProfile === 'merge' ? 'success' : 'skipped');
@@ -278,7 +280,7 @@ test('mixed, non-documentation and unknown diffs preserve all existing profile s
         assert.deepEqual(gate(selectedProfile, needs), []);
         const artifacts = jobs['merge-gate'].split(/\n      - /).filter(step => /download-artifact|mocked-report|upload-artifact/.test(step));
         for (const step of artifacts) assert.equal(eligible(condition(step), needs), selectedProfile !== 'pr', `${selectedProfile}: E2E artifacts`);
-        for (const name of ['ut', 'st', 'e2e-plan', 'e2e']) {
+        for (const name of ['ut', 'st', 'e2e-plan', 'e2e', 'e2e-desktop']) {
           const result = needs[name].result === 'skipped' ? 'success' : 'skipped';
           assert.ok(gate(selectedProfile, { ...needs, [name]: { result } }).length, `${event}: ${name}`);
         }

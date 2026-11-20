@@ -1,0 +1,394 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* ===== Reviewer Specialist =====
+ *
+ * The card the conversation draws where a review happened. Its anatomy is the
+ * reference's: a one-line header that folds out into white cards on the
+ * transcript's own grey, with a category label above each claim.
+ *
+ * The tones are the transcript's status vocabulary, not a new palette:
+ * pass = success, warn = insight, fail = danger, pending = muted. */
+
+/* The panel is the grey the reference draws the card on: the white claim cards
+   inside it are what make the verdict a block rather than a line of text.
+ *
+ * The 24px inset is the reference's own: its card sits inside the transcript's
+ * `px-4 md:px-6` container, so the grey never runs edge to edge. The transcript
+ * column here has no horizontal padding of its own, which without this margin
+ * draws the panel 48px wider than the reference on the same column. */
+.review-card {
+  margin: 6px 24px 14px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-soft);
+}
+
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* No hover fill: the reference's header has none, and a darker patch inside the
+   grey panel reads as a second frame rather than as a background. The chevron
+   already says the line opens. */
+.review-head:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.review-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.review-mark.is-pass { color: var(--success); }
+.review-mark.is-warn { color: var(--insight); }
+.review-mark.is-fail { color: var(--danger); }
+.review-mark.is-pending { color: var(--muted-light); }
+.review-mark.is-neutral { color: var(--muted); }
+
+.review-title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.review-sep {
+  color: var(--muted-light);
+}
+
+.review-summary {
+  color: var(--text-secondary);
+}
+
+.review-count,
+.review-progress {
+  color: var(--muted);
+}
+
+.review-chev {
+  margin-left: auto;
+  color: var(--muted-light);
+  transition: transform .15s ease;
+}
+
+.review-head[aria-expanded="true"] .review-chev {
+  transform: rotate(90deg);
+}
+
+/* The running state is a line, not a card: nothing exists to expand yet. It
+   keeps the card's inset so the line does not jump sideways when the verdict
+   replaces it. */
+.review-running {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 30px;
+  margin: 6px 24px 14px;
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-running-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+}
+
+/* How far the run is, for the reviews that take long enough to wonder. Thin
+   and quiet: it is context for the counts beside it, not a focal element. */
+.review-progress-track {
+  height: 3px;
+  margin: 0 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+}
+
+.review-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--muted-light);
+  transition: width .3s ease;
+}
+
+.review-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+.review-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted-light);
+  animation: review-dot 1.2s ease-in-out infinite;
+}
+
+.review-dots i:nth-child(2) { animation-delay: .15s; }
+.review-dots i:nth-child(3) { animation-delay: .3s; }
+
+@keyframes review-dot {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
+
+.review-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0 0;
+}
+
+.review-artifact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* One artifact is one section of the expanded card. Several of them have to be
+   visibly separate, so the section is framed and the artifact name is its
+   heading rather than a 12px label wedged between two groups of claim cards,
+   which is where the name was lost. The rail carries the same tone as the
+   verdict, so the file that needs attention is findable before reading a word
+   — the web card outlines each artifact the same way. */
+.review-artifact.is-framed {
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted-light);
+  border-radius: var(--radius-s);
+}
+
+.review-artifact.is-framed.is-pass { border-left-color: var(--success); }
+.review-artifact.is-framed.is-warn { border-left-color: var(--insight); }
+.review-artifact.is-framed.is-fail { border-left-color: var(--danger); }
+
+.review-artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 4px;
+}
+
+.review-artifact-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-artifact-verdict {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.review-artifact-verdict.is-pass { background: var(--success-soft); color: var(--success); }
+.review-artifact-verdict.is-warn { background: var(--insight-soft); color: var(--insight-strong); }
+.review-artifact-verdict.is-fail { background: var(--danger-soft); color: var(--danger); }
+
+.review-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.review-banner.is-stale {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.review-banner.is-fail {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-deep);
+}
+
+.review-banner span {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-rerun {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.review-rerun:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.review-note {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--muted-light);
+  font-size: 11px;
+}
+
+.review-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* White on the panel's grey; the reference draws no line between them, and a
+   border here would be a second frame around every claim. */
+.review-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+
+.review-item-label {
+  margin-bottom: 6px;
+  color: var(--muted-light);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.review-item-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.review-badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.review-item.is-pass .review-badge { color: var(--success); }
+.review-item.is-warn .review-badge { color: var(--insight-strong); }
+.review-item.is-fail .review-badge { color: var(--danger); }
+
+.review-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.review-item-body {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.review-item-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.review-pill {
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: var(--muted-light);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* The artifact dialog's Review tab: the same cards, with the page's own
+   padding rather than the transcript's column. */
+.review-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+
+/* The dialog's page is already white, so the transcript's white-on-grey needs
+   its own edge here; the rows keep the tone the panel gives them elsewhere. */
+.review-dialog .review-item {
+  border: 1px solid var(--border-soft);
+}
+
+.review-dialog .review-banner {
+  background: var(--surface-soft);
+}
+
+.review-empty {
+  margin: 0;
+  padding: 4px 2px;
+  color: var(--muted-light);
+  font-size: 12px;
+  line-height: 1.6;
+}

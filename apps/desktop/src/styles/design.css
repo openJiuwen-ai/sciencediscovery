@@ -1995,6 +1995,26 @@ body.is-resizing {
   color: #b3b3b3;
 }
 
+/* A row that holds a control of its own (the auto-review switch) rather than
+   opening a flyout: only the control is a target, so the row does not light up
+   as if pressing anywhere would do something. */
+.session-menu-row.is-static {
+  cursor: default;
+}
+
+.session-menu-row.is-static:hover {
+  background: transparent;
+}
+
+/* Why a row's control will not take effect. It reads as part of the row above
+   rather than as a new setting of its own. */
+.session-menu-note {
+  margin: -4px 10px 6px;
+  color: #8a8a8a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .session-menu-icon {
   display: grid;
   place-items: center;

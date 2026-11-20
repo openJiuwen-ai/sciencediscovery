@@ -175,6 +175,98 @@ test("会话设置 carries the way into program evolution above its own settings
   assert.doesNotMatch(settingsMenu(), /程序演进实验/);
 });
 
+test("会话设置 can ask for a review now, and the same row stops one under way", async () => {
+  const calls: string[] = [];
+  const menu = (runningReview: boolean, reviewerEnabled = true) => (
+    <SessionSettingsMenu
+      automaticReviewEnabled={false}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      onRunReview={() => { calls.push("run"); }}
+      onStopReview={() => { calls.push("stop"); }}
+      reviewerEnabled={reviewerEnabled}
+      reviewerRunning={runningReview}
+      running={false}
+    />
+  );
+
+  // 自动审阅 is off, and the row is still there: one decides whether a review
+  // happens by itself, the other is the reader asking for one.
+  const idle = renderToStaticMarkup(menu(false));
+  assert.match(idle, />立即审查</u);
+  assert.doesNotMatch(idle, />停止审查</u);
+
+  const busy = renderToStaticMarkup(menu(true));
+  assert.match(busy, />停止审查</u);
+  assert.doesNotMatch(busy, />立即审查</u);
+
+  // A row with nowhere to go is not drawn, as with 程序演进实验 above.
+  assert.doesNotMatch(settingsMenu(), /立即审查/u);
+
+  const row = (view: ReturnType<typeof create>) =>
+    view.root.findAllByType("span").find((node) => node.props.className === "session-menu-label"
+      && (node.props.children === "立即审查" || node.props.children === "停止审查"))?.parent;
+
+  let view;
+  await act(async () => { view = create(menu(true)); });
+  try {
+    const stop = row(view);
+    assert.ok(stop);
+    await act(async () => { (stop.props.onClick as () => void)(); });
+    assert.deepEqual(calls, ["stop"]);
+    // The master switch being off leaves a row that cannot do anything, so it
+    // says so rather than accepting a click the server would ignore.
+    await act(async () => { view.update(menu(false, false)); });
+    const off = row(view);
+    assert.ok(off);
+    assert.equal(off.props.disabled, true);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("without a Session there is nothing to review, so the reviewer rows are not drawn", () => {
+  const markup = renderToStaticMarkup(
+    <SessionSettingsMenu
+      automaticReviewEnabled={undefined}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      running={false}
+    />,
+  );
+  // The welcome and draft composers pass no handlers, and rows that would
+  // return early are not offered.
+  assert.doesNotMatch(markup, /自动审阅|审查档位|立即审查|停止审查/u);
+});
+
+test("审查档位 stays open while automatic review is off, because 立即审查 reads it", () => {
+  const menu = (reviewerEnabled: boolean) => renderToStaticMarkup(
+    <SessionSettingsMenu
+      automaticReviewEnabled={false}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      onReviewLevel={() => {}}
+      onRunReview={() => {}}
+      reviewerEnabled={reviewerEnabled}
+      reviewLevel="quick"
+      running={false}
+    />,
+  );
+  // The markup of the whole row, up to the label: a `disabled` attribute there
+  // is what takes the choice away.
+  const levelRow = (markup: string) => {
+    const label = markup.indexOf(">审查档位<");
+    return markup.slice(markup.lastIndexOf("<button", label), label);
+  };
+
+  // Automatic review off: the row still chooses what a manual run will do.
+  const available = menu(true);
+  assert.doesNotMatch(levelRow(available), /disabled/u);
+  assert.match(available, /title="自动审阅已关闭；立即审查仍会使用这个档位。"/u);
+  // The master switch off: nothing can run at all, so the row says so.
+  assert.match(levelRow(menu(false)), /disabled=""/u);
+});
+
 test("a permission option says on screen what it allows", () => {
   const markup = renderToStaticMarkup(
     <PermissionFlyout mode="ask_for_dangerous" onApprovalMode={() => {}} onClose={() => {}} />,

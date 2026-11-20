@@ -163,6 +163,136 @@ export const EN: Text = {
     jwBlocked: "The agent cluster is starting. Chat unlocks when it is ready…",
   },
 
+  /** Reviewer Specialist: the session's own toggle, and the review card the
+   *  conversation draws at its checkpoint. */
+  reviewer: {
+    title: "Review",
+    settings: "Auto-review",
+    unavailable: "The Reviewer Specialist is off, so automatic review will not run for this session.",
+    level: "Review level",
+    /** Shown on the level row when automatic review is off: the level is not
+     *  idle, a manual run still reads it. */
+    levelManualHint: "Automatic review is off; Review now will still use this level.",
+    levelQuickDesc: "Deterministic checks: structure, citation format, delivery completeness.",
+    levelDeepDesc: "Adds source-by-source and computation evidence checks on top of Quick.",
+    running: "Reviewing…",
+    /** The stage the coordinator is in, when it says. It is what tells a
+     *  reader that a long Deep review is working rather than stuck. */
+    phase: {
+      quick: "Running the quick checks",
+      preparing: "Preparing the review…",
+      computation: "Checking the computation evidence",
+      citation: "Checking the citations",
+    } as Record<string, string>,
+    summaryPass: "No issues found",
+    summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+    summaryIncomplete: "Delivery incomplete",
+    summaryUnverified: "Delivery unverified",
+    summaryFailed: "Review failed",
+    summarySkipped: "Review skipped",
+    /** Nothing was raised, but the review itself said part of the claim was
+     *  never examined. "No issues found" alone would read as a pass. */
+    summaryPartial: (count: number) => `No issues found, but ${count} ${count === 1 ? "check was" : "checks were"} not run`,
+    checks: (count: number) => `${count} ${count === 1 ? "check" : "checks"}`,
+    /** One checkpoint can cover several artifacts; when their verdicts differ,
+     *  the header's worst-of phrase would hide the clean ones. */
+    outcomeCounts: (passed: number, attention: number) => `${passed} passed · ${attention} need attention`,
+    checkNames: {
+      structure: "Structure",
+      citation: "Citation",
+      computation: "Computation",
+      completeness: "Completeness",
+    } as Record<string, string>,
+    /** What a category means, for the label above each claim. The label is one
+     *  word ("Computation"), which is not enough to know what was compared
+     *  with what. */
+    labelTips: {
+      structure: "Structure: checks the artifact's fields, format and provenance are complete. It does not judge whether the content is right.",
+      citation: "Citation: checks the citation identifiers can be recognised and are well formed. It does not check whether the cited work supports the claim.",
+      computation: "Computation: compares the numbers in the report with the evidence, checking the figures and the statistics agree.",
+      completeness: "Completeness: checks every declared deliverable is present and not empty.",
+      semantics: "Semantics: the source service reads the cited text and decides whether the claim is supported. Deep reviews only.",
+      other: "General finding: not tied to one check, recorded during the review.",
+      gaps: "Not checked: this review did not run this check, and the reason is below. Not checked is not a pass.",
+      source: "Source verification: compares one claim with the source text and answers supported, partly supported, contradicted or inconclusive.",
+    } as Record<"structure" | "citation" | "computation" | "completeness" | "semantics"
+      | "other" | "gaps" | "source", string>,
+    checkPass: (name: string) => `${name} passed`,
+    passBody: "Nothing was found wrong with this check.",
+    finding: "Issue",
+    warning: "Warning",
+    badgePass: "Pass",
+    /** For a check that ran but could not conclude, or a delivery verdict no brief declared. */
+    badgeUnconfirmed: "Unconfirmed",
+    deepSemantic: "Semantics",
+    source: "Source",
+    gaps: "Not checked",
+    gapChecks: {
+      claim_support: "Claim support",
+      citation_identity: "Citation identity",
+      computation: "Computation",
+    } as Record<string, string>,
+    /** A source check that could not conclude is not a report defect. */
+    inconclusive: "Source verification reached no conclusion",
+    inconclusiveBody: "The source service returned no verdict; this is not a problem with the report.",
+    /** A citation-format-only Quick pass did not look at claim support. */
+    citationOnlyNote: "This review checked citation format only; claim support was not checked.",
+    /** Why a checkpoint produced nothing, by the server's reason code. */
+    skipReasons: {
+      specialist_disabled: "The Reviewer Specialist is off, so no review was produced.",
+      automatic_review_disabled: "Automatic review is off for this session, so no review was produced.",
+    } as Record<string, string>,
+    skipUnknown: "No review was produced.",
+    stale: "A newer version of this artifact exists, so this review is history.",
+    outdated: " (outdated)",
+    rerun: "Re-run review",
+    rerunQueued: "Queued for review.",
+    /** Ask for a review of the Session's current report-shaped artifacts
+     *  without waiting for a new version to make the old verdict stale. */
+    runNow: "Review now",
+    stopRun: "Stop review",
+    runStarted: "Review started.",
+    runStopped: "Review stopped.",
+    noCheckpoint: "There is no checkpoint to review again.",
+    reused: "Reused the verdict for the same version",
+    completeness: {
+      complete: "Delivery complete",
+      incomplete: "Delivery incomplete",
+      unconfirmed: "No deliverable list declared",
+      sourceBrief: "Checked against the deliverables this task declared.",
+      sourceSession: "This task declared nothing; checked against the session's own declarations.",
+      sourceNone: "No deliverable declaration was available, so delivery could not be confirmed.",
+      missing: "Missing",
+      empty: "Empty",
+    },
+    assessments: {
+      SUPPORTED: "Supported",
+      PARTIALLY_SUPPORTED: "Partly supported",
+      CONTRADICTED: "Contradicted",
+      INCONCLUSIVE: "Inconclusive",
+    } as Record<string, string>,
+    progress: (completed: number, total: number) => `${completed}/${total}`,
+    queued: (count: number) => `${count} queued`,
+    /** A bounded passage in a locked source; "locator" and evidence levels
+     *  are internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
+    sourceInconclusiveWith: (count: number) => count === 1
+      ? "Found 1 source passage, but it is not enough to support this claim."
+      : `Found ${count} source passages, but they are not enough to support this claim.`,
+    sourceInconclusiveNone: "No source passage was found to support this claim.",
+    failedDetail: "The review reported an error.",
+    empty: "This checkpoint produced no review record.",
+    noReviews: "No reviews yet.",
+    tab: "Review",
+    levelName: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
+    levelPill: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
+    /** The pill only names the level; the tip carries what the name claims.
+     *  The two levels differ in whether a source service is consulted. */
+    levelTip: (level: string): string => (level !== "quick"
+      ? "Deep review: on top of the Quick checks, calls the source service to verify each claim against its source."
+      : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source service is called."),
+  },
+
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting
    *  (the shell bridge pushes progress; this is the idle wording). */
   jiuwen: {
@@ -1198,7 +1328,10 @@ export const EN: Text = {
       specialists: {
         heading: "Specialists",
         help: "A specialist is a reusable bundle of instructions and tools that work can be dispatched to.",
-        empty: "No specialists yet.",
+        /** The line under the built-in Review Specialist. It says who uses it,
+         *  which is the only thing there is to say about it: it cannot be
+         *  turned off, so there is no state to describe. */
+        reviewerUse: "Used by Auto-review",
         builtIn: "Built-in",
         enabled: "Enabled",
         disabled: "Disabled",

@@ -22,7 +22,11 @@ import {
   listSpecialists,
   updateSpecialist,
 } from "../../../api/settings.js";
-import type { ConnectorManifest, SkillDescriptor, Specialist } from "../../../api/types.js";
+import type {
+  ConnectorManifest,
+  SkillDescriptor,
+  Specialist,
+} from "../../../api/types.js";
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
@@ -44,10 +48,16 @@ interface Page {
 /**
  * 设置 › 专家: the reusable instruction-and-tool bundles a run can dispatch to.
  *
- * Built-ins are seeded by the application and read-only; their one editable
- * field is whether they appear in the task tool's enum at all. A user-created
- * specialist is always enabled, so the switch is drawn only where it means
- * something.
+ * The Review Specialist is not one of those rows. It ships with the
+ * application, every session's automatic review is what uses it, and nothing
+ * on this page can take it away — the reference client draws it as a fixed
+ * built-in card with no switch, and this page does the same. Whether a
+ * session reviews automatically is that session's own 自动审阅 choice.
+ *
+ * Built-ins the server seeds as specialist records are read-only; their one
+ * editable field is whether they appear in the task tool's enum at all. A
+ * user-created specialist is always enabled, so the switch is drawn only where
+ * it means something.
  *
  * A row's 编辑 opens the same form 添加模型 uses: the list stays in place
  * behind the scrim, and the specialist's own record is what it edits.
@@ -108,74 +118,87 @@ export function SpecialistsSettings({ client, onConfirm }: Props) {
         <>
           <Group>
             <p className="settings-note">{TEXT.settings.system.specialists.help}</p>
-            {page.specialists.length === 0 ? (
-              <p className="settings-empty">{TEXT.settings.system.specialists.empty}</p>
-            ) : (
-              <div className="settings-list">
-                <BulkToggles busy={busy} onAll={(next) => void setAll(next)} />
-                {page.specialists.map((specialist) => {
-                  const on = specialist.enabled !== false;
-                  return (
-                    <div className={`settings-card is-expandable${on ? "" : " is-off"}`} key={specialist.id}>
-                      <span className="settings-card-mark">{specialist.name.slice(0, 1).toUpperCase()}</span>
-                      <div className="settings-card-main">
-                        <strong>
-                          {specialist.name}
-                          {specialist.builtIn ? (
-                            <Tag tone="off">{TEXT.settings.system.specialists.builtIn}</Tag>
-                          ) : null}
-                          <Tag tone={on ? "ok" : "off"}>
-                            {on ? TEXT.settings.system.specialists.enabled : TEXT.settings.system.specialists.disabled}
-                          </Tag>
-                        </strong>
-                        <small>{specialist.description}</small>
-                      </div>
-                      <div className="settings-card-actions">
-                        {specialist.builtIn ? (
-                          <Switch
-                            disabled={busy}
-                            label={`${specialist.name} · ${TEXT.settings.system.specialists.enabled}`}
-                            onChange={(next) => void toggle(specialist, next)}
-                            value={on}
-                          />
-                        ) : (
-                          <>
-                            <button
-                              className="link-button"
-                              disabled={busy}
-                              onClick={() => setEditing(specialist)}
-                              type="button"
-                            >
-                              {TEXT.settings.edit}
-                            </button>
-                            <button
-                              className="link-button is-danger"
-                              disabled={busy}
-                              onClick={() => onConfirm({
-                                accept: TEXT.menu.delete,
-                                body: TEXT.settings.system.specialists.deleteBody(specialist.name),
-                                eyebrow: TEXT.settings.system.specialists.heading,
-                                onAccept: () => {
-                                  void deleteSpecialist(client, specialist.id)
-                                    .then(() => loaded.reload())
-                                    .catch((reason: unknown) => {
-                                      setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                                    });
-                                },
-                                title: TEXT.settings.system.specialists.deleteTitle(specialist.name),
-                              })}
-                              type="button"
-                            >
-                              {TEXT.menu.delete}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="settings-list">
+              {/* The Review Specialist is part of the application. It has no
+                  switch here, and no description of its own beyond what uses
+                  it: 自动审阅 is chosen per session, and nothing on this page
+                  can take the reviewer away from a session that wants it. */}
+              <div className="settings-card" data-testid="built-in-reviewer">
+                <span aria-hidden="true" className="settings-card-mark">
+                  {TEXT.reviewer.title.slice(0, 1)}
+                </span>
+                <div className="settings-card-main">
+                  <strong>{TEXT.reviewer.title}</strong>
+                  <small>{TEXT.settings.system.specialists.reviewerUse}</small>
+                </div>
               </div>
-            )}
+              {page.specialists.length === 0 ? null : (
+                <>
+                  <BulkToggles busy={busy} onAll={(next) => void setAll(next)} />
+                  {page.specialists.map((specialist) => {
+                    const on = specialist.enabled !== false;
+                    return (
+                      <div className={`settings-card is-expandable${on ? "" : " is-off"}`} key={specialist.id}>
+                        <span className="settings-card-mark">{specialist.name.slice(0, 1).toUpperCase()}</span>
+                        <div className="settings-card-main">
+                          <strong>
+                            {specialist.name}
+                            {specialist.builtIn ? (
+                              <Tag tone="off">{TEXT.settings.system.specialists.builtIn}</Tag>
+                            ) : null}
+                            <Tag tone={on ? "ok" : "off"}>
+                              {on ? TEXT.settings.system.specialists.enabled : TEXT.settings.system.specialists.disabled}
+                            </Tag>
+                          </strong>
+                          <small>{specialist.description}</small>
+                        </div>
+                        <div className="settings-card-actions">
+                          {specialist.builtIn ? (
+                            <Switch
+                              disabled={busy}
+                              label={`${specialist.name} · ${TEXT.settings.system.specialists.enabled}`}
+                              onChange={(next) => void toggle(specialist, next)}
+                              value={on}
+                            />
+                          ) : (
+                            <>
+                              <button
+                                className="link-button"
+                                disabled={busy}
+                                onClick={() => setEditing(specialist)}
+                                type="button"
+                              >
+                                {TEXT.settings.edit}
+                              </button>
+                              <button
+                                className="link-button is-danger"
+                                disabled={busy}
+                                onClick={() => onConfirm({
+                                  accept: TEXT.menu.delete,
+                                  body: TEXT.settings.system.specialists.deleteBody(specialist.name),
+                                  eyebrow: TEXT.settings.system.specialists.heading,
+                                  onAccept: () => {
+                                    void deleteSpecialist(client, specialist.id)
+                                      .then(() => loaded.reload())
+                                      .catch((reason: unknown) => {
+                                        setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
+                                      });
+                                  },
+                                  title: TEXT.settings.system.specialists.deleteTitle(specialist.name),
+                                })}
+                                type="button"
+                              >
+                                {TEXT.menu.delete}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
           </Group>
 
           {open ? (

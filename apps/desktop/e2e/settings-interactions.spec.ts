@@ -694,9 +694,12 @@ test.describe("技能", () => {
     const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
 
     await card.locator(".settings-card-main").click();
-    // The count is the package's own files plus its SKILL.md, and the version
-    // is the one the package declared rather than the revision number.
-    await expect(card.locator(".settings-detail")).toContainText("内置 · v1.0.0 · 4 个文件");
+    // The source is the card's badge; the detail line carries the package's
+    // own SKILL.md and the count, which is its resources plus SKILL.md itself.
+    await expect(card.locator(".skill-source-badge")).toContainText("内置");
+    await expect(card.locator(".settings-detail")).toContainText("v1.0.0 · 4 个文件");
+    // Opened means the package file was read, not just that loading stopped.
+    await expect(card.locator(".settings-detail-body")).toContainText("画分子图");
   });
 
   test("switching back paints the remembered list before the refresh answers", async ({ page }) => {

@@ -163,6 +163,131 @@ export const ZH = {
     jwBlocked: "智能体集群正在启动，就绪后即可对话…",
   },
 
+  /** Reviewer Specialist：会话设置里的开关，和产物审查在对话里的那张卡。 */
+  reviewer: {
+    title: "审查",
+    settings: "自动审阅",
+    unavailable: "审查专家已关闭，此会话的自动审阅不会生效。",
+    level: "审查档位",
+    /** 显示在档位行上：自动审阅关着时它并没有失效，立即审查仍会用它。 */
+    levelManualHint: "自动审阅已关闭；立即审查仍会使用这个档位。",
+    levelQuickDesc: "确定性检查：结构、引用格式、交付完整性。",
+    levelDeepDesc: "在快速检查之上，逐条核对来源与计算证据。",
+    running: "正在审查…",
+    /** The stage the coordinator is in, when it says. It is what tells a
+     *  reader that a long Deep review is working rather than stuck. */
+    phase: {
+      quick: "快速检查中",
+      preparing: "准备审查…",
+      computation: "核对计算证据",
+      citation: "核对引用",
+    } as Record<string, string>,
+    summaryPass: "未发现问题",
+    summaryFindings: (count: number) => `${count} 个问题`,
+    summaryIncomplete: "交付不完整",
+    summaryUnverified: "未验证交付",
+    summaryFailed: "审查失败",
+    summarySkipped: "已跳过审查",
+    /** Nothing was raised, but the review itself said part of the claim was
+     *  never examined. "未发现问题" alone would read as a pass. */
+    summaryPartial: (count: number) => `未发现问题，但有 ${count} 项未检查`,
+    checks: (count: number) => `${count} 项检查`,
+    /** One checkpoint can cover several artifacts; when their verdicts differ,
+     *  the header's worst-of phrase would hide the clean ones. */
+    outcomeCounts: (passed: number, attention: number) => `${passed} 通过 · ${attention} 需处理`,
+    checkNames: {
+      structure: "结构",
+      citation: "引用",
+      computation: "计算",
+      completeness: "完整性",
+    } as Record<string, string>,
+    /** What a category means, for the label above each claim. The label is one
+     *  word ("计算"), which is not enough to know what was compared with what. */
+    labelTips: {
+      structure: "结构：核对产物的字段与格式是否完整、来源信息是否齐全，不判断内容对错。",
+      citation: "引用：核对引文标识符能否识别、格式是否完整；不核实文献是否支持结论。",
+      computation: "计算：把报告里的数值与证据、数据逐项比对，检查数字与统计口径是否一致。",
+      completeness: "完整性：按本次任务声明的交付清单，检查应交付的文件是否都在、是否为空白。",
+      semantics: "语义：由来源服务读原文，判断结论是否有出处支撑；只有深度审查会做。",
+      other: "通用发现：不属于某一类具体检查，是审查过程中记录的问题。",
+      gaps: "未检查：这次审查没有做这一项，原因见下方；未检查不等于通过。",
+      source: "来源核验：把一条结论与来源原文对照，给出支持、部分支持、矛盾或无结论。",
+    } as Record<"structure" | "citation" | "computation" | "completeness" | "semantics"
+      | "other" | "gaps" | "source", string>,
+    checkPass: (name: string) => `${name}检查通过`,
+    passBody: "这一项没有发现问题。",
+    finding: "问题",
+    warning: "提醒",
+    badgePass: "通过",
+    /** For a check that ran but could not conclude, or a delivery verdict no brief declared. */
+    badgeUnconfirmed: "未确认",
+    deepSemantic: "语义",
+    source: "来源",
+    gaps: "未检查",
+    gapChecks: {
+      claim_support: "主张与来源的对应",
+      citation_identity: "引用身份",
+      computation: "计算",
+    } as Record<string, string>,
+    /** A source check that could not conclude is not a report defect. */
+    inconclusive: "来源核验没有得出结论",
+    inconclusiveBody: "来源服务未返回结论，这不代表报告有问题。",
+    /** A citation-format-only Quick pass did not look at claim support. */
+    citationOnlyNote: "本次只核对引用格式，未检查结论支撑。",
+    /** Why a checkpoint produced nothing, by the server's reason code. */
+    skipReasons: {
+      specialist_disabled: "审查专家已关闭，本次没有产生审查结论。",
+      automatic_review_disabled: "此会话已关闭自动审阅，本次没有产生审查结论。",
+    } as Record<string, string>,
+    skipUnknown: "本次没有产生审查结论。",
+    stale: "产物已有新版本，这次审查仅作历史记录。",
+    outdated: "（已过期）",
+    rerun: "重新审查",
+    rerunQueued: "已加入审查队列。",
+    /** Ask for a review of the Session's current report-shaped artifacts
+     *  without waiting for a new version to make the old verdict stale. */
+    runNow: "立即审查",
+    stopRun: "停止审查",
+    runStarted: "已开始审查。",
+    runStopped: "已停止审查。",
+    noCheckpoint: "没有可重新审查的检查点。",
+    reused: "复用上次相同版本的结论",
+    completeness: {
+      complete: "交付完整",
+      incomplete: "交付不完整",
+      unconfirmed: "未声明交付清单",
+      sourceBrief: "依据本次任务声明的交付清单。",
+      sourceSession: "本次任务没有声明，按会话内已有声明核对。",
+      sourceNone: "没有找到可对照的交付声明，因此无法确认。",
+      missing: "缺失",
+      empty: "空文件",
+    },
+    assessments: {
+      SUPPORTED: "支持",
+      PARTIALLY_SUPPORTED: "部分支持",
+      CONTRADICTED: "矛盾",
+      INCONCLUSIVE: "无结论",
+    } as Record<string, string>,
+    progress: (completed: number, total: number) => `${completed}/${total}`,
+    queued: (count: number) => `排队 ${count}`,
+    /** A bounded passage in a locked source; "定位" and evidence levels are
+     *  internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} 处原文`,
+    sourceInconclusiveWith: (count: number) => `找到 ${count} 处原文，但还不足以支撑这条结论。`,
+    sourceInconclusiveNone: "没有找到可用于支撑这条结论的原文。",
+    failedDetail: "审查过程报告了错误。",
+    empty: "这个检查点没有产生审查记录。",
+    noReviews: "还没有审查记录。",
+    tab: "审查",
+    levelName: (level: string): string => (level === "quick" ? "快速" : "深度"),
+    levelPill: (level: string): string => (level === "quick" ? "快速" : "深度"),
+    /** The pill only names the level; the tip carries what the name claims.
+     *  The two levels differ in whether a source service is consulted. */
+    levelTip: (level: string): string => (level !== "quick"
+      ? "深度审查：在快速检查之外，调用来源服务逐条核对结论与原文是否一致。"
+      : "快速审查：只在本机做确定性的结构、引用格式和交付完整性检查，不调用外部来源服务。"),
+  },
+
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting
    *  (the shell bridge pushes progress; this is the idle wording). */
   jiuwen: {
@@ -1218,7 +1343,10 @@ export const ZH = {
       specialists: {
         heading: "专家",
         help: "专家是可复用的指令与工具组合，任务可以指派给它们。",
-        empty: "还没有专家。",
+        /** The line under the built-in Review Specialist. It says who uses it,
+         *  which is the only thing there is to say about it: it cannot be
+         *  turned off, so there is no state to describe. */
+        reviewerUse: "由自动审阅使用",
         builtIn: "内置",
         enabled: "已启用",
         disabled: "已停用",
