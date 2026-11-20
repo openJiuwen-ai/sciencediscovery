@@ -441,7 +441,11 @@ export const EN: Text = {
       computation: "This review did not check the numbers against the computation evidence.",
     } as Record<string, string>,
     gapBodyUnknown: "This review did not run this check.",
+    claimLabel: "Claim",
+    /** A fold with only the reviewer's account, when no passage was quoted. */
+    reviewerNote: "Reviewer's note",
     sourceSupported: "The source text supports this claim.",
+    sourceContradicted: "The source text contradicts this claim.",
     sourcePartly: "The source text supports only part of this claim.",
     /** Where a source passage sits, for the evidence list under a source row. */
     locatorAt: {
