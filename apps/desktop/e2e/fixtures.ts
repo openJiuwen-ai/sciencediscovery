@@ -1123,6 +1123,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       const requestReview = /^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/.exec(path);
       if (requestReview && method === "POST") {
         const { messageId } = JSON.parse(body ?? "{}") as { messageId?: string };
+        // The store refuses an existing checkpoint id whose tool call id is not
+        // this manual task's; a re-run that reused the id it was pressed on
+        // answered 400 in production. The fixture says so too, so the specs
+        // cannot keep passing while that bug is back.
+        const target = state.sessions.find((entry) => entry.id === requestReview[1]);
+        if ((target?.messages as JsonRecord[] | undefined)?.some((message) => message.id === messageId)) {
+          return json(route, 400, { error: "Reviewer checkpoint message id is already in use" });
+        }
         const task: JsonRecord = {
           artifactVersionIds: [],
           checkpointMessageId: messageId,

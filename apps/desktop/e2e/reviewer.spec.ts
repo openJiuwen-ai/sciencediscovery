@@ -289,8 +289,8 @@ test("a delivery that was checked and found incomplete is red", async ({ page })
   await expect(missing).toContainText("output/predictions.npy");
 });
 
-test("a verdict on a replaced version says it is history, and offers a re-run", async ({ page }) => {
-  await installMockApi(page, {
+test("a verdict on a replaced version says it is history, and its re-run names a new checkpoint", async ({ page }) => {
+  const mock = await installMockApi(page, {
     reviewer: { reviews: [review({ stale: true })] },
     sessions: [makeSession({ messages: [checkpointMessage("message-checkpoint-1", "call-1")] })],
   });
@@ -303,6 +303,18 @@ test("a verdict on a replaced version says it is history, and offers a re-run", 
   await card.locator(".review-head").click();
   await expect(card.locator(".review-banner.is-stale")).toContainText("产物已有新版本");
   await expect(card.locator(".review-rerun")).toBeVisible();
+
+  // The checkpoint already exists under message-checkpoint-1 with another
+  // tool call id; the store refuses that id for a manual task, and the fixture
+  // now refuses it too. The re-run must mint a message of its own.
+  await card.locator(".review-rerun").click();
+  await expect.poll(
+    () => mock.calls.filter((call) => call.method === "POST" && call.path.endsWith("/reviewer-specialist/review")).length,
+  ).toBe(1);
+  const rerun = mock.calls.find((call) => call.method === "POST" && call.path.endsWith("/reviewer-specialist/review"))!;
+  const posted = JSON.parse(rerun.body!) as { messageId?: string };
+  expect(posted.messageId).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(posted.messageId).not.toBe("message-checkpoint-1");
 });
 
 test("the built-in Review Specialist is always listed and carries no switch", async ({ page }) => {
@@ -535,9 +547,12 @@ test("the artifact dialog's 审查 tab shows the version's verdict and can queue
     (call) => call.method === "POST" && call.path === `/api/sessions/${SESSION}/reviewer-specialist/review`,
   );
   expect(queued).toBeDefined();
-  // The route names a transcript message, not a review: the queue is what
-  // supplied which message this review's tool call belongs to.
-  expect(JSON.parse(queued!.body!)).toEqual({ messageId: "message-checkpoint-1" });
+  // The route appends a new checkpoint: reusing the one this verdict was drawn
+  // on is refused by the store (its tool call id belongs to another task), so
+  // the dialog mints an id of its own.
+  const posted = JSON.parse(queued!.body!) as { messageId?: string };
+  expect(posted.messageId).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(posted.messageId).not.toBe("message-checkpoint-1");
 });
 
 test("the outcome matrix keeps Quick and Deep apart, and a skip says why", async ({ page }) => {

@@ -158,7 +158,6 @@ export function ArtifactDialog({
    *  what a re-run has to name. */
   const [reviewTasks, setReviewTasks] = useState<ReviewerAuditTask[]>([]);
   /** The review whose re-run is being requested, while the request is in flight. */
-  const [reviewRerun, setReviewRerun] = useState<string>();
   /** What the last re-run attempt had to say. */
   const [reviewNote, setReviewNote] = useState<string>();
   /** The checkpoint this tab asked to re-review, until its task leaves the queue. */
@@ -384,34 +383,24 @@ export function ArtifactDialog({
     };
   }, [client, reviewQueued, reviewSession]);
 
-  /** Ask for this review's checkpoint to be reviewed again.
+  /** Ask for the session's artifacts to be reviewed again.
    *
-   *  The route names a transcript message, so the queue supplies the message id
-   *  the review's `toolCallId` belongs to. The queue is read again here rather
-   *  than trusted from mount: a checkpoint that finished long ago is exactly
-   *  the one whose stale review is being re-run. */
-  const rerunReview = async (review: ArtifactReviewRun) => {
-    if (reviewSession === undefined || review.toolCallId === undefined) {
+   *  The route takes the id of the checkpoint message it appends, and a re-run
+   *  cannot reuse the checkpoint it was pressed on: the store refuses an
+   *  existing id whose tool call id differs from the manual one. So this mints
+   *  a new id, and the poll follows the task that names it. */
+  const rerunReview = async () => {
+    if (reviewSession === undefined) {
       setReviewNote(TEXT.reviewer.noCheckpoint);
       return;
     }
-    setReviewRerun(review.id);
     setReviewNote(undefined);
     try {
-      const tasks = await listReviewerAuditTasks(client, reviewSession);
-      setReviewTasks(tasks);
-      const task = tasks.find((candidate) => candidate.toolCallId === review.toolCallId);
-      if (task === undefined) {
-        setReviewNote(TEXT.reviewer.noCheckpoint);
-        return;
-      }
-      await requestReview(client, reviewSession, task.checkpointMessageId);
+      const { task } = await requestReview(client, reviewSession, crypto.randomUUID());
       setReviewNote(TEXT.reviewer.rerunQueued);
-      setReviewQueued(review.toolCallId);
+      setReviewQueued(task.toolCallId);
     } catch (failure) {
       setReviewNote(failure instanceof Error ? failure.message : TEXT.errors.generic);
-    } finally {
-      setReviewRerun(undefined);
     }
   };
 
@@ -600,7 +589,7 @@ export function ArtifactDialog({
                         key={review.id}
                         // Hidden only while this card's own request is in
                         // flight; a second click would queue the same work twice.
-                        onRerun={reviewRerun === review.id ? undefined : () => void rerunReview(review)}
+                        onRerun={() => void rerunReview()}
                         review={review}
                         showName={false}
                       />

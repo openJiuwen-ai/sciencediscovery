@@ -225,12 +225,28 @@ test("会话设置 can ask for a review now, and the same row stops one under wa
   }
 });
 
+test("without a Session there is nothing to review, so the reviewer rows are not drawn", () => {
+  const markup = renderToStaticMarkup(
+    <SessionSettingsMenu
+      automaticReviewEnabled={undefined}
+      onApprovalMode={() => {}}
+      onClose={() => {}}
+      running={false}
+    />,
+  );
+  // The welcome and draft composers pass no handlers, and rows that would
+  // return early are not offered.
+  assert.doesNotMatch(markup, /自动审阅|审查档位|立即审查|停止审查/u);
+});
+
 test("审查档位 stays open while automatic review is off, because 立即审查 reads it", () => {
   const menu = (reviewerEnabled: boolean) => renderToStaticMarkup(
     <SessionSettingsMenu
       automaticReviewEnabled={false}
       onApprovalMode={() => {}}
       onClose={() => {}}
+      onReviewLevel={() => {}}
+      onRunReview={() => {}}
       reviewerEnabled={reviewerEnabled}
       reviewLevel="quick"
       running={false}

@@ -45,21 +45,21 @@ type Checkpoint = NonNullable<ChatMessage["reviewerCheckpoint"]>;
  */
 export function ReviewCard({
   checkpoint,
-  messageId,
   onReview,
   reviews,
   running,
 }: {
   checkpoint: Checkpoint;
-  /** The transcript message this card stands for; a re-run names it. */
-  messageId: string;
-  onReview?: (messageId: string) => void;
+  onReview?: () => void;
   reviews: readonly ArtifactReviewRun[];
   /** The coordinator has this checkpoint queued or running. */
   running: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const pending = running && reviews.length === 0;
+  // An in-run checkpoint has no audit task, so the queue alone never says it
+  // is running; its own message does. Without this the card read "no review"
+  // for the whole review.
+  const pending = (running || checkpoint.status === "running") && reviews.length === 0;
 
   // While the review runs there is nothing to fold out: the reference reduces
   // it to a transparent status line, and so does this.
@@ -171,7 +171,7 @@ export function ReviewCard({
           {reviews.map((review) => (
             <ReviewArtifactBody
               key={review.id}
-              onRerun={onReview === undefined ? undefined : () => onReview(messageId)}
+              onRerun={onReview}
               review={review}
               showName
             />
@@ -235,7 +235,8 @@ export function ReviewArtifactBody({
       {review.status === "failed" ? (
         <div className="review-banner is-fail">
           <span>{TEXT.reviewer.failedDetail}</span>
-          {rerun}
+          {/* A stale failed review already offers the re-run above. */}
+          {review.stale ? null : rerun}
         </div>
       ) : null}
 
