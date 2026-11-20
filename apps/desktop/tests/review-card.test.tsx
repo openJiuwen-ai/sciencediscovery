@@ -282,7 +282,7 @@ describe("a review's rows", () => {
     assert.equal(row.badge, TEXT.reviewer.gaps);
     // The server's own reason stays in the record; the card says the same
     // thing in the UI's language, and in words a reader can act on.
-    assert.equal(row.body, TEXT.reviewer.gapBodies.claim_support);
+    assert.equal(row.body, "no source text");
     // An absence is not a warning about the artifact, and it is not a pass.
     assert.equal(row.tone, "neutral");
   });
@@ -338,7 +338,7 @@ describe("a review's rows", () => {
     assert.equal(deliveryNote(parsed), undefined);
   });
 
-  it("says an inconclusive source check in plain words, not in evidence levels", () => {
+  it("shows the reviewer's own account of an inconclusive source check", () => {
     const checked = review({
       sourceAssessments: [{
         assessment: {
@@ -368,16 +368,13 @@ describe("a review's rows", () => {
     });
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
     assert.ok(row);
-    // Found one passage, not enough to check the claim: that is the whole
-    // message. "E3" and "locator" are the policy's words, not the reader's.
+    // The record's own sentence, as the web card shows it.
     assert.equal(row.tone, "neutral");
-    assert.equal(row.body, TEXT.reviewer.sourceInconclusiveSome);
-    assert.ok(!(row.body ?? "").includes("E3"));
-    assert.ok(!/locator/u.test(row.body ?? ""));
+    assert.equal(row.body, "No issued E3 source locator is available for this claim.");
     assert.equal(row.badge, TEXT.reviewer.assessments.INCONCLUSIVE);
   });
 
-  it("says so when an inconclusive source check found nothing at all", () => {
+  it("falls back to a sentence when the record has no account", () => {
     const checked = review({
       sourceAssessments: [{
         assessment: {
@@ -385,7 +382,7 @@ describe("a review's rows", () => {
           claimId: "claim-1",
           locatorIds: [],
           policyVersion: "1",
-          rationale: "The public source could not be reached.",
+          rationale: "",
         },
         claim: {
           artifactVersionId: "version-2",
@@ -478,7 +475,7 @@ describe("a review's rows", () => {
     assert.ok(!markup.includes("review-evidence"));
   });
 
-  it("says when the only source found was an abstract", () => {
+  it("says when the only source found was an abstract and the record is silent", () => {
     const checked = review({
       sourceAssessments: [{
         assessment: {
@@ -486,7 +483,7 @@ describe("a review's rows", () => {
           claimId: "claim-1",
           locatorIds: [],
           policyVersion: "1",
-          rationale: "No issued E3 source locator is available for this claim.",
+          rationale: "",
         },
         claim: {
           artifactVersionId: "version-2",
