@@ -311,23 +311,14 @@ export const ZH = {
       citation: "核对引用",
     } as Record<string, string>,
     summaryPass: "未发现问题",
-    /** The count uses the same nouns as the rows: 问题 for a critical
-     *  finding, 提醒 for a warning. Counting both as 问题 promised a problem
-     *  the reader could not find below. */
-    summaryProblems: (count: number) => `${count} 个问题`,
-    summaryWarnings: (count: number) => `${count} 项提醒`,
-    summaryMixed: (problems: number, warnings: number) => `${problems} 个问题 · ${warnings} 项提醒`,
-    /** Short verdict words, the same ones the rows use. */
-    summaryContradicted: "矛盾",
-    summaryPartlySupported: "部分支持",
-    summaryInconclusive: "未能核对来源",
+    summaryFindings: (count: number) => `${count} 个问题`,
     summaryIncomplete: "交付不完整",
     summaryUnverified: "未验证交付",
     summaryFailed: "审查失败",
     summarySkipped: "已跳过审查",
     /** Nothing was raised, but the review itself said part of the claim was
      *  never examined. "未发现问题" alone would read as a pass. */
-    summaryPartial: (count: number) => `有 ${count} 项未检查`,
+    summaryPartial: (count: number) => `未发现问题，但有 ${count} 项未检查`,
     checks: (count: number) => `${count} 项检查`,
     /** One checkpoint can cover several artifacts; when their verdicts differ,
      *  the header's worst-of phrase would hide the clean ones. */
@@ -366,21 +357,9 @@ export const ZH = {
       citation_identity: "引用身份",
       computation: "计算",
     } as Record<string, string>,
-    /** What the unperformed check would have covered, and what to do next.
-     *  The server's own reason is an English template; the card keeps its
-     *  language and says the same thing in the reader's words. */
-    gapBodies: {
-      claim_support: "这次审查没有核对结论有没有来源支撑。要核对请用深度审查。",
-      citation_identity: "这次审查没有核对文献身份（作者、期刊、年份）。",
-      computation: "这次审查没有核对数字与计算依据。",
-    } as Record<string, string>,
-    gapBodyUnknown: "这次审查没有执行这一项。",
-    sourceSupported: "来源原文支持这条结论。",
-    sourceContradicted: "来源原文与这条结论矛盾。",
-    sourcePartly: "来源原文只支持这条结论的一部分。",
     /** A source check that could not conclude is not a report defect. */
-    inconclusive: "没能核对结论来源",
-    inconclusiveBody: "这次没能把结论与来源原文对照：查来源的外部服务没有返回结果，可能超时或服务暂不可用。这不代表报告有问题。",
+    inconclusive: "来源核验没有得出结论",
+    inconclusiveBody: "来源服务未返回结论，这不代表报告有问题。",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "本次只核对引用格式，未检查结论支撑。",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -404,12 +383,10 @@ export const ZH = {
     completeness: {
       complete: "交付完整",
       incomplete: "交付不完整",
-      sourceBrief: "对照的是本次任务里写明的交付文件。",
-      sourceSession: "本次任务没写明，对照的是会话里已有的交付声明。",
-      sourceNone: "对照的是本任务声明的交付文件。",
-      /** A note under the rows, not a check result: the task named no files. */
-      unconfirmedNote: "交付完整性没有核对：任务里只说明了要生成什么，没有指定具体文件名或路径。",
-      notCheckedNote: "这次审查没有核对交付完整性。",
+      unconfirmed: "未声明交付清单",
+      sourceBrief: "依据本次任务声明的交付清单。",
+      sourceSession: "本次任务没有声明，按会话内已有声明核对。",
+      sourceNone: "没有找到可对照的交付声明，因此无法确认。",
       missing: "缺失",
       empty: "空文件",
     },
@@ -421,8 +398,10 @@ export const ZH = {
     } as Record<string, string>,
     progress: (completed: number, total: number) => `${completed}/${total}`,
     queued: (count: number) => `排队 ${count}`,
-    sourceInconclusiveSome: "找到了原文，但还不足以支撑这条结论。",
-    sourceInconclusiveAbstract: "只找到摘要或论文元数据，没有正文，无法核对这条结论。",
+    /** A bounded passage in a locked source; "定位" and evidence levels are
+     *  internal vocabulary, so the card says what was found instead. */
+    locators: (count: number) => `${count} 处原文`,
+    sourceInconclusiveWith: (count: number) => `找到 ${count} 处原文，但还不足以支撑这条结论。`,
     sourceInconclusiveNone: "没有找到可用于支撑这条结论的原文。",
     failedDetail: "审查过程报告了错误。",
     empty: "这个检查点没有产生审查记录。",

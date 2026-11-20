@@ -15,12 +15,11 @@
 import { useState } from "react";
 
 import type { ArtifactReviewRun, ChatMessage } from "../../api/types.js";
-import { EN } from "../../text/en.js";
+import { TEXT } from "../../text.js";
 import {
   checkpointSummary,
   checkpointTone,
   citationOnlyReview,
-  deliveryNote,
   mixedOutcomeCounts,
   reviewRowCount,
   reviewRows,
@@ -28,11 +27,6 @@ import {
   reviewTone,
   skipReasonText,
 } from "./presentation.js";
-
-/** The review card is English, as the web client's is: the reviewer writes
- *  English, and a card that switches language while its sentences do not mixes
- *  two languages in one line. Settings and menus stay localized. */
-const CARD = EN.reviewer;
 
 type Checkpoint = NonNullable<ChatMessage["reviewerCheckpoint"]>;
 
@@ -50,20 +44,22 @@ type Checkpoint = NonNullable<ChatMessage["reviewerCheckpoint"]>;
  */
 export function ReviewCard({
   checkpoint,
+  messageId,
   onReview,
   reviews,
   running,
 }: {
   checkpoint: Checkpoint;
-  onReview?: () => void;
+  /** The transcript message this card stands for; a re-run names it. */
+  messageId: string;
+  onReview?: (messageId: string) => void;
   reviews: readonly ArtifactReviewRun[];
   /** The coordinator has this checkpoint queued or running. */
   running: boolean;
 }) {
   const [open, setOpen] = useState(false);
   // An in-run checkpoint has no audit task, so the queue alone never says it
-  // is running; its own message does. Without this the card read "no review"
-  // for the whole review.
+  // is running; its own message does.
   const pending = (running || checkpoint.status === "running") && reviews.length === 0;
 
   // While the review runs there is nothing to fold out: the reference reduces
@@ -74,7 +70,7 @@ export function ReviewCard({
     // for one source at a time. The phase is the only thing that separates
     // "working" from "stuck"; finished-over-total is the only thing that says
     // how much of it is left.
-    const phase = progress?.phase === undefined ? undefined : CARD.phase[progress.phase];
+    const phase = progress?.phase === undefined ? undefined : TEXT.reviewer.phase[progress.phase];
     // A Quick run counts artifacts and leaves the check counters at zero, so the
     // progress has to come from whichever counter is actually moving.
     const checksTotal = progress?.total ?? 0;
@@ -88,22 +84,22 @@ export function ReviewCard({
           <span className="review-mark is-pending">
             <ShieldGlyph />
           </span>
-          <span className="review-title">{CARD.title}</span>
+          <span className="review-title">{TEXT.reviewer.title}</span>
           <span className="review-sep">·</span>
-          <span className="review-summary">{phase ?? CARD.running}</span>
+          <span className="review-summary">{phase ?? TEXT.reviewer.running}</span>
           {progress === undefined ? null : (
             <>
               <span className="review-sep">·</span>
               <span className="review-progress">
                 {progress.artifactLogicalName}
-                {counted.total > 0 ? ` ${CARD.progress(counted.done, counted.total)}` : ""}
+                {counted.total > 0 ? ` ${TEXT.reviewer.progress(counted.done, counted.total)}` : ""}
               </span>
             </>
           )}
           {queued > 0 ? (
             <>
               <span className="review-sep">·</span>
-              <span className="review-progress">{CARD.queued(queued)}</span>
+              <span className="review-progress">{TEXT.reviewer.queued(queued)}</span>
             </>
           ) : null}
           <span aria-hidden="true" className="review-dots">
@@ -138,7 +134,7 @@ export function ReviewCard({
         <span className={`review-mark is-${tone}`}>
           <ShieldGlyph />
         </span>
-        <span className="review-title">{CARD.title}</span>
+        <span className="review-title">{TEXT.reviewer.title}</span>
         <span className="review-sep">·</span>
         <span className="review-summary">{checkpointSummary(reviews, checkpoint.status)}</span>
         {/* The summary reports the worst artifact; when they disagree, the
@@ -152,7 +148,7 @@ export function ReviewCard({
         {count > 0 ? (
           <>
             <span className="review-sep">·</span>
-            <span className="review-count">{CARD.checks(count)}</span>
+            <span className="review-count">{TEXT.reviewer.checks(count)}</span>
           </>
         ) : null}
         {/* A re-run keeps the old verdict readable; the line says another one
@@ -160,7 +156,7 @@ export function ReviewCard({
         {running ? (
           <>
             <span className="review-sep">·</span>
-            <span className="review-progress">{CARD.running}</span>
+            <span className="review-progress">{TEXT.reviewer.running}</span>
           </>
         ) : null}
         <span aria-hidden="true" className="review-chev">
@@ -171,12 +167,12 @@ export function ReviewCard({
       {open ? (
         <div className="review-body">
           {reviews.length === 0 ? (
-            <p className="review-empty">{checkpoint.error ?? skipReasonText(checkpoint.skipReason) ?? CARD.empty}</p>
+            <p className="review-empty">{checkpoint.error ?? skipReasonText(checkpoint.skipReason) ?? TEXT.reviewer.empty}</p>
           ) : null}
           {reviews.map((review) => (
             <ReviewArtifactBody
               key={review.id}
-              onRerun={onReview}
+              onRerun={onReview === undefined ? undefined : () => onReview(messageId)}
               review={review}
               showName
             />
@@ -206,7 +202,7 @@ export function ReviewArtifactBody({
   const tone = reviewTone(review);
   const rerun = onRerun === undefined ? null : (
     <button className="review-rerun" onClick={onRerun} type="button">
-      {CARD.rerun}
+      {TEXT.reviewer.rerun}
     </button>
   );
 
@@ -232,61 +228,53 @@ export function ReviewArtifactBody({
           stays readable as history, and the re-run is the way forward. */}
       {review.stale ? (
         <div className="review-banner is-stale">
-          <span>{CARD.stale}</span>
+          <span>{TEXT.reviewer.stale}</span>
           {rerun}
         </div>
       ) : null}
 
       {review.status === "failed" ? (
         <div className="review-banner is-fail">
-          <span>{CARD.failedDetail}</span>
+          <span>{TEXT.reviewer.failedDetail}</span>
           {/* A stale failed review already offers the re-run above. */}
           {review.stale ? null : rerun}
         </div>
       ) : null}
 
       {review.reusedFromReviewId === undefined ? null : (
-        <p className="review-note">{CARD.reused}</p>
+        <p className="review-note">{TEXT.reviewer.reused}</p>
       )}
 
       {/* A citation-format pass did not look at whether the claims hold, and
           the header must not be the only thing the reader sees. */}
       {citationOnlyReview(review) && review.status !== "failed" && !review.stale ? (
-        <p className="review-note">{CARD.citationOnlyNote}</p>
+        <p className="review-note">{TEXT.reviewer.citationOnlyNote}</p>
       ) : null}
 
       <div className="review-items">
         {rows.map((row) => (
-          <article className="review-item" key={row.id}>
-            {/* One shape for every row: what was checked, what it concluded,
-                then one sentence saying what that means. */}
-            <header className="review-item-head">
-              <span className={`review-item-verdict is-${row.tone}`} title={row.categoryTip}>
-                {row.badge}
-              </span>
-            </header>
-            <p className="review-item-text">{row.body}</p>
+          <article className={`review-item is-${row.tone}`} key={row.id}>
+            <div className="review-item-label" title={row.labelTip}>{row.label}</div>
+            <div className="review-item-head">
+              <span className="review-badge">{row.badge}</span>
+              <span className="review-item-title">{row.title}</span>
+            </div>
+            {row.body ? <p className="review-item-body">{row.body}</p> : null}
             <div className="review-item-foot">
               <span
                 className="review-pill"
-                title={CARD.levelTip(review.reviewLevel ?? "quick")}
+                title={TEXT.reviewer.levelTip(review.reviewLevel ?? "quick")}
               >
-                {CARD.levelPill(review.reviewLevel ?? "quick")}
+                {TEXT.reviewer.levelPill(review.reviewLevel ?? "quick")}
               </span>
             </div>
           </article>
         ))}
       </div>
 
-      {/* Delivery is not a check result when the task named no files: it is
-          one line saying what was not checked, under the rows. */}
-      {deliveryNote(review) === undefined ? null : (
-        <p className="review-note">{deliveryNote(review)}</p>
-      )}
-
       {/* A failed review that produced no rows still needs a way back. */}
-      {rows.length === 0 && review.status !== "failed" && deliveryNote(review) === undefined ? (
-        <p className="review-empty">{CARD.empty}</p>
+      {rows.length === 0 && review.status !== "failed" ? (
+        <p className="review-empty">{TEXT.reviewer.empty}</p>
       ) : null}
     </section>
   );
