@@ -647,6 +647,13 @@ jobs:
       # The app's own dependencies (Vite, React) come from the pnpm workspace;
       # Playwright and the browser come from the shared `.e2e` install below.
       - run: pnpm install --frozen-lockfile
+
+      # The dev server resolves the desktop's workspace dependencies through
+      # their built `exports`, so they have to exist before Vite starts. UT
+      # reads the same packages from source and never notices; a browser does.
+      - name: Build the desktop's workspace dependencies
+        run: pnpm --filter "@sciencediscovery/desktop..." --if-present build
+
       - run: node test/sync-e2e.mjs --write
       - run: npm ci --prefix .e2e
       - name: Install the shared Chromium
