@@ -250,49 +250,76 @@ test('the policy job actually calls the rule', () => {
   assert.match(policy, /versionProblemsFromEvent\(\{ event: process\.env\.GITHUB_EVENT_NAME, payload: event \}\)/u);
 });
 
-test('the checkout read covers every metadata file, and the base commit', () => {
+test('every metadata file is read from the pull request head, and the base from the base', () => {
   const asked = [];
-  const contents = { ...files('0.4.1'), [VERSION_FILE]: '{"version": "0.4.1"}' };
+  const head = 'b'.repeat(40);
+  const base = 'a'.repeat(40);
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'a'.repeat(40) }, title: 'fix(mcp): reconnect' } },
-    readFile: path => { asked.push(path); return contents[path]; },
-    showFile: (sha, path) => { asked.push(`${sha.slice(0, 7)}:${path}`); return '{"version": "0.4.0"}'; },
+    payload: { pull_request: { base: { sha: base }, head: { sha: head }, title: 'fix(mcp): reconnect' } },
+    showFile: (sha, path) => {
+      asked.push(`${sha.slice(0, 1)}:${path}`);
+      if (path === VERSION_FILE) return sha === head ? '{"version": "0.4.1"}' : '{"version": "0.4.0"}';
+      return files('0.4.1')[path];
+    },
   });
   assert.equal(problems.length, 1, 'the version moved, so the rule applies');
-  for (const { path } of requirementsFor('0.4.0')) {
-    assert.ok(asked.includes(path), `${path} was never read`);
+  for (const { path } of requirementsFor('0.4.1')) {
+    assert.ok(asked.includes(`b:${path}`), `${path} was not read from the head commit`);
   }
-  assert.equal(asked.filter(entry => entry.includes(':')).length, 1, 'the base commit is read once');
-  assert.ok(asked.some(entry => entry.endsWith(':application/package.json')));
+  assert.ok(asked.includes(`a:${VERSION_FILE}`), 'the base version is read from the base commit');
+  assert.equal(asked.some(entry => entry.startsWith('b:') && entry.endsWith(VERSION_FILE)), true);
+});
+
+test('a branch behind main is not a version bump (#1271)', () => {
+  // The incident: the checkout is the merge commit (base + head), the base was
+  // 0.4.1 and the head was 0.4.1, but the merge tree carried main's 0.4.0-rc1.
+  // Reading the checkout made that look like a release change.
+  const asked = [];
+  const problems = versionProblemsFromEvent({
+    event: 'pull_request',
+    payload: {
+      pull_request: {
+        base: { sha: 'a'.repeat(40) },
+        head: { sha: 'b'.repeat(40) },
+        title: 'fix(api): tell /distill-session it has nothing to distil',
+      },
+    },
+    showFile: (sha, path) => {
+      asked.push(`${sha.slice(0, 1)}:${path}`);
+      // Both commits say 0.4.1; only a merge with the new main would say otherwise.
+      return path === VERSION_FILE ? '{"version": "0.4.1"}' : files('0.4.1')[path];
+    },
+  });
+  assert.deepEqual(problems, [], 'the pull request did not move the version');
+  assert.equal(asked.some(entry => entry.includes('electron-builder.yml')), false,
+    'an unchanged version reads no metadata at all');
 });
 
 test('a pull request that removes a metadata file is not stopped when the version did not move', () => {
-  // F11: the rule read every metadata file before comparing versions, so deleting
-  // or renaming one failed the policy job on an unrelated pull request.
   const asked = [];
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'b'.repeat(40) }, title: 'docs: drop a stale README' } },
-    readFile: path => {
+    payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) }, title: 'docs: drop a stale README' } },
+    showFile: (sha, path) => {
       asked.push(path);
       if (path === VERSION_FILE) return '{"version": "0.4.0-rc1"}';
-      const error = new Error(`ENOENT: no such file or directory, open '${path}'`);
+      const error = new Error(`ENOENT: ${path}`);
       error.code = 'ENOENT';
       throw error;
     },
-    showFile: () => '{"version": "0.4.0-rc1"}',
   });
   assert.deepEqual(problems, [], 'an unchanged version applies no rule, so nothing may throw');
   assert.equal(asked.includes('application/build/nsh-syntax-check-stub.nsi'), false, 'the metadata is not even read');
 });
 
 test('a missing metadata file is reported by name when the version did move', () => {
+  const head = 'c'.repeat(40);
   const problems = versionProblemsFromEvent({
     event: 'pull_request',
-    payload: { pull_request: { base: { sha: 'c'.repeat(40) }, title: 'chore(release): bump' } },
-    readFile: path => {
-      if (path === VERSION_FILE) return '{"version": "0.5.0-rc1"}';
+    payload: { pull_request: { base: { sha: 'a'.repeat(40) }, head: { sha: head }, title: 'chore(release): bump' } },
+    showFile: (sha, path) => {
+      if (path === VERSION_FILE) return sha === head ? '{"version": "0.5.0-rc1"}' : '{"version": "0.4.0-rc1"}';
       if (path === 'application/build/nsh-syntax-check-stub.nsi') {
         const error = new Error('ENOENT');
         error.code = 'ENOENT';
@@ -300,18 +327,25 @@ test('a missing metadata file is reported by name when the version did move', ()
       }
       return files('0.5.0-rc1')[path];
     },
-    showFile: () => '{"version": "0.4.0-rc1"}',
   });
   assert.equal(problems.length, 1);
   assert.match(problems[0], /nsh-syntax-check-stub\.nsi could not be read/u);
 });
 
-test('the checkout read refuses an event it cannot compare against', () => {
+test('the check refuses an event it cannot compare against', () => {
+  const usable = { sha: 'a'.repeat(40) };
   assert.throws(
     () => versionProblemsFromEvent({
-      event: 'pull_request', payload: { pull_request: { title: 'chore(release): x' } },
-      readFile: () => '{}', showFile: () => '{}',
+      event: 'pull_request', payload: { pull_request: { head: usable, title: 'chore(release): x' } },
+      showFile: () => '{}',
     }),
     /no usable pull_request\.base\.sha/u,
+  );
+  assert.throws(
+    () => versionProblemsFromEvent({
+      event: 'pull_request', payload: { pull_request: { base: usable, title: 'chore(release): x' } },
+      showFile: () => '{}',
+    }),
+    /no usable pull_request\.head\.sha/u,
   );
 });

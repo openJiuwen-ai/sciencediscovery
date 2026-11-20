@@ -37,37 +37,45 @@ export function versionProblems({ baseVersion, event, files, headVersion, title 
 }
 
 /**
- * Reads what `versionProblems` needs from this checkout.
+ * Reads what `versionProblems` needs from the two commits the rule is about.
  *
- * The two readers are injectable so a case can drive this without a repository,
- * and so a case can assert that every metadata path is actually read — a
- * mapping that quietly skipped one would leave that file unchecked while the
- * rule still looked in place.
+ * Both sides come from git objects, and the checkout is never consulted: on a
+ * `pull_request` the checkout is the *merge* commit — the head merged into the
+ * current base — so a branch that is behind `main` would be compared against a
+ * tree it never wrote, and a pull request that did not touch the version would
+ * be reported as a release change (#1271).
+ *
+ * The reader is injectable so a case can drive this without a repository, and so
+ * a case can assert that every metadata path is actually read — a mapping that
+ * quietly skipped one would leave that file unchecked while the rule still
+ * looked in place.
  */
 export function versionProblemsFromEvent({
   event,
   payload,
-  readFile = path => readFileSync(path, 'utf8'),
   showFile = (sha, path) => execFileSync('git', ['show', `${sha}:${path}`], { encoding: 'utf8' }),
 }) {
   if (event !== 'pull_request') return [];
   const base = payload?.pull_request?.base?.sha;
-  if (typeof base !== 'string' || !/^[a-f\d]{40}$/i.test(base)) {
-    // Without the base commit there is nothing to compare against; saying so is
-    // better than passing a rule nobody can evaluate.
-    throw new Error('release version: the event carries no usable pull_request.base.sha');
+  const head = payload?.pull_request?.head?.sha;
+  for (const [name, sha] of [['base', base], ['head', head]]) {
+    // Without both commits there is nothing to compare; saying so is better than
+    // passing a rule nobody can evaluate.
+    if (typeof sha !== 'string' || !/^[a-f\d]{40}$/i.test(sha)) {
+      throw new Error(`release version: the event carries no usable pull_request.${name}.sha`);
+    }
   }
-  const headVersion = versionOf(readFile(VERSION_FILE));
+  const headVersion = versionOf(showFile(head, VERSION_FILE));
   const baseVersion = versionOf(showFile(base, VERSION_FILE));
   // Compare first, read the metadata after: a pull request that deletes or
   // renames one of those files has nothing to do with this rule, and must not be
   // stopped by it. A missing file then becomes `undefined` rather than a throw,
   // and the rule reports it by name if a version really did move.
   if (headVersion === baseVersion) return [];
-  const readOrUndefined = path => {
-    try { return readFile(path); } catch { return undefined; }
+  const readFromHead = path => {
+    try { return showFile(head, path); } catch { return undefined; }
   };
-  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readOrUndefined(path)]));
+  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readFromHead(path)]));
   return versionProblems({
     baseVersion,
     event,
@@ -125,7 +133,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Said out loud even when it passes: a gate that is only visible on failure
     // can be half-wired and still look green (#1254).
     if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
-      console.log(`release version OK: ${VERSION_FILE} at ${versionOf(readFileSync(VERSION_FILE, 'utf8'))}`);
+      const headSha = event?.pull_request?.head?.sha;
+      const accepted = typeof headSha === 'string'
+        ? versionOf(execFileSync('git', ['show', `${headSha}:${VERSION_FILE}`], { encoding: 'utf8' }))
+        : 'unknown';
+      console.log(`release version OK: ${VERSION_FILE} at ${accepted} (head ${String(headSha).slice(0, 12)})`);
     }
     const result = route(process.env.GITHUB_EVENT_NAME, process.env.CI_REQUESTED_PROFILE || 'pr', process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm', paths);
     for (const [key,value] of Object.entries(result)) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
