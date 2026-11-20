@@ -21,7 +21,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ArtifactReviewRun, ChatMessage } from "../src/api/types.js";
-import { TEXT } from "../src/text.js";
+import { EN } from "../src/text/en.js";
 import { ReviewArtifactBody, ReviewCard } from "../src/views/reviewer/ReviewCard.js";
 import {
   checkpointSummary,
@@ -73,7 +73,7 @@ function card(reviews: readonly ArtifactReviewRun[], status: NonNullable<ChatMes
 describe("a review's verdict", () => {
   it("is green only when delivery was confirmed", () => {
     assert.equal(reviewTone(review()), "pass");
-    assert.equal(reviewSummary(review()), TEXT.reviewer.summaryPass);
+    assert.equal(reviewSummary(review()), EN.reviewer.summaryPass);
     assert.equal(unverifiedDelivery(review()), false);
   });
 
@@ -92,8 +92,8 @@ describe("a review's verdict", () => {
     // Nothing was found wrong, so the card is a pass; delivery is a note
     // under the rows, not a verdict — the task rarely names its files.
     assert.equal(reviewTone(unconfirmed), "pass");
-    assert.equal(reviewSummary(unconfirmed), TEXT.reviewer.summaryPass);
-    assert.equal(deliveryNote(unconfirmed), TEXT.reviewer.completeness.notCheckedNote);
+    assert.equal(reviewSummary(unconfirmed), EN.reviewer.summaryPass);
+    assert.equal(deliveryNote(unconfirmed), EN.reviewer.completeness.notCheckedNote);
   });
 
   it("is red when a declared deliverable is missing", () => {
@@ -114,13 +114,13 @@ describe("a review's verdict", () => {
       }],
     });
     assert.equal(reviewTone(incomplete), "fail");
-    assert.equal(reviewSummary(incomplete), TEXT.reviewer.summaryIncomplete);
+    assert.equal(reviewSummary(incomplete), EN.reviewer.summaryIncomplete);
   });
 
   it("says a skipped review skipped, not that it passed", () => {
     const skipped = review({ decision: "SKIPPED" });
     assert.equal(reviewTone(skipped), "neutral");
-    assert.equal(reviewSummary(skipped), TEXT.reviewer.summarySkipped);
+    assert.equal(reviewSummary(skipped), EN.reviewer.summarySkipped);
   });
 
   it("calls a warning a warning, and keeps red for a critical finding", () => {
@@ -138,7 +138,7 @@ describe("a review's verdict", () => {
     // The row below the header says 提醒; the header has to use the same word
     // and the same tone, or the card promises a problem it cannot show.
     assert.equal(reviewTone(warned), "warn");
-    assert.equal(reviewSummary(warned), TEXT.reviewer.summaryWarnings(1));
+    assert.equal(reviewSummary(warned), EN.reviewer.summaryWarnings(1));
 
     const critical = review({
       decision: "REVISE_AND_RETRY",
@@ -152,7 +152,7 @@ describe("a review's verdict", () => {
       }],
     });
     assert.equal(reviewTone(critical), "fail");
-    assert.equal(reviewSummary(critical), TEXT.reviewer.summaryProblems(1));
+    assert.equal(reviewSummary(critical), EN.reviewer.summaryProblems(1));
   });
 
   it("counts problems and warnings apart when a review raised both", () => {
@@ -177,7 +177,7 @@ describe("a review's verdict", () => {
         },
       ],
     });
-    assert.equal(reviewSummary(both), TEXT.reviewer.summaryMixed(1, 1));
+    assert.equal(reviewSummary(both), EN.reviewer.summaryMixed(1, 1));
   });
 
   it("does not call it a pass when the review itself says a check was not run", () => {
@@ -188,7 +188,7 @@ describe("a review's verdict", () => {
     // It is not a finding either, so the card does not wear the warning tone.
     assert.equal(unverifiedDelivery(gapped), false);
     assert.equal(reviewTone(gapped), "neutral");
-    assert.equal(reviewSummary(gapped), TEXT.reviewer.summaryPartial(1));
+    assert.equal(reviewSummary(gapped), EN.reviewer.summaryPartial(1));
   });
 
   it("stays green when every check it names actually ran", () => {
@@ -199,13 +199,13 @@ describe("a review's verdict", () => {
   it("keeps a failed review amber: an error is not a verdict on the artifact", () => {
     const broken = review({ status: "failed" });
     assert.equal(reviewTone(broken), "warn");
-    assert.equal(reviewSummary(broken), TEXT.reviewer.summaryFailed);
+    assert.equal(reviewSummary(broken), EN.reviewer.summaryFailed);
   });
 
   it("marks a verdict on a replaced version as history, and says so", () => {
     const stale = review({ stale: true });
     assert.equal(reviewTone(stale), "warn");
-    assert.equal(reviewSummary(stale), `${TEXT.reviewer.summaryPass}${TEXT.reviewer.outdated}`);
+    assert.equal(reviewSummary(stale), `${EN.reviewer.summaryPass}${EN.reviewer.outdated}`);
   });
 });
 
@@ -225,7 +225,7 @@ describe("a review's rows", () => {
     assert.equal(rows[0]?.id, "finding-1");
     assert.equal(rows[0]?.tone, "warn");
     // The category that raised a finding is not repeated as a pass below it.
-    assert.equal(rows.filter((row) => row.category === TEXT.reviewer.checkNames.citation).length, 1);
+    assert.equal(rows.filter((row) => row.category === EN.reviewer.checkNames.citation).length, 1);
   });
 
   it("lets the completeness card answer for the delivery finding", () => {
@@ -269,7 +269,6 @@ describe("a review's rows", () => {
       notChecked: [{ check: "claim_support", reason: "No source was read to confirm the claims." }],
     });
     const rows = reviewRows(unreachable);
-    assert.equal(rows.some((row) => row.category === "引文任务"), false);
     assert.ok(rows.some((row) => row.id === "review-1:gap:0"));
   });
 
@@ -278,8 +277,8 @@ describe("a review's rows", () => {
     const row = reviewRows(gapped).find((candidate) => candidate.id === "review-1:gap:0");
     assert.ok(row);
     // The category is the check that was skipped; the badge says it did not run.
-    assert.equal(row.category, TEXT.reviewer.gapChecks.claim_support);
-    assert.equal(row.badge, TEXT.reviewer.gaps);
+    assert.equal(row.category, EN.reviewer.gapChecks.claim_support);
+    assert.equal(row.badge, EN.reviewer.gaps);
     // The server's own reason stays in the record; the card says the same
     // thing in the UI's language, and in words a reader can act on.
     assert.equal(row.body, "no source text");
@@ -292,13 +291,13 @@ describe("a review's rows", () => {
     // message says it is running, and that is what the card must follow.
     const markup = card([], "running");
     assert.ok(markup.includes("review-card-running"));
-    assert.ok(!markup.includes("没有产生审查记录"));
+    assert.ok(!markup.includes(EN.reviewer.empty));
   });
 
   it("labels a smart review as a Deep review", () => {
     // `smart` is the server's older name for what the web maps to Deep.
-    assert.equal(TEXT.reviewer.levelPill("smart"), TEXT.reviewer.levelPill("deep"));
-    assert.equal(TEXT.reviewer.levelName("smart"), TEXT.reviewer.levelName("deep"));
+    assert.equal(EN.reviewer.levelPill("smart"), EN.reviewer.levelPill("deep"));
+    assert.equal(EN.reviewer.levelName("smart"), EN.reviewer.levelName("deep"));
   });
 
   it("offers one re-run when a review is both stale and failed", () => {
@@ -309,7 +308,7 @@ describe("a review's rows", () => {
         showName={false}
       />,
     );
-    assert.equal(markup.split(TEXT.reviewer.rerun).length - 1, 1);
+    assert.equal(markup.split(EN.reviewer.rerun).length - 1, 1);
   });
 
   it("keeps delivery out of the check list, in a note of its own", () => {
@@ -317,7 +316,7 @@ describe("a review's rows", () => {
     // row; the note says so under the rows.
     const unrecorded = review({ checks: ["citation"], completeness: undefined });
     assert.equal(reviewRows(unrecorded).some((row) => row.id.endsWith(":completeness")), false);
-    assert.equal(deliveryNote(unrecorded), TEXT.reviewer.completeness.notCheckedNote);
+    assert.equal(deliveryNote(unrecorded), EN.reviewer.completeness.notCheckedNote);
   });
 
   it("treats an unconfirmed delivery as a note about the request, not a result", () => {
@@ -329,7 +328,7 @@ describe("a review's rows", () => {
     // to verify against, so it stays out of the rows and the verdict.
     assert.equal(reviewRows(unconfirmed).some((row) => row.id.endsWith(":completeness")), false);
     assert.equal(reviewTone(unconfirmed), "pass");
-    assert.equal(deliveryNote(unconfirmed), TEXT.reviewer.completeness.unconfirmedNote);
+    assert.equal(deliveryNote(unconfirmed), EN.reviewer.completeness.unconfirmedNote);
   });
 
   it("gives a structure-only review no delivery note", () => {
@@ -371,7 +370,7 @@ describe("a review's rows", () => {
     // The record's own sentence, as the web card shows it.
     assert.equal(row.tone, "neutral");
     assert.equal(row.body, "No issued E3 source locator is available for this claim.");
-    assert.equal(row.badge, TEXT.reviewer.assessments.INCONCLUSIVE);
+    assert.equal(row.badge, EN.reviewer.assessments.INCONCLUSIVE);
   });
 
   it("falls back to a sentence when the record has no account", () => {
@@ -397,7 +396,7 @@ describe("a review's rows", () => {
       }],
     });
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
-    assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveNone);
+    assert.equal(row?.body, EN.reviewer.sourceInconclusiveNone);
     assert.equal(row?.tone, "neutral");
   });
 
@@ -426,7 +425,7 @@ describe("a review's rows", () => {
     // The row is amber; a grey card around it would contradict its own content,
     // and the header names the result rather than only the unverified delivery.
     assert.equal(reviewTone(checked), "warn");
-    assert.equal(reviewSummary(checked), TEXT.reviewer.summaryPartlySupported);
+    assert.equal(reviewSummary(checked), EN.reviewer.summaryPartlySupported);
   });
 
   it("states a partial verdict as the row's result, like a finding", () => {
@@ -469,7 +468,7 @@ describe("a review's rows", () => {
     // The sentence is the reviewer's account of what the source said — the same
     // slot a finding uses for its message, so every row has one shape.
     assert.equal(row?.body, "The excerpt supports the first half of the claim, not the second.");
-    assert.equal(row?.badge, TEXT.reviewer.assessments.PARTIALLY_SUPPORTED);
+    assert.equal(row?.badge, EN.reviewer.assessments.PARTIALLY_SUPPORTED);
     const markup = renderToStaticMarkup(<ReviewArtifactBody review={checked} showName={false} />);
     assert.ok(markup.includes("supports the first half"));
     assert.ok(!markup.includes("review-evidence"));
@@ -512,7 +511,7 @@ describe("a review's rows", () => {
       }],
     });
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
-    assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveAbstract);
+    assert.equal(row?.body, EN.reviewer.sourceInconclusiveAbstract);
     assert.equal(row?.tone, "neutral");
   });
 
@@ -525,7 +524,7 @@ describe("a review's rows", () => {
     const rows = reviewRows(partial);
     // The citation check ran and passed; the claim check did not run at all.
     assert.equal(rows[0]?.tone, "pass");
-    assert.equal(rows[0]?.category, TEXT.reviewer.checkNames.citation);
+    assert.equal(rows[0]?.category, EN.reviewer.checkNames.citation);
     assert.equal(rows.at(-1)?.id, "review-1:gap:0");
     assert.equal(rows.at(-1)?.tone, "neutral");
   });
@@ -550,8 +549,8 @@ describe("the hint behind a label", () => {
   it("explains each row's category, so a one-word label is readable", () => {
     const rows = reviewRows(review());
     for (const row of rows) assert.ok(row.categoryTip.length > 0, `no hint for ${row.category}`);
-    const structure = rows.find((row) => row.category === TEXT.reviewer.checkNames.structure);
-    assert.equal(structure?.categoryTip, TEXT.reviewer.labelTips.structure);
+    const structure = rows.find((row) => row.category === EN.reviewer.checkNames.structure);
+    assert.equal(structure?.categoryTip, EN.reviewer.labelTips.structure);
   });
 
   it("explains a finding the card has no category for", () => {
@@ -565,15 +564,17 @@ describe("the hint behind a label", () => {
         status: "open",
       }],
     });
-    assert.equal(reviewRows(generic)[0]?.categoryTip, TEXT.reviewer.labelTips.other);
+    assert.equal(reviewRows(generic)[0]?.categoryTip, EN.reviewer.labelTips.other);
   });
 
   it("draws the explanation as a hover title, on the label and on the level pill", () => {
     const markup = renderToStaticMarkup(
       <ReviewArtifactBody review={review()} showName={false} />,
     );
-    assert.ok(markup.includes(`title="${TEXT.reviewer.labelTips.structure}"`));
-    assert.ok(markup.includes(`title="${TEXT.reviewer.levelTip("quick")}"`));
+    // React escapes apostrophes in attributes; compare the escaped text.
+    const tip = EN.reviewer.labelTips.structure.replaceAll("'", "&#x27;");
+    assert.ok(markup.includes(`title="${tip}"`));
+    assert.ok(markup.includes(`title="${EN.reviewer.levelTip("quick")}"`));
   });
 });
 
@@ -591,27 +592,27 @@ describe("a checkpoint's card", () => {
       id: "review-2",
     });
     assert.equal(checkpointTone([review(), flagged], "completed"), "warn");
-    assert.equal(checkpointSummary([review(), flagged], "completed"), TEXT.reviewer.summaryWarnings(1));
+    assert.equal(checkpointSummary([review(), flagged], "completed"), EN.reviewer.summaryWarnings(1));
   });
 
   it("draws a one-line header that folds out into the items", () => {
     const markup = card([review()]);
-    assert.ok(markup.includes(TEXT.reviewer.title));
-    assert.ok(markup.includes(TEXT.reviewer.summaryPass));
-    assert.ok(markup.includes(TEXT.reviewer.checks(reviewRowCount([review()]))));
+    assert.ok(markup.includes(EN.reviewer.title));
+    assert.ok(markup.includes(EN.reviewer.summaryPass));
+    assert.ok(markup.includes(EN.reviewer.checks(reviewRowCount([review()]))));
     // Folded by default: no item cards until the header is clicked.
     assert.ok(!markup.includes("review-item "));
   });
 
   it("says a skipped checkpoint skipped when nothing was reviewed", () => {
     const markup = card([], "skipped");
-    assert.ok(markup.includes(TEXT.reviewer.summarySkipped));
-    assert.ok(!markup.includes(TEXT.reviewer.empty));
+    assert.ok(markup.includes(EN.reviewer.summarySkipped));
+    assert.ok(!markup.includes(EN.reviewer.empty));
   });
 
   it("says a failed checkpoint failed when nothing was reviewed", () => {
     const markup = card([], "failed");
-    assert.ok(markup.includes(TEXT.reviewer.summaryFailed));
+    assert.ok(markup.includes(EN.reviewer.summaryFailed));
   });
 
   it("titles each artifact section with the file it answers for", () => {
@@ -636,14 +637,14 @@ describe("a checkpoint's card", () => {
       }],
       id: "review-2",
     });
-    assert.equal(mixedOutcomeCounts([review(), flagged]), TEXT.reviewer.outcomeCounts(1, 1));
+    assert.equal(mixedOutcomeCounts([review(), flagged]), EN.reviewer.outcomeCounts(1, 1));
     // Agreement is already said once, by the verdict; numbers would repeat it.
     assert.equal(mixedOutcomeCounts([review()]), undefined);
     assert.equal(mixedOutcomeCounts([review(), review({ id: "review-3" })]), undefined);
 
     const markup = card([review(), flagged]);
-    assert.ok(markup.includes(TEXT.reviewer.outcomeCounts(1, 1)));
-    assert.ok(!card([review(), review({ id: "review-3" })]).includes(TEXT.reviewer.outcomeCounts(2, 0)));
+    assert.ok(markup.includes(EN.reviewer.outcomeCounts(1, 1)));
+    assert.ok(!card([review(), review({ id: "review-3" })]).includes(EN.reviewer.outcomeCounts(2, 0)));
   });
 
   it("names the phase and counts the queue while a run is in flight", () => {
@@ -666,11 +667,11 @@ describe("a checkpoint's card", () => {
       />,
     );
     // The phase is what separates a long Deep review from a stuck one.
-    assert.ok(markup.includes(TEXT.reviewer.phase.citation));
-    assert.ok(!markup.includes(TEXT.reviewer.running));
+    assert.ok(markup.includes(EN.reviewer.phase.citation));
+    assert.ok(!markup.includes(EN.reviewer.running));
     // Failed counts as done: the bar is how much is left, not how much worked.
-    assert.ok(markup.includes(TEXT.reviewer.progress(3, 8)));
-    assert.ok(markup.includes(TEXT.reviewer.queued(3)));
+    assert.ok(markup.includes(EN.reviewer.progress(3, 8)));
+    assert.ok(markup.includes(EN.reviewer.queued(3)));
     assert.ok(markup.includes('style="width:38%"'));
   });
 
@@ -697,9 +698,9 @@ describe("a checkpoint's card", () => {
         running
       />,
     );
-    assert.ok(markup.includes(TEXT.reviewer.progress(10, 11)));
+    assert.ok(markup.includes(EN.reviewer.progress(10, 11)));
     assert.ok(markup.includes('style="width:91%"'));
-    assert.ok(!markup.includes(TEXT.reviewer.progress(0, 0)));
+    assert.ok(!markup.includes(EN.reviewer.progress(0, 0)));
   });
 
   it("draws no bar when the coordinator has not said how much there is", () => {
@@ -722,7 +723,7 @@ describe("a checkpoint's card", () => {
     );
     assert.ok(!markup.includes("review-progress-track"));
     // No phase and no total: the generic line is the honest one.
-    assert.ok(markup.includes(TEXT.reviewer.running));
+    assert.ok(markup.includes(EN.reviewer.running));
   });
 
   it("draws a running line, with progress, while nothing exists yet", () => {
@@ -743,8 +744,8 @@ describe("a checkpoint's card", () => {
         running
       />,
     );
-    assert.ok(markup.includes(TEXT.reviewer.running));
-    assert.ok(markup.includes(TEXT.reviewer.progress(2, 5)));
+    assert.ok(markup.includes(EN.reviewer.running));
+    assert.ok(markup.includes(EN.reviewer.progress(2, 5)));
     assert.ok(!markup.includes("review-head"));
   });
 });

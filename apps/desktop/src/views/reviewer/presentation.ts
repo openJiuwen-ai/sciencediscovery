@@ -34,7 +34,12 @@
  */
 
 import type { ArtifactReviewRun, ChatMessage, ReviewClaim } from "../../api/types.js";
-import { TEXT } from "../../text.js";
+import { EN } from "../../text/en.js";
+
+/** The review card is English, as the web client's is: the reviewer writes
+ *  English, and a card that switches language while its sentences do not mixes
+ *  two languages in one line. Settings and menus stay localized. */
+const CARD = EN.reviewer;
 
 export type ReviewTone = "pass" | "warn" | "fail" | "pending" | "neutral";
 
@@ -78,7 +83,7 @@ function findingCategory(code: string): "structure" | "citation" | "computation"
 }
 
 function labelFor(category: string): string {
-  return TEXT.reviewer.checkNames[category] ?? TEXT.reviewer.title;
+  return CARD.checkNames[category] ?? CARD.title;
 }
 
 /** The hover explanation behind a label. A category the card has no separate
@@ -87,8 +92,8 @@ function labelFor(category: string): string {
 function labelTipFor(category: string): string {
   // The record's keys are named so the `other` fallback is a known string; the
   // lookup itself stays open because a check name comes off the wire.
-  const tips: Record<string, string | undefined> = TEXT.reviewer.labelTips;
-  return tips[category] ?? TEXT.reviewer.labelTips.other;
+  const tips: Record<string, string | undefined> = CARD.labelTips;
+  return tips[category] ?? CARD.labelTips.other;
 }
 
 /**
@@ -124,8 +129,8 @@ export function unverifiedDelivery(review: ArtifactReviewRun): boolean {
  * review never claimed delivery at all, so it gets no note.
  */
 export function deliveryNote(review: ArtifactReviewRun): string | undefined {
-  if (review.completeness?.status === "unconfirmed") return TEXT.reviewer.completeness.unconfirmedNote;
-  if (review.completeness === undefined && unverifiedDelivery(review)) return TEXT.reviewer.completeness.notCheckedNote;
+  if (review.completeness?.status === "unconfirmed") return CARD.completeness.unconfirmedNote;
+  if (review.completeness === undefined && unverifiedDelivery(review)) return CARD.completeness.notCheckedNote;
   return undefined;
 }
 
@@ -202,31 +207,31 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
 
 export function reviewSummary(review: ArtifactReviewRun): string {
   const summary = ((): string => {
-    if (review.status === "failed") return TEXT.reviewer.summaryFailed;
-    if (review.decision === "SKIPPED") return TEXT.reviewer.summarySkipped;
-    if (review.completeness?.status === "incomplete") return TEXT.reviewer.summaryIncomplete;
+    if (review.status === "failed") return CARD.summaryFailed;
+    if (review.decision === "SKIPPED") return CARD.summarySkipped;
+    if (review.completeness?.status === "incomplete") return CARD.summaryIncomplete;
     // Say what the rows say: 问题 for a critical finding, 提醒 for a warning.
     // Counting both as 问题 promised a problem the reader could not find.
     const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code));
     const problems = raised.filter((finding) => finding.severity === "critical").length;
     const warnings = raised.length - problems;
-    if (problems > 0 && warnings > 0) return TEXT.reviewer.summaryMixed(problems, warnings);
-    if (problems > 0) return TEXT.reviewer.summaryProblems(problems);
-    if (warnings > 0) return TEXT.reviewer.summaryWarnings(warnings);
+    if (problems > 0 && warnings > 0) return CARD.summaryMixed(problems, warnings);
+    if (problems > 0) return CARD.summaryProblems(problems);
+    if (warnings > 0) return CARD.summaryWarnings(warnings);
     // A source verdict is a result even when no finding was raised, and the
     // header has to name it: the card is amber because of it.
     const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
     const contradicted = verdicts.filter((verdict) => verdict === "CONTRADICTED").length;
     // The header uses the row's own word, not a sentence about the row.
-    if (contradicted > 0) return TEXT.reviewer.summaryContradicted;
-    if (verdicts.includes("PARTIALLY_SUPPORTED")) return TEXT.reviewer.summaryPartlySupported;
-    if (review.smartStatus === "inconclusive") return TEXT.reviewer.summaryInconclusive;
-    if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
-    return TEXT.reviewer.summaryPass;
+    if (contradicted > 0) return CARD.summaryContradicted;
+    if (verdicts.includes("PARTIALLY_SUPPORTED")) return CARD.summaryPartlySupported;
+    if (review.smartStatus === "inconclusive") return CARD.summaryInconclusive;
+    if (declaredGap(review)) return CARD.summaryPartial(review.notChecked?.length ?? 0);
+    return CARD.summaryPass;
   })();
   // A verdict on a version that has since been replaced says what it found and
   // that it is history: the reader must not take it for the current state.
-  return review.stale === true && review.status !== "failed" ? `${summary}${TEXT.reviewer.outdated}` : summary;
+  return review.stale === true && review.status !== "failed" ? `${summary}${CARD.outdated}` : summary;
 }
 
 /** Where a row sits in the card: problems, then results, then absences. */
@@ -254,13 +259,13 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: finding.id,
       tone: finding.severity === "critical" ? "fail" : "warn",
-      category: category === "semantics" ? TEXT.reviewer.deepSemantic : category === undefined
-        ? TEXT.reviewer.title
+      category: category === "semantics" ? CARD.deepSemantic : category === undefined
+        ? CARD.title
         : labelFor(category),
       categoryTip: category === "semantics"
-        ? TEXT.reviewer.labelTips.semantics
+        ? CARD.labelTips.semantics
         : labelTipFor(category ?? "other"),
-      badge: finding.severity === "critical" ? TEXT.reviewer.finding : TEXT.reviewer.warning,
+      badge: finding.severity === "critical" ? CARD.finding : CARD.warning,
       // The reviewer's own sentence, as written — the web card shows it the
       // same way; the badge above already says which check it came from.
       body: finding.message,
@@ -270,7 +275,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
   const completeness = review.completeness;
   if (completeness !== undefined) {
     covered.add("completeness");
-    const text = TEXT.reviewer.completeness;
+    const text = CARD.completeness;
     const source = completeness.source === "brief"
       ? text.sourceBrief
       : completeness.source === "session-fallback" ? text.sourceSession : text.sourceNone;
@@ -288,10 +293,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
         tone: completeness.status === "complete" ? "pass" : "fail",
         category: labelFor("completeness"),
         categoryTip: labelTipFor("completeness"),
-        badge: completeness.status === "complete" ? TEXT.reviewer.badgePass : TEXT.reviewer.finding,
+        badge: completeness.status === "complete" ? CARD.badgePass : CARD.finding,
         body: completeness.status === "complete"
-          ? `${text.complete}。${source}`
-          : `${text.incomplete}。${missing.length > 0 ? missing.join("；") : source}`,
+          ? `${text.complete}. ${source}`
+          : `${text.incomplete}. ${missing.length > 0 ? missing.join("; ") : source}`,
       });
     }
   }
@@ -303,12 +308,12 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       // The category is the check that was skipped; the badge says it did not
       // run. The server's own `gap.reason` is an English template and stays in
       // the record; the card says the same thing in one sentence.
-      category: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
+      category: CARD.gapChecks[gap.check] ?? gap.check,
       categoryTip: labelTipFor("gaps"),
-      badge: TEXT.reviewer.gaps,
+      badge: CARD.gaps,
       body: gap.reason?.trim() !== undefined && gap.reason.trim() !== ""
         ? gap.reason
-        : TEXT.reviewer.gapBodies[gap.check] ?? TEXT.reviewer.gapBodyUnknown,
+        : CARD.gapBodies[gap.check] ?? CARD.gapBodyUnknown,
     });
   }
 
@@ -321,10 +326,10 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     rows.push({
       id: `${review.id}:smart`,
       tone: "neutral",
-      category: TEXT.reviewer.deepSemantic,
+      category: CARD.deepSemantic,
       categoryTip: labelTipFor("semantics"),
-      badge: TEXT.reviewer.badgeUnconfirmed,
-      body: TEXT.reviewer.inconclusiveBody,
+      badge: CARD.badgeUnconfirmed,
+      body: CARD.inconclusiveBody,
     });
   }
 
@@ -357,19 +362,19 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       ? rationale
       : inconclusive
         ? assessment.locators.length === 0
-          ? TEXT.reviewer.sourceInconclusiveNone
-          : secondaryOnly ? TEXT.reviewer.sourceInconclusiveAbstract : TEXT.reviewer.sourceInconclusiveSome
+          ? CARD.sourceInconclusiveNone
+          : secondaryOnly ? CARD.sourceInconclusiveAbstract : CARD.sourceInconclusiveSome
         : verdict === "CONTRADICTED"
-          ? TEXT.reviewer.sourceContradicted
-          : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;
+          ? CARD.sourceContradicted
+          : verdict === "SUPPORTED" ? CARD.sourceSupported : CARD.sourcePartly;
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
       tone: inconclusive
         ? "neutral"
         : verdict === "SUPPORTED" ? "pass" : verdict === "CONTRADICTED" ? "fail" : "warn",
-      category: TEXT.reviewer.source,
+      category: CARD.source,
       categoryTip: labelTipFor("source"),
-      badge: TEXT.reviewer.assessments[verdict] ?? verdict,
+      badge: CARD.assessments[verdict] ?? verdict,
       body,
     });
   }
@@ -390,8 +395,8 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       tone: "pass",
       category: labelFor(check),
       categoryTip: labelTipFor(check),
-      badge: TEXT.reviewer.badgePass,
-      body: `${TEXT.reviewer.checkPass(labelFor(check))}。${TEXT.reviewer.passBody}`,
+      badge: CARD.badgePass,
+      body: `${CARD.checkPass(labelFor(check))}. ${CARD.passBody}`,
     });
   }
 
@@ -422,7 +427,7 @@ export function mixedOutcomeCounts(reviews: readonly ArtifactReviewRun[]): strin
   const passed = tones.filter((tone) => tone === "pass").length;
   const attention = tones.filter((tone) => tone === "fail" || tone === "warn").length;
   if (passed === 0 || attention === 0) return undefined;
-  return TEXT.reviewer.outcomeCounts(passed, attention);
+  return CARD.outcomeCounts(passed, attention);
 }
 
 /* A review that could not confirm something outranks one that passed: the
@@ -452,14 +457,14 @@ export function checkpointTone(
  *  reader nothing about where to turn it back on. */
 export function skipReasonText(reason: string | undefined): string | undefined {
   if (reason === undefined) return undefined;
-  return TEXT.reviewer.skipReasons[reason] ?? TEXT.reviewer.skipUnknown;
+  return CARD.skipReasons[reason] ?? CARD.skipUnknown;
 }
 
 export function checkpointSummary(reviews: readonly ArtifactReviewRun[], status: CheckpointStatus): string {
   if (reviews.length === 0) {
-    if (status === "failed") return TEXT.reviewer.summaryFailed;
-    if (status === "skipped") return TEXT.reviewer.summarySkipped;
-    return TEXT.reviewer.empty;
+    if (status === "failed") return CARD.summaryFailed;
+    if (status === "skipped") return CARD.summarySkipped;
+    return CARD.empty;
   }
   const worst = reviews.reduce((chosen, review) =>
     TONE_RANK[reviewTone(review)] > TONE_RANK[reviewTone(chosen)] ? review : chosen);
