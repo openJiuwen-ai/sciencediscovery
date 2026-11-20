@@ -144,7 +144,7 @@ an nginx container that serves `apps/hub/dist` and proxies `/api/` to the
 service. Build the site for the root path first:
 
 ```bash
-pnpm hub:build:api --root   # HUB_BASE_PATH=/, no exporter, no catalog.json
+VITE_HUB_API_BASE=/api/v1 pnpm hub:build:api --root   # HUB_BASE_PATH=/, no exporter, no catalog.json
 ```
 
 Then `docker compose --env-file .env up -d --build` and open
