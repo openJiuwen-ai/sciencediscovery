@@ -432,7 +432,7 @@ describe("a review's rows", () => {
     assert.equal(reviewSummary(checked), TEXT.reviewer.summaryPartlySupported);
   });
 
-  it("folds the quoted passages, and why a verdict was only partial, under the row", () => {
+  it("states a partial verdict as the row's result, like a finding", () => {
     const checked = review({
       sourceAssessments: [{
         assessment: {
@@ -469,18 +469,54 @@ describe("a review's rows", () => {
       }],
     });
     const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
-    assert.equal(row?.evidence?.length, 1);
-    assert.equal(
-      row?.evidence?.[0]?.where,
-      `${TEXT.reviewer.sourceTypes.abstract} · ${TEXT.reviewer.locatorAt.paragraph(2)}`,
-    );
-    // The reviewer's account is what answers "why only part of it", and it is
-    // model output: folded, not printed under every partial verdict.
-    assert.equal(row?.rationale, "The excerpt supports the first half of the claim, not the second.");
+    // The sentence is the reviewer's account of what the source said — the same
+    // slot a finding uses for its message, so every row has one shape.
+    assert.equal(row?.body, "The excerpt supports the first half of the claim, not the second.");
+    assert.equal(row?.badge, TEXT.reviewer.assessments.PARTIALLY_SUPPORTED);
     const markup = renderToStaticMarkup(<ReviewArtifactBody review={checked} showName={false} />);
-    assert.ok(markup.includes(TEXT.reviewer.details));
-    assert.ok(markup.includes("an abstract sentence"));
     assert.ok(markup.includes("supports the first half"));
+    assert.ok(!markup.includes("review-evidence"));
+  });
+
+  it("says when the only source found was an abstract", () => {
+    const checked = review({
+      sourceAssessments: [{
+        assessment: {
+          assessment: "INCONCLUSIVE",
+          claimId: "claim-1",
+          locatorIds: [],
+          policyVersion: "1",
+          rationale: "No issued E3 source locator is available for this claim.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: [],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E3",
+          text: "代表工作",
+        },
+        locators: [{
+          excerpt: "an abstract sentence",
+          excerptHash: "abc",
+          id: "locator-1",
+          locator: { paragraph: 2 },
+          snapshotId: "snapshot-1",
+        }],
+        snapshots: [{
+          availability: "available",
+          evidenceLevel: "E2",
+          id: "snapshot-1",
+          retrievedAt: "2026-01-01T00:00:00.000Z",
+          snapshot: { hash: "h", size: 1 },
+          sourceId: "pubmed",
+          sourceType: "abstract",
+        }],
+      }],
+    });
+    const row = reviewRows(checked).find((candidate) => candidate.id === "review-1:source:claim-1");
+    assert.equal(row?.body, TEXT.reviewer.sourceInconclusiveAbstract);
+    assert.equal(row?.tone, "neutral");
   });
 
   it("puts the checks that ran above what the review never looked at", () => {

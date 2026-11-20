@@ -58,25 +58,10 @@ export interface ReviewRow {
   categoryTip: string;
   /** The badge's word, the only coloured part of the row. */
   badge: string;
-  /** What the row is about, when that is not the check itself — for a source
-   *  verdict, the claim the source was compared with. Shown above the sentence. */
-  subject?: string;
-  /** One sentence: what the check found, or could not do. Always present. */
+  /** One sentence: what the check found, or could not do. Always present.
+   *  For a source verdict it is the reviewer's own account of what the source
+   *  said — the same slot a finding uses for its message. */
   body: string;
-  /** Source passages the check relied on. Folded: the verdict has to be
-   *  readable at a glance, and "why only part of it" is a question the reader
-   *  asks on purpose. */
-  evidence?: ReviewEvidence[];
-  /** The reviewer's own account of the evidence. Folded with it — this is
-   *  model output, so it is opt-in, not the card's default copy. */
-  rationale?: string;
-}
-
-/** One passage quoted from a locked source snapshot. */
-export interface ReviewEvidence {
-  excerpt: string;
-  /** "Abstract · paragraph 2": what kind of source, and where in it. */
-  where?: string;
 }
 
 const DELIVERY_CODES = new Set(["DELIVERABLE_MISSING", "DELIVERABLE_EMPTY"]);
@@ -244,29 +229,6 @@ export function reviewSummary(review: ArtifactReviewRun): string {
   return review.stale === true && review.status !== "failed" ? `${summary}${TEXT.reviewer.outdated}` : summary;
 }
 
-function claimText(claim: ReviewClaim | undefined): string | undefined {
-  return claim?.text?.trim() || undefined;
-}
-
-/** "paragraph 2 · page 4": where a quoted passage sits, in the UI's language. */
-function locatorWhere(locator: {
-  column?: string; field?: string; line?: number; outputPath?: string; page?: number;
-  paragraph?: number; row?: string; section?: string; table?: string;
-}): string | undefined {
-  const at = TEXT.reviewer.locatorAt;
-  const parts: string[] = [];
-  if (locator.page !== undefined) parts.push(at.page(locator.page));
-  if (locator.paragraph !== undefined) parts.push(at.paragraph(locator.paragraph));
-  if (locator.line !== undefined) parts.push(at.line(locator.line));
-  if (locator.section !== undefined) parts.push(at.section(locator.section));
-  if (locator.table !== undefined) parts.push(at.table(locator.table));
-  if (locator.row !== undefined) parts.push(at.row(locator.row));
-  if (locator.column !== undefined) parts.push(at.column(locator.column));
-  if (locator.field !== undefined) parts.push(at.field(locator.field));
-  if (locator.outputPath !== undefined) parts.push(at.output(locator.outputPath));
-  return parts.length > 0 ? parts.join(" · ") : undefined;
-}
-
 /** Where a row sits in the card: problems, then results, then absences. */
 const ROW_RANK: Record<ReviewTone, number> = { fail: 0, warn: 1, pass: 2, pending: 2, neutral: 3 };
 
@@ -373,23 +335,26 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     // found, and that it was not enough to check the claim. The raw reason
     // stays in the review record.
     const inconclusive = verdict === "INCONCLUSIVE";
-    // The row says what the verdict means in one sentence, in the card's
-    // language. The reviewer's own account and the passages it read — model
-    // output, in whichever language the source was — are folded below with the
-    // claim they answer for.
+    // The sentence is the result, like a finding's: the reviewer's own account
+    // of what the source said ("the abstract supports the gravimetric part but
+    // not the stronger claim"). The policy's own words for an inconclusive
+    // lookup are replaced: they name evidence levels and locators, and what a
+    // reader needs is whether any source text existed and at what depth.
+    const secondaryOnly = assessment.locators.length > 0
+      && assessment.locators.every((locator) => {
+        const type = snapshots.get(locator.snapshotId)?.sourceType;
+        return type === "abstract" || type === "paper_metadata";
+      });
+    const rationale = assessment.assessment.rationale?.trim();
     const body = inconclusive
-      ? assessment.locators.length > 0
-        ? TEXT.reviewer.sourceInconclusiveSome
-        : TEXT.reviewer.sourceInconclusiveNone
-      : verdict === "CONTRADICTED"
-        ? TEXT.reviewer.sourceContradicted
-        : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;
-    const evidence = assessment.locators.map((locator) => {
-      const kind = TEXT.reviewer.sourceTypes[snapshots.get(locator.snapshotId)?.sourceType ?? ""];
-      const where = locatorWhere(locator.locator);
-      const label = [kind, where].filter((part) => part !== undefined && part !== "").join(" · ");
-      return { excerpt: locator.excerpt, where: label === "" ? undefined : label };
-    });
+      ? assessment.locators.length === 0
+        ? TEXT.reviewer.sourceInconclusiveNone
+        : secondaryOnly ? TEXT.reviewer.sourceInconclusiveAbstract : TEXT.reviewer.sourceInconclusiveSome
+      : rationale !== undefined && rationale !== ""
+        ? rationale
+        : verdict === "CONTRADICTED"
+          ? TEXT.reviewer.sourceContradicted
+          : verdict === "SUPPORTED" ? TEXT.reviewer.sourceSupported : TEXT.reviewer.sourcePartly;
     rows.push({
       id: `${review.id}:source:${assessment.claim.id}`,
       tone: inconclusive
@@ -398,14 +363,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       category: TEXT.reviewer.source,
       categoryTip: labelTipFor("source"),
       badge: TEXT.reviewer.assessments[verdict] ?? verdict,
-      // The claim stays in the row: "why is this only partly supported" is a
-      // question about a sentence, and the sentence has to be visible.
-      subject: claimText(assessment.claim),
       body,
-      evidence: evidence.length > 0 ? evidence : undefined,
-      // A contradiction's account is the evidence for the finding, so it is
-      // shown with it; every source row keeps it folded.
-      rationale: inconclusive ? undefined : assessment.assessment.rationale || undefined,
     });
   }
 
