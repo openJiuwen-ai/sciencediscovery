@@ -15,6 +15,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { loadCatalog } from "./catalog/load.js";
+import { writeEnabled } from "./api/client.js";
+import { AccountView } from "./views/Account.js";
 import { BackIcon, BrandMark, GlobeIcon, SearchIcon } from "./components/icons.js";
 import { counted, useCopy, useLanguage } from "./i18n.js";
 import { TABS, useRoute } from "./router.js";
@@ -44,6 +46,7 @@ function assetsFor(catalog: Catalog, tab: Tab): Asset[] {
 export function App(): JSX.Element {
   const [state, setState] = useState<State>({ status: "loading" });
   const [hintVisible, setHintVisible] = useState(true);
+  const [accountOpen, setAccountOpen] = useState(() => globalThis.location.pathname.replace(/\/+$/u, "").endsWith("/account"));
   const { language, toggle } = useLanguage();
   const copy = useCopy(language);
   const { route, setRoute } = useRoute(BASE_PATH);
@@ -61,6 +64,22 @@ export function App(): JSX.Element {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const update = (): void => setAccountOpen(globalThis.location.pathname.replace(/\/+$/u, "").endsWith("/account"));
+    globalThis.addEventListener("popstate", update);
+    return () => globalThis.removeEventListener("popstate", update);
+  }, []);
+
+  function openAccount(): void {
+    globalThis.history.pushState(null, "", `${BASE_PATH.replace(/\/+$/u, "")}/account`);
+    setAccountOpen(true);
+  }
+
+  function closeAccount(): void {
+    globalThis.history.pushState(null, "", BASE_PATH);
+    setAccountOpen(false);
+  }
 
   const counts = useMemo(() => {
     if (state.status !== "ready") return null;
@@ -163,6 +182,11 @@ export function App(): JSX.Element {
           <span className="brand-name">ScienceDiscovery <b>Hub</b></span>
         </button>
         <div className="top-actions">
+          {writeEnabled ? (
+            <button className="lang" onClick={() => { if (accountOpen) closeAccount(); else openAccount(); }} type="button">
+              {language === "zh" ? "账号" : "Account"}
+            </button>
+          ) : null}
           <button aria-label={language === "zh" ? "切换到英文" : "Switch to Chinese"} className="lang" onClick={toggle} type="button">
             <GlobeIcon size={16} />
             {language === "zh" ? "中文" : "EN"}
@@ -209,7 +233,9 @@ export function App(): JSX.Element {
         </section>
       )}
 
-      <main className="content">{renderBody()}</main>
+      <main className="content">
+        {accountOpen ? <AccountView language={language} onClose={closeAccount} /> : renderBody()}
+      </main>
     </div>
   );
 }
