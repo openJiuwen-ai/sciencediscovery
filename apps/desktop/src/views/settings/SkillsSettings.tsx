@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import {
@@ -24,8 +24,13 @@ import {
   setJiuwenSwarmSkillEnabled,
   setJiuwenSwarmSkillEnabledById,
 } from "../../api/settings.js";
-import type { JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/types.js";
+import type { GitSkillImportJob, JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/types.js";
 import type { ConfirmRequest } from "../../app/use-workspace.js";
+import {
+  dismissGitSkillImportJob,
+  startGitSkillImportInBackground,
+  subscribeGitSkillImportJob,
+} from "../../app/git-skill-import-job.js";
 import { saveSkillPackage } from "../../app/skill-export.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
@@ -122,6 +127,8 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     id: string;
     message: string;
   }>();
+  const [backgroundImport, setBackgroundImport] = useState<GitSkillImportJob>();
+  const handledImportJob = useRef<string | undefined>(undefined);
 
   // An export's outcome is a passing confirmation, not a property of the row:
   // it says what just happened, then leaves. A failure stays long enough to be
@@ -132,6 +139,11 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     const timer = setTimeout(() => setExportStatus(undefined), 4_000);
     return () => clearTimeout(timer);
   }, [exportStatus]);
+
+  // The Git import keeps running in the API while the reader is elsewhere;
+  // this pane only watches it. Once it ends, new packages are switched on in
+  // JiuwenSwarm (as a foreground import did) and the catalog is re-read once.
+  useEffect(() => subscribeGitSkillImportJob(setBackgroundImport), []);
   const [view, setView] = useState<SkillView>({ kind: "list" });
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -158,6 +170,30 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     client,
     key: "skills:jiuwenswarm",
   });
+
+  useEffect(() => {
+    if (!backgroundImport) return;
+    const terminal = backgroundImport.status === "done"
+      || backgroundImport.status === "cancelled"
+      || backgroundImport.status === "failed";
+    if (!terminal || handledImportJob.current === backgroundImport.id) return;
+    handledImportJob.current = backgroundImport.id;
+    const page = loaded.value;
+    const reload = loaded.reload;
+    void (async () => {
+      if (page?.switchesAvailable) {
+        for (const entry of backgroundImport.imported) {
+          if (!entry.created) continue;
+          try {
+            await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
+          } catch {
+            // The row's switch shows the state the server actually stored.
+          }
+        }
+      }
+      reload();
+    })();
+  }, [backgroundImport, client, loaded]);
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
@@ -373,6 +409,48 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       {trail}
       <div className={`settings-group-detail${view.kind === "edit" ? " is-skill-editor" : ""}`}>
       {header}
+      {view.kind === "list" && backgroundImport ? (
+        <div
+          className={`skill-import-banner${backgroundImport.status === "failed" ? " is-error" : ""}`}
+          role={backgroundImport.status === "failed" ? "alert" : "status"}
+        >
+          <div className="skill-import-banner-copy">
+            <strong>
+              {backgroundImport.status === "queued" || backgroundImport.status === "running"
+                ? TEXT.settings.skills.backgroundImportRunning(
+                  backgroundImport.done,
+                  backgroundImport.total,
+                )
+                : backgroundImport.status === "failed"
+                  ? TEXT.settings.skills.backgroundImportFailed
+                  : backgroundImport.failures.length
+                    ? TEXT.settings.skills.backgroundImportPartial(
+                      backgroundImport.imported.length,
+                      backgroundImport.failures.length,
+                    )
+                    : TEXT.settings.skills.backgroundImportDone(backgroundImport.imported.length)}
+            </strong>
+            {backgroundImport.failures.length ? (
+              <small>
+                {TEXT.settings.skills.backgroundImportFailures(
+                  backgroundImport.failures.slice(0, 3).map((failure) => failure.subdirectory).join("、"),
+                  backgroundImport.failures.length,
+                )}
+              </small>
+            ) : null}
+          </div>
+          {backgroundImport.status === "queued" || backgroundImport.status === "running" ? null : (
+            <button
+              aria-label={TEXT.settings.skills.backgroundImportDismiss}
+              className="skill-import-banner-close"
+              onClick={() => dismissGitSkillImportJob()}
+              type="button"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ) : null}
       {view.kind === "list" ? (
       <Group>
         <p className="row-note">{TEXT.settings.skills.scope}</p>
@@ -495,7 +573,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         <SkillGitImportView
           client={client}
           onDone={() => setView({ kind: "list" })}
-          onImported={afterInstall}
+          onStart={async (request) => {
+            await startGitSkillImportInBackground(client, request);
+          }}
         />
       ) : null}
 

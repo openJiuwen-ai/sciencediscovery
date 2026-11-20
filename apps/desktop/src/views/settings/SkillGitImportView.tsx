@@ -15,24 +15,21 @@
 import { useRef, useState } from "react";
 
 import { isAbortError, type ApiClient } from "../../api/client.js";
-import { importSkillFromGit, inspectGitSkillRepository } from "../../api/settings.js";
+import { inspectGitSkillRepository } from "../../api/settings.js";
 import type {
   GitSkillImportCandidate,
   GitSkillRepositoryInspection,
-  SkillDetail,
+  StartGitSkillImportJobRequest,
 } from "../../api/types.js";
 import { TEXT } from "../../text.js";
 
 interface Props {
   client: ApiClient;
-  /** Leaves for the list once every selected package arrived: the installed
-   *  Skill is what the reader came for, and the page that shows them is the
-   *  list behind this view. A partial import stays here so the failures keep
-   *  their ticks and messages. */
+  /** Leaves for the list as soon as the job is accepted. The import itself
+   *  runs in the API process; the list shows its progress and result. */
   onDone?: () => void;
-  /** Runs for every package the server installs; the caller enables it and
-   *  reloads the list behind this view. */
-  onImported: (skill: SkillDetail) => void | Promise<void>;
+  /** Starts the background job. The view only builds the selection. */
+  onStart: (request: StartGitSkillImportJobRequest) => Promise<void>;
 }
 
 const STATUS_LABEL: Record<GitSkillImportCandidate["status"], () => string> = {
@@ -74,7 +71,7 @@ function messageOf(reason: unknown): string {
  * the inspection saw: if another window edited it meanwhile the server answers
  * 409, and the row says so rather than silently replacing that edit.
  */
-export function SkillGitImportView({ client, onDone, onImported }: Props) {
+export function SkillGitImportView({ client, onDone, onStart }: Props) {
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [subdirectory, setSubdirectory] = useState("");
@@ -83,18 +80,13 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
   const [inspection, setInspection] = useState<GitSkillRepositoryInspection>();
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const inspectionRequest = useRef<AbortController | undefined>(undefined);
 
   const reset = () => {
     setInspection(undefined);
     setSelected(new Set());
-    setRowErrors({});
     setFailure(undefined);
-    setNotice(undefined);
   };
 
   const inspect = async () => {
@@ -103,9 +95,7 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
     setInspecting(true);
     setInspection(undefined);
     setSelected(new Set());
-    setRowErrors({});
     setFailure(undefined);
-    setNotice(undefined);
     try {
       const found = await inspectGitSkillRepository(client, {
         repositoryUrl: url.trim(),
@@ -195,42 +185,26 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
     if (!inspection || chosen.length === 0) return;
     setBusy(true);
     setFailure(undefined);
-    setNotice(undefined);
-    const errors: Record<string, string> = {};
-    let imported = 0;
-    setProgress({ done: 0, total: chosen.length });
-    for (const candidate of chosen) {
-      try {
-        const detail = await importSkillFromGit(client, {
-          commit: inspection.commit,
-          ...(inspection.ref ? { ref: inspection.ref } : {}),
-          repositoryUrl: inspection.repositoryUrl,
+    try {
+      await onStart({
+        commit: inspection.commit,
+        items: chosen.map((candidate) => ({
           subdirectory: candidate.subdirectory,
           ...(candidate.status === "update" && candidate.currentRevision !== undefined
             ? { expectedRevision: candidate.currentRevision, overwrite: true }
             : {}),
-        });
-        imported += 1;
-        await onImported(detail);
-      } catch (reason) {
-        errors[candidate.subdirectory] = messageOf(reason);
-      }
-      setProgress({ done: imported + Object.keys(errors).length, total: chosen.length });
+        })),
+        ...(inspection.ref ? { ref: inspection.ref } : {}),
+        repositoryUrl: inspection.repositoryUrl,
+      });
+      // The job is accepted and runs in the API; the list is where its
+      // progress and the installed packages are shown.
+      onDone?.();
+    } catch (reason) {
+      setFailure(messageOf(reason));
+    } finally {
+      setBusy(false);
     }
-    setRowErrors(errors);
-    // What failed stays ticked, so a retry after fixing the cause is one press.
-    setSelected(new Set(Object.keys(errors)));
-    const failed = chosen.length - imported;
-    setBusy(false);
-    // Everything arrived: the list is where the reader sees what they just
-    // installed. A partial batch stays here, with the failures still ticked.
-    if (imported > 0 && failed === 0 && onDone) {
-      onDone();
-      return;
-    }
-    setNotice(imported === 0
-      ? undefined
-      : TEXT.settings.skills.importPartial(imported, failed));
   };
 
   return (
@@ -329,9 +303,7 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
               type="button"
             >
               {busy
-                ? progress.total === 0
-                  ? TEXT.settings.skills.importBusy
-                  : TEXT.settings.skills.importProgress(progress.done, progress.total)
+                ? TEXT.settings.skills.importBusy
                 : TEXT.settings.skills.git.importSelected(selected.size)}
             </button>
           </div>
@@ -377,9 +349,6 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
                         {candidate.diagnostics.length ? (
                           <small className="is-error">{candidate.diagnostics.join(" ")}</small>
                         ) : null}
-                        {rowErrors[candidate.subdirectory] ? (
-                          <small className="is-error">{rowErrors[candidate.subdirectory]}</small>
-                        ) : null}
                       </span>
                     </label>
                   );
@@ -407,7 +376,6 @@ export function SkillGitImportView({ client, onDone, onImported }: Props) {
         </section>
       ) : null}
 
-      {notice ? <small className="row-note" role="status">{notice}</small> : null}
     </div>
   );
 }

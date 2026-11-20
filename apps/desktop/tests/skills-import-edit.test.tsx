@@ -145,17 +145,14 @@ test("a Git inspection pins the commit and never overwrites without the revision
       { diagnostics: [], name: "same", status: "unchanged", subdirectory: "skills/same" },
     ],
   };
-  const stub = new StubClient()
-    .reply(inspection)
-    .reply({ ...detail, id: "fresh", name: "fresh" })
-    .reply({ ...detail, currentRevision: 4 });
-  const imported: SkillDetail[] = [];
+  const stub = new StubClient().reply(inspection);
+  const started: unknown[] = [];
   let done = 0;
   const view = await mount(
     <SkillGitImportView
       client={stub.asClient()}
       onDone={() => { done += 1; }}
-      onImported={(row) => { imported.push(row); }}
+      onStart={async (request) => { started.push(request); }}
     />,
   );
   try {
@@ -178,21 +175,18 @@ test("a Git inspection pins the commit and never overwrites without the revision
       buttonWithText(view, TEXT.settings.skills.git.importSelected(2)).props.onClick();
     });
 
-    assert.equal(stub.calls[1]?.path, "/api/skills/import-git");
-    assert.deepEqual(json(requestAt(stub, 1)), {
+    // One background job carries the whole selection; no per-package request
+    // leaves the view.
+    assert.equal(stub.calls.some((call) => call.path === "/api/skills/import-git"), false);
+    assert.deepEqual(started, [{
       commit,
+      items: [
+        { subdirectory: "skills/fresh" },
+        { expectedRevision: 3, overwrite: true, subdirectory: "skills/review" },
+      ],
       repositoryUrl: inspection.repositoryUrl,
-      subdirectory: "skills/fresh",
-    });
-    assert.deepEqual(json(requestAt(stub, 2)), {
-      commit,
-      expectedRevision: 3,
-      overwrite: true,
-      repositoryUrl: inspection.repositoryUrl,
-      subdirectory: "skills/review",
-    });
-    assert.deepEqual(imported.map((row) => row.id), ["fresh", "review"]);
-    assert.equal(done, 1, "a complete import does not return to the Skill list");
+    }]);
+    assert.equal(done, 1, "an accepted import does not return to the Skill list");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
