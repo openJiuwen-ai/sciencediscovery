@@ -1821,14 +1821,22 @@ export class SkillCatalog {
     throw new SkillCatalogError("SKILL_CONFLICT", `No available name for imported Skill: ${base}`);
   }
 
-  async import(filename: string, bytes: Buffer): Promise<SkillDetail> {
+  async import(
+    filename: string,
+    bytes: Buffer,
+    options: { onDuplicate?: "reject" | "rename" } = {},
+  ): Promise<SkillDetail> {
     return await this.mutate(async () => {
       this.assertLoaded();
       // A second package with the same name is not a mistake to refuse: the
       // reader chose a file, and the catalog can hold both. The import gets
       // the next free name rather than making the reader rename the source.
       const uploaded = packageFromUpload(filename, bytes);
-      const loaded = this.builtIns.has(uploaded.detail.id) || this.managed.has(uploaded.detail.id)
+      const taken = this.builtIns.has(uploaded.detail.id) || this.managed.has(uploaded.detail.id);
+      if (taken && options.onDuplicate !== "rename") {
+        throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${uploaded.detail.id}`);
+      }
+      const loaded = taken
         ? renameSkillPackage(uploaded, this.availableSkillName(uploaded.detail.id))
         : uploaded;
       const committed = await this.commitManaged(loaded, 1, new Date().toISOString(), { source: "local-import" });
@@ -2155,7 +2163,12 @@ export class SkillCatalog {
 
   async importFromGit(input: ImportSkillFromGitRequest): Promise<SkillDetail> {
     this.assertLoaded();
-    const normalized = validateGitSkillImportRequest(input);
+    // Discovery names a package at the checkout root ".". The path validator
+    // refuses every "." segment, so the root form is re-expressed as "no
+    // subdirectory" before it is validated.
+    const normalized = validateGitSkillImportRequest(
+      input.subdirectory?.trim() === "." ? { ...input, subdirectory: undefined } : input,
+    );
     const requestedCommit = normalizeGitCommit(input.commit);
     if (input.overwrite !== undefined && typeof input.overwrite !== "boolean") {
       throw validationError("overwrite must be a boolean");

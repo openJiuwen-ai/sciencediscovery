@@ -16,6 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
@@ -668,6 +669,38 @@ test("an update keeps allowed-tools declared as a sequence", async () => {
   }
 });
 
+test("a package at the checkout root can be imported", async () => {
+  const dataDir = await temporaryDataDir();
+  const checkout = await mkdtemp(resolve(tmpdir(), "git-root-"));
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  try {
+    await writeFile(resolve(checkout, "SKILL.md"), "---\nname: root-skill\ndescription: A package at the repository root.\n---\n\n# Root\n");
+    const catalog = new SkillCatalog(dataDir, repositoryRoot, {
+      checkoutGit: async (_importRoot, input) => ({
+        checkout,
+        commit,
+        normalized: validateGitSkillImportRequest(input),
+        partial: false,
+      }),
+    });
+    await catalog.load();
+    const inspection = await catalog.inspectGitRepository({
+      repositoryUrl: "https://example.invalid/org/skills.git",
+    });
+    assert.deepEqual(inspection.candidates.map((candidate) => candidate.subdirectory), ["."]);
+
+    const imported = await catalog.importFromGit({
+      commit,
+      repositoryUrl: "https://example.invalid/org/skills.git",
+      subdirectory: ".",
+    });
+    assert.equal(imported.id, "root-skill");
+  } finally {
+    await rm(checkout, { force: true, recursive: true });
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("a restart clears checkouts an inspection left under .imports", async () => {
   const dataDir = await temporaryDataDir();
   try {
@@ -695,7 +728,11 @@ test("an imported name that is taken installs under the next free name", async (
 
     const first = await catalog.import("portable-skill.zip", archive);
     assert.equal(first.id, "portable-skill");
-    const second = await catalog.import("portable-skill.zip", archive);
+    await assert.rejects(
+      catalog.import("portable-skill.zip", archive),
+      (error: unknown) => error instanceof SkillCatalogError && error.code === "SKILL_CONFLICT",
+    );
+    const second = await catalog.import("portable-skill.zip", archive, { onDuplicate: "rename" });
     assert.equal(second.id, "portable-skill-2");
     assert.equal(second.name, "portable-skill-2");
     assert.equal(second.frontmatter.name, "portable-skill-2");

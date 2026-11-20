@@ -2589,7 +2589,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/skills/import") {
         const upload = await readMultipartSkill(request);
-        const detail = await skillCatalog.import(upload.filename, upload.bytes);
+        const onDuplicate = url.searchParams.get("onDuplicate");
+        if (onDuplicate !== null && onDuplicate !== "rename") {
+          throw new ApiStatusError(400, "onDuplicate must be rename when present");
+        }
+        const detail = await skillCatalog.import(
+          upload.filename,
+          upload.bytes,
+          onDuplicate === "rename" ? { onDuplicate: "rename" } : {},
+        );
         store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, detail);
         return;

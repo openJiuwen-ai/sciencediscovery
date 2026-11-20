@@ -124,7 +124,7 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
     await act(async () => { buttonWithText(view, TEXT.settings.skills.importAction).props.onClick(); });
 
     const call = stub.calls[0];
-    assert.equal(call?.path, "/api/skills/import");
+    assert.equal(call?.path, "/api/skills/import?onDuplicate=rename");
     assert.equal(call?.init.method, "POST");
     const form = call?.init.body;
     assert.ok(form instanceof FormData);
@@ -236,6 +236,31 @@ test("a repository larger than one page reads the rest on request", async () => 
     // Every row was ticked before the second page arrived, so the new ones
     // joined the selection.
     assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(7)));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a /tree/ URL keeps its subdirectory on the next page", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const treeUrl = "https://github.com/org/repo/tree/main/skills";
+  const normalized = "https://github.com/org/repo.git";
+  const stub = new StubClient()
+    .reply({ candidates: gitRows(0, 3), commit, nextCursor: "skills/skill-2", repositoryUrl: normalized, total: 7 })
+    .reply({ candidates: gitRows(3, 7), commit, repositoryUrl: normalized, total: 7 });
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
+  try {
+    const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: treeUrl } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
+
+    // The inspection response carries the normalized URL only; the /tree/
+    // form is what tells the server which subtree the cursor belongs to.
+    assert.deepEqual(json(requestAt(stub, 1)), {
+      commit,
+      cursor: "skills/skill-2",
+      repositoryUrl: treeUrl,
+    });
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -444,6 +469,29 @@ test("a resource that is not UTF-8 is shown as uneditable rather than decoded", 
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a partial reference upload keeps the revision it already stored", async () => {
+  const stub = new StubClient()
+    .reply(detail)
+    .reply({ ...detail, currentRevision: 2 })
+    .fail(new Error("disk full"));
+  const saved: SkillDetail[] = [];
+  const view = await mount(
+    <SkillEditorView client={stub.asClient()} onSaved={(row) => { saved.push(row); }} skillId="review" />,
+  );
+  try {
+    await openAdvancedSettings(view);
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.references);
+    assert.ok(input);
+    const files = [new File(["# one"], "one.md"), new File(["# two"], "two.md")];
+    await act(async () => { input.props.onChange({ target: { files } }); });
+    await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
+
+    assert.equal(saved[0]?.currentRevision, 2);
+    assert.ok(JSON.stringify(view.toJSON()).includes("disk full"));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("adding a non-UTF-8 reference file is refused before anything is written", async () => {
   const stub = new StubClient().reply(detail);
   const view = await mount(
@@ -515,15 +563,19 @@ function menuItem(view: ReactTestRenderer, label: string) {
   return item;
 }
 
-test("a managed skill's chevron offers export, edit and delete; a built-in has none", async () => {
+test("a managed skill offers export, edit and delete; a built-in only export", async () => {
   const builtIn = { ...skill, id: "literature", name: "literature", source: "built-in" as const, readOnly: true };
   const stub = new StubClient().reply([skill, builtIn]).reply({ backend: "jiuwenswarm", skills: [] });
   const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  const menuLabels = () => view.root.findAllByType("button")
+    .filter((node) => node.props.role === "menuitem")
+    .flatMap((node) => node.children.filter((child) => typeof child === "string"));
   try {
-    rowMenu(view, "review");
-    const builtInMenu = view.root.findAllByType("button")
-      .find((node) => node.props["aria-label"] === TEXT.settings.skills.rowMenu.actions("literature"));
-    assert.equal(builtInMenu, undefined, "a read-only package is offered a mutation menu");
+    rowMenu(view, "literature");
+    await openRowMenu(view, "literature");
+    assert.deepEqual(menuLabels(), [TEXT.settings.skills.rowMenu.export],
+      "a built-in should be copyable but not editable or deletable");
+    await act(async () => { rowMenu(view, "literature").props.onClick(); });
 
     await openRowMenu(view, "review");
     menuItem(view, TEXT.settings.skills.rowMenu.export);
