@@ -89,6 +89,7 @@ const COPY = {
   toolCount: { en: "tools", zh: "个工具" },
   tools: { en: "Tools", zh: "工具" },
   type: { en: "Type", zh: "类型" },
+  uncategorized: { en: "Uncategorized", zh: "未分类" },
   version: { en: "Version", zh: "版本" },
   config: { en: "Launch configuration", zh: "连接配置" },
   boundSkills: { en: "Skills", zh: "绑定技能" },

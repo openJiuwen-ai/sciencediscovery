@@ -153,7 +153,7 @@ export function ListView(props: ListViewProps): JSX.Element {
         result.push({
           cards: rest.map(card),
           id: "__other",
-          label: language === "zh" ? "未分类" : "Uncategorized",
+          label: copy("uncategorized"),
         });
       }
       return result;
