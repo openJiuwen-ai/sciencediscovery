@@ -5,5 +5,8 @@ import { defineConfig } from "vite";
 // catalog URLs must use the same base, so the exporter reads HUB_BASE_PATH too.
 export default defineConfig({
   base: process.env.HUB_BASE_PATH ?? "/",
+  // A service-hosted build ships no exporter output: the API serves the
+  // catalogue and the files, so `public/` must not be copied into `dist/`.
+  publicDir: process.env.HUB_PUBLIC_DIR === "none" ? false : "public",
   plugins: [react()],
 });

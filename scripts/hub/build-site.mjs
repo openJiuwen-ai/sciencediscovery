@@ -7,9 +7,11 @@ import { spawnSync } from "node:child_process";
 
 // `--root` is the service-hosted deployment: nginx serves the site at `/` and
 // proxies `/api`, so the bundle must not assume a `/site/` prefix.
-const base = process.argv.includes("--root") ? "/" : process.env.HUB_BASE_PATH ?? "/site/";
+const apiBuild = process.argv.includes("--root");
+const base = apiBuild ? "/" : process.env.HUB_BASE_PATH ?? "/site/";
+const extraEnv = apiBuild ? { HUB_PUBLIC_DIR: "none" } : {};
 const result = spawnSync("pnpm", ["--filter", "@sciencediscovery/hub", "build"], {
-  env: { ...process.env, HUB_BASE_PATH: base },
+  env: { ...process.env, ...extraEnv, HUB_BASE_PATH: base },
   shell: process.platform === "win32",
   stdio: "inherit",
 });
