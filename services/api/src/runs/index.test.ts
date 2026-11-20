@@ -103,6 +103,32 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   assert.match(distill ?? "", /complete prior Session conversation and execution history/);
   assert.match(distill ?? "", /keep the validation steps/);
   assert.equal(skillAuthoringCommandPrompt("ordinary message"), undefined);
+
+  // #1262: an empty Session has nothing to distil. The unguarded wording sent the
+  // model looking for a conversation that was never there — 28 `run_shell` calls,
+  // 32 turns, ~89k tokens, no draft — so the prompt has to stop it instead.
+  const empty = skillAuthoringCommandPrompt("/distill-session 把这次会话里可复用的做法总结成一个技能", { hasHistory: false });
+  assert.ok(empty);
+  assert.match(empty, /no prior conversation and no execution history to distil/u, "it says there is nothing to distil");
+  assert.match(empty, /Do not call create_skill yet/u, "it does not author a generic Skill");
+  assert.match(empty, /do not run shell commands/u, "it forbids looking for the conversation");
+  assert.match(empty, /application data directory/u, "it names the directory the run wandered into");
+  assert.match(empty, /把这次会话里可复用的做法总结成一个技能/u, "the user's own direction is kept");
+  assert.equal(/Infer the reusable workflow from the complete prior Session/u.test(empty), false,
+    "the inference instruction that caused the search must be absent");
+
+  // A caller that does not know keeps the old behaviour rather than refusing
+  // every distill, and a Session with history still gets the authoring prompt.
+  assert.equal(/Infer the reusable workflow/u.test(skillAuthoringCommandPrompt("/distill-session") ?? ""), true);
+  const withHistory = skillAuthoringCommandPrompt("/distill-session", { hasHistory: true });
+  assert.ok(withHistory);
+  assert.match(withHistory, /Infer the reusable workflow from the complete prior Session conversation/u);
+  assert.equal(/no prior conversation/u.test(withHistory), false);
+
+  // The sibling command is untouched by the distill guard.
+  const creatorEmpty = skillAuthoringCommandPrompt("/skill-creator", { hasHistory: false });
+  assert.ok(creatorEmpty);
+  assert.match(creatorEmpty, /Ask one concise question for the workflow goal/u);
 });
 
 test("run event details clone falls back to JSON-safe values", () => {
