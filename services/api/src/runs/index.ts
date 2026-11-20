@@ -590,6 +590,21 @@ export interface EvolveTurnContext {
 }
 
 /**
+ * Whether a Session holds a conversation — something a Skill could be distilled
+ * from.
+ *
+ * Not a plain role test: runtime wake and manual-review notices are stored with a
+ * user or assistant role and a `kind`, so a Session that has only ever been woken
+ * would otherwise look like it had history. `firstUserAuthoredMessage` draws the
+ * same line for the research objective.
+ */
+export function hasConversation(messages: readonly ChatMessage[]): boolean {
+  return messages.some((message) =>
+    (message.role === "user" || message.role === "assistant")
+    && (message.kind === undefined || message.kind === "message"));
+}
+
+/**
  * The instruction an authoring slash command becomes.
  *
  * `hasHistory` is false for a Session with no prior conversation. `/distill-session`
@@ -1017,9 +1032,9 @@ async function executeAgentRun(
     ...userMessage,
     content: [
       skillAuthoringCommandPrompt(userMessage.content, {
-        // "Prior conversation" is what /distill-session infers from. A Session
+        // "Prior conversation" is what /distill-session infers from; a Session
         // holding only runtime notices has none either (#1262).
-        hasHistory: previousMessages.some((message) => message.role === "user" || message.role === "assistant"),
+        hasHistory: hasConversation(previousMessages),
       }) ?? messagePromptContent(userMessage),
       ...(pendingManualNotice ? [
         "A manual Reviewer notice is pending. Address its findings in this response by correcting the work or explaining why a finding does not apply, with record evidence.",
