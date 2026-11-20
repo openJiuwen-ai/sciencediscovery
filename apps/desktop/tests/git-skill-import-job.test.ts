@@ -20,10 +20,10 @@ import { enableCreatedSkills } from "../src/app/git-skill-import-job.js";
 import type { GitSkillImportJob } from "../src/api/types.js";
 import { StubClient } from "./api-stub.js";
 
-const job = (imported: GitSkillImportJob["imported"]): GitSkillImportJob => ({
+const job = (imported: GitSkillImportJob["imported"], id = "job-1"): GitSkillImportJob => ({
   done: imported.length,
   failures: [],
-  id: "job-1",
+  id,
   imported,
   startedAt: "2026-11-20T00:00:00.000Z",
   status: "done",
@@ -47,8 +47,23 @@ test("a finished import switches on only the packages it created", async () => {
   );
 });
 
+test("the pane and the store share one enable run per job", async () => {
+  const stub = new StubClient()
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply({});
+  const shared = job([{ created: true, id: "new-skill" }], "job-dedupe");
+  await Promise.all([
+    enableCreatedSkills(stub.asClient(), shared),
+    enableCreatedSkills(stub.asClient(), shared),
+  ]);
+  assert.deepEqual(
+    stub.calls.map((call) => call.path),
+    ["/api/jiuwenswarm/skills", "/api/jiuwenswarm/skills-by-id/new-skill"],
+  );
+});
+
 test("a native backend has no switches to turn on", async () => {
   const stub = new StubClient().reply({ backend: "native", skills: [] });
-  await enableCreatedSkills(stub.asClient(), job([{ created: true, id: "new-skill" }]));
+  await enableCreatedSkills(stub.asClient(), job([{ created: true, id: "new-skill" }], "job-2"));
   assert.deepEqual(stub.calls.map((call) => call.path), ["/api/jiuwenswarm/skills"]);
 });
