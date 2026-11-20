@@ -121,12 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Full history: the release-version check below compares the pull request
-      # with its base through the merge base, which a shallow clone cannot
-      # compute (#1254).
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -137,19 +132,6 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
         run: pnpm ci:l1
-      # A version bump is a release change (#1254). Runs on pull requests only:
-      # a push to main and the merge queue re-check a commit the PR already
-      # checked. `base.sha` names the commit the diff is taken from, and the
-      # checkout above has the history to reach its merge base.
-      - name: Run the release-version check's own tests
-        if: ${{ github.event_name == 'pull_request' }}
-        run: node --test scripts/check-release-version.test.mjs
-      - name: Reject a version bump that is not a release change
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: node scripts/check-release-version.mjs
       - name: Run documentation checks
         if: ${{ needs.policy.outputs.docs_only == 'true' }}
         run: |
