@@ -39,23 +39,31 @@ export function versionProblems({ baseVersion, event, files, headVersion, title 
 /**
  * Reads what `versionProblems` needs from this checkout.
  *
- * The two readers are injectable so a case can drive this without a repository,
- * and so a case can assert that every metadata path is actually read — a
+ * The readers and Git command are injectable so a case can drive this without
+ * a repository, and assert that every metadata path is actually read — a
  * mapping that quietly skipped one would leave that file unchecked while the
  * rule still looked in place.
  */
 export function versionProblemsFromEvent({
   event,
   payload,
+  git = args => execFileSync('git', args, { encoding: 'utf8' }),
   readFile = path => readFileSync(path, 'utf8'),
-  showFile = (sha, path) => execFileSync('git', ['show', `${sha}:${path}`], { encoding: 'utf8' }),
+  showFile = (sha, path) => git(['show', `${sha}:${path}`]),
 }) {
   if (event !== 'pull_request') return [];
-  const base = payload?.pull_request?.base?.sha;
-  if (typeof base !== 'string' || !/^[a-f\d]{40}$/i.test(base)) {
-    // Without the base commit there is nothing to compare against; saying so is
-    // better than passing a rule nobody can evaluate.
-    throw new Error('release version: the event carries no usable pull_request.base.sha');
+  const head = payload?.pull_request?.head?.sha;
+  if (typeof head !== 'string' || !/^[a-f\d]{40}$/i.test(head)) {
+    throw new Error('release version: the event carries no usable pull_request.head.sha');
+  }
+  // checkout checks out the synthetic PR merge, whose first parent is the
+  // target revision actually used. The event's base.sha can predate that merge;
+  // comparing it to the checkout would attribute main's release to this PR.
+  // Verify the other parent before trusting this relationship, so a raw branch
+  // checkout or a different candidate cannot silently bypass the version gate.
+  const [, base, mergedHead, ...extraParents] = git(['rev-list', '--parents', '-n', '1', 'HEAD']).trim().split(/\s+/u);
+  if (!base || !/^[a-f\d]{40}$/i.test(base) || mergedHead !== head || extraParents.length) {
+    throw new Error('release version: checkout must be a two-parent PR merge with pull_request.head.sha as its second parent');
   }
   const headVersion = versionOf(readFile(VERSION_FILE));
   const baseVersion = versionOf(showFile(base, VERSION_FILE));
