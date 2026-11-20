@@ -14,11 +14,17 @@ def apply_clock_offset(settings) -> None:
         return
     import datetime
 
-    import botocore.auth
+    import botocore.auth as auth
 
-    original = botocore.auth.get_current_datetime
+    # Applying the same offset twice must not compound it: keep the original
+    # behind the wrapper and no-op when this offset is already in place.
+    if getattr(auth, "_hub_clock_offset", None) == offset:
+        return
+    original = getattr(auth, "_hub_clock_original", auth.get_current_datetime)
+    auth._hub_clock_original = original
 
     def corrected(remove_tzinfo: bool = True):
         return original(remove_tzinfo) - datetime.timedelta(seconds=offset)
 
-    botocore.auth.get_current_datetime = corrected
+    auth.get_current_datetime = corrected
+    auth._hub_clock_offset = offset

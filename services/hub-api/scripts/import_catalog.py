@@ -51,6 +51,7 @@ EXTRA_KEYS = (
     "author", "source", "hardware", "type", "members", "runtime",
     "instructions", "tools", "kinds", "publisher", "benchmark",
     "contents", "run", "related", "connectors", "skills",
+    "config", "governance", "toolCount",
 )
 
 KIND_MAP = {
@@ -110,6 +111,9 @@ def _flatten_category(category) -> str | None:
 def _readme_text(entry: dict, assets_root: Path, sessions_root: Path) -> str:
     """The catalogue's rendered description, read once at import time."""
     url = str(entry.get("readme") or "")
+    if not url and entry.get("kind") == "specialist":
+        # A specialist's description is the Markdown companion of its JSON.
+        url = str((entry.get("download") or {}).get("text") or "")
     if not url:
         return ""
     if url.startswith(("http://", "https://")):
@@ -259,7 +263,14 @@ def import_catalog(
                     AssetVersion.asset_id == asset_id, AssetVersion.version == version
                 )
             )
-            if existing is not None and not force:
+            # A session stored by the earlier importer is a zip wrapping the
+            # package; a plain re-run repairs it instead of skipping it.
+            repair = (
+                existing is not None
+                and asset.kind == "session"
+                and str(existing.filename).endswith(".zip")
+            )
+            if existing is not None and not force and not repair:
                 asset.latest_version = asset.latest_version or version
                 asset.public_latest_version = asset.public_latest_version or version
                 stats.skipped.append(f"{asset_id}@{version}: already imported")
@@ -303,7 +314,8 @@ def import_catalog(
             )
             storage.put(key, artifact.data, content_type="application/octet-stream")
 
-            if existing is not None and force:
+            if existing is not None and (force or repair):
+                old_key = existing.storage_key
                 existing.storage_key = key
                 existing.filename = filename
                 existing.sha256 = info.sha256
@@ -312,6 +324,11 @@ def import_catalog(
                 existing.moderation_status = "approved"
                 existing.reviewed_at = utcnow()
                 row = existing
+                if old_key != key:
+                    try:
+                        storage.delete(old_key)
+                    except Exception:  # noqa: BLE001 - cleanup must not fail the import
+                        pass
             else:
                 row = AssetVersion(
                     asset_id=asset_id,

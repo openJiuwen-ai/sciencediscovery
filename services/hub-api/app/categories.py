@@ -16,3 +16,18 @@ def parse_session_category(path: str | None) -> dict:
     if len(parts) == 1:
         return {"task": parts[0]}
     return {}
+
+
+def parse_category_object(kind: str, path: str | None) -> dict:
+    """The per-kind category object the site compiles against."""
+    parts = [part for part in str(path or "").split("/") if part]
+    if kind in ("skill", "team"):
+        return {
+            "domain": parts[0] if parts else "",
+            "subdomain": parts[1] if len(parts) > 1 else "",
+        }
+    if kind == "connector":
+        return {"function": parts[0] if parts else ""}
+    if kind == "session":
+        return parse_session_category(path)
+    return {}

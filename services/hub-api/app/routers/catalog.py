@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..categories import parse_session_category
+from ..categories import parse_category_object, parse_session_category
 from ..deps import get_db
 from ..models import Asset
 from ..serializers import ok
@@ -34,54 +34,47 @@ def stats(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/categories")
 def categories(kind: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
-    """The category tree of the public catalogue.
+    """The category tree of the public catalogue, in the shape its tab uses.
 
-    `assets.category` is a slash path (`biology/protein_structure`); this builds
-    the same nested nodes the static exporter emitted, with counts that include
-    descendants. Only ids and counts are returned — the site owns the labels.
+    Skills are domain → subdomain, connectors are functions, sessions are
+    task → domain. Node ids are the bare segment, because that is what the site
+    puts in `?domain=`/`?sub=` and compares against the asset's category.
     """
-    query = (
-        select(Asset.category, func.count())
-        .where(
+    rows = db.scalars(
+        select(Asset).where(
             Asset.status == "active",
             Asset.visibility == "public",
             Asset.public_latest_version.is_not(None),
-            Asset.category.is_not(None),
         )
-        .group_by(Asset.category)
-    )
+    ).all()
     if kind:
-        query = query.where(Asset.kind == kind)
-
+        rows = [row for row in rows if row.kind == kind]
     if kind == "session":
-        rows = db.scalars(
-            select(Asset).where(
-                Asset.status == "active",
-                Asset.visibility == "public",
-                Asset.public_latest_version.is_not(None),
-                Asset.kind == "session",
-            )
-        ).all()
-        return ok({"tree": _session_tree(rows)})
+        tree = _session_tree(rows)
+    elif kind in ("skill", "team"):
+        tree = _skill_tree(rows)
+    elif kind == "connector":
+        tree = _connector_tree(rows)
+    else:
+        tree = _path_tree(rows)
+    return ok({"tree": tree})
 
+
+def _path_tree(rows) -> list[dict]:
     roots: dict[str, dict] = {}
-    for path, count in db.execute(query).all():
-        segments = [segment for segment in str(path).split("/") if segment]
+    for asset in rows:
+        segments = [part for part in str(asset.category or "").split("/") if part]
         parent = None
         for depth, segment in enumerate(segments):
             node_id = "/".join(segments[: depth + 1])
             node = roots.setdefault(node_id, {"id": node_id, "count": 0, "children": []})
-            node["count"] += count
+            node["count"] += 1
             if parent is not None and node not in parent["children"]:
                 parent["children"].append(node)
             parent = node
-
-    def finalise(node: dict) -> dict:
+    for node in roots.values():
         node["children"].sort(key=lambda child: child["id"])
-        return node
-
-    tree = [finalise(roots[node_id]) for node_id in sorted(roots) if "/" not in node_id]
-    return ok({"tree": tree})
+    return [roots[node_id] for node_id in sorted(roots) if "/" not in node_id]
 
 
 KIND_TO_CATALOG = {
@@ -109,19 +102,12 @@ def _category_object(asset: Asset) -> dict:
     stored = (asset.extra or {}).get("category")
     if isinstance(stored, dict):
         return stored
-    kind, path = asset.kind, asset.category
-    parts = [part for part in str(path or "").split("/") if part]
-    if kind in ("skill", "team"):
-        return {"domain": parts[0] if parts else "", "subdomain": parts[1] if len(parts) > 1 else ""}
-    if kind == "connector":
-        return {"function": parts[0] if parts else ""}
-    if kind == "session":
-        return parse_session_category(path)
-    return {}
+    return parse_category_object(asset.kind, asset.category)
 
 
 def _catalog_asset(asset: Asset, version_row) -> dict:
     extra = dict(asset.extra or {})
+    version = asset.public_latest_version
     download = {
         "sha256": version_row.sha256 if version_row else None,
         "size": version_row.size if version_row else None,
@@ -132,7 +118,7 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
         "kind": KIND_TO_CATALOG[asset.kind],
         "name": asset.display_name or asset.name,
         "description": asset.summary,
-        "version": asset.public_latest_version,
+        "version": version,
         "source": extra.get("source", "builtin"),
         "author": extra.get("author"),
         "tags": list(asset.tags or []),
@@ -148,27 +134,47 @@ def _catalog_asset(asset: Asset, version_row) -> dict:
                 "path": item["path"],
                 "size": item["size"],
                 "url": (
-                    f"/api/v1/assets/{asset.id}/versions/{asset.public_latest_version}"
+                    f"/api/v1/assets/{asset.id}/versions/{version}"
                     f"/files/content?path={item['path']}"
                 ),
             }
             for item in manifest
-            if item.get("path", "").lower().endswith((".md", ".json", ".yaml", ".yml", ".txt", ".py"))
+            if item.get("path") != "SKILL.md"
         ]
-        payload["readme"] = f"/api/v1/assets/{asset.id}/readme?format=text"
-    for key in ("hardware", "type", "members", "runtime", "instructions", "tools", "kinds", "publisher", "benchmark", "contents", "run", "connectors", "skills"):
-        if key in extra:
-            payload[key] = extra[key]
+        payload["hardware"] = extra.get("hardware")
+        payload["type"] = extra.get("type")
+        if asset.kind == "team":
+            payload["members"] = extra.get("members", [])
+    elif asset.kind == "specialist":
+        download["text"] = f"/api/v1/assets/{asset.id}/readme?format=text"
+        payload["connectors"] = extra.get("connectors", [])
+        payload["instructions"] = extra.get("instructions", "")
+        payload["runtime"] = extra.get("runtime")
+        payload["skills"] = extra.get("skills", [])
+    elif asset.kind == "connector":
+        tools = extra.get("tools", [])
+        payload["config"] = extra.get("config", {})
+        payload["governance"] = extra.get("governance", {})
+        payload["kinds"] = extra.get("kinds", [])
+        payload["publisher"] = extra.get("publisher", "")
+        payload["tools"] = tools
+        payload["toolCount"] = extra.get("toolCount", len(tools))
+    elif asset.kind == "session":
+        payload["benchmark"] = extra.get("benchmark") or {
+            "caseId": asset.name, "name": "", "score": None, "runAt": None,
+        }
+        payload["contents"] = extra.get("contents") or {
+            "artifacts": 0, "executions": 0, "files": 0,
+            "memoryNodes": 0, "messages": 0, "trajectory": "summary",
+        }
+        payload["run"] = extra.get("run")
     return payload
 
 
 def _session_tree(rows) -> list[dict]:
-    """Sessions group task → domain, the shape the site's sessions tab uses."""
     tasks: dict[str, dict] = {}
     for asset in rows:
-        category = (asset.extra or {}).get("category")
-        if not isinstance(category, dict):
-            category = parse_session_category(asset.category)
+        category = _category_object(asset)
         task = str(category.get("task") or "uncategorized")
         domain = category.get("domain")
         node = tasks.setdefault(task, {"id": task, "count": 0, "children": []})
@@ -184,21 +190,36 @@ def _session_tree(rows) -> list[dict]:
     return [tasks[key] for key in sorted(tasks)]
 
 
-def _tree(rows) -> list[dict]:
+def _skill_tree(rows) -> list[dict]:
     roots: dict[str, dict] = {}
     for asset in rows:
-        segments = [part for part in str(asset.category or "").split("/") if part]
-        parent = None
-        for depth, segment in enumerate(segments):
-            node_id = "/".join(segments[: depth + 1])
-            node = roots.setdefault(node_id, {"id": node_id, "count": 0, "children": []})
-            node["count"] += 1
-            if parent is not None and node not in parent["children"]:
-                parent["children"].append(node)
-            parent = node
+        category = _category_object(asset)
+        domain = str(category.get("domain") or "")
+        subdomain = category.get("subdomain")
+        if not domain:
+            continue
+        node = roots.setdefault(domain, {"id": domain, "count": 0, "children": []})
+        node["count"] += 1
+        if subdomain:
+            child = next((item for item in node["children"] if item["id"] == subdomain), None)
+            if child is None:
+                child = {"id": str(subdomain), "count": 0, "children": []}
+                node["children"].append(child)
+            child["count"] += 1
     for node in roots.values():
         node["children"].sort(key=lambda child: child["id"])
-    return [roots[node_id] for node_id in sorted(roots) if "/" not in node_id]
+    return [roots[key] for key in sorted(roots)]
+
+
+def _connector_tree(rows) -> list[dict]:
+    roots: dict[str, dict] = {}
+    for asset in rows:
+        function = str(_category_object(asset).get("function") or "")
+        if not function:
+            continue
+        node = roots.setdefault(function, {"id": function, "count": 0, "children": []})
+        node["count"] += 1
+    return [roots[key] for key in sorted(roots)]
 
 
 @router.get("/catalog")
@@ -236,8 +257,8 @@ def catalog(db: Session = Depends(get_db)) -> dict:
             "generatedAt": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
             "assets": assets,
             "categories": {
-                "skill": _tree(skills),
-                "connector": _tree(connectors),
+                "skill": _skill_tree(skills),
+                "connector": _connector_tree(connectors),
                 "sessionPackage": _session_tree(sessions),
             },
             "sources": {},
