@@ -296,46 +296,49 @@
   background: var(--surface);
 }
 
-.review-item-label {
-  margin-bottom: 6px;
-  color: var(--muted-light);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: .04em;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
+/* One shape for every row: the check on the left, its verdict on the right,
+   then a sentence. The only coloured part is the verdict, so a card with
+   several kinds of result still reads as one card. */
 .review-item-head {
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.review-item-category {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-light);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .review-badge {
   flex: 0 0 auto;
-  margin-top: 1px;
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 4px;
   background: var(--surface-soft);
   color: var(--muted);
   font-size: 10px;
   font-weight: 600;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
-.review-item.is-pass .review-badge { color: var(--success); }
-.review-item.is-warn .review-badge { color: var(--insight-strong); }
-.review-item.is-fail .review-badge { color: var(--danger); }
+.review-badge.is-pass { color: var(--success); }
+.review-badge.is-warn { color: var(--insight-strong); }
+.review-badge.is-fail { color: var(--danger); }
 
-.review-item-title {
-  flex: 1;
-  min-width: 0;
+.review-item-text {
+  margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 /* The source passages behind one verdict, folded under it. The count is the
@@ -352,6 +355,18 @@
   font-size: 11px;
   line-height: 1.6;
   cursor: pointer;
+}
+
+.review-evidence-claim {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.review-evidence-claim > span {
+  margin-right: 6px;
+  color: var(--text-faint);
 }
 
 .review-evidence-reason {

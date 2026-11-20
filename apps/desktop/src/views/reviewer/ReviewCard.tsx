@@ -252,24 +252,34 @@ export function ReviewArtifactBody({
 
       <div className="review-items">
         {rows.map((row) => (
-          <article className={`review-item is-${row.tone}`} key={row.id}>
-            <div className="review-item-label" title={row.labelTip}>{row.label}</div>
-            <div className="review-item-head">
-              <span className="review-badge">{row.badge}</span>
-              <span className="review-item-title">{row.title}</span>
-            </div>
-            {row.body ? <p className="review-item-body">{row.body}</p> : null}
+          <article className="review-item" key={row.id}>
+            {/* One shape for every row: what was checked, what it concluded,
+                then one sentence saying what that means. */}
+            <header className="review-item-head">
+              <span className="review-item-category" title={row.categoryTip}>{row.category}</span>
+              <span className={`review-badge is-${row.tone}`}>{row.badge}</span>
+            </header>
+            <p className="review-item-text">{row.body}</p>
             {/* "Why only part of it" and "what does that passage say" are
                 questions a reader asks on purpose, so the evidence stays
                 folded: the verdict is the card's default reading, not a wall
                 of quoted source. */}
-            {row.evidence === undefined ? null : (
+            {row.evidence === undefined && row.rationale === undefined ? null : (
               <details className="review-evidence">
-                <summary>{TEXT.reviewer.locators(row.evidence.length)}</summary>
+                <summary>
+                  {row.evidence === undefined
+                    ? TEXT.reviewer.reviewerNote
+                    : TEXT.reviewer.locators(row.evidence.length)}
+                </summary>
+                {row.claim === undefined ? null : (
+                  <p className="review-evidence-claim">
+                    <span>{TEXT.reviewer.claimLabel}</span>{row.claim}
+                  </p>
+                )}
                 {row.rationale === undefined ? null : (
                   <p className="review-evidence-reason">{row.rationale}</p>
                 )}
-                {row.evidence.map((entry, index) => (
+                {(row.evidence ?? []).map((entry, index) => (
                   <blockquote key={index}>
                     <p className="review-excerpt">{entry.excerpt}</p>
                     {entry.where === undefined ? null : (
