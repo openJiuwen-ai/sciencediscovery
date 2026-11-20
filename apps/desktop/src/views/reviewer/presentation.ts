@@ -119,6 +119,22 @@ export function unverifiedDelivery(review: ArtifactReviewRun): boolean {
  * verdict is not a pass. The web client counts these separately for the same
  * reason.
  */
+/**
+ * What the card says about delivery when there is no verdict to show.
+ *
+ * A task written the way people write tasks ("生成一篇报告") names no files,
+ * so the completeness check has nothing to verify against. That is a
+ * property of the request, not a result, and it must not turn the whole card
+ * into "unconfirmed": the reviewer still checked what it could. The note
+ * under the rows says what was not checked, in one line. A structure-only
+ * review never claimed delivery at all, so it gets no note.
+ */
+export function deliveryNote(review: ArtifactReviewRun): string | undefined {
+  if (review.completeness?.status === "unconfirmed") return TEXT.reviewer.completeness.unconfirmedNote;
+  if (review.completeness === undefined && unverifiedDelivery(review)) return TEXT.reviewer.completeness.notCheckedNote;
+  return undefined;
+}
+
 export function declaredGap(review: Pick<ArtifactReviewRun, "notChecked">): boolean {
   return (review.notChecked?.length ?? 0) > 0;
 }
@@ -179,7 +195,9 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
   if (verdicts.includes("CONTRADICTED")) return "fail";
   if (verdicts.includes("PARTIALLY_SUPPORTED")) return "warn";
-  if (unverifiedDelivery(review)) return "neutral";
+  // A source lookup that never concluded is an absence: it must not let the
+  // header say the review found nothing to worry about.
+  if (review.smartStatus === "inconclusive") return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
   // is an absence of a verdict, not a warning about the artifact.
   if (declaredGap(review)) return "neutral";
@@ -206,7 +224,7 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     // The header uses the row's own word, not a sentence about the row.
     if (contradicted > 0) return TEXT.reviewer.summaryContradicted;
     if (verdicts.includes("PARTIALLY_SUPPORTED")) return TEXT.reviewer.summaryPartlySupported;
-    if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
+    if (review.smartStatus === "inconclusive") return TEXT.reviewer.summaryInconclusive;
     if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;
   })();
@@ -284,34 +302,22 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
     const missing = completeness.required
       .filter((entry) => entry.state !== "present")
       .map((entry) => `${entry.state === "empty" ? text.empty : text.missing}：${entry.path}`);
-    rows.push({
-      id: `${review.id}:completeness`,
-      tone: completeness.status === "complete"
-        ? "pass"
-        : completeness.status === "incomplete" ? "fail" : "neutral",
-      label: labelFor("completeness"),
-      labelTip: labelTipFor("completeness"),
-      title: completeness.status === "complete"
-        ? text.complete
-        : completeness.status === "incomplete" ? text.incomplete : text.unconfirmed,
-      body: missing.length > 0 ? `${source}\n${missing.join("\n")}` : source,
-      badge: completeness.status === "complete"
-        ? TEXT.reviewer.summaryPass
-        : completeness.status === "incomplete" ? TEXT.reviewer.finding : TEXT.reviewer.badgeUnconfirmed,
-    });
-  } else if (unverifiedDelivery(review)) {
-    // The header reports 未验证交付 whenever the review recorded no delivery
-    // verdict at all; without this row that claim had nothing under it to
-    // point at, and a reader could not tell which check was missing.
-    rows.push({
-      id: `${review.id}:completeness-unchecked`,
-      tone: "neutral",
-      label: labelFor("completeness"),
-      labelTip: labelTipFor("completeness"),
-      title: TEXT.reviewer.completeness.notChecked,
-      body: TEXT.reviewer.completeness.notCheckedBody,
-      badge: TEXT.reviewer.badgeUnconfirmed,
-    });
+    // Only a verdict the check actually reached is a row. "Unconfirmed"
+    // means the task never named the files it should produce, which is how
+    // people normally write a task — it is a fact about the request, not a
+    // result of the check, so it is a note under the row list instead (see
+    // `deliveryNote`).
+    if (completeness.status !== "unconfirmed") {
+      rows.push({
+        id: `${review.id}:completeness`,
+        tone: completeness.status === "complete" ? "pass" : "fail",
+        label: labelFor("completeness"),
+        labelTip: labelTipFor("completeness"),
+        title: completeness.status === "complete" ? text.complete : text.incomplete,
+        body: missing.length > 0 ? `${source}\n${missing.join("\n")}` : source,
+        badge: completeness.status === "complete" ? TEXT.reviewer.summaryPass : TEXT.reviewer.finding,
+      });
+    }
   }
 
   for (const [index, gap] of (review.notChecked ?? []).entries()) {
