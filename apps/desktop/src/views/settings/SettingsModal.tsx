@@ -50,7 +50,7 @@ interface Props {
  * key here first is what keeps only the modal from closing. Between two
  * settings modals the stack above decides which one is on top.
  */
-export function SettingsModal({ children, label, onClose, wide = false }: Props) {
+export function SettingsModal({ children, hint, label, onClose, wide = false }: Props) {
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback
   // through a ref and registers once.
