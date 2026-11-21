@@ -20,7 +20,7 @@ import type { WorkspaceActions } from "../app/use-workspace.js";
 import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
 import { openFeedback } from "../feedback/open.js";
-import type { Project, Session } from "../api/types.js";
+import type { Project, Session, SessionListState } from "../api/types.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -51,7 +51,29 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
+  /** Which Sessions the list is showing; `actions.setSessionFilter` changes it. */
+  sessionFilter: SessionListState;
   sessionsByProject: Record<string, Session[]>;
+}
+
+/**
+ * What the row's menu offers for archiving, and why it is inert when it is.
+ *
+ * Kept as a function of the Session and the run state rather than inline in the
+ * menu, because "an archived Session offers 恢复" and "a running one offers
+ * neither" are the two rules a reviewer will check, and a portal is a poor place
+ * to check them.
+ */
+export function archiveActionFor(
+  session: Pick<Session, "archivedAt">,
+  running: boolean,
+): { disabled: boolean; label: string; reason?: string } {
+  const archived = session.archivedAt !== undefined;
+  return {
+    disabled: running,
+    label: archived ? TEXT.menu.restore : TEXT.menu.archive,
+    ...(running ? { reason: TEXT.errors.archiveBlockedByRun } : {}),
+  };
 }
 
 function basename(session: Session): string {
@@ -101,6 +123,7 @@ export function Sidebar({
   projects,
   recent,
   running,
+  sessionFilter,
   sessionsByProject,
 }: Props) {
   const [menu, setMenu] = useState<MenuState>();
@@ -209,6 +232,18 @@ export function Sidebar({
                     label: TEXT.menu.rename,
                     onSelect: () => setRenaming({ kind: "session", session, value: sessionTitle(session.title) }),
                   },
+                  // Archiving is reversible and deletion is not, so the two are
+                  // separate commands with separate dialogs. A run in progress is
+                  // refused by the service with a 409; saying so here is cheaper
+                  // than letting the reader find out that way.
+                  {
+                    disabled: archiveActionFor(session, running === true && active).disabled,
+                    label: archiveActionFor(session, running === true && active).label,
+                    onSelect: () => {
+                      if (session.archivedAt === undefined) actions.archiveSession(session);
+                      else actions.restoreSession(session);
+                    },
+                  },
                   ...(onExportSession ? [{ icon: <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg>, label: TEXT.researchPackage.export, onSelect: () => onExportSession(session) }] : []),
                   {
                     icon: "🗑",
@@ -216,6 +251,7 @@ export function Sidebar({
                     onSelect: () => void actions.deleteSession(session),
                   },
                 ],
+                ...(running === true && active ? { note: TEXT.errors.archiveBlockedByRun } : {}),
               })
             }
             title={TEXT.sessionBar.sessionMenu}
@@ -261,6 +297,23 @@ export function Sidebar({
         <button className="side-new side-import-button" onClick={() => onImportSession?.()} type="button">
           <img alt="" aria-hidden="true" src={migrationIcon} /><span>{TEXT.researchPackage.import}</span>
         </button>
+      </div>
+
+      {/* The list default is 活跃, so a Session archived in the web client is
+          invisible until the reader asks for it. This is that ask. */}
+      <div aria-label={TEXT.sidebar.filterLabel} className="side-filter" role="group">
+        {(["active", "archived", "all"] as const).map((value) => (
+          <button
+            aria-pressed={sessionFilter === value}
+            className={`side-filter-item${sessionFilter === value ? " is-on" : ""}`}
+            key={value}
+            onClick={() => actions.setSessionFilter(value)}
+            type="button"
+          >
+            {value === "active" ? TEXT.sidebar.filterActive
+              : value === "archived" ? TEXT.sidebar.filterArchived : TEXT.sidebar.filterAll}
+          </button>
+        ))}
       </div>
 
       <div className="side-scroll">

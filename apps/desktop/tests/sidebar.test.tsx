@@ -35,7 +35,7 @@ function project(id: string, name: string) {
 
 function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
   return renderToStaticMarkup(
-    <Sidebar actions={actions} projects={[]} recent={[]} sessionsByProject={{}} {...over} />,
+    <Sidebar actions={actions} projects={[]} recent={[]} sessionFilter="active" sessionsByProject={{}} {...over} />,
   );
 }
 
