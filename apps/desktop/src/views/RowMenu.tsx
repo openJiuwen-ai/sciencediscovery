@@ -28,6 +28,9 @@ export interface MenuItem {
   checked?: boolean;
   /** A hairline above this entry, to separate a list from what acts on it. */
   separatorBefore?: boolean;
+  /** Shown greyed out and inert. A command the service would refuse is better
+   *  named here than answered with a 409 the reader has to interpret. */
+  disabled?: boolean;
   onSelect: () => void;
 }
 
@@ -128,7 +131,9 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
           {item.separatorBefore ? <div className="ctx-divider" /> : null}
           <button
             aria-current={item.checked ? "true" : undefined}
+            aria-disabled={item.disabled ? "true" : undefined}
             className="ctx-item"
+            disabled={item.disabled}
             onClick={() => {
               onClose();
               item.onSelect();
