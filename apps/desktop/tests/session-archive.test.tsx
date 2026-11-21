@@ -17,34 +17,13 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
-
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
-import { useWorkspace } from "../src/app/use-workspace.js";
-import type { ApiClient } from "../src/api/client.js";
-import { act as domAct, create as domCreate } from "./support/dom-renderer.js";
 import {
   SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead, readSessionFilter,
-  writeSessionFilter,
+  sessionsOfProject, writeSessionFilter,
 } from "../src/app/session-filter.js";
 import { TEXT } from "../src/text.js";
-import { RowMenu } from "../src/views/RowMenu.js";
 import { Sidebar, archiveActionFor } from "../src/views/Sidebar.js";
-
-// `RowMenu` portals into the body and listens for pointer and scroll events; this
-// renderer has neither, so the menu would never mount.
-const listeners = new Map<string, Set<() => void>>();
-const body = { appendChild: () => {}, removeChild: () => {}, contains: () => false };
-Object.assign(globalThis, {
-  document: {
-    addEventListener: (type: string, fn: () => void) => {
-      if (!listeners.has(type)) listeners.set(type, new Set());
-      listeners.get(type)!.add(fn);
-    },
-    body,
-    removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
-  },
-});
 
 const actions = {
   archiveSession: () => {},
@@ -84,7 +63,7 @@ test("the sidebar offers the three Session sets and marks the one in force", () 
   }
 });
 
-test("the filter keeps its value, and an unusable stored value falls back to 活动", () => {
+test("the filter keeps its value, and an unusable stored value falls back to 活跃", () => {
   const store = new Map<string, string>();
   const storage = {
     getItem: (key: string) => store.get(key) ?? null,
@@ -155,4 +134,17 @@ test("a filtered refresh never prunes the artifact catalog of the Sessions it hi
   const cold = membershipAfterRead("archived", ["b"], undefined);
   assert.equal(cold.pruneAgainst, undefined, "no pruning before the workspace is known");
   assert.deepEqual([...(cold.snapshot ?? [])], ["b"]);
+});
+
+test("deleting a Project under a filter forgets its Sessions' outputs", async () => {
+  // The listing cannot name the Sessions a deleted Project had - under 活跃 it only
+  // shows the ones that are not archived - so the cached outputs, which carry the
+  // Project, are what the sweep runs on.
+  const outputs = {
+    "session-hidden": [{ artifact: { id: "a1", projectId: "p1" }, version: {} }],
+    "session-other": [{ artifact: { id: "a2", projectId: "p2" }, version: {} }],
+  };
+  assert.deepEqual(sessionsOfProject(outputs as never, "p1"), ["session-hidden"],
+    "only the deleted Project's Session is swept");
+  assert.deepEqual(sessionsOfProject({}, "p1"), [], "and an unknown Project sweeps nothing");
 });
