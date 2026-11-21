@@ -283,6 +283,7 @@ export const ZH = {
     loading: "正在读取…",
     savedSession: "已用于本次会话，之后发起的研究会用这套参数",
     savedGlobal: "已写入全局设置",
+    unchanged: "没有需要写入全局的改动。",
     noSession: "打开一个会话后，才能只给本次会话改参数。",
   },
 
