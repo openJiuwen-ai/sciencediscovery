@@ -150,7 +150,6 @@ export const EN: Text = {
     skillsPalette: "Choose a skill",
     permission: "Ask for approval",
     permissionMode: "Permission mode",
-    permissionAskShort: "Ask",
     permissionAskDesc: "Always ask before editing external files or using the internet",
     permissionFull: "Full access",
     permissionFullDesc: "Access the internet and any file on your computer without restriction",

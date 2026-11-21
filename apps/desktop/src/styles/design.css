@@ -2046,16 +2046,6 @@ body.is-resizing {
   transform: translateY(0.5px);
 }
 
-.session-menu-value-icon {
-  display: inline-flex;
-  color: #8c8c8c;
-}
-
-.session-menu-value-icon svg {
-  width: 12px;
-  height: 12px;
-}
-
 .session-menu-chev {
   color: #a6a6a6;
 }

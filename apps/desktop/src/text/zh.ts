@@ -150,7 +150,6 @@ export const ZH = {
     skillsPalette: "选择技能",
     permission: "请求批准",
     permissionMode: "权限模式",
-    permissionAskShort: "询问",
     permissionAskDesc: "编辑外部文件和使用互联网时始终询问",
     permissionFull: "完全访问",
     permissionFullDesc: "可不受限制地访问互联网和您电脑上的任何文件",

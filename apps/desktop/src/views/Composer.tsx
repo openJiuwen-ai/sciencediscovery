@@ -169,7 +169,7 @@ function SlidersGlyph() {
   );
 }
 
-type SettingsPanel = "experts" | "permission";
+type SettingsPanel = "experts";
 
 /** The shield that marks permission, and its warning form for 完全访问. */
 function ShieldGlyph({ alert = false }: { alert?: boolean }) {
@@ -314,37 +314,34 @@ export function PermissionFlyout({
  * rows and, beside the open one, its choices. The two columns are separate
  * cards so a flyout is never clipped by the row column's own scroll box.
  *
+ * 权限模式 is not one of these rows. It has its own control beside them in the
+ * footer (#1204), and a second door to the same two choices only made this menu
+ * look like it still held a setting the footer had taken over.
+ *
  * Exported because it is only mounted while open, and a static render of the
  * composer never gets there.
  */
 export function SessionSettingsMenu({
-  approvalMode,
   experts,
   expertsLoading,
-  onApprovalMode,
   onClose,
   onEvolve,
   onSelectSpecialist,
-  running,
   selectedSpecialistId,
 }: {
-  approvalMode?: ApprovalMode;
   /** The experts a session can be bound to, already read by the composer.
    *  Held there rather than here so reopening the menu does not blank the row
    *  above it back to 无 while the catalog is fetched again. */
   experts?: Specialist[];
   expertsLoading?: boolean;
-  onApprovalMode: (mode: ApprovalMode) => void;
   onClose: () => void;
   /** Opens the evolve surface. Absent in a static render, where the entry has
    *  nowhere to go. */
   onEvolve?: () => void;
   onSelectSpecialist?: (specialistId?: string) => void;
-  running: boolean;
   selectedSpecialistId?: string;
 }) {
   const [panel, setPanel] = useState<SettingsPanel>();
-  const fullAccess = approvalMode === "always_allow";
   const selectedExpert = (experts ?? []).find((row) => row.id === selectedSpecialistId);
   const toggle = (next: SettingsPanel) => setPanel((current) => (current === next ? undefined : next));
 
@@ -374,30 +371,6 @@ export function SessionSettingsMenu({
             </>
           )}
           <button
-            aria-expanded={panel === "permission"}
-            aria-haspopup="true"
-            className={`session-menu-row${panel === "permission" ? " is-open" : ""}`}
-            disabled={running}
-            onClick={() => toggle("permission")}
-            title={running ? TEXT.composer.permissionLocked : undefined}
-            type="button"
-          >
-            <span className="session-menu-icon">
-              <ShieldGlyph />
-            </span>
-            <span className="session-menu-label">{TEXT.composer.permissionMode}</span>
-            <span className="session-menu-value">
-              <span className="session-menu-value-icon">
-                <ShieldGlyph />
-              </span>
-              <span className="session-menu-value-text">
-                {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
-              </span>
-              <ChevronRightGlyph />
-            </span>
-          </button>
-          <div className="session-menu-divider" />
-          <button
             aria-describedby="session-experts-hint"
             aria-expanded={panel === "experts"}
             aria-haspopup="true"
@@ -425,10 +398,6 @@ export function SessionSettingsMenu({
           </button>
           <span className="sr-only" id="session-experts-hint">{TEXT.composer.expertsHint}</span>
         </div>
-
-        {panel === "permission" ? (
-          <PermissionFlyout mode={approvalMode} onApprovalMode={onApprovalMode} onClose={onClose} />
-        ) : null}
 
         {panel === "experts" ? (
           <ExpertFlyout
@@ -1097,24 +1066,21 @@ export function Composer({
           </button>
           {menu === "settings" ? (
             <SessionSettingsMenu
-              approvalMode={approvalMode}
               experts={experts}
               expertsLoading={expertsLoading}
-              onApprovalMode={onApprovalMode}
               onClose={() => setMenu(undefined)}
               // The draft is carried into the setup dialog: a sentence already
               // written is the task the new design would start from.
               onEvolve={onEvolve === undefined ? undefined : () => onEvolve(text)}
               onSelectSpecialist={onSelectSpecialist}
-              running={running}
               selectedSpecialistId={selectedSpecialistId}
             />
           ) : null}
         </span>
 
-        {/* The active permission mode, beside the settings that used to be its only
-            door (#1204): the shield says which policy the next turn runs under, and
-            the label is the same word the settings row uses. */}
+        {/* The active permission mode, and now its only door (#1204): 会话设置 no
+            longer repeats the row. The shield says which policy the next turn runs
+            under; the label names it. */}
         <span className="composer-menu-anchor is-permission">
           <button
             aria-expanded={menu === "permission"}
