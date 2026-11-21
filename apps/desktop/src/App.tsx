@@ -326,6 +326,9 @@ export function App({ initialToken }: Props) {
     checkpointMode?: "auto" | "confirm";
     goal?: string;
   } | undefined>();
+  /** The Idea Tree parameters card. Declared with the other state, above the
+   *  early returns, so the hook order never depends on which branch renders. */
+  const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
   /** A design command the dialog placed in the composer instead of sending.
    *  Held here because the composer has two mounts — the welcome page and the
    *  conversation — and the dialog opens over either. Cleared when the composer
@@ -1201,7 +1204,6 @@ export function App({ initialToken }: Props) {
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
   /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row. */
-  const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
   const openIdeaTree = () => setIdeaTreeOpen(true);
 
   /**
