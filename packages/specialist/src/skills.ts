@@ -1639,31 +1639,44 @@ export class SkillCatalog {
     return await this.mutate(async () => {
       this.assertLoaded();
       const { draft, loaded, provenance: confirmedProvenance } = this.prepareReviewDraftConfirmation(draftId, input);
-      const revision = loaded.detail.currentRevision;
-      if (draft.baseRevision === undefined && (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id))) {
-        throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
-      }
-      const committed = await this.commitManaged(
-        loaded,
-        revision,
-        new Date().toISOString(),
-        confirmedProvenance,
-      );
-      const previous = this.index.managed[loaded.detail.id];
-      this.index.managed[loaded.detail.id] = { currentRevision: revision };
-      try {
-        await this.saveIndex();
-      } catch (error) {
-        if (previous) this.index.managed[loaded.detail.id] = previous;
-        else delete this.index.managed[loaded.detail.id];
-        await rm(this.revisionRoot(loaded.detail.id, revision), { force: true, recursive: true });
-        throw error;
-      }
-      this.managed.set(loaded.detail.id, committed);
+      const committed = await this.installReviewedDraft(loaded, confirmedProvenance, draft.baseRevision);
       await rm(this.reviewDraftPath(draftId), { force: true });
       this.reviewDrafts.delete(draftId);
       return structuredClone(committed.detail);
     });
+  }
+
+  /**
+   * Install reviewed bytes into the managed Skill catalog: the revision
+   * directory, the index entry and the in-memory package.
+   *
+   * Both confirmation paths end here. A Library publication keeps an archive of
+   * what was confirmed, but the catalog is what the Skills page lists and what a
+   * Session selects from, so a draft that only reached a Library would be
+   * invisible to the user who had just confirmed it.
+   */
+  private async installReviewedDraft(
+    loaded: LoadedPackage,
+    provenance: SkillVersionProvenance,
+    baseRevision: number | undefined,
+  ): Promise<LoadedPackage> {
+    const revision = loaded.detail.currentRevision;
+    if (baseRevision === undefined && (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id))) {
+      throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
+    }
+    const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), provenance);
+    const previous = this.index.managed[loaded.detail.id];
+    this.index.managed[loaded.detail.id] = { currentRevision: revision };
+    try {
+      await this.saveIndex();
+    } catch (error) {
+      if (previous) this.index.managed[loaded.detail.id] = previous;
+      else delete this.index.managed[loaded.detail.id];
+      await rm(this.revisionRoot(loaded.detail.id, revision), { force: true, recursive: true });
+      throw error;
+    }
+    this.managed.set(loaded.detail.id, committed);
+    return committed;
   }
 
   /**
@@ -1684,6 +1697,10 @@ export class SkillCatalog {
         files: new Map([...files].map(([path, bytes]) => [path, Buffer.from(bytes)])),
         provenance: structuredClone(provenance),
       });
+      // The Library holds the archive; the user confirmed a Skill, so it has to
+      // exist where the Skills page and a Session look for it. Installed after
+      // the publisher succeeds, so a Library failure leaves the draft intact.
+      await this.installReviewedDraft(loaded, provenance, draft.baseRevision);
       await rm(this.reviewDraftPath(draft.draftId), { force: true });
       this.reviewDrafts.delete(draft.draftId);
       return result;

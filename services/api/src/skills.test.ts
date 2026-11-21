@@ -407,6 +407,45 @@ test("keeps a reviewed Agent draft when its external Library publication fails",
       throw new Error("Library commit failed");
     }), /Library commit failed/);
     assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.draftId), [draft.draftId]);
+    assert.equal(catalog.get("publication-failure-skill"), undefined, "and nothing reached the Skill catalog");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("a draft confirmed through a Library publication is also installed in the Skill catalog", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const draft = await catalog.createReviewDraft({
+      description: "A draft a Library publication must make visible as a Skill.",
+      instructions: "# Workflow\n\nLand in the Library and in the catalog.",
+      name: "published-to-library-skill",
+    }, { sessionId: "session-source", source: "agent" });
+    const detail = await catalog.getReviewDraft(draft.draftId);
+    let publishedId: string | undefined;
+    const result = await catalog.publishReviewDraft(draft.draftId, {
+      expectedUpdatedAt: draft.updatedAt,
+      files: detail!.files.map((file) => ({ content: file.content, path: file.path })),
+    }, async (prepared) => {
+      publishedId = prepared.detail.id;
+      return { libraryId: "project-skills", skillId: prepared.detail.id, versionId: "version-1" };
+    });
+
+    assert.equal(publishedId, "published-to-library-skill");
+    assert.deepEqual(result, { libraryId: "project-skills", skillId: "published-to-library-skill", versionId: "version-1" });
+    // The user confirmed a Skill, not merely a Library version: it has to be
+    // listed and selectable, which is what the catalog drives.
+    const installed = catalog.get("published-to-library-skill");
+    assert.ok(installed, "the confirmed Skill is in the catalog");
+    assert.equal(installed.currentRevision, 1);
+    assert.ok(catalog.list().some((skill) => skill.id === "published-to-library-skill"), "and the Skills list returns it");
+    assert.deepEqual(catalog.listReviewDrafts(), [], "the draft is consumed");
+
+    const reloaded = new SkillCatalog(dataDir, repositoryRoot);
+    await reloaded.load();
+    assert.equal(reloaded.get("published-to-library-skill")?.currentRevision, 1, "and it survives a reload");
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }
