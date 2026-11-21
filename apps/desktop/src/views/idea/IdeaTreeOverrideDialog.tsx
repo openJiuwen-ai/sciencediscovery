@@ -43,15 +43,22 @@ import { Group, Row, Select } from "../settings/rows.js";
 const t = TEXT.ideaTreeOverride;
 const fields = TEXT.settings.system.ideaTree;
 
-/** The five fields a layer may override, taken from a full settings object. */
-function overrideOf(settings: IdeaTreeSettingsDetails): IdeaTreeSettingsOverride {
-  return {
-    explorationIntensity: settings.explorationIntensity,
-    maxDepth: settings.maxDepth,
-    maxNodes: settings.maxNodes,
-    scoreDirection: settings.scoreDirection,
-    templateId: settings.templateId,
-  };
+/** Only the fields this Session means to change. Sending all five would pin the
+ *  whole set at the global values of the moment, so a later global edit would
+ *  stop reaching this Session — the opposite of what the override is for. */
+function overrideOf(
+  settings: IdeaTreeSettingsDetails,
+  inherited: IdeaTreeSettingsDetails,
+): IdeaTreeSettingsOverride {
+  const override: IdeaTreeSettingsOverride = {};
+  if (settings.templateId !== inherited.templateId) override.templateId = settings.templateId;
+  if (settings.explorationIntensity !== inherited.explorationIntensity) {
+    override.explorationIntensity = settings.explorationIntensity;
+  }
+  if (settings.scoreDirection !== inherited.scoreDirection) override.scoreDirection = settings.scoreDirection;
+  if (settings.maxDepth !== inherited.maxDepth) override.maxDepth = settings.maxDepth;
+  if (settings.maxNodes !== inherited.maxNodes) override.maxNodes = settings.maxNodes;
+  return override;
 }
 
 function numberFrom(raw: string, fallback: number): number {
@@ -85,6 +92,8 @@ export function IdeaTreeOverrideDialog({
   sessionId?: string;
 }) {
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
+  /** The values the card opened with: what "unchanged" means for each field. */
+  const [inherited, setInherited] = useState<IdeaTreeSettingsDetails>();
   const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "failed">("loading");
   const [failure, setFailure] = useState<string>();
 
@@ -94,6 +103,7 @@ export function IdeaTreeOverrideDialog({
       .then((value) => {
         if (cancelled) return;
         setDraft(value);
+        setInherited(value);
         setStatus("idle");
       })
       .catch((reason: unknown) => {
@@ -128,7 +138,7 @@ export function IdeaTreeOverrideDialog({
     setStatus("saving");
     setFailure(undefined);
     try {
-      await updateSession(client, sessionId, { ideaTreeOverride: overrideOf(draft) });
+      await updateSession(client, sessionId, { ideaTreeOverride: overrideOf(draft, inherited ?? draft) });
       setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -141,12 +151,27 @@ export function IdeaTreeOverrideDialog({
     setStatus("saving");
     setFailure(undefined);
     const body: UpdateIdeaTreeSettingsRequest = {
-      ...overrideOf(draft),
+      ...overrideOf(draft, inherited ?? draft),
       maxTokens: draft.maxTokens ?? null,
     };
     try {
       setDraft(await updateIdeaTreeSettings(client, body));
       setStatus("global");
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : String(reason));
+      setStatus("failed");
+    }
+  };
+
+  /** Hand the Session back to the global settings. */
+  const inheritGlobal = async () => {
+    if (!sessionId) return;
+    setStatus("saving");
+    setFailure(undefined);
+    try {
+      await updateSession(client, sessionId, { ideaTreeOverride: null });
+      setDraft(inherited);
+      setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
       setStatus("failed");
@@ -239,6 +264,14 @@ export function IdeaTreeOverrideDialog({
               type="button"
             >
               {t.saveSession}
+            </button>
+            <button
+              className="evolve-create-cancel"
+              disabled={busy || sessionId === undefined}
+              onClick={() => void inheritGlobal()}
+              type="button"
+            >
+              {t.inheritGlobal}
             </button>
             <button className="evolve-create-submit" disabled={busy || draft === undefined} onClick={() => void saveGlobal()} type="button">
               {t.saveGlobal}

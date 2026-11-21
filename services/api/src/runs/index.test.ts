@@ -288,7 +288,7 @@ test("run snapshots preserve explicit effort for an unknown DeepSeek gateway", a
 });
 
 
-test("a Session's Idea Tree override is exactly what its next run freezes", async (context) => {
+test("a Session's Idea Tree override is what a research created there reads", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `idea-tree-override-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -303,28 +303,34 @@ test("a Session's Idea Tree override is exactly what its next run freezes", asyn
   const project = await store.createProject("Idea tree override");
   const session = await store.createSession(project.id, "Idea tree override", model.id);
 
-  // No override: the run gets the global settings, which is what every Session had before.
+  // No override: the same settings every Session had before this.
   const global = store.getIdeaTreeSettings();
-  assert.deepEqual(computeSettingsSnapshot(store, session.id).ideaTreeSettings, global);
+  assert.deepEqual(store.resolveIdeaTreeSettings(session.id), global);
 
   await store.updateSession(session.id, { ideaTreeOverride: { maxDepth: 3, scoreDirection: "minimize" } });
-  const overridden = computeSettingsSnapshot(store, session.id).ideaTreeSettings;
-  assert.equal(overridden?.maxDepth, 3);
-  assert.equal(overridden?.scoreDirection, "minimize");
-  // The fields the Session did not override keep coming from the global settings.
-  assert.equal(overridden?.templateId, global.templateId);
-  assert.equal(overridden?.maxNodes, global.maxNodes);
+  const overridden = store.resolveIdeaTreeSettings(session.id);
+  assert.equal(overridden.maxDepth, 3);
+  assert.equal(overridden.scoreDirection, "minimize");
+  // The fields the Session did not override keep coming from the deployment.
+  assert.equal(overridden.templateId, global.templateId);
+  assert.equal(overridden.maxNodes, global.maxNodes);
 
   // A later global change reaches the inherited field, never the overridden one.
   await store.updateIdeaTreeSettings({ maxNodes: 42 });
-  const afterGlobal = computeSettingsSnapshot(store, session.id).ideaTreeSettings;
-  assert.equal(afterGlobal?.maxNodes, 42);
-  assert.equal(afterGlobal?.maxDepth, 3);
+  const afterGlobal = store.resolveIdeaTreeSettings(session.id);
+  assert.equal(afterGlobal.maxNodes, 42);
+  assert.equal(afterGlobal.maxDepth, 3);
 
-  // Another Session in the same project sees the global value, not this one's override.
+  // Another Session in the same project sees the deployment value.
   const sibling = await store.createSession(project.id, "Sibling", model.id);
-  assert.equal(computeSettingsSnapshot(store, sibling.id).ideaTreeSettings?.maxDepth, global.maxDepth);
-  assert.equal(computeSettingsSnapshot(store, sibling.id).ideaTreeSettings?.maxNodes, 42);
+  assert.equal(store.resolveIdeaTreeSettings(sibling.id).maxDepth, global.maxDepth);
+  assert.equal(store.resolveIdeaTreeSettings(sibling.id).maxNodes, 42);
+
+  // And the way back: null drops the override and the Session inherits again.
+  await store.updateSession(session.id, { ideaTreeOverride: null });
+  const cleared = store.resolveIdeaTreeSettings(session.id);
+  assert.equal(cleared.maxDepth, global.maxDepth);
+  assert.equal(cleared.maxNodes, 42);
 });
 
 test("computeSettingsSnapshot rejects a session whose effective model was deleted", async (context) => {

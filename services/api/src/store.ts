@@ -282,6 +282,7 @@ import {
   resolveIdeaTreeSettings,
   resolveQuotaSettings,
   RUNTIME_SETTINGS_FIELDS,
+  withoutIdeaTreeOverride,
   withoutSkillSelection,
 } from "./store/settings.js";
 import {
@@ -1016,7 +1017,7 @@ export class SessionStore {
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
-      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false, this.connectorIds));
+      : withoutIdeaTreeOverride(withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false, this.connectorIds)));
     const globalSettings = normalizedGlobalSettings === undefined
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
@@ -3349,19 +3350,20 @@ export class SessionStore {
     return this.getMemoryGraphSettings();
   }
 
-  /** Idea Tree system settings. Persisted in the catalog JSON (the settings
-   *  table) and filled from `DEFAULT_IDEA_TREE_SETTINGS` for any missing
-   *  field. The runtime reads these when a user triggers `/idea-tree-team` in a
-   *  Run — there is no per-Session override. */
   /** The Idea Tree parameters a Session runs with: the global settings with
    *  that Session's own overrides applied field by field. No override means the
-   *  global value unchanged, which is what every Session had before this. */
+   *  global value unchanged, which is what every Session had before this. A
+   *  research created in this Session reads this — see `createIdeaResearchClient`. */
   resolveIdeaTreeSettings(sessionId: string): IdeaTreeSettings {
     const override = this.resolveRuntimeSettings(sessionId).effective.ideaTreeOverride;
     const global = this.getIdeaTreeSettings();
     return override ? { ...global, ...structuredClone(override) } : global;
   }
 
+  /** Idea Tree system settings: the deployment-wide values. Persisted in the
+   *  catalog JSON (the settings table) and filled from `DEFAULT_IDEA_TREE_SETTINGS`
+   *  for any missing field. A Session may override them; `resolveIdeaTreeSettings`
+   *  is what a research reads. */
   getIdeaTreeSettings(): IdeaTreeSettings {
     return structuredClone(this.catalog.ideaTreeSettings);
   }
@@ -3741,7 +3743,7 @@ export class SessionStore {
       ? this.normalizeSessionOverrides(value, this.assertSessionWritable(scope.id).settingsOverrides)
       : this.normalizeSettings(value);
     if (scope.kind === "global") {
-      this.catalog.globalSettings = withoutSkillSelection(normalized);
+      this.catalog.globalSettings = withoutIdeaTreeOverride(withoutSkillSelection(normalized));
       this.syncSessionCompatibilityForProject();
     } else if (scope.kind === "project") {
       const project = this.getProject(scope.id);

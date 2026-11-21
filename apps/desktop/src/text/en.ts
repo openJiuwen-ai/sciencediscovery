@@ -163,8 +163,6 @@ export const EN: Text = {
     jwBlocked: "The agent cluster is starting. Chat unlocks when it is ready…",
   },
 
-  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
-   *  (the shell bridge pushes progress; this is the idle wording). */
   ideaTreeOverride: {
     title: "Idea Tree parameters",
     hint: "The next research uses these values without changing the global settings; only the global button below writes them back.",
@@ -181,6 +179,7 @@ export const EN: Text = {
     maxDepth: "Maximum depth",
     maxNodes: "Maximum nodes",
     saveSession: "Use for this conversation",
+    inheritGlobal: "Follow the global settings",
     saveGlobal: "Overwrite the global settings",
     cancel: "Cancel",
     loading: "Reading…",
@@ -189,6 +188,8 @@ export const EN: Text = {
     noSession: "Open a conversation to change the settings for it alone.",
   },
 
+  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
+   *  (the shell bridge pushes progress; this is the idle wording). */
   jiuwen: {
     starting: "Agent cluster starting",
     preparing: "Initializing…",
