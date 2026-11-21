@@ -79,3 +79,20 @@ export function membershipAfterRead(
   // unfiltered read has named the workspace.
   return previous === undefined ? { snapshot: known } : { pruneAgainst: [...known], snapshot: known };
 }
+
+/**
+ * The cached Sessions that belong to one Project.
+ *
+ * Each cached output carries the Project it was produced in, which is the only
+ * way to reach a Session the current filter hides: the listing cannot name it.
+ * Deleting a Project has to sweep by this, or its groups stay in 产物 and opening
+ * one reads a Session the server removed.
+ */
+export function sessionsOfProject(
+  cached: Record<string, readonly { artifact: { projectId?: string } }[]>,
+  projectId: string,
+): string[] {
+  return Object.entries(cached)
+    .filter(([, outputs]) => outputs.some((output) => output.artifact.projectId === projectId))
+    .map(([sessionId]) => sessionId);
+}
