@@ -47,6 +47,7 @@ function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
       actions={actions}
       projects={[]}
       recent={[]}
+      sessionFilter="active"
       sessionsByProject={{}}
       {...over}
     />,
