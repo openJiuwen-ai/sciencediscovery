@@ -177,6 +177,9 @@ export function IdeaTreeOverrideDialog({
     // the pins it no longer shows.
     if (empty && !hasOverride) {
       setStatus("session");
+      // Nothing to store — but a waiting command still has to leave: the card
+      // being confirmed is what lets it out, not the write.
+      onConfirm?.();
       return;
     }
     setStatus("saving");
