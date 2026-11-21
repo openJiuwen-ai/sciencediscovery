@@ -49,3 +49,28 @@ export function writeSessionFilter(
     // filter: the choice still applies for this visit.
   }
 }
+
+/**
+ * What a listing read is allowed to conclude about Sessions it did not return.
+ *
+ * The artifact catalog spans Sessions, so it may only be pruned against whole
+ * membership. An unfiltered read *is* that membership; a filtered read is a
+ * subset, and pruning by it would drop the artifacts of every Session the filter
+ * hides — on every refresh under that filter, not just the first one, because the
+ * filtered map is all the reader ever sees while the filter is in force.
+ *
+ * Returns the snapshot to remember and whether the caller may prune, plus the ids
+ * to keep when it may.
+ */
+export function membershipAfterRead(
+  filter: SessionListState,
+  sessionIds: readonly string[],
+  previous: ReadonlySet<string> | undefined,
+): { pruneAgainst?: readonly string[]; snapshot?: ReadonlySet<string> } {
+  if (filter === "all") {
+    const snapshot = new Set(sessionIds);
+    return { pruneAgainst: sessionIds, snapshot };
+  }
+  // Nothing is known about the Sessions the filter hides, so nothing is pruned.
+  return previous === undefined ? {} : { pruneAgainst: [...previous] };
+}
