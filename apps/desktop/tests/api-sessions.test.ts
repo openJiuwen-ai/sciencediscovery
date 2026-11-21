@@ -53,6 +53,23 @@ describe("project and session reads", () => {
     assert.equal(split(stub.calls[1]!).query.get("state"), "archived");
   });
 
+  it("posts archive and restore to the Session they name", async () => {
+    const stub = new StubClient().reply({}).reply({});
+    const client = stub.asClient();
+
+    await sessions.archiveSession(client, "session/one");
+    await sessions.restoreSession(client, "session/one");
+
+    assert.equal(stub.calls[0]!.path, "/api/sessions/session%2Fone/archive");
+    assert.equal(stub.calls[0]!.init.method, "POST");
+    assert.equal(stub.calls[1]!.path, "/api/sessions/session%2Fone/restore");
+    assert.equal(stub.calls[1]!.init.method, "POST");
+    // Neither carries a body: the route takes the id from the path, and inventing
+    // one here would break the day the route accepts something else.
+    assert.equal(stub.calls[0]!.init.body, undefined);
+    assert.equal(stub.calls[1]!.init.body, undefined);
+  });
+
   it("creates a session by posting the body it was handed", async () => {
     const stub = new StubClient().reply({});
     const body = { modelId: "model/one", title: "新会话" } as unknown as CreateSessionBody;
