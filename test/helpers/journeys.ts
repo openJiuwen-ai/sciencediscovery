@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import type { EnvironmentSetup } from "./environment-setup.ts";
 import { retryRead } from "./read-retry.ts";
 import { deleteOwnedProject } from "./project-cleanup.ts";
 import { RunPollRecovery } from "./run-poll-recovery.js";
@@ -886,7 +887,7 @@ export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Arr
 }
 
 /** Query the setup state without triggering installation or other environment changes. */
-export function environmentSetup(page: Page, timeoutMs = 10_000): Promise<{ message: string; state: string }> {
+export function environmentSetup(page: Page, timeoutMs = 10_000): Promise<EnvironmentSetup> {
   return apiJson(page, "/api/environment-setup", { timeoutMs });
 }
 
