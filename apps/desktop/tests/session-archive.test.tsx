@@ -19,8 +19,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import {
-  SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead, readSessionFilter,
-  sessionsOfProject, writeSessionFilter,
+  forgetProject, SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead,
+  readSessionFilter, sessionsOfProject, writeSessionFilter,
 } from "../src/app/session-filter.js";
 import { TEXT } from "../src/text.js";
 import { Sidebar, archiveActionFor } from "../src/views/Sidebar.js";
@@ -147,4 +147,25 @@ test("deleting a Project under a filter forgets its Sessions' outputs", async ()
   assert.deepEqual(sessionsOfProject(outputs as never, "p1"), ["session-hidden"],
     "only the deleted Project's Session is swept");
   assert.deepEqual(sessionsOfProject({}, "p1"), [], "and an unknown Project sweeps nothing");
+});
+
+test("deleting a Project removes its artifact groups and forgets those ids", () => {
+  // The Project's Sessions cannot be named by the listing under 活跃 - it only
+  // shows the ones that are not archived - so the sweep runs on the cached
+  // outputs, which carry the Project.
+  const cached = {
+    "s-doomed": [{ artifact: { id: "a1", projectId: "p1" } }],
+    "s-kept": [{ artifact: { id: "a2", projectId: "inbox" } }],
+  };
+  const membership = new Set(["s-doomed", "s-kept", "s-hidden"]);
+  const sweep = forgetProject(cached as never, membership, "p1");
+  assert.deepEqual(sweep.removed, ["s-doomed"], "only the deleted Project's Session is swept");
+  assert.deepEqual([...(sweep.membership ?? [])].sort(), ["s-hidden", "s-kept"],
+    "its id leaves membership, the others stay");
+  assert.ok(membership.has("s-doomed"), "and the set handed in is not mutated");
+
+  // An unknown Project, and a workspace with no snapshot yet.
+  assert.deepEqual(forgetProject(cached as never, membership, "p9").removed, []);
+  assert.deepEqual(forgetProject(cached as never, undefined, "p1"),
+    { removed: ["s-doomed"] }, "without a snapshot only the groups are named");
 });

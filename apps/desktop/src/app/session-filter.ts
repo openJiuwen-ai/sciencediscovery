@@ -96,3 +96,23 @@ export function sessionsOfProject(
     .filter(([, outputs]) => outputs.some((output) => output.artifact.projectId === projectId))
     .map(([sessionId]) => sessionId);
 }
+
+/**
+ * Everything a deleted Project takes with it: the Sessions whose cached outputs
+ * belong to it, and the membership snapshot minus those ids.
+ *
+ * A decision, not an effect, so the rule is testable without mounting the
+ * workspace hook: which groups leave 产物, and which ids stop being "known" to
+ * the artifact catalog.
+ */
+export function forgetProject(
+  cached: Record<string, readonly { artifact: { projectId?: string } }[]>,
+  membership: ReadonlySet<string> | undefined,
+  projectId: string,
+): { membership?: Set<string>; removed: string[] } {
+  const removed = sessionsOfProject(cached, projectId);
+  if (membership === undefined) return { removed };
+  const next = new Set(membership);
+  for (const id of removed) next.delete(id);
+  return { membership: next, removed };
+}
