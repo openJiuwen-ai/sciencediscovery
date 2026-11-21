@@ -2651,6 +2651,54 @@ test("concurrent first messages keep every run and auto-name only once from queu
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
+test("a PATCH carries one Idea Tree override, and a second PATCH clears it", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `session-idea-override-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const created = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Idea tree override" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = created.body.firstSession.id;
+
+  // What the deployment says, before any override exists.
+  const before = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {
+    headers: authorization,
+  });
+  assert.equal(before.response.status, 200);
+  assert.equal(before.body.sources.ideaTreeOverride, "unset");
+
+  // One field, exactly as the card now sends it.
+  const written = await jsonRequest<Session>(`${origin}/api/sessions/${sessionId}`, {
+    body: JSON.stringify({ ideaTreeOverride: { maxDepth: 3 } }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(written.response.status, 200);
+
+  const after = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {
+    headers: authorization,
+  });
+  assert.equal(after.body.sources.ideaTreeOverride, "session");
+  assert.deepEqual(after.body.overrides.ideaTreeOverride, { maxDepth: 3 });
+
+  // null is how the card hands the Session back to the deployment.
+  const cleared = await jsonRequest<Session>(`${origin}/api/sessions/${sessionId}`, {
+    body: JSON.stringify({ ideaTreeOverride: null }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(cleared.response.status, 200);
+
+  const inherited = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {
+    headers: authorization,
+  });
+  assert.equal(inherited.body.sources.ideaTreeOverride, "unset", "the Session inherits again");
+  assert.equal("ideaTreeOverride" in inherited.body.overrides, false);
+});
+
 test("an asynchronous title refinement never overwrites a manual rename", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-manual-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
