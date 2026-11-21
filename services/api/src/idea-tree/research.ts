@@ -40,7 +40,9 @@ export function createIdeaResearchClient(options: {
       grants.set(researchId, { sessionId, token });
       issued = researchId;
       payload = { ...payload, researchId, modelId: model.id,
-        ...(operation === "create" ? { settings: { ...options.store.getIdeaTreeSettings(), ...(input.settings as object ?? {}) } } : {}),
+        // The Session's own parameters come first: this is where a research is
+        // created, and the card promises the next research here uses them.
+        ...(operation === "create" ? { settings: { ...options.store.resolveIdeaTreeSettings(sessionId), ...(input.settings as object ?? {}) } } : {}),
         llm: { token, url: `${options.apiOrigin}/internal/evolve-llm/${researchId}/v1/chat/completions` } };
     }
     try {

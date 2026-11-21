@@ -92,20 +92,41 @@ test("the card starts from the global settings and offers the five fields", asyn
   }
 });
 
-test("using the settings for this conversation writes the Session, never the global settings", async () => {
+test("only the field that was changed is written, so the rest keep inheriting", async () => {
   const { calls, client } = stubClient();
   const { view } = await mount(client, "s1");
   try {
+    // Change one number, leave everything else as the card opened.
+    const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大深度");
+    assert.ok(depth, "the depth field is drawn");
+    await act(async () => { depth!.props.onChange?.({ target: { value: "3" } }); });
     await act(async () => { click(view, "只用于本次会话"); });
     await flush();
+
     assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "no global write");
     const patch = calls.find((call) => call.method === "PATCH");
     assert.ok(patch, "the session is patched");
     assert.equal(patch!.path, "/api/sessions/s1");
-    assert.deepEqual(
-      Object.keys((patch!.body as { ideaTreeOverride: object }).ideaTreeOverride).sort(),
-      ["explorationIntensity", "maxDepth", "maxNodes", "scoreDirection", "templateId"],
-    );
+    // Only what differs travels: pinning all five would freeze the other four at
+    // today's global values and a later global edit would never reach them.
+    assert.deepEqual((patch!.body as { ideaTreeOverride: object }).ideaTreeOverride, { maxDepth: 3 });
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("following the global settings clears the override", async () => {
+  const { calls, client } = stubClient();
+  const { view } = await mount(client, "s1");
+  try {
+    await act(async () => { click(view, "跟随全局设置"); });
+    await flush();
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.ok(patch, "the session is patched");
+    assert.equal((patch!.body as { ideaTreeOverride: unknown }).ideaTreeOverride, null,
+      "null is how a Session goes back to inheriting");
   } finally {
     await act(async () => { view.unmount(); });
   }
@@ -147,10 +168,10 @@ test("with no conversation the session write is refused and said so", async () =
   const { markup, view } = await mount(client, undefined);
   try {
     assert.match(markup(), /打开一个会话后/);
-    // Exactly one control is disabled in this state: the one that would write a
-    // Session that does not exist. Cancel and the global write stay available.
-    assert.equal((markup().match(/"disabled":true/g) ?? []).length, 1,
-      "only the session write is refused");
+    // Two controls need a Session and are refused in this state: the override
+    // write and the return to inheriting. Cancel and the global write stay.
+    assert.equal((markup().match(/"disabled":true/g) ?? []).length, 2,
+      "exactly the two Session-scoped actions are refused");
     assert.match(markup(), /只用于本次会话/);
     assert.match(markup(), /覆盖全局设置/);
   } finally {

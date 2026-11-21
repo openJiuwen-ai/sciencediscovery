@@ -614,8 +614,9 @@ export interface UpdateSessionRequest {
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
   /** Idea Tree parameters overridden for this Session only; the fields left out
-   *  keep the global value. */
-  ideaTreeOverride?: IdeaTreeSettingsOverride;
+   *  keep the global value. `null` clears the override, so the Session inherits
+   *  the global settings again. */
+  ideaTreeOverride?: IdeaTreeSettingsOverride | null;
   modelId?: string;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";

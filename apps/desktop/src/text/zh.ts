@@ -260,8 +260,6 @@ export const ZH = {
     jwBlocked: "智能体集群正在启动，就绪后即可对话…",
   },
 
-  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
-   *  (the shell bridge pushes progress; this is the idle wording). */
   ideaTreeOverride: {
     title: "idea-tree 参数",
     hint: "只用于之后发起的研究；不改全局设置。点「覆盖全局设置」才会写回全局。",
@@ -278,6 +276,7 @@ export const ZH = {
     maxDepth: "最大深度",
     maxNodes: "最大节点数",
     saveSession: "只用于本次会话",
+    inheritGlobal: "跟随全局设置",
     saveGlobal: "覆盖全局设置",
     cancel: "取消",
     loading: "正在读取…",
@@ -286,6 +285,8 @@ export const ZH = {
     noSession: "打开一个会话后，才能只给本次会话改参数。",
   },
 
+  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
+   *  (the shell bridge pushes progress; this is the idle wording). */
   jiuwen: {
     starting: "智能体集群启动中",
     preparing: "正在初始化…",
