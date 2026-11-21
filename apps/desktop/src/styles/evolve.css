@@ -195,6 +195,106 @@
 
 /* ── the create dialog ─────────────────────────────────────────────────────── */
 
+/* The Idea Tree parameters card. It borrows the settings rows and the modal
+   frame, and both are built for their own surface: `.evolve-create-body` has no
+   horizontal padding because its children carry `0 24px`, which left this card's
+   fields pressed against the frame and its actions with no rule under them. */
+.modal-panel.idea-tree-card {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(780px, calc(100vh - 48px));
+  /* Sized by its content, capped by the viewport: a short form should not leave
+     a panel-height hole between the last row and the actions. */
+  height: auto;
+}
+
+.idea-tree-card .modal-header {
+  padding: 22px 28px 4px;
+  border-bottom: 0;
+}
+
+.idea-tree-card .modal-header h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+/* The body owns the side padding and the scroll: the rows are short enough to
+   fit, but a narrow window still has to be able to reach the actions. */
+.idea-tree-card .evolve-create-body {
+  flex: 0 1 auto;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 10px 28px 0;
+}
+
+/* The two sentences beside the form, not rows in it. */
+.idea-tree-card .evolve-create-confirm-hint {
+  margin: 0;
+  /* The base rule indents 48px to clear the evolve dialog's switch; there is no
+     switch here, so the sentence starts at the panel's own margin. */
+  padding-left: 0;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.idea-tree-card .settings-section {
+  margin: 0;
+}
+
+.idea-tree-card .settings-section h3 {
+  margin: 0 0 2px;
+}
+
+/* Label and control share the line, so five fields stay one screen tall. */
+.idea-tree-card .settings-section .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+}
+
+.idea-tree-card .settings-section .settings-row + .settings-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.idea-tree-card .settings-section .settings-row .row-title {
+  min-width: 0;
+}
+
+.idea-tree-card .settings-section .settings-row .row-control {
+  flex: 0 0 auto;
+}
+
+.idea-tree-card .settings-section .settings-row .row-control > select {
+  width: 208px;
+}
+
+.idea-tree-card .settings-section .settings-row .row-control > .field-input {
+  width: 108px;
+  text-align: right;
+}
+
+.idea-tree-card .modal-footer {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 16px 28px 20px;
+  background: transparent;
+}
+
+/* A label that wraps mid-word reads as a different button; these are short. */
+.idea-tree-card .modal-footer {
+  gap: 8px;
+}
+
+.idea-tree-card .modal-footer button {
+  min-width: 0;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
 .modal-panel.evolve-create {
   width: min(552px, calc(100vw - 40px));
 }
