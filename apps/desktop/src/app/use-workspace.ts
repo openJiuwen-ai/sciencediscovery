@@ -353,6 +353,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [sessionFilter, setSessionFilterState] = useState<SessionListState>(() =>
     readSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage));
   const sessionFilterRef = useRef<SessionListState>(sessionFilter);
+  /** The newest list read, so a superseded one cannot paint over it. */
+  const refreshTicket = useRef(0);
   sessionFilterRef.current = sessionFilter;
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
@@ -775,6 +777,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * refresh (after each create, rename and delete), so a listing that skipped
    * it would empty 会话 the first time the user did anything. */
   const refreshSessionLists = useCallback(async (): Promise<Session[] | undefined> => {
+    // Two filter clicks in a row each start a read. The older answer must not
+    // paint the list under the newer pill, so every read takes a ticket and only
+    // the newest one is allowed to write.
+    const ticket = ++refreshTicket.current;
     try {
       const inbox = inboxRef.current ?? (await ensureInbox(client));
       if (inboxRef.current === undefined) {
@@ -786,16 +792,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         [...known, inbox].map(async (project) =>
           [project.id, await listSessions(client, project.id, sessionFilterRef.current)] as const),
       );
+      if (ticket !== refreshTicket.current) return undefined;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       setSessionsByProject(Object.fromEntries(entries));
-      // 切换过滤 or an archive can take the open Session out of the listing. It
-      // must not stay on screen while the list no longer carries it: the header
-      // would describe a row the reader cannot see, and the next send would go
-      // somewhere that is not listed at all.
-      if (sessionRef.current !== undefined && !sessions.some((session) => session.id === sessionRef.current)) {
-        startDraft();
-      }
       // The artifact list spans Sessions; read the ones this app has not seen,
       // and forget the ones the listing no longer has.
       pruneArtifacts(sessions);
@@ -1814,6 +1814,18 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** Run one mutation and, when it succeeds, bring the lists back in step.
    *  `dropIfCurrent` is for the operations that remove the open session. */
+  /** Put the Session the service just returned into the view and the cache, the
+   *  way a rename does: otherwise the bar and the composer keep describing the
+   *  state the row had before the call. */
+  const adoptSessionReply = useCallback((updated: Session) => {
+    setDetail((current) => {
+      if (current?.id !== updated.id) return current;
+      const next = { ...current, ...updated };
+      rememberBounded(detailsBySession.current, next.id, next);
+      return next;
+    });
+  }, []);
+
   const mutate = useCallback(
     async (options: { dropIfCurrent?: boolean; id: string; operation: () => Promise<unknown> }) => {
       try {
@@ -2145,12 +2157,30 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           // down with whatever persistent memory was not on disk.
           body: TEXT.errors.archiveWarning(sessionTitle(session.title)),
           eyebrow: TEXT.menu.archive,
-          onAccept: () =>
-            mutate({ id: session.id, operation: () => archiveSessionRequest(client, session.id) }),
+          onAccept: async () => {
+            let updated: Session;
+            try {
+              updated = await archiveSessionRequest(client, session.id);
+            } catch (reason) {
+              // A run still going is the 409, and its own sentence is what the
+              // reader needs; nothing is rewritten here.
+              report(reason);
+              return;
+            }
+            adoptSessionReply(updated);
+            // The row stays visible under 全部/已归档, so only 活动 is about to
+            // lose it; closing the conversation there is the archive's doing, not
+            // a filter's.
+            if (sessionFilterRef.current === "active" && sessionRef.current === updated.id) startDraft();
+            await refreshSessionLists();
+          },
           title: TEXT.errors.archiveTitle(sessionTitle(session.title)),
         }),
       restoreSession: (session) =>
-        mutate({ id: session.id, operation: () => restoreSessionRequest(client, session.id) }),
+        mutate({
+          id: session.id,
+          operation: async () => adoptSessionReply(await restoreSessionRequest(client, session.id)),
+        }),
       deleteSession: (session) =>
         confirmAction({
           accept: TEXT.menu.delete,

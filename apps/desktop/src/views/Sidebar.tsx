@@ -56,6 +56,26 @@ interface Props {
   sessionsByProject: Record<string, Session[]>;
 }
 
+/**
+ * What the row's menu offers for archiving, and why it is inert when it is.
+ *
+ * Kept as a function of the Session and the run state rather than inline in the
+ * menu, because "an archived Session offers 恢复" and "a running one offers
+ * neither" are the two rules a reviewer will check, and a portal is a poor place
+ * to check them.
+ */
+export function archiveActionFor(
+  session: Pick<Session, "archivedAt">,
+  running: boolean,
+): { disabled: boolean; label: string; reason?: string } {
+  const archived = session.archivedAt !== undefined;
+  return {
+    disabled: running,
+    label: archived ? TEXT.menu.restore : TEXT.menu.archive,
+    ...(running ? { reason: TEXT.errors.archiveBlockedByRun } : {}),
+  };
+}
+
 function basename(session: Session): string {
   return sessionTitle(session.title);
 }
@@ -217,8 +237,8 @@ export function Sidebar({
                   // refused by the service with a 409; saying so here is cheaper
                   // than letting the reader find out that way.
                   {
-                    disabled: running === true && active,
-                    label: session.archivedAt === undefined ? TEXT.menu.archive : TEXT.menu.restore,
+                    disabled: archiveActionFor(session, running === true && active).disabled,
+                    label: archiveActionFor(session, running === true && active).label,
                     onSelect: () => {
                       if (session.archivedAt === undefined) actions.archiveSession(session);
                       else actions.restoreSession(session);
