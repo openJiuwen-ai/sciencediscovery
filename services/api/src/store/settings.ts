@@ -254,9 +254,6 @@ export function normalizeRuntimeSettings(
   return normalized;
 }
 
-/** The five Idea Tree fields a layer may override, with the range each accepts.
- *  Anything else is an unknown field: rejected in strict mode so a typo cannot
- *  silently leave the global value in place. */
 /** The Idea Tree override belongs to a Session alone: the catalog declares
  *  `["system", "session"]`, and a Global or Project value would silently become
  *  every Session's research parameters. Those layers drop it on write. */
@@ -266,6 +263,9 @@ export function withoutIdeaTreeOverride(overrides: RuntimeSettingsOverrides): Ru
   return stripped;
 }
 
+/** The five Idea Tree fields a Session may override, with the range each
+ *  accepts. Anything else is an unknown field: rejected in strict mode so a typo
+ *  cannot silently leave the global value in place. */
 const IDEA_TREE_OVERRIDE_FIELDS = [
   "templateId",
   "explorationIntensity",

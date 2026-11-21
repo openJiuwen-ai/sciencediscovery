@@ -276,19 +276,23 @@
   text-align: right;
 }
 
+/* The body already supplies the 28px gutter, so the footer adds height only —
+   otherwise the actions sit 56px in while the controls end at 28px. Sticky,
+   because the footer is the last child of the element that scrolls: on a short
+   window the actions would otherwise scroll away with the rows. */
 .idea-tree-card .modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   flex: 0 0 auto;
   flex-wrap: wrap;
+  gap: 8px;
   margin-top: 6px;
-  padding: 16px 28px 20px;
-  background: transparent;
+  padding: 16px 0 20px;
+  background: var(--surface-raised, #fff);
 }
 
 /* A label that wraps mid-word reads as a different button; these are short. */
-.idea-tree-card .modal-footer {
-  gap: 8px;
-}
-
 .idea-tree-card .modal-footer button {
   min-width: 0;
   padding: 0 16px;

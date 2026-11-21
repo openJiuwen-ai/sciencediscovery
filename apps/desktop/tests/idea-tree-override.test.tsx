@@ -227,3 +227,50 @@ test("the card opens on what the Session pinned, not on the deployment values", 
     await act(async () => { view.unmount(); });
   }
 });
+
+test("putting every field back to the deployment value releases the pin", async () => {
+  // The natural undo: the Session pins maxDepth 3, the deployment says 5, and the
+  // reader types 5 back. Before this, the card reported 已用于本次会话 and sent
+  // nothing, so the Session kept running 3.
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const { calls, client } = stubClient();
+  const { view } = await mount(client, "s1");
+  try {
+    const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大深度");
+    await act(async () => { depth!.props.onChange?.({ target: { value: "5" } }); });
+    await act(async () => { click(view, "只用于本次会话"); });
+    await flush();
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.ok(patch, "the undo has to be written, or the pin stays");
+    assert.deepEqual((patch!.body as { ideaTreeOverride: unknown }).ideaTreeOverride, {});
+  } finally {
+    SESSION_OVERRIDES = {};
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a global write rebases the diff, so nothing is pinned at the value it inherits", async () => {
+  const { calls, client } = stubClient();
+  const { view } = await mount(client, "s1");
+  try {
+    const nodes = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大节点数");
+    await act(async () => { nodes!.props.onChange?.({ target: { value: "120" } }); });
+    await act(async () => { click(view, "覆盖全局设置"); });
+    await flush();
+    // The deployment now says 120, so a later Session save has nothing to pin.
+    await act(async () => { click(view, "只用于本次会话"); });
+    await flush();
+    const patches = calls.filter((call) => call.method === "PATCH");
+    // 120 equals the value it now inherits, so the diff is empty and nothing is pinned.
+    assert.deepEqual(
+      patches.map((call) => (call.body as { ideaTreeOverride: unknown }).ideaTreeOverride),
+      [],
+    );
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
