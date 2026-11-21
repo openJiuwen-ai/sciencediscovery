@@ -47,11 +47,14 @@ test("the pane renders only the settings the API accepts", async () => {
   assert.match(text, /评分方向/);
   assert.match(text, /最大深度/);
   assert.match(text, /最大节点数/);
-  assert.match(text, /各阶段思考强度/);
   // The retired engine fields must not come back through this pane.
   assert.doesNotMatch(text, /最多轮次/);
   assert.doesNotMatch(text, /每轮候选数/);
   assert.doesNotMatch(text, /评估提示词/);
+  // Every stage follows the research model's thinking level, so the pane's
+  // per-stage effort rows stay out; the values are no longer configurable.
+  assert.doesNotMatch(text, /各阶段思考强度/);
+  assert.doesNotMatch(text, /跟随模型/);
   // The save row sits at the right edge of the page, like the other settings
   // pages' actions: `is-end` is the shared modifier that does it.
   const actions = view.root.findAll((node) => node.type === "div" && String(node.props.className ?? "").includes("settings-actions"));
@@ -76,6 +79,7 @@ test("saving sends the live field set", async () => {
   assert.equal((put!.body as { maxDepth: number }).maxDepth, 7);
   assert.equal((put!.body as { templateId: string }).templateId, "scientific-hypothesis-general/v1");
   assert.equal("rounds" in (put!.body as object), false, "retired fields are not sent");
+  assert.equal("roleThinkingEfforts" in (put!.body as object), false, "stages follow the model, so no effort map is sent");
   view.unmount();
 });
 

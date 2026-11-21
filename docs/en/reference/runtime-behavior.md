@@ -23,12 +23,13 @@ New Sessions inherit by default, but creation still requires a resolved task mod
 
 ### Thinking effort per role
 
-The conversation's thinking, set in the composer or with `run --thinking` / `--effort`, applies to the main agent. Two roles can think at their own effort instead. Both default to inherit, which leaves them exactly as they were before the settings existed: on the model profile's own thinking setting.
+The conversation's thinking, set in the composer or with `run --thinking` / `--effort`, applies to the main agent. The Reviewer can think at its own effort instead. It defaults to inherit, which leaves it exactly as it was before the setting existed: on the model profile's own thinking setting.
 
 - **Reviewer**: the runtime setting `reviewThinkingEffort`, resolved Global, then Project, then Session like the task model (`PUT /api/settings`, `PUT /api/projects/:projectId/settings`, `PATCH /api/sessions/:sessionId`). It applies to Deep (semantic) review, which runs on the Session's task model.
-- **Idea Tree**: `roleThinkingEfforts` in the Idea Tree settings (`PUT /api/settings/idea-tree`), keyed by stage: `ideate`, `design`, `assess` (every assessor), `aggregate`, and `propagate`. For example `{"roleThinkingEfforts":{"assess":"high","aggregate":"max"}}`. The map is replaced as a whole; `null` or `{}` returns every stage to inherit. A research freezes the map when it is created.
 
-A role effort turns thinking on at that level, narrowed to the nearest level the model accepts, as a saved conversation effort is; a model without an effort control ignores it. The Web UI has no control for these settings yet.
+Idea Tree stages have no effort setting of their own: `ideate`, `design`, every assessor, `aggregate` and `propagate` each follow the research model's own thinking level. A map stored by an older build is dropped when the settings load and is ignored if a client still sends it.
+
+A role effort turns thinking on at that level, narrowed to the nearest level the model accepts, as a saved conversation effort is; a model without an effort control ignores it. The Web UI has no control for this setting yet.
 
 ## Skill management
 

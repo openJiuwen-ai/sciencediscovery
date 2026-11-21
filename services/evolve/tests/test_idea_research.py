@@ -627,7 +627,10 @@ def test_a_fenced_json_answer_is_read_as_json():
         parse_json('Here it is: {"a": 1}')
 
 
-def test_each_stage_asks_for_its_own_effort_and_unset_stages_ask_for_none(monkeypatch):
+def test_every_stage_follows_the_models_own_thinking_level(monkeypatch):
+    """No stage asks for an effort: the request leaves `reasoning_effort` out so the
+    model profile's own thinking level applies, and a settings payload written before
+    the per-stage control was removed is simply not carried into the research."""
     sent = []
 
     class Reply:
@@ -645,27 +648,16 @@ def test_each_stage_asks_for_its_own_effort_and_unset_stages_ask_for_none(monkey
         return Reply()
 
     monkeypatch.setattr('urllib.request.urlopen', urlopen)
-    settings = Settings(templateId='water-treatment-materials/v1', roleThinkingEfforts=dict(design='max', assess='low')).model_dump()
+    settings = Settings(templateId='water-treatment-materials/v1', roleThinkingEfforts=dict(design='max')).model_dump()
+    assert 'roleThinkingEfforts' not in settings
     with tempfile.TemporaryDirectory() as root:
         state = dict(id='r', projectId='p', sessionId='s', settings=settings, template=snapshot('water-treatment-materials/v1'),
                      round=0, tokens=0, usageKnown=True, nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         engine = IdeaTreeEngine(state, ResearchStore(Path(root)), dict(url='http://model.test/v1/chat/completions', token='t'))
-        # Every assessor of the template shares the `assess` stage.
-        assert [engine.role_effort(role) for role in ('design', 'activity', 'sustainability', 'aggregate')] == ['max', 'low', 'low', None]
         asyncio.run(engine.ask('design', {}))
-        assert sent[-1]['reasoning_effort'] == 'max'
+        assert 'reasoning_effort' not in sent[-1]
         engine.transport('system', dict(a=1))
         assert 'reasoning_effort' not in sent[-1]
-        # A research created before stages had efforts carries none.
-        del state['settings']['roleThinkingEfforts']
-        assert engine.role_effort('design') is None
-
-
-def test_a_stage_effort_must_name_a_known_stage_and_level():
-    assert Settings().roleThinkingEfforts == {}
-    for efforts in (dict(review='high'), dict(design='ultra')):
-        with pytest.raises(ValueError):
-            Settings(roleThinkingEfforts=efforts)
 
 
 RESEARCH_READ_SCRIPT = """
