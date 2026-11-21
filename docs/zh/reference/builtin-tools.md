@@ -100,7 +100,7 @@
 | `stop_evolve_run` | 部署注册了演进能力且能停止 run | `runId`（必填，`create_evolve_run` 返回的 id）。用户的评分公式或评估器改变时，先停掉正在跑的搜索再提新的：同时跑两个搜索会平分预算、各按不同公式打分，用户也无法判断哪个结果算数。停止一个已结束的搜索不会报错，只回它的终态 |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
-| `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |
+| `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本，并同时装进技能目录 |
 
 技能加载流程见 [skill-progressive-disclosure.md](../developer-docs/skill-progressive-disclosure.md)。本次运行已选技能的**完整冻结包**在沙箱启动前就已放入只读的 `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`，Prompt 逐个给出包路径和包 hash。引用时用该变量而不是它展开后的值——`/skills` 只在 bubblewrap 下成立。`read_file` 与 `list_files` 可直接分页读取包内文件，并接受 `$SCIENCEDISCOVERY_SKILLS_DIR/...`、`${SCIENCEDISCOVERY_SKILLS_DIR}/...` 和裸 bind 路径三种写法；`run_shell` 的 `scriptPath` 也可以直接指向包内脚本并用 `arguments` 传显式 argv，无需先复制到工作区。`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` 是为后续自演进预留的可写目录，默认为空。放入技能包**不等于**自动执行或安装其中的 `scripts/`；执行必须由 Agent 显式发起。`read_skill` / `read_skill_resource` 作为兼容通道保留。
 

@@ -1639,7 +1639,8 @@ export class SkillCatalog {
     return await this.mutate(async () => {
       this.assertLoaded();
       const { draft, loaded, provenance: confirmedProvenance } = this.prepareReviewDraftConfirmation(draftId, input);
-      const committed = await this.installReviewedDraft(loaded, confirmedProvenance, draft.baseRevision);
+      this.assertDraftInstallable(loaded, draft.baseRevision);
+      const committed = await this.installReviewedDraft(loaded, confirmedProvenance);
       await rm(this.reviewDraftPath(draftId), { force: true });
       this.reviewDrafts.delete(draftId);
       return structuredClone(committed.detail);
@@ -1655,15 +1656,20 @@ export class SkillCatalog {
    * Session selects from, so a draft that only reached a Library would be
    * invisible to the user who had just confirmed it.
    */
-  private async installReviewedDraft(
-    loaded: LoadedPackage,
-    provenance: SkillVersionProvenance,
-    baseRevision: number | undefined,
-  ): Promise<LoadedPackage> {
-    const revision = loaded.detail.currentRevision;
+  /** Refuse a draft that would install over an existing Skill, before anything
+   *  is written: a publisher that has already committed must not be left with a
+   *  version whose reviewed package was rejected here. */
+  private assertDraftInstallable(loaded: LoadedPackage, baseRevision: number | undefined): void {
     if (baseRevision === undefined && (this.builtIns.has(loaded.detail.id) || this.managed.has(loaded.detail.id))) {
       throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${loaded.detail.id}`);
     }
+  }
+
+  private async installReviewedDraft(
+    loaded: LoadedPackage,
+    provenance: SkillVersionProvenance,
+  ): Promise<LoadedPackage> {
+    const revision = loaded.detail.currentRevision;
     const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), provenance);
     const previous = this.index.managed[loaded.detail.id];
     this.index.managed[loaded.detail.id] = { currentRevision: revision };
@@ -1692,6 +1698,9 @@ export class SkillCatalog {
     return await this.mutate(async () => {
       this.assertLoaded();
       const { draft, files, loaded, provenance } = this.prepareReviewDraftConfirmation(draftId, input);
+      // Checked before the publisher runs, so a rejected install cannot leave a
+      // committed Library version behind.
+      this.assertDraftInstallable(loaded, draft.baseRevision);
       const result = await publish({
         detail: structuredClone(loaded.detail),
         files: new Map([...files].map(([path, bytes]) => [path, Buffer.from(bytes)])),
@@ -1700,7 +1709,7 @@ export class SkillCatalog {
       // The Library holds the archive; the user confirmed a Skill, so it has to
       // exist where the Skills page and a Session look for it. Installed after
       // the publisher succeeds, so a Library failure leaves the draft intact.
-      await this.installReviewedDraft(loaded, provenance, draft.baseRevision);
+      await this.installReviewedDraft(loaded, provenance);
       await rm(this.reviewDraftPath(draft.draftId), { force: true });
       this.reviewDrafts.delete(draft.draftId);
       return result;
