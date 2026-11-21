@@ -3748,7 +3748,7 @@ export class SessionStore {
     } else if (scope.kind === "project") {
       const project = this.getProject(scope.id);
       if (!project) throw new Error("Project not found");
-      project.settingsOverrides = normalized;
+      project.settingsOverrides = withoutIdeaTreeOverride(normalized);
       this.syncSessionCompatibilityForProject(project.id);
     } else {
       const session = this.assertSessionWritable(scope.id);
@@ -4506,7 +4506,7 @@ export class SessionStore {
     description?: string,
     kind?: Project["kind"],
   ): Project {
-    const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
+    const settingsOverrides = withoutIdeaTreeOverride(this.normalizeSettings(withDefaultProjectSkillSettings(input)));
     const legacyHosts = runnerIds === undefined && remoteRunnerHostIds !== undefined
       ? this.validateProjectRemoteRunnerHosts(remoteRunnerHostIds) : undefined;
     // Omission follows the live catalog; an explicitly supplied empty legacy list keeps local only.
