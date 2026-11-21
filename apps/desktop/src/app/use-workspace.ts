@@ -29,7 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
-import { readSessionFilter, writeSessionFilter } from "./session-filter.js";
+import { membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -355,6 +355,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const sessionFilterRef = useRef<SessionListState>(sessionFilter);
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
+  /** Every Session an unfiltered read has seen. Pruning runs against this, or
+   *  not at all: a filtered listing is a subset, and treating its complement as
+   *  "gone" would drop artifacts of Sessions that still exist. */
+  const membershipRef = useRef<ReadonlySet<string> | undefined>(undefined);
   sessionFilterRef.current = sessionFilter;
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
@@ -755,8 +759,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  also wrote survives under the Session that made it — only the deleted
    *  Session's versions leave. */
   const pruneArtifacts = useCallback(
-    (sessions: readonly Session[]) => {
+    (sessions: readonly Session[], keepSessionId?: string) => {
       const live = new Set(sessions.map((session) => session.id));
+      // A Session just deleted is the one case a filtered read can still settle:
+      // the caller knows what it removed.
+      if (keepSessionId !== undefined) live.delete(keepSessionId);
       let dropped = false;
       for (const id of Object.keys(artifactsBySession.current)) {
         if (live.has(id)) continue;
@@ -796,11 +803,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       setSessionsByProject(Object.fromEntries(entries));
-      // The artifact list spans Sessions; read the ones this app has not seen,
-      // and forget the ones the listing no longer has — but only when the listing
-      // is the whole set. Under a filter it is a subset, and pruning by it would
-      // empty 产物 of every Session the filter hides.
-      pruneArtifacts(sessionFilterRef.current === "all" ? sessions : [...sessions, ...Object.values(sessionsByProjectRef.current).flat()]);
+      // The artifact list spans Sessions, so it can only be pruned against whole
+      // membership. An unfiltered read supplies that; a filtered one is a subset
+      // and must not be mistaken for "the rest are gone" — that would empty 产物
+      // of every Session the filter hides, on every refresh, not just the first.
+      const membership = membershipAfterRead(
+        sessionFilterRef.current,
+        sessions.map((session) => session.id),
+        membershipRef.current,
+      );
+      if (membership.snapshot !== undefined) membershipRef.current = membership.snapshot;
+      if (membership.pruneAgainst !== undefined) {
+        pruneArtifacts(membership.pruneAgainst.map((id) => ({ id }) as Session));
+      }
       for (const session of sessions) readSessionArtifacts(session.id);
       return sessions;
     } catch (reason) {

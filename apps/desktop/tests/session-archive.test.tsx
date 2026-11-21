@@ -21,7 +21,8 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import {
-  SESSION_FILTER_STORAGE_KEY, isSessionListState, readSessionFilter, writeSessionFilter,
+  SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead, readSessionFilter,
+  writeSessionFilter,
 } from "../src/app/session-filter.js";
 import { TEXT } from "../src/text.js";
 import { RowMenu } from "../src/views/RowMenu.js";
@@ -124,4 +125,25 @@ test("the archive confirmation names the read-only state and the kernel teardown
     assert.ok(zh.includes(phrase), `zh warning is missing ${phrase}`);
   }
   assert.ok(zh.includes("恢复") && zh.includes("删除"), "and it keeps reversible/irreversible apart");
+});
+
+test("a filtered refresh never prunes the artifact catalog of the Sessions it hides", () => {
+  const whole = ["a", "b"];
+  // 全部: the read is the workspace, so it is both the snapshot and the pruning set.
+  const all = membershipAfterRead("all", whole, undefined);
+  assert.deepEqual(all.pruneAgainst, whole);
+  assert.deepEqual([...(all.snapshot ?? [])], whole);
+
+  // 已归档: a subset. Pruning against it would drop every active Session's
+  // artifacts - and it would do so on the *next* refresh too, which is exactly
+  // the sequence to pin. The snapshot from 全部 is what keeps them.
+  const filtered = membershipAfterRead("archived", ["b"], all.snapshot);
+  assert.deepEqual(filtered.pruneAgainst, whole, "the hidden Session must survive pruning");
+  assert.equal(filtered.snapshot, undefined, "and a subset must not become the snapshot");
+
+  const again = membershipAfterRead("archived", ["b"], all.snapshot);
+  assert.deepEqual(again.pruneAgainst, whole, "a second refresh under the same filter behaves the same");
+
+  // Before any unfiltered read, nothing is known, so nothing may be pruned.
+  assert.deepEqual(membershipAfterRead("archived", ["b"], undefined), {});
 });
