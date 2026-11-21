@@ -53,6 +53,11 @@ test("the pane renders only the settings the API accepts", async () => {
   assert.doesNotMatch(text, /最多轮次/);
   assert.doesNotMatch(text, /每轮候选数/);
   assert.doesNotMatch(text, /评估提示词/);
+  // The save row sits at the right edge of the page, like the other settings
+  // pages' actions: `is-end` is the shared modifier that does it.
+  const actions = view.root.findAll((node) => node.type === "div" && String(node.props.className ?? "").includes("settings-actions"));
+  assert.equal(actions.length, 1, "one action row");
+  assert.equal(actions[0]!.props.className, "settings-actions is-end");
   view.unmount();
 });
 

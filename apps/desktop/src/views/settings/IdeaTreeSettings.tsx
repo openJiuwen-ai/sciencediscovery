@@ -228,7 +228,7 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
               </Row>
             ))}
           </Group>
-          <div className="settings-actions">
+          <div className="settings-actions is-end">
             <button className="primary-button" disabled={status === "saving"} onClick={() => void save()} type="button">
               {status === "saving" ? t.saving : t.save}
             </button>
