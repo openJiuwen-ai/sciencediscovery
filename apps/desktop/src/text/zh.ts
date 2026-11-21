@@ -332,6 +332,15 @@ export const ZH = {
     showMore: (count: number) => `显示更早的 ${count} 个会话`,
     /** The rule a folded Project states above its page: the newest N are shown. */
     pageRule: (count: number) => `最近 ${count} 个`,
+    searchPlaceholder: "搜索会话、项目、产物",
+    searchLabel: "搜索",
+    searchProjects: "项目",
+    searchSessions: "会话",
+    searchArtifacts: "产物",
+    searchEmpty: (query: string) => `没有匹配「${query}」的会话、项目或产物。搜索只匹配名称与标题，不包含消息正文。`,
+    searchFailed: "搜索失败，请重试。",
+    searchMore: (count: number) => `还有 ${count} 条结果，继续输入以缩小范围。`,
+    searchArchived: "已归档",
     collapseSidebar: "收起侧栏",
     expandSidebar: "显示侧栏",
     /** Shown as the tooltip on a session name, for the gesture nothing else
