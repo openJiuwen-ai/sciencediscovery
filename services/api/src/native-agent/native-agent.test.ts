@@ -223,6 +223,31 @@ test("main, child and reviewer use the same disabled runtime contributions", asy
   } finally { restore(); }
 });
 
+test("a native Specialist sends the platform base and its role to the model", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("Checked.")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      specialist: {
+        name: "Data quality reviewer",
+        description: "Checks supplied records.",
+        instructions: "Only inspect the supplied records for missing values.",
+      },
+    } as NativeAgentOptions);
+    await agent.execute("Check these records.");
+    assert.equal(calls.length, 1);
+    const prompt = calls[0]!.systemPrompt;
+    assert.match(prompt, /Only inspect the supplied records for missing values/);
+    assert.match(prompt, /request_direct_execution/);
+    assert.match(prompt, /declare_artifact/);
+    assert.doesNotMatch(prompt, /You are a local science analysis agent/);
+    assert.doesNotMatch(prompt, /Inspect data before analyzing it/);
+  } finally {
+    restore();
+  }
+});
+
 test("loop streams a tool round trip and returns wire-format final messages", async () => {
   const { calls, streamer } = scriptStreamer([
     (call) => {
