@@ -29,7 +29,7 @@
  * cap that used to sit among them was removed (#1281) and is not offered here.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { IdeaTreeSettingsDetails, IdeaTreeSettingsOverride, RuntimeSettingsDetails, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
 
@@ -118,6 +118,15 @@ export function IdeaTreeOverrideDialog({
   const [hasOverride, setHasOverride] = useState(false);
   const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "unchanged" | "failed">("loading");
   const [failure, setFailure] = useState<string>();
+  /** Set the moment the card is dismissed. A write that resolves afterwards must
+   *  not confirm a command the reader cancelled — that would start a long, costly
+   *  research against an explicit cancel. */
+  const closed = useRef(false);
+
+  const close = () => {
+    closed.current = true;
+    onClose();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -154,11 +163,14 @@ export function IdeaTreeOverrideDialog({
     const onKey = (event: KeyboardEvent) => {
       if (!claimsEscape(event)) return;
       event.preventDefault();
-      onClose();
+      close();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Unmounting is a dismissal too: a write that lands after it must stay silent.
+  useEffect(() => () => { closed.current = true; }, []);
 
   const patch = (next: Partial<IdeaTreeSettingsDetails>) => {
     setDraft((current) => (current ? { ...current, ...next } : current));
@@ -167,7 +179,12 @@ export function IdeaTreeOverrideDialog({
   };
 
   const saveSession = async () => {
-    if (!draft || !sessionId) return;
+    if (!draft || !sessionId) {
+      // Nothing to store (no Session, or the settings never loaded) — but the
+      // command the card is holding still has to leave.
+      if (!closed.current) onConfirm?.();
+      return;
+    }
     const override = overrideOf(draft, inherited ?? draft);
     const empty = Object.keys(override).length === 0;
     // An empty diff means two different things. With nothing pinned it means the
@@ -192,6 +209,7 @@ export function IdeaTreeOverrideDialog({
       await updateSession(client, sessionId, { ideaTreeOverride: override });
       setPins(override);
       setHasOverride(!empty);
+      if (closed.current) return;
       setStatus("session");
       onConfirm?.();
     } catch (reason) {
@@ -265,7 +283,7 @@ export function IdeaTreeOverrideDialog({
   const busy = status === "saving";
 
   return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
+    <div className="modal-backdrop" onPointerDown={close}>
       <div
         aria-labelledby="idea-tree-override-title"
         aria-modal="true"
@@ -275,7 +293,7 @@ export function IdeaTreeOverrideDialog({
       >
         <header className="modal-header">
           <h2 id="idea-tree-override-title">{t.title}</h2>
-          <button aria-label={t.cancel} className="modal-close" onClick={onClose} type="button">
+          <button aria-label={t.cancel} className="modal-close" onClick={close} type="button">
             ×
           </button>
         </header>
@@ -344,10 +362,11 @@ export function IdeaTreeOverrideDialog({
           {status === "unchanged" ? <p className="evolve-create-confirm-hint" role="status">{t.unchanged}</p> : null}
 
           <div className="modal-footer">
-            <button className="evolve-create-cancel" onClick={onClose} type="button">{t.cancel}</button>
+            <button className="evolve-create-cancel" onClick={close} type="button">{t.cancel}</button>
             <button
               className="evolve-create-cancel"
-              disabled={busy || draft === undefined || sessionId === undefined}
+              disabled={busy || (draft === undefined && status !== "failed")
+                || (sessionId === undefined && onConfirm === undefined)}
               onClick={() => void saveSession()}
               type="button"
             >
