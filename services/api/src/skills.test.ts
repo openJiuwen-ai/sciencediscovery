@@ -451,6 +451,42 @@ test("a draft confirmed through a Library publication is also installed in the S
   }
 });
 
+test("a Library publication refuses a colliding draft before it publishes anything", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    // The draft is opened while the name is free, then the same id lands in the
+    // catalog through an import. Publishing would install over it, so the
+    // publisher must never run — otherwise a Library version would record a
+    // package the catalog refused.
+    const draft = await catalog.createReviewDraft({
+      description: "A draft whose name is taken before it is published.",
+      instructions: "# Workflow\n\nThis must never reach the Library.",
+      name: "collision-skill",
+    }, { sessionId: "session-source", source: "agent" });
+    const archive = Buffer.from(zipSync({
+      "collision-skill/SKILL.md": strToU8(markdown("collision-skill").toString("utf8")),
+    }));
+    await catalog.import("collision-skill.zip", archive);
+    assert.equal(catalog.get("collision-skill")?.currentRevision, 1, "the import installed it first");
+
+    const detail = await catalog.getReviewDraft(draft.draftId);
+    let published = false;
+    await assert.rejects(catalog.publishReviewDraft(draft.draftId, {
+      expectedUpdatedAt: draft.updatedAt,
+      files: detail!.files.map((file) => ({ content: file.content, path: file.path })),
+    }, async () => {
+      published = true;
+      return { libraryId: "project-skills", skillId: "unexpected", versionId: "v1" };
+    }), SkillCatalogError);
+    assert.equal(published, false, "the publisher never ran");
+    assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.draftId), [draft.draftId], "and the draft survives");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("updates one pending Agent Skill draft and compares it with the previous proposal", async () => {
   const dataDir = await temporaryDataDir();
   try {

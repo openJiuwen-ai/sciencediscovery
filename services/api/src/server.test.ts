@@ -4127,7 +4127,7 @@ test("ART-001 a missing artifact version answers 404 on provenance and diff like
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value."));
 });
 
-test("Agent-created Skill stays in draft until review publishes it to a Skill Library", { tags: ["swarm:required"] }, async (context) => {
+test("Agent-created Skill stays in draft until review publishes it to a Library and installs it in the catalog", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -4189,7 +4189,9 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
   // the Skill catalog, which is what the Skills page lists and a Session selects.
   const installed = await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization });
   assert.equal(installed.status, 200);
-  assert.equal(((await installed.json()) as { id: string }).id, "agent-created-demo");
+  const installedSkill = (await installed.json()) as { currentRevision: number; id: string };
+  assert.equal(installedSkill.id, "agent-created-demo");
+  assert.equal(installedSkill.currentRevision, 1, "the reviewed package is revision 1, as confirmed");
   const listed = await jsonRequest<{ id: string }[]>(`${origin}/api/skills`, { headers: authorization });
   assert.ok(listed.body.some((skill) => skill.id === "agent-created-demo"), "the Skills list carries it");
   // And a Project created now inherits it through the `all` selection mode.
