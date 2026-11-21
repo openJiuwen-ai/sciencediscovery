@@ -79,6 +79,53 @@ test("the task column has no search field under 新建会话", () => {
   assert.doesNotMatch(markup, /type="search"/);
 });
 
+function hit(kind: "project" | "session" | "artifact", label: string, over: Record<string, unknown> = {}) {
+  return { detail: "", id: `${kind}-1`, kind, label, projectId: "p1", ...over };
+}
+
+function results(list: unknown[], over: Record<string, unknown> = {}) {
+  return { hasMore: false, limit: 20, offset: 0, results: list, total: list.length, ...over } as never;
+}
+
+test("results are drawn in the fixed 项目 → 会话 → 产物 order, with an archived row marked", () => {
+  const markup = render({
+    onSearch: () => {},
+    searchQuery: "本周",
+    searchResults: results([
+      hit("artifact", "figure.png", { projectName: "材料", sessionId: "s9", sessionTitle: "本周实验" }),
+      hit("session", "本周实验", { archived: true, projectName: "材料" }),
+      hit("project", "材料"),
+    ]),
+  });
+  // The headings are the ones inside the results block, not the column's own
+  // 项目 / 会话 section labels.
+  const heading = (name: string) => markup.indexOf(`side-search-heading">${name}<`);
+  const [project, session, artifact] = [heading("项目"), heading("会话"), heading("产物")];
+  assert.ok(project >= 0 && session >= 0 && artifact >= 0, "a result group is missing");
+  assert.ok(project < session && session < artifact, "the groups are not in 项目 → 会话 → 产物 order");
+
+  assert.match(markup, /side-search-badge">已归档</u, "the archived row carries the badge");
+  assert.match(markup, /本周实验/u, "a result label is drawn");
+  assert.match(markup, /材料 · 本周实验/u, "the artifact's detail names its Project and Session");
+});
+
+test("an empty answer, a failure and the rest of the list each say their own thing", () => {
+  const empty = render({ onSearch: () => {}, searchQuery: "晶", searchResults: results([]) });
+  assert.match(empty, /没有匹配「晶」/u);
+  assert.match(empty, /名称与标题/u, "the empty state says what is searched, where the caption used to");
+
+  const failed = render({ onSearch: () => {}, searchError: "boom", searchQuery: "晶", searchResults: undefined });
+  assert.match(failed, /class="side-search-note is-error" role="alert">boom</u);
+
+  const more = render({ onSearch: () => {}, searchQuery: "晶", searchResults: results([hit("project", "材料")], { hasMore: true, total: 41 }) });
+  assert.match(more, /还有 41 条结果/u);
+});
+
+test("a column with no workspace draws no results either", () => {
+  const markup = render({ searchQuery: "晶", searchResults: results([hit("project", "材料")]) });
+  assert.doesNotMatch(markup, /side-search-results/, "no field means no list under it");
+});
+
 test("the search field names only itself, with no caption under it", () => {
   const markup = render({ onSearch: () => {}, searchQuery: "" });
   const from = markup.indexOf('class="side-search-field"');
