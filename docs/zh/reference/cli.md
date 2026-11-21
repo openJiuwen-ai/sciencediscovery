@@ -112,7 +112,7 @@ for level in high max; do
 done
 ```
 
-每次运行生效的思考方式记录在 `GET /api/sessions/:sessionId/runs/:runId` 的 `settingsSnapshot.thinkingMode` 与 `settingsSnapshot.thinkingEffort` 中；力度只在模式为 `enabled` 时生效。Reviewer 与 Idea Tree 各阶段可以有自己的力度，它们属于设置而不是 `run` 选项，见[按角色的思考力度](runtime-behavior.md#按角色的思考力度)。
+每次运行生效的思考方式记录在 `GET /api/sessions/:sessionId/runs/:runId` 的 `settingsSnapshot.thinkingMode` 与 `settingsSnapshot.thinkingEffort` 中；力度只在模式为 `enabled` 时生效。Reviewer 可以有自己的力度，它属于设置而不是 `run` 选项，见[按角色的思考力度](runtime-behavior.md#按角色的思考力度)。
 
 ### 本地源码模式
 

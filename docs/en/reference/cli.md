@@ -110,7 +110,7 @@ for level in high max; do
 done
 ```
 
-Each run records its effective thinking in `settingsSnapshot.thinkingMode` and `settingsSnapshot.thinkingEffort` of `GET /api/sessions/:sessionId/runs/:runId`; the effort applies only when the mode is `enabled`. The Reviewer and Idea Tree stages can have their own effort; those are settings, not `run` options. See [Thinking effort per role](runtime-behavior.md#thinking-effort-per-role).
+Each run records its effective thinking in `settingsSnapshot.thinkingMode` and `settingsSnapshot.thinkingEffort` of `GET /api/sessions/:sessionId/runs/:runId`; the effort applies only when the mode is `enabled`. The Reviewer can have its own effort; that is a setting, not a `run` option. See [Thinking effort per role](runtime-behavior.md#thinking-effort-per-role).
 
 ### Local source mode
 
