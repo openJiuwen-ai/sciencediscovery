@@ -22,13 +22,7 @@
  * changes: no blocks matched → no results → the aggregation moves on.
  */
 
-const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
-  ["amp", "&"],
-  ["lt", "<"],
-  ["gt", ">"],
-  ["quot", '"'],
-  ["nbsp", " "],
-]);
+import { NAMED_ENTITIES } from "./html-named-entities.js";
 
 /** Matches one reference in the source; its replacement is never scanned again,
  *  which is what keeps `&amp;lt;` at the two characters `&lt;`. */
