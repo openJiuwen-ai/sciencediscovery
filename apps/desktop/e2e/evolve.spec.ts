@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop evolve journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -111,7 +127,7 @@ async function openEvolve(page: Page): Promise<void> {
   await page.getByRole("button", { name: "程序演进实验" }).click();
 }
 
-test("a search stays reachable after its turn and opens in the task tab", async ({ page }) => {
+test("a search stays reachable after its turn and opens in the task tab", { tag: "@ui-st" }, async ({ page }) => {
   const mock = await installMockApi(page, {
     evolveRunsBySession: { "session-1": [liveRun()] },
     evolveSources: {

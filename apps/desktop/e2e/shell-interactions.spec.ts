@@ -1,3 +1,19 @@
+/**
+ * E2E-META
+ * Purpose: Exercise the Desktop shell interactions journey against the deterministic API fixture.
+ * Steps:
+ *   1. Open the Desktop browser entry and drive the user-facing interaction.
+ *   2. Assert the resulting UI state and fixture-side request or persistence effect.
+ * Environment: Isolated Desktop Vite app with deterministic local API mocks.
+ * Type: mocked
+ * LLM: none; model behavior is deterministic fixture data.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: deterministic fixture responses only where the journey requires them.
+ * OtherExternal: none
+ * Credentials: none
+ * CostSideEffects: none
+ */
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,14 +57,14 @@ async function upload(page: Page, name = "data.csv"): Promise<void> {
   await (await chooser).setFiles({ buffer: Buffer.from("a,b\n1,2\n"), mimeType: "text/csv", name });
 }
 
-/** 设置 › 网络 writes the sandbox policy and answers with the one info-tone
+/** 设置 › 沙箱网络 writes the sandbox policy and answers with the one info-tone
  *  notice the app still raises: an upload that lands is reported by its card,
  *  so the toast tests need a different gesture. The fixture starts on 开放网络,
  *  which makes 无网络 a change worth writing. */
 async function saveNetworkPolicy(page: Page): Promise<void> {
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "设置" });
-  await dialog.getByRole("button", { name: "网络", exact: true }).click();
+  await dialog.getByRole("button", { name: "沙箱网络", exact: true }).click();
   await dialog.getByRole("button", { name: "无网络", exact: true }).click();
 }
 
@@ -197,8 +213,11 @@ test.describe("确认框", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "设置" });
-    await settings.getByRole("button", { name: "远程", exact: true }).click();
-    await settings.getByRole("button", { name: "删除" }).click();
+    await settings.getByRole("button", { name: "运行环境", exact: true }).click();
+    const machine = settings.locator(".settings-card.is-machine").filter({ hasText: "gpu-01" });
+    await machine.getByRole("button", { name: /gpu-01/ }).click();
+    await expect(settings.getByRole("button", { name: "返回运行环境", exact: true })).toBeVisible();
+    await machine.getByRole("button", { name: "删除", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "删除机器「gpu-01」？" })).toBeVisible();
 
     await page.keyboard.press("Escape");

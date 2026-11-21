@@ -29,6 +29,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -235,7 +236,11 @@ class Reporter implements JourneyReporter {
     const root = process.env.E2E_JOURNEY_REPORTS?.trim()
       || resolve(testInfo.project.outputDir, "..", "journey-reports");
     const specName = (testInfo.file.split(/[\\/]/).at(-1) ?? "spec").replace(/\.spec\.ts$/, "");
-    this.directory = join(root, slug(specName), slug(testInfo.title));
+    // Titles may differ only after the slug is truncated (for example by locale).
+    // Preserve each case and retry's screenshots and reports independently.
+    const caseKey = createHash("sha256").update(testInfo.testId).digest("hex").slice(0, 12);
+    const attempt = testInfo.retry ? `-retry-${testInfo.retry}` : "";
+    this.directory = join(root, slug(specName), `${slug(testInfo.title)}-${caseKey}${attempt}`);
     this.attachPageListeners();
   }
 

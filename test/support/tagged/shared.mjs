@@ -15,8 +15,11 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync, readdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, delimiter } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { sourceTestIdentityProblems } from '../../../.ci/source-test-map.mjs';
+import { webUiStEntries } from '../../../.ci/web-ui-st.mjs';
+import { combinationBrowserEntries } from '../../../.ci/combination-browser-evidence.mjs';
 import { collect, execute } from './coordinator.mjs';
 import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
@@ -64,8 +67,17 @@ function run(command,args,env,log,cwd=root,{echo=false}={}) {
  * scripts/with-jiuwenswarm.sh and start-stack.mjs uvSyncProject.
  */
 function pythonVenv(project){return join(root,'services',project,'.venv');}
-function python(project){return join(pythonVenv(project),'bin/python');}
-function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(':')};}
+function python(project){
+  return process.platform === 'win32'
+    ? join(pythonVenv(project),'Scripts','python.exe')
+    : join(pythonVenv(project),'bin','python');
+}
+function projectEnv(env,project){
+  return {
+    ...env,
+    PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(delimiter),
+  };
+}
 /**
  * Coverage is recorded by the run that gates, never by a second one: `--coverage`
  * instruments exactly this execution and changes nothing about what is selected.
@@ -160,8 +172,20 @@ export function resultsLabel(slice, query=false) {
   return query?'query':slice;
 }
 
+export function nodeSourcesForCategories(categories, repositoryRoot = root) {
+  const files = [...globSync([...nodeSources], { cwd: repositoryRoot }), ...nodeExtraSources].sort();
+  // A shared plan combines the same tagged sources as the individual slices.
+  // Some files in the workspace globs still use standalone test commands.
+  return files.filter(file => {
+    const source = readFileSync(join(repositoryRoot, file), 'utf8');
+    return categories.some(category => source.includes(`category:${category}`));
+  });
+}
+
 export async function main(args=process.argv.slice(2)) {
   const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard,targetArch;const query={};
+  let webUiSt = process.env.CI_WEB_UI_ST_SPECS;
+  let combinationBrowser = false;
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -171,6 +195,8 @@ export async function main(args=process.argv.slice(2)) {
     else if(flag==='--profile')profileName=args.shift();
     else if(flag==='--output')output=args.shift();
     else if(flag==='--coverage')coverage=true;
+    else if(flag==='--web-ui-st')webUiSt='all';
+    else if(flag==='--combination-browser')combinationBrowser=true;
     else if(flag==='--backend')backend=args.shift();
     else if(flag==='--shard')shard=args.shift();
     else if(flag==='--target-arch'){
@@ -240,12 +266,7 @@ export async function main(args=process.argv.slice(2)) {
   }
   if(prepareOnly){console.log(`Prepared ${slice}; no test was collected or executed here.`);return 0;}
   // Source scopes follow workspace layout, never installed capabilities or environment gates.
-  const nodeFiles=[...globSync([...nodeSources],{cwd:root}), ...nodeExtraSources].sort();
-  const wantedCategory=categories.length===1?categories[0]:null;
-  const files=light?[]:nodeFiles.filter(file=>{
-    const source=readFileSync(join(root,file),'utf8');
-    return !wantedCategory||source.includes(`category:${wantedCategory}`);
-  });
+  const files = light ? [] : nodeSourcesForCategories(categories);
   let catalog=[];
   if(files.length)catalog.push(...collect({root,files,outputDir,nodeImports:['tsx'],env}));
   if(needUT)for(const project of pythonProjects){
@@ -258,6 +279,10 @@ export async function main(args=process.argv.slice(2)) {
     const code=await run('.e2e/node_modules/.bin/playwright',['test','--config','.e2e/playwright.config.ts','--list','--reporter','./test/support/tagged/playwright-reporter.mjs'],{...env,SCIENCE_TAG_PW_CATALOG:destination},join(outputDir,'playwright-collect.log'));
     if(code||!existsSync(destination))throw new Error('PLAYWRIGHT_COLLECTION_FAILED');
     catalog.push(...JSON.parse(readFileSync(destination)).catalog);
+  }
+  if (!light) {
+    const problems = await sourceTestIdentityProblems(root, catalog, categories);
+    if (problems.length) throw new Error(`SOURCE_TEST_IDENTITY_INVALID:\n${problems.join('\n')}`);
   }
   catalog.push(...checks.filter(check=>categories.some(c=>check.tags.includes(`category:${c}`))).map(check=>({...check,source:'test/support/tagged/checks.mjs',sourceHash:fileDigest(readFileSync(join(root,'test/support/tagged/checks.mjs'))),runner:'command'})));
   // Explicit opt-in entry points are discoverable metadata, never executed by this policy.
@@ -280,6 +305,13 @@ export async function main(args=process.argv.slice(2)) {
     const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/benchmarks/**/*.mjs','test/helpers/*result.mjs','test/helpers/real-delivery.*','test/biomnibench-da-swarm.spec.ts','.ci/biomni-gate.mjs'],{cwd:root})].sort();
     const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
     plan=subplan({...plan,evaluatorRevision},plan.entries);
+  }
+  if (combinationBrowser) {
+    if (slice !== 'e2e' || (webUiSt && webUiSt !== 'none')) throw new Error('--combination-browser requires the mocked e2e slice');
+    plan = subplan({ ...plan, suite: 'combination-browser' }, await combinationBrowserEntries(plan.entries));
+  }
+  if (slice === 'e2e' && webUiSt && webUiSt !== 'none') {
+    plan = subplan({ ...plan, suite: 'web-ui-st' }, webUiStEntries(plan.entries, webUiSt));
   }
   let selectedShard;
   if (slice === 'e2e') mockedShards(plan); // Reject unclassified cases even in a serial local run.
@@ -476,11 +508,12 @@ export async function main(args=process.argv.slice(2)) {
     const lcov=existsSync(join(coverageDir,'node'))?readdirSync(join(coverageDir,'node')).filter(f=>f.endsWith('.lcov')).length:0;
     json(join(coverageDir,'manifest.json'),{schema_version:2,revision:plan.revision,profile:dimensions.length?null:profileName,slice,
       selector:plan.selector,targets:plan.targets,plan_digest:plan.digest,status:summary.status,planned:summary.planned,
-      executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,
+      collected:summary.collected,executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,
+      blocked:summary.blocked,notExecuted:summary.notRun,not_run:summary.notRun,provider_fault:summary.providerFaults,
       node:{lcov,expected:owed.node},python});
     console.log(`Coverage: ${lcov} Node test file(s); Python ${python.processes.started} process(es) started, ${python.processes.measured} measured, report ${python.report?'written':'none'} -> ${coverageDir}`);
   }
-  console.log(JSON.stringify({status:summary.status,planned:summary.planned,executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,outputDir}));
+  console.log(JSON.stringify({status:summary.status,planned:summary.planned,collected:summary.collected,executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,blocked:summary.blocked,notExecuted:summary.notRun,not_run:summary.notRun,provider_fault:summary.providerFaults,outputDir}));
   return summary.exitCode;
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href)main().then(code=>{process.exitCode=code;}).catch(e=>{console.error(e.stack);process.exitCode=1;});

@@ -1,5 +1,12 @@
 # apps/desktop real E2E (tier L3)
 
+The merge profile runs `.ci/run-desktop-real-isolated.mjs` after the L2 gates.
+It creates an empty API catalog, shares the workspace root with the local
+Runner, and registers a second Runner through the direct HTTP connection. The
+launcher uses temporary directories and loopback ports. It runs the
+`e2e.desktop-real` wrapper and publishes the Playwright plan, execution report,
+and reconciled summary as `desktop-real-results`.
+
 The desktop counterpart of the `tier:l3` merge-gate journeys: a real API, a
 real Runner and a real model, driven through the desktop browser entry instead
 of a mock. The mock entry lives in [`../e2e`](../e2e/README.md) and stays the
@@ -18,7 +25,7 @@ collected.
 | `conversation.real.spec.ts` | L3 | real stream and persistence; Stop cancels the live Run |
 | `permission.real.spec.ts` | L3 | real `run_shell` approval, then the same Run finishes |
 | `workspace.real.spec.ts` | L3 | real upload, file list and preview |
-| `runner.real.spec.ts` | L3 | real Runner catalog: local allowlist; a connected remote Runner's resources |
+| `runner.real.spec.ts` | L3 | real Runner catalog: built-in Runner navigation and a connected Runner's resources |
 
 Every test carries `@real @category:e2e @os:linux @arch:amd64 @model:real
 @tier:l3`, which is the tag set the shared catalog uses for the first real tier.
@@ -99,25 +106,19 @@ rm -rf "$DATA"
 
 ## Skips
 
-A missing credential or an absent stack skips with a named reason rather than
-failing; a wrong credential (HTTP 401/403 on `/health`) fails, because that is a
-configuration error rather than a workstation without a stack.
-
-Two cases need a state the fixture cannot create:
-
-- `setup.real.spec.ts` runs only when `/api/models` is empty. Point it at a
-  throwaway stack.
-- the remote-resource case in `runner.real.spec.ts` runs only when the API
-  reports a ready remote Runner with `runnerStatus.resources`.
+The wrapper reports missing credentials, an absent stack, and a nonempty
+catalog for the first-run case as `BLOCKED`. A manually supplied stack without
+an eligible remote Runner reports `CAPABILITY_NOT_PRESENT` for the Runner
+cases. Authentication failures such as HTTP 401/403 fail the smoke. The merge
+job provisions both capabilities and requires all eight identities to pass.
 
 ## What is still not covered
 
 - Artifact generation and version switching against a real model. The existing
   real API suite covers backend artifact delivery; here the workspace case stops
   at real upload → list → preview.
-- The suite is not registered in the shared `.e2e` catalog yet. Doing that
-  means adding a Playwright project plus a desktop webServer to
-  `test/playwright.config.ts`, not a second case list.
+- The direct remote Runner fixture uses loopback HTTP. SSH deployment and NPU
+  hardware execution need separate evidence.
 
 ## Data cleanup
 

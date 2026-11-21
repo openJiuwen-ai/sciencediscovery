@@ -144,16 +144,24 @@ export function verifyResults(plan, results, errors = []) {
   const providerFaultProblems = problems.filter(problem => isProviderFaultProblem(problem));
   const providerFaults = [...seen.values()].filter(r => r.outcome === PROVIDER_FAULT).length;
   const recoveredAfterRetry = results.filter(r => r.retriedAfterRetry && r.outcome === 'PASS').length;
+  const notRun = [...expected.keys()].filter(key => !seen.has(key)).length;
+  const blocked = [...seen.values()].filter(r => r.outcome === 'BLOCKED').length;
+  const skipped = results.filter(r => ['SKIPPED', 'XFAIL', 'XPASS', 'TODO'].includes(r.outcome)).length;
   return {
     status: productProblems.length ? 'FAIL' : providerFaultProblems.length ? 'PROVIDER_FAULT' : 'PASS',
     exitCode: productProblems.length || providerFaultProblems.length ? 1 : 0,
-    planDigest: plan.digest, planned: expected.size, reported: results.length,
+    planDigest: plan.digest, planned: expected.size, collected: expected.size, reported: results.length,
     executed: [...seen.values()].filter(r => ["PASS", "FAIL", PROVIDER_FAULT].includes(r.outcome)).length,
     failed: [...seen.values()].filter(r => r.outcome === "FAIL").length,
     passed: new Set(results.filter(r => r.outcome === 'PASS' && expected.has(r.key)
       && canonical(r.actualTarget) === canonical(expected.get(r.key).target)
       && (!expected.get(r.key).backend || r.actualBackend === expected.get(r.key).backend)).map(r => r.key)).size,
-    skipped: results.filter(r => ['SKIPPED', 'XFAIL', 'XPASS', 'TODO'].includes(r.outcome)).length,
+    skipped,
+    blocked,
+    notRun,
+    notExecuted: notRun,
+    duplicates: problems.filter(problem => problem.startsWith('DUPLICATE_RESULT:')).length,
+    mismatches: problems.filter(problem => /^(TARGET|BACKEND|PLAN|SHARD|CATALOG)_MISMATCH:/.test(problem)).length,
     providerFaults,
     providerFaultRetries: results.filter(r => r.retriedAfterProviderFault || r.firstAttempt?.providerFault).length,
     retriedCases: results.filter(r => r.retriedAfterRetry).length,

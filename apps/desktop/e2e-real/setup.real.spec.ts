@@ -37,7 +37,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { REAL_TAGS, api, requireEnv, requireStack, seedToken } from "./support.js";
+import { REAL_TAGS, api, requireEnv, requireStack, seedToken, skipReal } from "./support.js";
 
 test.beforeEach(async ({ page }, info) => {
   requireEnv(info, "E2E_API_TOKEN", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
@@ -48,10 +48,16 @@ test.beforeEach(async ({ page }, info) => {
 test("the first-run wizard tests a real provider before unlocking the workspace", { tag: [...REAL_TAGS] }, async ({ page }, info) => {
   const models = await api<unknown[]>(page, "/api/models");
   if (models.length > 0) {
-    info.skip(true, "needs an installation with no model profiles; point E2E_BASE_URL at a fresh stack");
+    skipReal(info, "BLOCKED", "needs an installation with no model profiles; point E2E_BASE_URL at a fresh stack");
   }
 
   await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "配置你的研究工作区" })).toBeVisible();
+  await expect(page.locator(".app-shell")).toHaveCount(0);
+  await page.getByRole("button", { name: "跳过，用默认值" }).click();
+  await expect(page.getByRole("heading", { name: "环境已就绪" })).toBeVisible();
+  await page.getByRole("button", { name: "下一步：配置模型" }).click();
 
   await expect(page.getByRole("heading", { name: "选择一个模型提供方" })).toBeVisible();
   const finish = page.getByRole("button", { name: "开始使用" });

@@ -64,6 +64,8 @@ test("an uploaded file is stored, listed and previewed from the real workspace",
     const marker = `row-${Date.now()}`;
     const name = `desktop-real-${marker}.csv`;
 
+    const uploaded = page.waitForResponse(response => response.request().method() === "POST"
+      && new URL(response.url()).pathname === `/api/sessions/${fixture!.session.id}/workspace/upload`);
     const chooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: "上传文件" }).click();
     await (await chooserPromise).setFiles({
@@ -72,7 +74,7 @@ test("an uploaded file is stored, listed and previewed from the real workspace",
       name,
     });
 
-    await expect(page.getByText(`已上传 ${name}`, { exact: false })).toBeVisible();
+    expect((await uploaded).status()).toBe(201);
 
     // A successful upload opens the panel on its 工作区 tab, so the test does
     // not press the toggle: that button is already gone once the panel is open.

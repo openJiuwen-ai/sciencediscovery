@@ -420,13 +420,17 @@ test('reconcile keeps retry audit codes as provider faults', t => {
     const results = worker.entries.map(entry => ({
       key: entry.key, outcome: 'PASS', actualTarget: entry.target, actualBackend: entry.backend,
     }));
-    writeFileSync(join(directory, 'summary.json'), JSON.stringify(verifyResults(worker, results, [retryReportMissing])));
+    writeFileSync(join(directory, 'summary.json'), JSON.stringify(verifyResults(worker, results, [retryReportMissing, retryFailed(1)])));
   }
   const verdict = reconcile(plan, root);
   assert.equal(verdict.status, 'PROVIDER_FAULT');
   assert.equal(verdict.exitCode, 1);
-  assert.ok(verdict.problems.some(problem => problem.startsWith('PROVIDER_FAULT:')));
-  assert.ok(!verdict.problems.some(problem => problem.includes('SHARD_FAILED')));
+  assert.equal(verdict.passed, 1);
+  assert.equal(verdict.providerFaults, 0);
+  assert.deepEqual(verdict.problems, realShards(plan).flatMap(shard => [
+    `PROVIDER_FAULT: ${shard.name}: ${retryReportMissing}`,
+    `PROVIDER_FAULT: ${shard.name}: ${retryFailed(1)}`,
+  ]));
 });
 
 test('the reconcile passes a suite whose cases all passed', t => {

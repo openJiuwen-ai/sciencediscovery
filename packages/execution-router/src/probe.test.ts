@@ -177,3 +177,46 @@ test("default registry stubs B/C with unified wording (F5.4)", async () => {
   assert.equal(selection.ok, false);
   if (!selection.ok) assert.equal(selection.code, "PROVIDER_UNAVAILABLE");
 });
+
+test("concurrent capability refreshes await one downgrade after WSL and remote become unavailable", async () => {
+  let sandboxUsable = true;
+  const registry = new ExecutionProviderRegistry([
+    { id: "windows-direct", available: true, sandboxed: false, badge: "direct" },
+    { id: "wsl", available: true, sandboxed: true, badge: "sandboxed" },
+    { id: "remote", available: true, sandboxed: true, badge: "remote" },
+  ]);
+  const downgradeStarted = Promise.withResolvers<void>();
+  const allowDowngrade = Promise.withResolvers<void>();
+  const transitions: string[] = [];
+  const router = new ExecutionRouter({
+    registry,
+    sources: sources({ capability: async () => capability("bubblewrap", sandboxUsable) }),
+    probe: { wslState: async () => null },
+    onProviderDowngrade: async ({ from, to }) => {
+      transitions.push(`${from.provider}->${to.provider}`);
+      downgradeStarted.resolve();
+      await allowDowngrade.promise;
+    },
+  });
+  assert.equal((await router.capability()).provider, "wsl");
+  registry.update({ id: "wsl", available: false, sandboxed: true, badge: "sandboxed" });
+  assert.equal((await router.capability(true)).provider, "remote");
+  assert.deepEqual(transitions, []);
+  registry.update({ id: "remote", available: false, sandboxed: true, badge: "remote" });
+  sandboxUsable = false;
+  const first = router.capability(true);
+  const second = router.capability(true);
+  await downgradeStarted.promise;
+  const read = router.capability();
+  const pending = Promise.all([first, second, read]);
+  try {
+    assert.deepEqual(transitions, ["remote->windows-direct"]);
+    const marker = Symbol("pending");
+    assert.equal(await Promise.race([read, Promise.resolve().then(() => marker)]), marker);
+  } finally {
+    allowDowngrade.resolve();
+    await pending;
+  }
+  assert.ok((await pending).every(result => result.provider === "windows-direct" && !result.sandboxed));
+  assert.equal(transitions.length, 1);
+});

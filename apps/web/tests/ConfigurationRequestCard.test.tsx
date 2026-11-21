@@ -88,6 +88,9 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
   return renderer!;
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
+function clearSettingsHandoffState() {
+  try { globalThis.sessionStorage?.clear?.(); } catch { /* Storage may be unavailable in a unit-test host. */ }
+}
 
 test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
   const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,
@@ -1245,7 +1248,9 @@ function metadataView(fieldId = "name"): ConfigurationRequestView {
 }
 
 test("CFG-X02f: provider key changes open real settings without collecting, uploading or approving a credential", async () => {
+  clearSettingsHandoffState();
   for (const locale of ["en", "zh"] as const) for (const capabilityId of ["provider.credential", "provider.remove_credential"] as const) {
+    clearSettingsHandoffState();
     let opened = 0, writes = 0;
     const rejectWrite = async () => { writes++; throw new Error("Navigation must not write"); };
     const renderer = await mount(providerView(capabilityId), actions({ consent: rejectWrite, preview: rejectWrite, credential: rejectWrite, decide: rejectWrite }), undefined, locale, { onOpenModelSettings() { opened++; } });
@@ -1261,6 +1266,7 @@ test("CFG-X02f: provider key changes open real settings without collecting, uplo
 });
 
 test("CFG-X02e: provider connection navigation preserves the request and never confirms destinations or applies values", async () => {
+  clearSettingsHandoffState();
   let writes = 0, opened = 0;
   const rejectWrite = async () => { writes++; throw new Error("No writes"); };
   const renderer = await mount(providerView("provider.connection"), actions({ consent: rejectWrite, preview: rejectWrite, decide: rejectWrite }), undefined, "en", { onOpenModelSettings() { opened++; } });
@@ -1268,8 +1274,10 @@ test("CFG-X02e: provider connection navigation preserves the request and never c
   await act(async () => button(renderer, "Open model settings").props.onClick());
   assert.equal(opened, 1); assert.equal(writes, 0);
   for (const props of [{ readOnly: true }, { runActive: true }]) {
-    await act(async () => renderer.update(createElement(ConfigurationRequestCard, { request: providerView("provider.connection"), actions: actions(), onUpdate() {}, onOpenModelSettings() {}, ...props })));
-    assert.equal(button(renderer, "Open model settings").props.disabled, true);
+    clearSettingsHandoffState();
+    const blocked = await mount(providerView("provider.connection"), actions(), () => undefined, "en", { onOpenModelSettings() {}, ...props });
+    assert.equal(button(blocked, "Open model settings").props.disabled, true);
+    await act(async () => blocked.unmount());
   }
   await act(async () => renderer.unmount());
 });
@@ -1300,6 +1308,7 @@ test("CFG-X02d/e: insecure destinations and unavailable settings never fall back
 });
 
 test("provider handoff keeps Not now as the original explicit dismiss and cannot accidentally apply", async () => {
+  clearSettingsHandoffState();
   const decisions: unknown[] = [];
   const renderer = await mount(providerView("provider.credential"), actions({ preview: async input => ({ ...providerView("provider.credential"), revision: 3, previewDigest: "dismiss-3", selectedOptionId: input.selectedOptionId }), decide: async value => { decisions.push(value); return { ...providerView("provider.credential"), state: "dismissed" }; } }), undefined, "en", { onOpenModelSettings() {} });
   await act(async () => button(renderer, "Not now").props.onClick());
@@ -1342,6 +1351,7 @@ test("complex, destructive, long or unknown metadata stays unsupported instead o
 
 
 test("provider handoff refreshes stale standalone requests before another dismissal", async () => {
+  clearSettingsHandoffState();
   let latest = { ...providerView("provider.credential"), runId: undefined }, renderer!: ReactTestRenderer;
   let attempts = 0, queries = 0;
   const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, previewDigest: "dismiss-next", selectedOptionId: input.selectedOptionId }),
@@ -1366,7 +1376,9 @@ test("provider handoff refreshes stale standalone requests before another dismis
 
 
 test("provider navigation leaves an expandable opened record in both languages without applying settings", async () => {
+  clearSettingsHandoffState();
   for (const locale of ["en", "zh"] as const) {
+    clearSettingsHandoffState();
     const view = providerView("provider.connection"); let opens = 0, writes = 0;
     const rejectWrite = async () => { writes++; throw new Error("No request mutation"); };
     const renderer = await mount(view, actions({ preview: rejectWrite, decide: rejectWrite, credential: rejectWrite, consent: rejectWrite }), undefined, locale, { onOpenModelSettings() { opens++; } });

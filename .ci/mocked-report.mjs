@@ -14,7 +14,7 @@ export function reconcileMocked(plan, root) {
     try {
       const worker = validatePlan(JSON.parse(readFileSync(join(directory, 'e2e/tagged/plan.json'))));
       const summary = JSON.parse(readFileSync(join(directory, 'e2e/tagged/summary.json')));
-      if (worker.revision !== plan.revision || worker.profile !== plan.profile || worker.evaluatorRevision !== plan.evaluatorRevision || canonical(worker.execution) !== canonical(plan.execution)
+      if (worker.revision !== plan.revision || worker.profile !== plan.profile || worker.suite !== plan.suite || worker.evaluatorRevision !== plan.evaluatorRevision || canonical(worker.execution) !== canonical(plan.execution)
         || canonical(worker.entries) !== canonical(plan.entries.filter(e => shard.keys.includes(e.key)))) throw new Error('SHARD_IDENTITY_MISMATCH');
       if (summary.planDigest !== worker.digest) throw new Error('SHARD_RESULT_PLAN_MISMATCH');
       // Keep validly identified failures in the totals: a failed worker ran

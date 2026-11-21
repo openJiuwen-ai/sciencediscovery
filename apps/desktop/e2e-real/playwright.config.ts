@@ -55,7 +55,9 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   timeout: 240_000,
   expect: { timeout: 15_000 },
-  reporter: [["list"]],
+  reporter: process.env.CI_RESULT_FILE
+    ? [["list"], ["json", { outputFile: process.env.CI_RESULT_FILE }]]
+    : [["list"]],
   outputDir: resolve(here, "test-results"),
   use: {
     baseURL: desktopOrigin,

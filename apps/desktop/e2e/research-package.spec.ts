@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const kind of ["continuation", "branch"] as const) {
-  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, async ({ page }, info) => {
+  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, { tag: "@ui-st" }, async ({ page }, info) => {
     const source = Object.assign(makeSession({ messages }), kind === "continuation" ? { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } } : {});
     const mock = await installMockApi(page, { sessions: [source] });
     const keys: string[] = [];
@@ -96,7 +96,7 @@ test("a missing project reports a recoverable export error and stacked Escape on
     await page.getByRole("button", { name: "会话菜单", exact: true }).click();
     await page.getByRole("menuitem", { name: "导出会话" }).click();
     await expect(page.getByRole("dialog").getByRole("alert")).toContainText("会话或所属项目已不存在");
-    await expect(page.getByRole("button", { name: "开始后台导出" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "开始导出" })).toBeDisabled();
   });
   await test.step("2. Close a stacked dialog without dismissing export", async () => {
     await page.evaluate(() => {
@@ -137,11 +137,11 @@ for (const locale of ["zh-CN", "en"]) {
     await test.step("2. Inspect export preparation and failure without losing the conversation", async () => {
       await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
       await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
-      await page.getByRole("button", { name: en ? "Start background export" : "开始后台导出" }).click();
-      await expect(page.locator(".research-package-status")).toContainText(en ? "export in progress" : "个导出进行中");
+      await page.getByRole("button", { name: en ? "Start export" : "开始导出" }).click();
+      await expect(page.getByRole("status").getByRole("button", { name: en ? /export in progress/ : /个导出进行中/ })).toBeVisible();
       await capture("11-export-preparing");
       fail = true;
-      await expect(page.locator(".research-package-flash")).toContainText(en ? "Export failed" : "导出失败");
+      await expect(page.getByRole("status").getByText(en ? "Operation failed" : "操作失败", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: en ? "Download" : "下载", exact: true })).toHaveCount(0);
       await capture("12-export-failed");
     });
@@ -178,20 +178,26 @@ test("session menu exports research with two scope cards", async ({ page }, info
   });
   await test.step("2. Inspect both real UI cards and save the selected scope automatically", async () => {
     const dialog = page.getByRole("dialog", { name: "导出会话" });
-    await expect(dialog.getByRole("button", { name: /^必要导出/ })).toContainText("2.0 KiB");
-    await expect(dialog.getByRole("button", { name: /^完整导出/ })).toContainText("8.0 KiB");
-    await expect(dialog).toContainText("整个会话及其研究材料");
-    await dialog.getByRole("button", { name: /^完整导出/ }).click();
-    await expect(dialog.getByText("工作区文件 · 1")).toBeVisible();
+    const necessary = dialog.getByRole("button", { name: /^必要导出/ });
+    const complete = dialog.getByRole("button", { name: /^完整导出/ });
+    await expect(necessary).toContainText("2.0 KB");
+    await expect(necessary).toHaveAttribute("aria-pressed", "true");
+    await expect(complete).toContainText("8.0 KB");
+    await expect(complete).toContainText("文件与产物版本");
+    await expect(complete).toContainText("已有研究历史");
+    await complete.click();
+    await expect(complete).toHaveAttribute("aria-pressed", "true");
+    await expect(dialog.getByText("工作区文件（1）", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("checkbox", { name: "results.csv" })).toBeChecked();
     const downloaded = page.waitForEvent("download");
-    await dialog.getByRole("button", { name: "开始后台导出" }).click();
+    await dialog.getByRole("button", { name: "开始导出" }).click();
     expect((await downloaded).suggestedFilename()).toBe("conversation.sdresearch");
-    await expect(page.locator(".research-package-flash")).toContainText("证据包已保存");
+    await expect(page.getByRole("status").filter({ hasText: "证据包已保存" })).toBeVisible();
   });
   await info.attach("journey-report", { body: "1. Session-menu placement verified.\n2. Both size cards, full research scope and automatic save with completion feedback verified.\n", contentType: "text/plain" });
 });
 
-test("hover import defaults to no project and allows an existing project", async ({ page }, info) => {
+test("sidebar import defaults to no project and allows an existing project", async ({ page }, info) => {
   const mock = await installMockApi(page, { sessions: [makeSession({ messages })] });
   const targets: string[] = [];
   await page.route("**/research-package/**", async route => {
@@ -214,36 +220,28 @@ test("hover import defaults to no project and allows an existing project", async
   await page.goto("/");
   await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
   await expect(page.locator(".conversation")).toContainText("下文结论");
-  await test.step("The import option only appears over the arrow; original create actions remain unchanged", async () => {
-    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeHidden();
-    await page.getByRole("button", { name: "新建会话选项", exact: true }).hover();
-    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeVisible();
-    await page.locator(".task-head-title").hover();
-    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeHidden();
+  await test.step("1. Verify the sidebar exposes separate import and create actions", async () => {
+    await expect(page.getByRole("complementary").getByRole("button", { name: "导入会话", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "在「默认项目」中导入会话" })).toHaveCount(0);
     await page.getByRole("button", { name: "新建会话", exact: true }).click();
-    await expect(page.locator(".landing")).toBeVisible();
+    await expect(page.locator(".task-head-title")).toHaveText("未命名会话");
+    await expect(page.locator("#composer-textarea")).toBeVisible();
     expect(targets).toEqual([]);
   });
   for (const project of ["inbox-1", "project-1"]) {
     await test.step(`Import and continue in ${project}`, async () => {
-      await page.getByRole("button", { name: "新建会话选项", exact: true }).hover();
-      await page.getByRole("menuitem", { name: "导入会话" }).click();
+      await page.getByRole("complementary").getByRole("button", { name: "导入会话", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "导入会话" });
-      await expect(dialog.getByLabel("项目归属")).toHaveValue("");
-      if (project === "project-1") await dialog.getByLabel("项目归属").selectOption(project);
-      // Open the picker the way a user does, so the hand-drawn trigger this PR
-      // added is actually exercised instead of being bypassed by setInputFiles.
+      await expect(dialog.getByRole("combobox")).toHaveValue("");
+      if (project === "project-1") await dialog.getByRole("combobox").selectOption(project);
+      // Exercise the visible file picker before handing it a fixture.
       const chooser = page.waitForEvent("filechooser");
-      await dialog.locator(".research-package-upload-trigger").click();
+      await dialog.locator(".research-package-upload").click();
       await (await chooser).setFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
-      // The review pane describes the package, not where it came from: the
-      // filename, the object count and the read-only hint. The source session's
-      // title is deliberately not rendered any more.
-      await expect(dialog.locator(".research-import-meta")).toContainText("study.sdresearch");
+      await expect(dialog.getByText("study.sdresearch", { exact: true })).toBeVisible();
       await expect(dialog.locator(".research-import-meta")).toContainText("2 个内容对象");
-      await expect(dialog.locator(".research-import-review")).not.toContainText("恢复的研究");
-      await dialog.getByRole("button", { name: "确认导入" }).click();
+      await expect(dialog.locator(".research-import-meta")).toContainText("恢复的研究");
+      await dialog.getByRole("button", { name: "导入", exact: true }).click();
       // Import opens the read-only snapshot; it does not auto-create a writable copy.
       await expect(page.locator(".task-head-title")).toHaveText("恢复的研究");
       await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("恢复的研究");
@@ -258,7 +256,7 @@ test("hover import defaults to no project and allows an existing project", async
     });
   }
   expect(targets).toEqual(["inbox-1", "project-1"]);
-  await info.attach("journey-report", { body: "Hover-only import, unchanged create actions, no-project default and optional project assignment verified; import opens the read-only snapshot and the explicit continue action creates the writable research copy.", contentType: "text/plain" });
+  await info.attach("journey-report", { body: "Sidebar import, independent create action, no-project default and optional project assignment verified; import opens the read-only snapshot and the explicit continue action creates the writable research copy.", contentType: "text/plain" });
 });
 
 test("reply menu branches at the selected reply without its later conversation", async ({ page }, info) => {
@@ -274,7 +272,7 @@ test("reply menu branches at the selected reply without its later conversation",
     await page.getByRole("button", { name: "回复菜单" }).first().click();
     await page.getByRole("menuitem", { name: "创建新分支聊天" }).click();
     const dialog = page.getByRole("dialog", { name: "创建新分支聊天" });
-    await expect(dialog.locator("blockquote")).toHaveText("中间回复");
+    await expect(dialog).toContainText("新分支保留所选回复及之前的对话与可恢复研究证据");
     await dialog.getByRole("button", { name: "创建新分支聊天" }).click();
   });
   await test.step("2. Verify the prefix, writable composer and unchanged source", async () => {
