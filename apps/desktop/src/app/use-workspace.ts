@@ -797,8 +797,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       const sessions = entries.flatMap(([, list]) => list);
       setSessionsByProject(Object.fromEntries(entries));
       // The artifact list spans Sessions; read the ones this app has not seen,
-      // and forget the ones the listing no longer has.
-      pruneArtifacts(sessions);
+      // and forget the ones the listing no longer has — but only when the listing
+      // is the whole set. Under a filter it is a subset, and pruning by it would
+      // empty 产物 of every Session the filter hides.
+      pruneArtifacts(sessionFilterRef.current === "all" ? sessions : [...sessions, ...Object.values(sessionsByProjectRef.current).flat()]);
       for (const session of sessions) readSessionArtifacts(session.id);
       return sessions;
     } catch (reason) {
@@ -1820,9 +1822,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const adoptSessionReply = useCallback((updated: Session) => {
     setDetail((current) => {
       if (current?.id !== updated.id) return current;
-      const next = { ...current, ...updated };
-      rememberBounded(detailsBySession.current, next.id, next);
-      return next;
+      // A spread cannot remove a key: a restore answers without `archivedAt`, and
+      // merging would keep the old timestamp, so the banner and the gated composer
+      // would survive the restore.
+      const merged: SessionDetail = { ...current, ...updated };
+      if (updated.archivedAt === undefined) delete (merged as { archivedAt?: string }).archivedAt;
+      rememberBounded(detailsBySession.current, merged.id, merged);
+      return merged;
     });
   }, []);
 
