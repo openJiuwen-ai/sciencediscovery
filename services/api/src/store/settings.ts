@@ -254,13 +254,12 @@ export function normalizeRuntimeSettings(
   return normalized;
 }
 
-/** The six Idea Tree fields a layer may override, with the range each accepts.
+/** The five Idea Tree fields a layer may override, with the range each accepts.
  *  Anything else is an unknown field: rejected in strict mode so a typo cannot
  *  silently leave the global value in place. */
 const IDEA_TREE_OVERRIDE_FIELDS = [
   "templateId",
   "explorationIntensity",
-  "maxTokensPerCall",
   "maxDepth",
   "maxNodes",
   "scoreDirection",
@@ -307,7 +306,6 @@ export function normalizeIdeaTreeOverride(
     }
   }
   const bounds: Record<string, readonly [number, number]> = {
-    maxTokensPerCall: [256, 32768],
     maxDepth: [1, 20],
     maxNodes: [2, 10_000],
   };
@@ -318,7 +316,7 @@ export function normalizeIdeaTreeOverride(
       if (strict) throw new Error(`ideaTreeOverride.${field} must be an integer between ${min} and ${max}`);
       continue;
     }
-    override[field as "maxTokensPerCall" | "maxDepth" | "maxNodes"] = numeric;
+    override[field as "maxDepth" | "maxNodes"] = numeric;
   }
   return Object.keys(override).length ? override : undefined;
 }

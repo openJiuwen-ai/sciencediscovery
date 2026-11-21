@@ -66,7 +66,7 @@ export interface RuntimeSettingsOverrides {
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
-  /** Idea Tree research parameters overridden for one layer. Only the six
+  /** Idea Tree research parameters overridden for one layer. Only the five
    *  fields the settings editors expose can be overridden; the rest keep the
    *  value from the layer below, and `resolveIdeaTreeSettings` fills whatever
    *  no layer set from the global settings. */
@@ -322,13 +322,12 @@ export interface IdeaTreeSettings {
   propagateInsightSystemPrompt?: string;
 }
 
-/** The six Idea Tree fields a Project or Session layer may override. Each is
+/** The five Idea Tree fields a Project or Session layer may override. Each is
  *  optional: a layer overrides the fields it means to change and inherits the
  *  rest, so a Session that only lowers `maxDepth` keeps the global template. */
 export interface IdeaTreeSettingsOverride {
   templateId?: IdeaTreeSettings["templateId"];
   explorationIntensity?: IdeaTreeSettings["explorationIntensity"];
-  maxTokensPerCall?: number;
   maxDepth?: number;
   maxNodes?: number;
   scoreDirection?: IdeaTreeSettings["scoreDirection"];
