@@ -103,6 +103,19 @@ export const EN: Text = {
     projectMenu: "Project menu",
     noTasks: "No sessions yet",
     showMore: "Show more",
+    filterLabel: "Sessions",
+    filterActive: "Active",
+    filterArchived: "Archived",
+    filterAll: "All",
+    searchPlaceholder: "Search sessions, projects, artifacts",
+    searchLabel: "Search",
+    searchProjects: "Projects",
+    searchSessions: "Sessions",
+    searchArtifacts: "Artifacts",
+    searchEmpty: (query: string) => `Nothing matches "${query}". Search matches names and titles, not message text.`,
+    searchFailed: "Search failed. Try again.",
+    searchMore: (count: number) => `${count} more results; keep typing to narrow them.`,
+    searchArchived: "Archived",
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",
@@ -119,6 +132,8 @@ export const EN: Text = {
   menu: {
     rename: "Rename",
     delete: "Delete",
+    archive: "Archive",
+    restore: "Restore",
     confirm: "Confirm",
     cancel: "Cancel",
   },
@@ -1932,6 +1947,14 @@ export const EN: Text = {
     rename: "Rename failed",
     deleteWarning: (title: string) =>
       `Deleting "${title}" also removes its workspace data, and cannot be undone.`,
+    archiveTitle: (title: string) => `Archive "${title}"?`,
+    archiveWarning: (title: string) =>
+      `Archiving "${title}" makes it read-only: no messages, no further research, no runs. `
+      + `A scientific-environment kernel it is using is torn down, and persistent memory not yet on disk is lost. `
+      + `Archiving can be undone; deleting cannot.`,
+    archivedBanner: "This session is archived and read-only. Restore it to send messages and run again.",
+    archivedComposer: "An archived session cannot send messages. Restore it to continue.",
+    archiveBlockedByRun: "This session is running. Wait for it to finish before archiving or restoring.",
     deleteProjectWarning: (name: string) =>
       `Deleting the project "${name}" also removes its sessions, their workspaces and their artifacts, and cannot be undone.`,
   },

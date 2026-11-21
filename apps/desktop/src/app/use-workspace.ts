@@ -29,6 +29,9 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
+import { searchWorkbench } from "../api/workbench.js";
+import { forgetProject, membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
+import { isSearchable, SEARCH_DEBOUNCE_MS } from "./session-search.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -47,6 +50,7 @@ import {
   createProject as createProjectRequest,
   createSession,
   deleteProject as deleteProjectRequest,
+  archiveSession as archiveSessionRequest,
   deleteSession,
   ensureInbox,
   getSession,
@@ -58,6 +62,7 @@ import {
   listWorkspaceFiles,
   readArtifactVersion,
   readWorkspaceFile,
+  restoreSession as restoreSessionRequest,
   type DocumentBytes,
   renameProject as renameProjectRequest,
   updateSession,
@@ -76,8 +81,11 @@ import type {
   Session,
   SessionArtifactOutput,
   SessionDetail,
+  SessionListState,
   SessionRun,
   SessionRunStatus,
+  WorkbenchSearchResponse,
+  WorkbenchSearchResult,
   WorkspaceFile,
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
@@ -172,6 +180,11 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
+  /** Which Sessions the sidebar asked for; the filter renders from this. */
+  searchQuery: string;
+  searchResults?: WorkbenchSearchResponse;
+  searchError?: string;
+  sessionFilter: SessionListState;
   /** Every Project's Sessions, keyed by Project id and including the inbox.
    *  The sidebar reads a Project's list from here; `recent` is the inbox's
    *  slice of it. */
@@ -197,7 +210,18 @@ export interface WorkspaceActions {
   /** Answer one authorization request raised by the running turn. */
   decidePermission: (requestId: string, decision: PermissionDecision) => Promise<void>;
   /** Opens the confirmation dialog; the deletion itself happens on accept. */
+  /** Reversible: asks first, because it makes the Session read-only and tears
+   *  down a scientific-environment kernel it is using. */
+  archiveSession: (session: Session) => void;
   deleteSession: (session: Session) => void;
+  /** The inverse; nothing is destroyed, so it does not ask. */
+  restoreSession: (session: Session) => void;
+  /** The sidebar's search field: debounced `GET /api/search`. */
+  search: (query: string) => void;
+  /** Open what a result names. */
+  openSearchResult: (result: WorkbenchSearchResult) => void;
+  /** The sidebar's 活跃 / 已归档 / 全部 choice. */
+  setSessionFilter: (state: SessionListState) => void;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
   deleteProject: (project: Project) => void;
@@ -333,6 +357,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [projects, setProjects] = useState<Project[]>([]);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
+  // Which Sessions the sidebar asks the server for. `active` is the route's own
+  // default, so an archived Session is invisible until the user asks for it —
+  // and a Session archived in the web client is exactly the case this client
+  // has to be able to reach. The choice is remembered across reloads.
+  /** The query the field holds, the answer it produced and why it failed. */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<WorkbenchSearchResponse>();
+  const [searchError, setSearchError] = useState<string>();
+  const searchTicket = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [sessionFilter, setSessionFilterState] = useState<SessionListState>(() =>
+    readSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage));
+  const sessionFilterRef = useRef<SessionListState>(sessionFilter);
+  /** The newest list read, so a superseded one cannot paint over it. */
+  const refreshTicket = useRef(0);
+  /** Every Session an unfiltered read has seen. Pruning runs against this, or
+   *  not at all: a filtered listing is a subset, and treating its complement as
+   *  "gone" would drop artifacts of Sessions that still exist. */
+  const membershipRef = useRef<Set<string> | undefined>(undefined);
+  sessionFilterRef.current = sessionFilter;
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
   // to tell one draft from the next — see `landingKey`.
@@ -732,8 +776,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  also wrote survives under the Session that made it — only the deleted
    *  Session's versions leave. */
   const pruneArtifacts = useCallback(
-    (sessions: readonly Session[]) => {
-      const live = new Set(sessions.map((session) => session.id));
+    (sessionIds: readonly string[]) => {
+      const live = new Set(sessionIds);
       let dropped = false;
       for (const id of Object.keys(artifactsBySession.current)) {
         if (live.has(id)) continue;
@@ -754,6 +798,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * refresh (after each create, rename and delete), so a listing that skipped
    * it would empty 会话 the first time the user did anything. */
   const refreshSessionLists = useCallback(async (): Promise<Session[] | undefined> => {
+    // Two filter clicks in a row each start a read. The older answer must not
+    // paint the list under the newer pill, so every read takes a ticket and only
+    // the newest one is allowed to write.
+    const ticket = ++refreshTicket.current;
     try {
       const inbox = inboxRef.current ?? (await ensureInbox(client));
       if (inboxRef.current === undefined) {
@@ -762,14 +810,24 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       }
       const known = await listProjects(client);
       const entries = await Promise.all(
-        [...known, inbox].map(async (project) => [project.id, await listSessions(client, project.id)] as const),
+        [...known, inbox].map(async (project) =>
+          [project.id, await listSessions(client, project.id, sessionFilterRef.current)] as const),
       );
+      if (ticket !== refreshTicket.current) return undefined;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       setSessionsByProject(Object.fromEntries(entries));
-      // The artifact list spans Sessions; read the ones this app has not seen,
-      // and forget the ones the listing no longer has.
-      pruneArtifacts(sessions);
+      // The artifact list spans Sessions, so it can only be pruned against whole
+      // membership. An unfiltered read supplies that; a filtered one is a subset
+      // and must not be mistaken for "the rest are gone" — that would empty 产物
+      // of every Session the filter hides, on every refresh, not just the first.
+      const membership = membershipAfterRead(
+        sessionFilterRef.current,
+        sessions.map((session) => session.id),
+        membershipRef.current,
+      );
+      if (membership.snapshot !== undefined) membershipRef.current = membership.snapshot;
+      if (membership.pruneAgainst !== undefined) pruneArtifacts(membership.pruneAgainst);
       for (const session of sessions) readSessionArtifacts(session.id);
       return sessions;
     } catch (reason) {
@@ -777,6 +835,45 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       return undefined;
     }
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
+
+  /** Ask the route for a query, once it settles.
+   *
+   *  The route matches names and titles; the field's copy says so. Each request
+   *  takes a ticket so an answer for an older query cannot paint over a newer
+   *  one, and the timer is cleared on every keystroke. */
+  const search = useCallback((query: string) => {
+    setSearchQuery(query);
+    setSearchError(undefined);
+    searchTicket.current += 1;
+    const ticket = searchTicket.current;
+    if (searchTimer.current !== undefined) clearTimeout(searchTimer.current);
+    if (!isSearchable(query)) {
+      setSearchResults(undefined);
+      return;
+    }
+    searchTimer.current = setTimeout(() => {
+      void searchWorkbench(client, query.trim())
+        .then((response) => {
+          if (ticket !== searchTicket.current) return;
+          setSearchResults(response);
+        })
+        .catch((reason: unknown) => {
+          if (ticket !== searchTicket.current) return;
+          // The route's own sentence, not a rewrite of it.
+          setSearchError(reason instanceof Error ? reason.message : TEXT.sidebar.searchFailed);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+  }, [client]);
+
+  /** Keep the sidebar's choice and re-read the lists with it. Persisted, because
+   *  a reload must not silently return the reader to 活跃. */
+  const setSessionFilter = useCallback((next: SessionListState) => {
+    setSessionFilterState(next);
+    sessionFilterRef.current = next;
+    writeSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage, next);
+    void refreshSessionLists();
+  }, [refreshSessionLists]);
+
 
   /**
    * Create a Session in the current Project and make it the open one.
@@ -1775,18 +1872,55 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** Run one mutation and, when it succeeds, bring the lists back in step.
    *  `dropIfCurrent` is for the operations that remove the open session. */
+  /** Put the Session the service just returned into the view and the cache, the
+   *  way a rename does: otherwise the bar and the composer keep describing the
+   *  state the row had before the call. */
+  const adoptSessionReply = useCallback((updated: Session) => {
+    setDetail((current) => {
+      if (current?.id !== updated.id) return current;
+      // A spread cannot remove a key: a restore answers without `archivedAt`, and
+      // merging would keep the old timestamp, so the banner and the gated composer
+      // would survive the restore.
+      const merged: SessionDetail = { ...current, ...updated };
+      if (updated.archivedAt === undefined) delete (merged as { archivedAt?: string }).archivedAt;
+      rememberBounded(detailsBySession.current, merged.id, merged);
+      return merged;
+    });
+  }, []);
+
+  /** Forget one Session's cached outputs. The delete path knows exactly which
+   *  Session went; a filtered listing cannot prove it, so it cannot do this. */
+  const forgetSessionArtifacts = useCallback((id: string) => {
+    if (artifactsBySession.current[id] === undefined) return;
+    delete artifactsBySession.current[id];
+    publishArtifacts();
+  }, [publishArtifacts]);
+
+  /** The same for a Project, which reaches Sessions the current filter hides: the
+   *  cached outputs carry the Project, the listing does not. */
+  const forgetProjectArtifacts = useCallback((projectId: string) => {
+    const sweep = forgetProject(artifactsBySession.current, membershipRef.current, projectId);
+    for (const sessionId of sweep.removed) delete artifactsBySession.current[sessionId];
+    if (sweep.membership !== undefined) membershipRef.current = sweep.membership;
+    publishArtifacts();
+  }, [publishArtifacts]);
+
   const mutate = useCallback(
-    async (options: { dropIfCurrent?: boolean; id: string; operation: () => Promise<unknown> }) => {
+    async (options: { dropIfCurrent?: boolean; forgetArtifacts?: boolean; id: string; operation: () => Promise<unknown> }) => {
       try {
         await options.operation();
       } catch (reason) {
         report(reason);
         return;
       }
+      if (options.forgetArtifacts) {
+        forgetSessionArtifacts(options.id);
+        membershipRef.current?.delete(options.id);
+      }
       if (options.dropIfCurrent && sessionRef.current === options.id) startDraft();
       await refreshSessionLists();
     },
-    [refreshSessionLists, report, startDraft],
+    [forgetSessionArtifacts, refreshSessionLists, report, startDraft],
   );
 
   /** The same write, gated on the version the read was made for: a pick that
@@ -2061,11 +2195,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       ? TEXT.sidebar.recent
       : activeProject.name;
 
+  /** Open what a result names: a Session, a Project, or an artifact's Session. */
+  const openSearchResult = useCallback((result: WorkbenchSearchResult) => {
+    setSearchQuery("");
+    setSearchResults(undefined);
+    if (result.kind === "project") {
+      selectProject(result.id);
+      return;
+    }
+    if (result.sessionId !== undefined) void openSession(result.sessionId);
+  }, [openSession, selectProject]);
+
+
   const actions: WorkspaceActions = useMemo(
     () => ({
       clearAttachments,
       closeTab,
       confirmAction,
+      search,
+      openSearchResult,
+      setSessionFilter,
       createProject: createProjectAndOpen,
       deleteProject: (project) =>
         confirmAction({
@@ -2088,6 +2237,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             // away. It cannot stay: its Session no longer exists, and the next
             // send has to land in the inbox rather than in a Project that is
             // gone.
+            // Its Sessions went with it, and under a filter the listing cannot
+            // name them; the cached outputs can.
+            forgetProjectArtifacts(project.id);
             if (projectRef.current === project.id) {
               projectRef.current = inboxRef.current?.id;
               setActiveProjectId(inboxRef.current?.id);
@@ -2096,6 +2248,38 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             await refreshSessionLists();
           },
           title: project.name,
+        }),
+      archiveSession: (session) =>
+        confirmAction({
+          accept: TEXT.menu.archive,
+          // The consequences are the server's, and the reader has to know them
+          // before the call: read-only, and a scientific-environment kernel torn
+          // down with whatever persistent memory was not on disk.
+          body: TEXT.errors.archiveWarning(sessionTitle(session.title)),
+          eyebrow: TEXT.menu.archive,
+          onAccept: async () => {
+            let updated: Session;
+            try {
+              updated = await archiveSessionRequest(client, session.id);
+            } catch (reason) {
+              // A run still going is the 409, and its own sentence is what the
+              // reader needs; nothing is rewritten here.
+              report(reason);
+              return;
+            }
+            adoptSessionReply(updated);
+            // The row stays visible under 全部/已归档, so only 活跃 is about to
+            // lose it; closing the conversation there is the archive's doing, not
+            // a filter's.
+            if (sessionFilterRef.current === "active" && sessionRef.current === updated.id) startDraft();
+            await refreshSessionLists();
+          },
+          title: TEXT.errors.archiveTitle(sessionTitle(session.title)),
+        }),
+      restoreSession: (session) =>
+        mutate({
+          id: session.id,
+          operation: async () => adoptSessionReply(await restoreSessionRequest(client, session.id)),
         }),
       deleteSession: (session) =>
         confirmAction({
@@ -2106,7 +2290,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           body: TEXT.errors.deleteWarning(sessionTitle(session.title)),
           eyebrow: TEXT.menu.delete,
           onAccept: () =>
-            mutate({ dropIfCurrent: true, id: session.id, operation: () => deleteSession(client, session.id) }),
+            mutate({ dropIfCurrent: true, forgetArtifacts: true, id: session.id, operation: () => deleteSession(client, session.id) }),
           title: sessionTitle(session.title),
         }),
       decidePermission,
@@ -2227,6 +2411,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
+    searchQuery,
+    searchResults,
+    searchError,
+    sessionFilter,
     sessionId,
     sessionsByProject: listedByProject,
     tabs,

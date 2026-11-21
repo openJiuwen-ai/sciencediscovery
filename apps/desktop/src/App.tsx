@@ -1182,6 +1182,12 @@ export function App({ initialToken }: Props) {
             projects={state.projects}
             recent={state.recent}
             running={state.running}
+            searchError={state.searchError}
+            searchQuery={state.searchQuery}
+            searchResults={state.searchResults}
+            onSearch={(query) => actions.search(query)}
+            onSearchOpen={(result) => actions.openSearchResult(result)}
+            sessionFilter={state.sessionFilter}
             sessionsByProject={state.sessionsByProject}
           />
         ) : null}
@@ -1258,7 +1264,15 @@ export function App({ initialToken }: Props) {
                   workspaceFiles={state.panelFiles}
                 />
               </CheckpointRefusedProvider>
-              {isEvidenceSessionReadOnly(state.detail) ? null : <Composer {...composerProps} />}
+              {state.detail?.archivedAt !== undefined ? (
+            <p className="session-archived-banner" role="status">{TEXT.errors.archivedBanner}</p>
+          ) : null}
+          {isEvidenceSessionReadOnly(state.detail) ? null : (
+            <Composer
+              {...composerProps}
+              {...(state.detail?.archivedAt !== undefined ? { readOnlyReason: TEXT.errors.archivedComposer } : {})}
+            />
+          )}
             </>
           )}
           <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />

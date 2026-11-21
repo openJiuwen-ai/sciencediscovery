@@ -84,6 +84,9 @@ interface Props {
    *  JiuwenSwarm cluster is still starting. A reason rather than a flag so
    *  the placeholder can say what is being waited on. */
   jwBlocked?: string;
+  /** Why this conversation cannot send at all — an archived Session is
+   *  read-only. A reason rather than a flag, so the placeholder can say it. */
+  readOnlyReason?: string;
   /** The welcome page's arrangement: the card floats, and a grey strip under
    *  it carries the project and the permission mode. */
   landing?: boolean;
@@ -661,6 +664,7 @@ export function Composer({
   attachLimit,
   attachments,
   jwBlocked,
+  readOnlyReason,
   client,
   landing = false,
   models,
@@ -794,7 +798,8 @@ export function Composer({
   /** The stored name is the server's; the pill shows it in the interface's
    *  language. */
   const selectedName = selected ? providerName(selected.name) : undefined;
-  const canSend = text.trim() !== "" && !running && jwBlocked === undefined && selected !== undefined;
+  const canSend = text.trim() !== "" && !running && jwBlocked === undefined
+    && readOnlyReason === undefined && selected !== undefined;
 
   // Grow with the content up to the CSS max-height, then scroll. Done by hand
   // because a textarea cannot size to its content.
@@ -987,7 +992,7 @@ export function Composer({
           </button>
         </span>}
         <textarea
-          disabled={running || jwBlocked !== undefined}
+          disabled={running || jwBlocked !== undefined || readOnlyReason !== undefined}
           id="composer-textarea"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -1031,7 +1036,7 @@ export function Composer({
               `${-event.currentTarget.scrollTop}px`,
             );
           }}
-          placeholder={jwBlocked ?? (command !== undefined ? TEXT.composer.evolvePlaceholder
+          placeholder={readOnlyReason ?? jwBlocked ?? (command !== undefined ? TEXT.composer.evolvePlaceholder
             : landing ? TEXT.landing.placeholder : TEXT.composer.placeholder)}
           ref={area}
           rows={1}
