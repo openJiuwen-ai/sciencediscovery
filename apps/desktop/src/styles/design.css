@@ -5558,3 +5558,6 @@ body.is-resizing {
   cursor: pointer;
 }
 .side-filter-chip.is-on { background: rgba(127, 127, 127, 0.14); color: var(--text-strong); }
+
+/* The row the arrow keys would open. */
+.side-search-hit.is-active { background: rgba(127, 127, 127, 0.18); }
