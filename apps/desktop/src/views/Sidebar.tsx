@@ -22,7 +22,7 @@ import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.j
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { flatResults, groupSearchResults, moveHit, searchDetail } from "../app/session-search.js";
-import type { SessionListFilters } from "../app/session-filters.js";
+import { DEFAULT_SESSION_FILTERS, type SessionListFilters } from "../app/session-filters.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -40,10 +40,12 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
-  /** The field asks the workspace to run `GET /api/search`. */
-  onSearch: (query: string) => void;
+  /** The field asks the workspace to run `GET /api/search`. The field is drawn
+   *  only when this is given: a column rendered without a workspace has nothing
+   *  to search. */
+  onSearch?: (query: string) => void;
   /** A result was chosen: a Session opens, a Project switches, an artifact opens. */
-  onSearchOpen: (result: WorkbenchSearchResult) => void;
+  onSearchOpen?: (result: WorkbenchSearchResult) => void;
   onExportSession?: (session: Session) => void;
   onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
@@ -58,13 +60,13 @@ interface Props {
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
   /** How the list is narrowed: scope, running, artifacts, window. */
-  listFilters: SessionListFilters;
+  listFilters?: SessionListFilters;
   /** What `GET /api/search` answered for the current query, if anything. */
   searchResults?: WorkbenchSearchResponse;
   /** Why the last search failed, when it did. */
   searchError?: string;
   /** The query the results belong to; the field is controlled from the workspace. */
-  searchQuery: string;
+  searchQuery?: string;
   sessionsByProject: Record<string, Session[]>;
 }
 
@@ -170,9 +172,9 @@ export function Sidebar({
   projects,
   recent,
   running,
-  listFilters,
+  listFilters = DEFAULT_SESSION_FILTERS,
   searchError,
-  searchQuery,
+  searchQuery = "",
   searchResults,
   onSearch,
   onSearchOpen,
@@ -392,8 +394,10 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* The route matches names and titles, not message bodies, so the field
-          says only what it can do. */}
+      {/* The field names only itself. What a search box does needs no caption,
+          and the shortcut is the chip inside the field. A column rendered
+          without a workspace has nothing to search, so it draws no field. */}
+      {onSearch === undefined ? null : (
       <div className="side-search">
         <input
           aria-label={TEXT.sidebar.searchLabel}
@@ -412,7 +416,7 @@ export function Sidebar({
               if (hit !== undefined) {
                 event.preventDefault();
                 setActiveHit(-1);
-                onSearchOpen(hit);
+                onSearchOpen?.(hit);
               }
               return;
             }
@@ -429,7 +433,8 @@ export function Sidebar({
           value={searchQuery}
         />
       </div>
-      {searchQuery.trim() !== "" ? (
+      )}
+      {onSearch === undefined || searchQuery.trim() === "" ? null : (
         <div className="side-search-results">
           {searchError !== undefined ? (
             <p className="side-search-note is-error" role="alert">{searchError}</p>
@@ -448,7 +453,7 @@ export function Sidebar({
                       <button
                         className={`side-search-hit${flatResults(searchResults?.results ?? [])[activeHit] === result ? " is-active" : ""}`}
                         key={`${result.kind}:${result.id}`}
-                        onClick={() => { setActiveHit(-1); onSearchOpen(result); }}
+                        onClick={() => { setActiveHit(-1); onSearchOpen?.(result); }}
                         type="button"
                       >
                         <span className="side-search-hit-label">
@@ -468,7 +473,7 @@ export function Sidebar({
               </>
             )}
         </div>
-      ) : null}
+      )}
 
       {/* Narrowing the list, applied client-side over what the page returned:
           the workspace is small enough that a filter is cheaper than a request,

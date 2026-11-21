@@ -45,6 +45,7 @@ import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
 import { canExportSession } from "./app/session-export.js";
+import { sessionReadOnly } from "./app/session-read-only.js";
 import { useIdeaResearches } from "./app/use-idea-researches.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
@@ -851,7 +852,7 @@ export function App({ initialToken }: Props) {
   // to write into. The listeners are installed regardless of that: a file
   // dropped on a page that ignores it would otherwise navigate away from the
   // app entirely.
-  const canUpload = boot === "ready" && state.detail?.archivedAt === undefined && !isEvidenceSessionReadOnly(state.detail);
+  const canUpload = boot === "ready" && sessionReadOnly(state.detail) === undefined;
   const dragging = useFileDrop((files) => void upload(files), canUpload);
 
   /** A session with nothing to read yet shows the welcome page instead of an
@@ -1641,7 +1642,7 @@ export function App({ initialToken }: Props) {
                   detail={state.detail}
                   configuration={configuration}
                   onConfigurationChange={actions.refreshConfiguration}
-                  configurationReadOnly={isEvidenceSessionReadOnly(state.detail) || state.detail?.archivedAt !== undefined}
+                  configurationReadOnly={sessionReadOnly(state.detail) !== undefined}
                   // One card per research; the panel is where the tree and the
                   // controls live, so the card itself only opens it. These are
                   // the transcript's foot, not its header: `Conversation` draws
@@ -1688,7 +1689,7 @@ export function App({ initialToken }: Props) {
                   workspaceFiles={state.panelFiles}
                 />
               </CheckpointRefusedProvider>
-              {state.detail?.archivedAt !== undefined ? (
+              {sessionReadOnly(state.detail) === "archived" ? (
             <p className="session-archived-banner" role="status">{TEXT.errors.archivedBanner}</p>
           ) : null}
           {isEvidenceSessionReadOnly(state.detail) ? null : (
@@ -1821,7 +1822,7 @@ export function App({ initialToken }: Props) {
       {evolveCreate === undefined ? null : (
         <EvolveCreateDialog
           activeRun={evolve.runs.some((run) => isEvolveRunActive(run.status))}
-          archived={state.detail?.archivedAt !== undefined}
+          archived={sessionReadOnly(state.detail) === "archived"}
           error={evolve.error}
           initialAlgorithm={evolveCreate.algorithm}
           initialCheckpointMode={evolveCreate.checkpointMode}
