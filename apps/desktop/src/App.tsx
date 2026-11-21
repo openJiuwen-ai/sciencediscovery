@@ -332,6 +332,14 @@ export function App({ initialToken }: Props) {
   const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
   /** An Idea Tree command waiting for its parameters; the card is open on it. */
   const [pendingIdeaSend, setPendingIdeaSend] = useState<string>();
+  /** The same value for the callbacks a card holds from an earlier render: a
+   *  write that resolves after the reader cancelled must not resurrect it. */
+  const pendingIdeaSendRef = useRef<string | undefined>(undefined);
+
+  const rememberPendingIdeaSend = (text: string | undefined) => {
+    pendingIdeaSendRef.current = text;
+    setPendingIdeaSend(text);
+  };
   /** A design command the dialog placed in the composer instead of sending.
    *  Held here because the composer has two mounts — the welcome page and the
    *  conversation — and the dialog opens over either. Cleared when the composer
@@ -932,12 +940,16 @@ export function App({ initialToken }: Props) {
       });
       return true;
     }
-    if (defersIdeaSend(content, ideaConfirmed)) {
+    // Only a Session can hold parameters. With no conversation open the card's
+    // confirm is disabled by construction, so deferring there would hold the
+    // command behind a button nobody can press: the welcome page sends it as it
+    // always did, and `send()` creates the Session on the way.
+    if (defersIdeaSend(content, ideaConfirmed) && state.detail?.id !== undefined) {
       // #1277: the parameters card opens before an Idea Tree command leaves, but
       // the command is not intercepted — `confirmIdeaSend` sends the same draft
       // unchanged once the card is confirmed. The composer keeps it meanwhile,
       // because this send did not happen.
-      setPendingIdeaSend(content);
+      rememberPendingIdeaSend(content);
       setIdeaTreeOpen(true);
       return false;
     }
@@ -1218,14 +1230,16 @@ export function App({ initialToken }: Props) {
 
   /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row. */
   const openIdeaTree = () => {
-    setPendingIdeaSend(undefined);
+    rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(true);
   };
 
   /** The card was confirmed: send the command that was waiting for it. */
   const confirmIdeaSend = () => {
-    const pending = pendingIdeaSend;
-    setPendingIdeaSend(undefined);
+    // Read through the ref: the card may be calling a callback captured before a
+    // cancel cleared this.
+    const pending = pendingIdeaSendRef.current;
+    rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(false);
     if (pending === undefined) return;
     // The composer kept the draft when the send was deferred; sending it now
@@ -1236,8 +1250,8 @@ export function App({ initialToken }: Props) {
 
   /** The card was dismissed: nothing is sent and the draft comes back. */
   const cancelIdeaSend = () => {
-    const pending = pendingIdeaSend;
-    setPendingIdeaSend(undefined);
+    const pending = pendingIdeaSendRef.current;
+    rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(false);
     if (pending !== undefined) setSeededCommand({ nonce: Date.now(), text: pending });
   };

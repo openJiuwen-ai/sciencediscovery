@@ -20,6 +20,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Attachment } from "../src/app/attachments.js";
+import { TEXT } from "../src/text.js";
 import { Composer, ExpertFlyout, ModelMenu, PermissionFlyout, SessionSettingsMenu } from "../src/views/Composer.js";
 import { filterExperts } from "../src/views/expert-catalog.js";
 import { modelBrand } from "../src/views/model-brand.js";
@@ -607,4 +608,61 @@ test("with no mode chosen neither permission option claims to be the choice", ()
   const markup = renderToStaticMarkup(<PermissionFlyout onApprovalMode={() => {}} onClose={() => {}} />);
   assert.equal(markup.split("is-selected").length - 1, 0, "no row is marked");
   assert.equal(markup.split("session-flyout-check").length - 1, 0, "no tick is drawn");
+});
+
+test("a send that answers false keeps the draft, and the same send then goes out", async () => {
+  // The Idea Tree card defers by answering `false`; the words have to stay in the
+  // box until it confirms, or the reader loses what they typed.
+  const attempts: string[] = [];
+  let accept = false;
+  let view: { root: never; unmount: () => void };
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={(content) => { attempts.push(content); return accept; }}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    ) as never;
+  });
+  try {
+    const textarea = (view!.root as unknown as { findByType: (type: string) => { props: { onChange?: (event: { target: { value: string } }) => void; value?: string } } })
+      .findByType("textarea");
+    await act(async () => { textarea.props.onChange?.({ target: { value: "/idea-tree-team 分析钙钛矿" } }); });
+
+    const send = (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.composer.send);
+    assert.ok(send, "the send button is drawn");
+
+    await act(async () => { send!.props.onClick?.(); });
+    assert.deepEqual(attempts, ["/idea-tree-team 分析钙钛矿"], "the send was attempted");
+    // The deferred send answered false, so the draft is untouched.
+    assert.equal(textarea.props.value, "/idea-tree-team 分析钙钛矿");
+
+    // The card confirmed: the same words, sent once, and the box is cleared.
+    accept = true;
+    await act(async () => { send!.props.onClick?.(); });
+    assert.deepEqual(attempts, ["/idea-tree-team 分析钙钛矿", "/idea-tree-team 分析钙钛矿"]);
+    assert.equal(textarea.props.value, "");
+  } finally {
+    await act(async () => { view!.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
 });
