@@ -52,8 +52,10 @@ export interface ComposerTag {
  *  collected becomes the first draft after it. Both leave together, joined at
  *  submit time — until then the token is part of the input, not a message. */
 export interface SeededCommand {
-  /** The flags, exactly as they will be sent. */
-  command: string;
+  /** The flags, exactly as they will be sent. Absent when the seed is only
+   *  restoring a sentence — an Idea Tree draft the parameters card handed back
+   *  (#1277) has no token of its own. */
+  command?: string;
   /** The parameters the dialog confirmed, if its panel was used. They travel
    *  with the token because the dialog closes before the user sends, and are
    *  dropped with the token if the reader takes the flags back. */
@@ -118,7 +120,7 @@ interface Props {
   /** `command` is the seeded token when the draft started from a setup
    *  dialog; the two are one message, but only the caller knows how to join
    *  them. */
-  onSend: (content: string, command?: string, direction?: EvolveDirectionInput) => void;
+  onSend: (content: string, command?: string, direction?: EvolveDirectionInput) => boolean | void;
   onStop: () => void;
   onUpload: (files: File[]) => void;
   /** Shown in the landing strip, beside the folder. Absent when the next
@@ -913,8 +915,11 @@ export function Composer({
   }, [menu]);
 
   const sendDraft = (content: string, selectedCommand?: string, direction?: EvolveDirectionInput) => {
-    if (direction) onSend(content, selectedCommand, direction);
-    else onSend(content, selectedCommand);
+    // `false` means the shell took the draft somewhere else — the Idea Tree card
+    // asks for parameters before the command leaves (#1277). The draft stays,
+    // because nothing was sent.
+    const sent = direction ? onSend(content, selectedCommand, direction) : onSend(content, selectedCommand);
+    if (sent === false) return;
     setText("");
     setCommand(undefined);
   };

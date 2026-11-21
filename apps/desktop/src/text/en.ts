@@ -282,6 +282,7 @@ export const EN: Text = {
     cancel: "Cancel",
     loading: "Reading…",
     savedSession: "This conversation will use these settings",
+    confirmSend: "Confirm and send",
     savedGlobal: "Written to the global settings",
     unchanged: "Nothing was changed here, so the global settings are untouched.",
     noSession: "Open a conversation to change the settings for it alone.",
