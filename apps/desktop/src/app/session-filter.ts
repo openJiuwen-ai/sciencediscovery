@@ -66,11 +66,16 @@ export function membershipAfterRead(
   filter: SessionListState,
   sessionIds: readonly string[],
   previous: ReadonlySet<string> | undefined,
-): { pruneAgainst?: readonly string[]; snapshot?: ReadonlySet<string> } {
+): { pruneAgainst?: readonly string[]; snapshot?: Set<string> } {
   if (filter === "all") {
     const snapshot = new Set(sessionIds);
     return { pruneAgainst: sessionIds, snapshot };
   }
-  // Nothing is known about the Sessions the filter hides, so nothing is pruned.
-  return previous === undefined ? {} : { pruneAgainst: [...previous] };
+  // A filtered read proves the ids it returned exist, so they join the snapshot:
+  // otherwise a Session created after the last 全部 read would be pruned out of
+  // the catalog and fetched again on every refresh under the filter.
+  const known = new Set([...(previous ?? []), ...sessionIds]);
+  // Anything the filter hides is still unknown, so nothing is pruned until an
+  // unfiltered read has named the workspace.
+  return previous === undefined ? { snapshot: known } : { pruneAgainst: [...known], snapshot: known };
 }
