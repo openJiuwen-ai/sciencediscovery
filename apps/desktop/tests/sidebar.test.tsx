@@ -21,6 +21,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
+import { EN } from "../src/text/en.js";
 import { Sidebar } from "../src/views/Sidebar.js";
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
@@ -76,6 +77,22 @@ test("the task column has no search field under 新建会话", () => {
   const markup = render({ recent: [session("s1", "结构比对")] });
   assert.doesNotMatch(markup, /side-search/);
   assert.doesNotMatch(markup, /type="search"/);
+});
+
+test("the search field names only itself, with no caption under it", () => {
+  const markup = render({ onSearch: () => {}, searchQuery: "" });
+  const from = markup.indexOf('class="side-search-field"');
+  assert.ok(from >= 0, "the field is missing");
+  // From the start of the tag, so the attributes written before the class name
+  // (aria-label) are in view as well.
+  const start = markup.lastIndexOf("<input", from);
+  const tag = markup.slice(start, markup.indexOf(">", from) + 1);
+  // One word, the field's own name — not a sentence about what a search box does.
+  assert.match(tag, /placeholder="搜索"/u);
+  assert.match(tag, /aria-label="搜索"/u, "it is still named for a screen reader");
+  assert.doesNotMatch(tag, /title=/, "the removed caption does not come back as a tooltip");
+  assert.doesNotMatch(markup, /side-search-hint/, "no explanatory caption is drawn under the field");
+  assert.equal(EN.sidebar.searchPlaceholder, "Search", "and the English field is one word too");
 });
 
 test("a session row carries the double-click rename as its own tooltip", () => {

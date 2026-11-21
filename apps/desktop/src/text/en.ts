@@ -349,7 +349,7 @@ export const EN: Text = {
     filterWindowToday: "Today",
     filterWindowWeek: "Last 7 days",
     filterWindowAll: "Any time",
-    searchPlaceholder: "Search sessions, projects, artifacts",
+    searchPlaceholder: "Search",
     searchLabel: "Search",
     searchProjects: "Projects",
     searchSessions: "Sessions",
