@@ -17,15 +17,29 @@
  * field groups the workbench answer and opens a Session with the keyboard, and
  * the filter row narrows the loaded list and survives a reload.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import {
   CREATED_AT,
+  DEFAULT_PROJECT,
   TOKEN,
   TOKEN_STORAGE_KEY,
   installMockApi,
   makeSession,
 } from "./fixtures.js";
+
+/** The opt-in capture hook used by `research-package.spec.ts`: a run with
+ *  `REVIEW_SCREENSHOTS_DIR` set writes the reviewer-facing PNGs, and an
+ *  ordinary run only asserts the state. */
+const REVIEW_SCREENSHOTS_DIR = process.env.REVIEW_SCREENSHOTS_DIR;
+
+async function capture(page: Page, name: string): Promise<void> {
+  if (!REVIEW_SCREENSHOTS_DIR) return;
+  await mkdir(REVIEW_SCREENSHOTS_DIR, { recursive: true });
+  await page.screenshot({ path: join(REVIEW_SCREENSHOTS_DIR, `${name}.png`), animations: "disabled" });
+}
 
 const SEARCH_RESULTS = [
   {
@@ -558,4 +572,166 @@ test("the empty result puts the full sentence as the block title", async ({ page
   });
   expect(type.title).toBeGreaterThanOrEqual(type.body);
   expect(type.weight).toBeGreaterThanOrEqual(600);
+});
+
+test("仅当前项目 keeps only the open Project's rows and leaves the other fold reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installMockApi(page, {
+    projects: [
+      { ...DEFAULT_PROJECT, id: "project-1", name: "脓毒症研究" },
+      { ...DEFAULT_PROJECT, id: "project-2", name: "晶体结构研究" },
+    ],
+    sessions: [
+      makeSession({ id: "s1", projectId: "project-1", title: "本项目的会话" }),
+      makeSession({ id: "s2", projectId: "project-2", title: "别的项目的会话" }),
+    ],
+  });
+  await page.goto("/");
+
+  await page.locator(".side-session-name", { hasText: "本项目的会话" }).click();
+  await expect(page.locator(".task-head-title")).toHaveText("本项目的会话");
+  await page.getByRole("button", { name: "仅当前项目" }).click();
+
+  await expect(page.getByRole("button", { name: "仅当前项目" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".side-session-name", { hasText: "本项目的会话" })).toBeVisible();
+  await expect(page.locator(".side-session-name", { hasText: "别的项目的会话" })).toHaveCount(0);
+  // The filter scopes rows, not navigation: the other Project is still there.
+  await expect(page.locator(".side-project-toggle", { hasText: "晶体结构研究" })).toBeVisible();
+  await capture(page, "sidebar-filter-current-project");
+});
+
+test("有产物 keeps the Session that wrote an output, in the English locale", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+  await installMockApi(page, {
+    artifactsBySession: {
+      i1: [{
+        artifact: {
+          createdAt: CREATED_AT,
+          createdInSessionId: "i1",
+          createdInSessionTitle: "Session with artifact",
+          currentVersion: 1,
+          id: "artifact-1",
+          kind: "report",
+          logicalName: "report.pdf",
+          name: "report.pdf",
+          origin: "server_generated",
+          projectId: "inbox-1",
+          sessionId: "i1",
+          updatedAt: CREATED_AT,
+        },
+        version: { id: "version-1" },
+      }],
+    },
+    sessions: [
+      makeSession({ id: "i1", projectId: "inbox-1", title: "Session with artifact" }),
+      makeSession({ id: "i2", projectId: "inbox-1", title: "Session without artifact" }),
+    ],
+  });
+  await page.goto("/");
+
+  const withArtifact = page.locator(".side-session-name", { hasText: "Session with artifact" });
+  const withoutArtifact = page.locator(".side-session-name", { hasText: "Session without artifact" });
+  await expect(withArtifact).toBeVisible();
+  await expect(withoutArtifact).toBeVisible();
+
+  await page.getByRole("button", { name: "Has artifacts" }).click();
+
+  await expect(page.getByRole("button", { name: "Has artifacts" })).toHaveAttribute("aria-pressed", "true");
+  await expect(withArtifact).toBeVisible();
+  await expect(withoutArtifact).toHaveCount(0);
+  await expect(page.getByLabel("Time range")).toBeVisible();
+  await capture(page, "sidebar-filter-has-artifacts-en");
+});
+
+test("the today window hides a Session last active before the local day", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const now = new Date().toISOString();
+  const older = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+  await installMockApi(page, {
+    sessions: [
+      makeSession({ createdAt: now, id: "i1", projectId: "inbox-1", title: "今天的会话", updatedAt: now }),
+      makeSession({ createdAt: older, id: "i2", projectId: "inbox-1", title: "十天前的会话", updatedAt: older }),
+    ],
+  });
+  await page.goto("/");
+
+  const today = page.locator(".side-session-name", { hasText: "今天的会话" });
+  const beforeToday = page.locator(".side-session-name", { hasText: "十天前的会话" });
+  await expect(today).toBeVisible();
+  await expect(beforeToday).toBeVisible();
+
+  await page.getByLabel("时间范围").selectOption("today");
+
+  await expect(today).toBeVisible();
+  await expect(beforeToday).toHaveCount(0);
+  await expect(page.getByLabel("时间范围")).toHaveValue("today");
+  await capture(page, "sidebar-filter-today");
+});
+
+test("an English search failure offers Retry outside the listbox and recovers", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+  await installMockApi(page, { searchResults: SEARCH_RESULTS });
+  let fail = true;
+  await page.route("**/api/search**", route => fail
+    ? route.fulfill({ status: 503, json: { error: "Search service unavailable" } })
+    : route.fallback());
+  await page.goto("/");
+
+  const field = page.locator(".side-search-input");
+  await expect(field).toHaveAttribute("placeholder", "Search names and titles");
+  await page.keyboard.press("Control+k");
+  await field.fill("archive");
+
+  const error = page.locator(".side-search-error");
+  await expect(error).toBeVisible();
+  await expect(error).toContainText("Search failed");
+  const retry = error.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  await capture(page, "sidebar-search-failed-en");
+
+  fail = false;
+  await retry.click();
+  await expect(page.locator('.side-search-results [role="option"]')).toHaveCount(3);
+  await expect(field).toHaveAttribute("aria-expanded", "true");
+});
+
+test("a failed filter read says the result is unknown and Retry recovers the rows", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installMockApi(page, {
+    runsBySession: {
+      i1: [{ events: [], run: { createdAt: CREATED_AT, id: "run-1", queueOrder: 0, status: "running" } }],
+    },
+    sessions: [
+      makeSession({ id: "i1", projectId: "inbox-1", title: "运行中的会话" }),
+      makeSession({ id: "i2", projectId: "inbox-1", title: "已完成的会话" }),
+    ],
+  });
+  let fail = true;
+  await page.route("**/api/sessions/*/runs", route => fail
+    ? route.fulfill({ status: 503, json: { error: "运行状态暂不可用" } })
+    : route.fallback());
+  await page.goto("/");
+
+  const running = page.locator(".side-session-name", { hasText: "运行中的会话" });
+  const finished = page.locator(".side-session-name", { hasText: "已完成的会话" });
+  await expect(running).toBeVisible();
+  await expect(finished).toBeVisible();
+
+  await page.getByRole("button", { name: "仅运行中" }).click();
+
+  const failed = page.locator(".side-filters-failed");
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText("运行状态或产物读取失败");
+  const retry = failed.getByRole("button", { name: "重试" });
+  await expect(retry).toBeVisible();
+  // Unknown is not the same answer as "none".
+  await expect(page.locator(".side-empty", { hasText: "暂时无法判断" })).toBeVisible();
+  await capture(page, "sidebar-filter-failed");
+
+  fail = false;
+  await retry.click();
+  await expect(running).toBeVisible();
+  await expect(finished).toHaveCount(0);
 });
