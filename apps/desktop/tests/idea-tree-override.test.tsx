@@ -190,26 +190,58 @@ test("with no conversation the session write is refused and said so", async () =
 });
 
 test("the number fields keep the last good value instead of holding one the write path rejects", async () => {
-  const { calls, client } = stubClient();
+  const { client } = stubClient();
   const { view } = await mount(client, "s1");
   try {
     const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void; value?: number } }[] })
       .findAllByType("input")
       .find((node) => node.props["aria-label"] === "最大深度");
-    assert.ok(depth);
+    assert.ok(depth, "the depth field is drawn");
     // Empty, zero, a fraction and an out-of-range value all leave 5 in place:
-    // the Session normalizer wants an integer from 1 to 20, and a form that can
-    // hold 0 or 3.5 is a form whose save button fails.
+    // both write paths want an integer in range, and a form that can hold 0 or
+    // 3.5 is a form whose save button fails.
     for (const raw of ["", "0", "3.5", "21"]) {
       await act(async () => { depth!.props.onChange?.({ target: { value: raw } }); });
     }
-    await act(async () => { click(view, "只用于本次会话"); });
-    await flush();
-    // Nothing differs from what the card loaded, so nothing is written.
-    const patch = calls.find((call) => call.method === "PATCH");
-    assert.equal(patch, undefined, "no write for a value the form never accepted");
     assert.equal(depth!.props.value, 5, "the field still shows the last accepted value");
-test("confirming sends the command after writing the Session override", async () => {
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("confirming writes the change and then lets the command out", async () => {
+  const { calls, client } = stubClient();
+  const confirmed: number[] = [];
+  let view: { toJSON: () => unknown; root: never; unmount: () => void };
+  await act(async () => {
+    view = create(
+      <IdeaTreeOverrideDialog
+        client={client as never}
+        onClose={() => {}}
+        onConfirm={() => { confirmed.push(1); }}
+        sessionId="s1"
+      />,
+    ) as never;
+  });
+  await flush();
+  try {
+    const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大深度");
+    await act(async () => { depth!.props.onChange?.({ target: { value: "3" } }); });
+    await act(async () => { click(view as never, "确认并发送"); });
+    await flush();
+    // The parameters go to the Session first, then the command is allowed out.
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.equal(patch?.path, "/api/sessions/s1");
+    assert.equal(confirmed.length, 1, "the shell was told to send");
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "global untouched");
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("confirming with nothing changed still lets the command out", async () => {
   const { calls, client } = stubClient();
   const confirmed: number[] = [];
   let view: { toJSON: () => unknown; root: never; unmount: () => void };
@@ -227,11 +259,10 @@ test("confirming sends the command after writing the Session override", async ()
   try {
     await act(async () => { click(view as never, "确认并发送"); });
     await flush();
-    // The parameters go to the Session first, then the command is allowed out.
-    const patch = calls.find((call) => call.method === "PATCH");
-    assert.equal(patch?.path, "/api/sessions/s1");
-    assert.equal(confirmed.length, 1, "the shell was told to send");
-    assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "global untouched");
+    // No field differs, so there is nothing to store — but the command that is
+    // waiting on this card must still leave, or confirming would swallow it.
+    assert.equal(calls.filter((call) => call.method === "PATCH").length, 0, "no write needed");
+    assert.equal(confirmed.length, 1, "the command was let out anyway");
   } finally {
     await act(async () => { view.unmount(); });
   }
