@@ -81,6 +81,12 @@
 .research-package-status.is-failed { color:var(--danger); background:var(--danger-soft); }
 .research-package-error { color:var(--danger); font-size:13px; overflow-wrap:anywhere; }
 .research-import-meta { color:var(--text-secondary); font-size:13px; margin-bottom:8px; }
+/* The package's omissions sit under the meta line, in full: the dialog body
+   already scrolls, so this block must not grow a scroll area of its own. */
+.research-import-omissions { border-top:1px solid var(--border-soft); margin-top:10px; padding-top:10px; }
+.research-import-omissions-heading { color:var(--text-secondary); font-size:12px; font-weight:600; margin:0; }
+.research-import-omissions-list { color:var(--muted); font-size:12px; line-height:1.6; margin:6px 0 0; padding-left:18px; }
+.research-import-omissions-list li { overflow-wrap:anywhere; }
 @media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } }
 .research-package-progress-toggle { border:0; background:none; color:inherit; cursor:pointer; font-size:12px; padding:0; }
 .research-package-progress-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }

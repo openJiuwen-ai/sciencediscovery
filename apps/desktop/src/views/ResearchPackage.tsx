@@ -546,7 +546,19 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
                 <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
                 <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
               </div>
-              {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
+              {inspection ? <>
+                <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
+                {/* The package's own omissions, from `inspection.manifest.omissions`
+                    — never a fixed list. They are rendered verbatim, in manifest
+                    order: the array mixes short machine tokens with whole
+                    sentences, and rewriting either would misreport the package.
+                    There is no scroll area of its own; the dialog body scrolls. */}
+                <div className="research-import-omissions">
+                  <p className="research-import-omissions-heading">{t.importOmissions(inspection.manifest.omissions.length)}</p>
+                  {inspection.manifest.omissions.length > 0 ? <ul className="research-import-omissions-list">{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul> : null}
+                </div>
+              </> : null}
+
             </div>
           ) : (
             <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>

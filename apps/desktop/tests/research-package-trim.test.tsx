@@ -195,10 +195,34 @@ test("the import review shows the source, the object count and the record bytes"
     assert.ok(markup.includes(t.recordsBytes), "the record byte count is labelled");
     assert.ok(markup.includes("2.0 KB"), "2048 records bytes read as 2.0 KB");
     assert.ok(markup.includes("pkg"), "the package's source title is shown");
-    // The preview is one meta line now: source title · objects · record bytes. The
-    // package's omissions are no longer rendered here, so this case must not keep
-    // asserting a scroll region that the dialog deliberately dropped.
-    assert.equal(markup.includes("IMPORT-OMISSION-TEXT"), false, "no omission list in the compact preview");
+    // #1024 (reopened): the compact preview carries the package's own omissions
+    // under the meta line. The line counts what the manifest says, so a package
+    // with one entry must not render a fixed empty list or a hard-coded number.
+    assert.ok(markup.includes(t.importOmissions(1)), "the omissions line counts the manifest's own entries");
+    assert.ok(markup.includes("IMPORT-OMISSION-TEXT"), "each omission is rendered verbatim");
+  });
+});
+
+test("a package whose manifest omits nothing says so and renders no list", async (context) => {
+  // The zero case is the other half of #1024: the line still states the count,
+  // and no list element is invented for an empty array.
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: client({
+      inspection: { manifest: { omissions: [], source: { title: "pkg" } }, objectCount: 0, packageChecksum: "c2", recordsBytes: 0 },
+    }),
+    request: { kind: "import", projectId: "p1" },
+  }), async (view) => {
+    const input = view.root.findAllByProps({ type: "file" })[0]!;
+    const chosen = new File([new Uint8Array([1, 2, 3, 4])], "empty.sdresearch");
+    await act(async () => {
+      (input.props.onChange as (event: unknown) => void)({ target: { files: [chosen] } });
+      await Promise.resolve();
+    });
+    const markup = rendered(view);
+    assert.ok(markup.includes(t.importOmissions(0)), "the line states that nothing was left out");
+    assert.equal(view.root.findAllByProps({ className: "research-import-omissions-list" }).length, 0,
+      "no list is drawn for an empty manifest array");
   });
 });
 
