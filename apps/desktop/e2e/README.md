@@ -54,6 +54,7 @@ adds a spec, that the evidence is local — do not describe it as a CI gate.
 | `failure-cards.spec.ts` | timeout cards, keyboard diagnostics, narrow layout, persisted replay, repeated failures, recovery and language switch |
 | `conversation.spec.ts` | compose, Enter vs Shift+Enter, SSE answer, persisted transcript |
 | `sessions.spec.ts` | rename and delete, both proved across a reload |
+| `sidebar-search.spec.ts` | Ctrl+K search: grouping, keyboard/IME, scroll, outside-click, inbox artifacts, a11y/contrast, truncation; 仅运行中 across a reload |
 | `settings.spec.ts` | default model and interface language surviving a reload |
 | `workspace.spec.ts` | file picker upload, and the health-reported size ceiling |
 

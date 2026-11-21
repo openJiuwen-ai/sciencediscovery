@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ApiClient } from "../src/api/client.js";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { TEXT } from "../src/text.js";
 import { Sidebar } from "../src/views/Sidebar.js";
@@ -32,6 +33,7 @@ const actions = {
   openSession: async () => {},
   renameSession: async () => {},
 } as unknown as WorkspaceActions;
+const client = { request: async () => ({}) } as unknown as ApiClient;
 
 function session(id: string, title: string, updatedAt?: string) {
   return { createdAt: updatedAt, id, title, updatedAt } as never;
@@ -45,6 +47,7 @@ function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
   return renderToStaticMarkup(
     <Sidebar
       actions={actions}
+      client={client}
       projects={[]}
       recent={[]}
       sessionsByProject={{}}

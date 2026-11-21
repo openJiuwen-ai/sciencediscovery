@@ -5335,3 +5335,360 @@ body.is-resizing {
   padding-top: 16px;
   border-top: 1px solid #ececec;
 }
+
+/* ---------------------------------------------------------------- */
+/* Sidebar search (#1251) and its session-list filters.              */
+/* ---------------------------------------------------------------- */
+
+/* The block follows the session-list row rhythm: the same 12 px horizontal
+   inset as `.side-new` / `.side-row` padding and the 2 px `.side-new` uses
+   between rows, so the field is not a third spacing system. */
+.side-search {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 2px;
+  padding: 0 12px;
+}
+
+.side-search-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 9px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  color: #777;
+}
+
+.side-search-field:focus-within {
+  border-color: #191919;
+  box-shadow: 0 0 0 2px rgba(25, 25, 25, 0.2);
+}
+
+.side-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #191919;
+  font-size: 13px;
+}
+
+.side-search-input::placeholder {
+  color: #767676;
+}
+
+.side-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.side-search-clear {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: #4d4d4d;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.side-search-clear:hover {
+  background: #efefef;
+  color: #191919;
+}
+
+.side-search-kbd {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid #d6d6d6;
+  border-radius: 4px;
+  color: #4d4d4d;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.side-search-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0 8px;
+  padding: 4px 4px 0;
+  color: #5a5a5a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* The block carries the 12 px inset the row rhythm uses, so the field lines up
+   with the two buttons above it. The result panel keeps the 4 px panel inset it
+   had, so it escapes the block's inset rather than pushing its rows 8 px right
+   of the Session names they replace. */
+.side-search-results,
+.side-search-note,
+.side-search-empty,
+.side-search-error {
+  margin: 0 -12px;
+}
+
+.side-search-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0 12px;
+  scrollbar-width: thin;
+}
+
+.side-search-results::-webkit-scrollbar {
+  width: 6px;
+}
+
+.side-search-results::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #dedede;
+}
+
+.side-search-note {
+  padding: 6px 4px;
+  color: #5a5a5a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.side-search-empty,
+.side-search-error {
+  padding: 10px 4px;
+  color: #4d4d4d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.side-search-empty p,
+.side-search-error p {
+  margin: 0;
+}
+
+.side-search-empty-title {
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.side-search-error {
+  color: #a33;
+}
+
+.side-search-retry {
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  background: #fff;
+  color: #191919;
+  font-size: 12px;
+}
+
+.side-search-retry:hover {
+  background: #efefef;
+}
+
+.side-search-group {
+  margin-top: 6px;
+}
+
+.side-search-group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 4px;
+  color: #5a5a5a;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.side-search-count {
+  color: #5a5a5a;
+}
+
+.side-search-result {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: #191919;
+  cursor: pointer;
+  text-align: left;
+}
+
+.side-search-result:hover {
+  background: #e2e2e2;
+}
+
+/* The bar is the selection's non-text indicator: the fill alone is too close
+   to the panel's #f5f5f5 to be seen, while #191919 clears 3:1. */
+.side-search-result.is-selected {
+  background: #e2e2e2;
+  box-shadow: inset 2px 0 0 #191919;
+}
+
+.side-search-result.is-unavailable {
+  color: #5a5a5a;
+  cursor: default;
+}
+
+.side-search-result.is-unavailable:hover {
+  background: transparent;
+}
+
+.side-search-result-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.side-search-result-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.side-search-result-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: #5a5a5a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.side-search-archived {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #e4e4e4;
+  color: #4d4d4d;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 15px;
+}
+
+.side-search-more {
+  flex: 1 1 100%;
+  color: #5a5a5a;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+/* The filter row above the session lists: three toggles and a time window. */
+.side-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 0;
+}
+
+.side-filters-label {
+  flex: 0 0 auto;
+  padding-right: 2px;
+  color: #5a5a5a;
+  font-size: 10px;
+}
+
+.side-filter,
+.side-filter-select,
+.side-filter-reset {
+  height: 22px;
+  max-width: 100%;
+  padding: 0 7px;
+  border: 1px solid #e2e2e2;
+  border-radius: 11px;
+  background: #fff;
+  color: #4d4d4d;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.side-filter-select {
+  padding: 0 4px;
+}
+
+.side-filter:hover,
+.side-filter-select:hover,
+.side-filter-reset:hover {
+  border-color: #c9c9c9;
+}
+
+.side-filter.is-on {
+  border-color: #191919;
+  background: #191919;
+  color: #fff;
+}
+
+.side-filter-reset {
+  border-style: dashed;
+  color: #5a5a5a;
+}
+
+.side-filters-pending,
+.side-filters-failed {
+  padding: 4px 8px 0;
+  color: #5a5a5a;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.side-filters-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: #8a2f2f;
+}
+
+.side-filter-retry {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid #c9a3a3;
+  border-radius: 10px;
+  background: #fff;
+  color: #8a2f2f;
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* A visible focus indicator on every control the search and filters own: the
+   previous border-only change was 1.8:1 against white. */
+.side-search-clear:focus-visible,
+.side-search-retry:focus-visible,
+.side-filter:focus-visible,
+.side-filter-select:focus-visible,
+.side-filter-reset:focus-visible,
+.side-filter-retry:focus-visible {
+  outline: 2px solid #191919;
+  outline-offset: 1px;
+}
+
+/* While a query is open the results own the column's remaining height; the
+   normal lists stay mounted behind `hidden` so Escape restores their scroll
+   position. */
+.side-search.is-active {
+  flex: 1 1 auto;
+}
