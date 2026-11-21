@@ -78,7 +78,8 @@ test("the welcome page's composer is the landing arrangement, with its strip", (
   assert.match(markup, /有什么需要我帮忙的/u);
   // The strip carries the project picker. With no Project chosen it shows the
   // invitation rather than a name. The approval mode is not a second control
-  // there: it lives in 会话设置, the one place a mode can be changed.
+  // there: it has its own control in the footer (#1204), which is the one place
+  // a mode can be changed now that 会话设置 no longer lists it.
   assert.match(markup, /class="composer-strip-project is-placeholder"/u);
   assert.match(markup, /选择项目/u);
   assert.doesNotMatch(markup, /composer-strip-permission/u);

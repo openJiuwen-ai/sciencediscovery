@@ -237,6 +237,7 @@ export const EN: Text = {
     sessionSettings: "Session settings",
     /** The action at the top of 会话设置: the way into program evolution. */
     evolveExperiment: "Program evolution experiment",
+    ideaTree: "idea-tree",
     experts: "Experts",
     expertsNone: "None",
     expertsHint: "Bind a personal expert to this conversation.",
@@ -261,6 +262,30 @@ export const EN: Text = {
 
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting
    *  (the shell bridge pushes progress; this is the idle wording). */
+  ideaTreeOverride: {
+    title: "Idea Tree parameters",
+    hint: "Used by the next research without changing the global settings. Only 覆盖全局设置 writes them back.",
+    template: "Research template",
+    templateGeneral: "General scientific hypothesis",
+    templateWater: "Water-treatment materials",
+    intensity: "Exploration intensity",
+    quick: "Quick",
+    standard: "Standard",
+    deep: "Deep",
+    direction: "Score direction",
+    maximize: "Maximize",
+    minimize: "Minimize",
+    maxDepth: "Maximum depth",
+    maxNodes: "Maximum nodes",
+    saveSession: "Use for this conversation",
+    saveGlobal: "Overwrite the global settings",
+    cancel: "Cancel",
+    loading: "Reading…",
+    savedSession: "This conversation will use these settings",
+    savedGlobal: "Written to the global settings",
+    noSession: "Open a conversation to change the settings for it alone.",
+  },
+
   jiuwen: {
     starting: "Agent cluster starting",
     preparing: "Initializing…",

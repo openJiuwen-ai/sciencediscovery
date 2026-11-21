@@ -96,6 +96,9 @@ interface Props {
    *  searches keep their cards in the transcript. The composer's draft rides
    *  along, so a sentence already written becomes the new design's task. */
   onEvolve?: (draft: string) => void;
+  /** Opens the Idea Tree parameters card. Absent where there is nothing to
+   *  configure — a static render, for one. */
+  onIdeaTree?: () => void;
   onOpenSettings: () => void;
   /** A skill whose choice has more to it than its command: the pick is handed
    *  here with the draft it would have replaced, and `true` means the surface
@@ -326,6 +329,7 @@ export function SessionSettingsMenu({
   expertsLoading,
   onClose,
   onEvolve,
+  onIdeaTree,
   onSelectSpecialist,
   selectedSpecialistId,
 }: {
@@ -338,6 +342,8 @@ export function SessionSettingsMenu({
   /** Opens the evolve surface. Absent in a static render, where the entry has
    *  nowhere to go. */
   onEvolve?: () => void;
+  /** Opens the Idea Tree parameters card; absent in a static render. */
+  onIdeaTree?: () => void;
   onSelectSpecialist?: (specialistId?: string) => void;
   selectedSpecialistId?: string;
 }) {
@@ -366,6 +372,26 @@ export function SessionSettingsMenu({
                   <EvolveGlyph size={18} />
                 </span>
                 <span className="session-menu-label">{TEXT.composer.evolveExperiment}</span>
+              </button>
+              <div className="session-menu-divider" />
+            </>
+          )}
+          {/* 程序演进实验's sibling: the same kind of action, one row lower, and
+              the only way into Idea Tree's parameters from a conversation. */}
+          {onIdeaTree === undefined ? null : (
+            <>
+              <button
+                className="session-menu-row"
+                onClick={() => {
+                  onClose();
+                  onIdeaTree();
+                }}
+                type="button"
+              >
+                <span className="session-menu-icon">
+                  <EvolveTreeGlyph size={18} />
+                </span>
+                <span className="session-menu-label">{TEXT.composer.ideaTree}</span>
               </button>
               <div className="session-menu-divider" />
             </>
@@ -669,6 +695,7 @@ export function Composer({
   onClearCommand,
   onCreateProject,
   onEvolve,
+  onIdeaTree,
   onOpenSettings,
   onPickSkill,
   onRemoveAttachment,
@@ -1072,6 +1099,7 @@ export function Composer({
               // The draft is carried into the setup dialog: a sentence already
               // written is the task the new design would start from.
               onEvolve={onEvolve === undefined ? undefined : () => onEvolve(text)}
+              onIdeaTree={onIdeaTree}
               onSelectSpecialist={onSelectSpecialist}
               selectedSpecialistId={selectedSpecialistId}
             />

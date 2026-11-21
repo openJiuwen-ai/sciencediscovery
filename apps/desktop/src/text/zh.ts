@@ -237,6 +237,7 @@ export const ZH = {
     sessionSettings: "会话设置",
     /** 会话设置最上面的一项：进入程序演进。 */
     evolveExperiment: "程序演进实验",
+    ideaTree: "idea-tree",
     experts: "专家",
     expertsNone: "无",
     expertsHint: "为此对话绑定一位个人专家。",
@@ -261,6 +262,30 @@ export const ZH = {
 
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting
    *  (the shell bridge pushes progress; this is the idle wording). */
+  ideaTreeOverride: {
+    title: "idea-tree 参数",
+    hint: "只用于之后发起的研究；不改全局设置。点「覆盖全局设置」才会写回全局。",
+    template: "研究模板",
+    templateGeneral: "通用科学假设",
+    templateWater: "水处理材料",
+    intensity: "探索强度",
+    quick: "快速",
+    standard: "标准",
+    deep: "深入",
+    direction: "评分方向",
+    maximize: "最大化",
+    minimize: "最小化",
+    maxDepth: "最大深度",
+    maxNodes: "最大节点数",
+    saveSession: "只用于本次会话",
+    saveGlobal: "覆盖全局设置",
+    cancel: "取消",
+    loading: "正在读取…",
+    savedSession: "已用于本次会话，之后发起的研究会用这套参数",
+    savedGlobal: "已写入全局设置",
+    noSession: "打开一个会话后，才能只给本次会话改参数。",
+  },
+
   jiuwen: {
     starting: "智能体集群启动中",
     preparing: "正在初始化…",

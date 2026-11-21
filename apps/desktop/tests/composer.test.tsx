@@ -81,11 +81,12 @@ function render(
 
 /** 会话设置's rows are rendered directly, since the menu they belong to is
  *  only mounted while open. */
-function settingsMenu(evolve = false): string {
+function settingsMenu(evolve = false, ideaTree = false): string {
   return renderToStaticMarkup(
     <SessionSettingsMenu
       onClose={() => {}}
       onEvolve={evolve ? () => {} : undefined}
+      onIdeaTree={ideaTree ? () => {} : undefined}
     />,
   );
 }
@@ -169,6 +170,17 @@ test("会话设置 carries the way into program evolution above its own settings
 
   // Without somewhere to go — a static render — the row is not drawn.
   assert.doesNotMatch(settingsMenu(), /程序演进实验/);
+});
+
+test("会话设置 carries the idea-tree entry under 程序演进实验", () => {
+  const markup = settingsMenu(true, true);
+  assert.match(markup, />idea-tree</);
+  // It sits below the evolve entry and above the expert row, the order the
+  // handoff gives the menu.
+  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("idea-tree"));
+  assert.ok(markup.indexOf("idea-tree") < markup.indexOf(">专家<"));
+  // A settings menu that cannot open the card does not offer the row.
+  assert.doesNotMatch(settingsMenu(true), /idea-tree/);
 });
 
 test("a permission option says on screen what it allows", () => {
