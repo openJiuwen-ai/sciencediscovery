@@ -365,12 +365,13 @@ export function IdeaTreeOverrideDialog({
             <button className="evolve-create-cancel" onClick={close} type="button">{t.cancel}</button>
             <button
               className="evolve-create-cancel"
-              // A failed settings read leaves nothing to save, so the Session
-              // action is disabled rather than pressable-and-inert. The command
-              // entry (onConfirm) stays live: it sends without writing.
-              disabled={busy || (draft === undefined && status !== "failed")
-                || (sessionId === undefined && onConfirm === undefined)
-                || (status === "failed" && onConfirm === undefined)}
+              // Only a failed *read* leaves nothing to save, and the discriminator
+              // is `draft === undefined`: a failed write keeps the draft, so the
+              // reader has to be able to press again and retry. The command entry
+              // (onConfirm) stays live either way — it sends without writing.
+              disabled={busy
+                || (draft === undefined && (onConfirm === undefined || status !== "failed"))
+                || (sessionId === undefined && onConfirm === undefined)}
               onClick={() => void saveSession()}
               type="button"
             >
