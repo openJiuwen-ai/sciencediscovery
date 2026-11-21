@@ -178,8 +178,10 @@ export function IdeaTreeOverrideDialog({
     setStatus("saving");
     setFailure(undefined);
     try {
-      // An empty object is how the normalizer is told "no override": it rebuilds
-      // the set from this payload, so a partial one leaves the other pins alone.
+      // The stored pin set becomes exactly this payload — `updateSession`
+      // normalizes it on its own. That is safe only because `draft` starts from
+      // the pins in force, so every pin the reader kept is in `override`; an
+      // empty object is how the normalizer is told "no override".
       await updateSession(client, sessionId, { ideaTreeOverride: override });
       setPins(override);
       setHasOverride(!empty);
@@ -242,6 +244,7 @@ export function IdeaTreeOverrideDialog({
     try {
       await updateSession(client, sessionId, { ideaTreeOverride: null });
       setDraft(inherited);
+      setOpened(inherited);
       setPins({});
       setHasOverride(false);
       setStatus("session");
