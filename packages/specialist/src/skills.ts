@@ -1647,15 +1647,6 @@ export class SkillCatalog {
     });
   }
 
-  /**
-   * Install reviewed bytes into the managed Skill catalog: the revision
-   * directory, the index entry and the in-memory package.
-   *
-   * Both confirmation paths end here. A Library publication keeps an archive of
-   * what was confirmed, but the catalog is what the Skills page lists and what a
-   * Session selects from, so a draft that only reached a Library would be
-   * invisible to the user who had just confirmed it.
-   */
   /** Refuse a draft that would install over an existing Skill, before anything
    *  is written: a publisher that has already committed must not be left with a
    *  version whose reviewed package was rejected here. */
@@ -1665,6 +1656,15 @@ export class SkillCatalog {
     }
   }
 
+  /**
+   * Install reviewed bytes into the managed Skill catalog: the revision
+   * directory, the index entry and the in-memory package.
+   *
+   * Both confirmation paths end here. A Library publication keeps an archive of
+   * what was confirmed, but the catalog is what the Skills page lists and what a
+   * Session selects from, so a draft that only reached a Library would be
+   * invisible to the user who had just confirmed it.
+   */
   private async installReviewedDraft(
     loaded: LoadedPackage,
     provenance: SkillVersionProvenance,
