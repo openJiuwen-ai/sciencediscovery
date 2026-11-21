@@ -319,3 +319,47 @@ test("an edited field is the only one the global write carries", async () => {
     await act(async () => { view.unmount(); });
   }
 });
+
+test("a global write keeps the Session's pins on screen, and the new deployment as the baseline", async () => {
+  // Deployment 5 / 100, Session pins maxDepth 3. The reader edits maxNodes and
+  // writes it globally: the deployment moves to 120, the pin stays 3, and the
+  // form must show both — showing the deployment alone would claim the
+  // conversation had moved to 5 while it still runs 3.
+  let deploymentMaxNodes = 100;
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const calls: { method: string; path: string; body: unknown }[] = [];
+  const client = {
+    request: async (path: string, init?: { body?: string; method?: string }) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body === undefined ? undefined : JSON.parse(init.body);
+      calls.push({ method, path, body });
+      if (method === "PUT") {
+        const written = body as Record<string, unknown>;
+        if (typeof written.maxNodes === "number") deploymentMaxNodes = written.maxNodes;
+        return { ...GLOBAL, maxNodes: deploymentMaxNodes };
+      }
+      if (path.endsWith("/settings")) {
+        return { overrides: { ideaTreeOverride: SESSION_OVERRIDES }, sources: {}, effective: {} };
+      }
+      return GLOBAL;
+    },
+  } as never;
+
+  const { markup, view } = await mount(client, "s1");
+  try {
+    const nodes = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大节点数");
+    await act(async () => { nodes!.props.onChange?.({ target: { value: "120" } }); });
+    await act(async () => { click(view, "覆盖全局设置"); });
+    await flush();
+
+    // The deployment moved, and the pin is still what this Session runs with.
+    assert.match(markup(), /"value":120/, "the new deployment value is shown");
+    assert.match(markup(), /"value":3/, "the pin is still shown");
+    assert.match(markup(), /本次会话已固定部分参数/);
+  } finally {
+    SESSION_OVERRIDES = {};
+    await act(async () => { view.unmount(); });
+  }
+});
