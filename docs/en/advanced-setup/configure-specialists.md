@@ -18,6 +18,11 @@ new-role action. Enter a name, description, and instructions:
 | Description | Inspect cohort columns, missingness, duplicates, and filtering counts; deliver reproducible checks. |
 | Instructions | Adapt the example below to your laboratory's data conventions. |
 
+The instructions define the selected Specialist's role and workflow. The
+platform's base prompt supplies tool, workspace, permission, and artifact rules.
+The shared prompt composer uses that base followed by the Specialist instructions.
+An ordinary session uses the default science-analysis role and workflow.
+
 ```text
 Check the cohort data supplied by the user.
 Read the actual columns and data scope. Explain ambiguity if the patient identifier is unclear.

@@ -59,6 +59,31 @@ async function fakeAdapter(
 
 const line = (value: unknown) => JSON.stringify(value) + "\n";
 
+test("the JiuwenSwarm adapter receives the platform base and the selected Specialist role", async () => {
+  const adapter = await fakeAdapter((_request, response) => {
+    response.writeHead(200);
+    response.end(line({ done: { finalText: "Checked." } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      specialist: {
+        name: "Data quality reviewer",
+        description: "Checks supplied records.",
+        instructions: "Only inspect the supplied records for missing values.",
+      },
+    })).execute("Check these records.");
+    const prompt = adapter.requests[0]?.body.systemPrompt;
+    assert.equal(typeof prompt, "string");
+    assert.match(prompt, /Only inspect the supplied records for missing values/);
+    assert.match(prompt, /request_direct_execution/);
+    assert.match(prompt, /declare_artifact/);
+    assert.doesNotMatch(prompt, /You are a local science analysis agent/);
+    assert.doesNotMatch(prompt, /Inspect data before analyzing it/);
+  } finally {
+    await adapter.close();
+  }
+});
+
 test("platform tool failure before reaching the bridge remains visible to users", async () => {
   const adapter = await fakeAdapter((_request, response) => {
     response.writeHead(200);

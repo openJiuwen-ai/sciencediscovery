@@ -18,6 +18,8 @@ import assert from "node:assert/strict";
 
 
 import {
+  BASE_WORKSPACE_SYSTEM_PROMPT,
+  WORKSPACE_SYSTEM_PROMPT,
   buildSkillSystemSection,
   buildWorkspacePromptParts,
   buildWorkspaceSystemPrompt,
@@ -147,6 +149,42 @@ test("workspace prompt exposes protected identity and governance parts", () => {
   assert.equal(parts.find((part) => part.id === "citation.governance")?.protected, true);
 });
 
+test("a selected Specialist replaces the default role while retaining platform rules", () => {
+  const governance = {
+    specialist: {
+      description: "Checks supplied data for missing values.",
+      instructions: "Only check the supplied data and explain each anomaly.",
+      name: "Data quality reviewer",
+    },
+    memoryGraphEnabled: true,
+  };
+  const prompt = buildWorkspaceSystemPrompt([skill("data-checks", "Check supplied data")], true, governance);
+  assert.ok(prompt.startsWith(BASE_WORKSPACE_SYSTEM_PROMPT));
+  assert.doesNotMatch(prompt, /You are a local science analysis agent/);
+  assert.doesNotMatch(prompt, /Inspect data before analyzing it/);
+  assert.match(prompt, /State what you actually ran/);
+  assert.match(prompt, /Only check the supplied data and explain each anomaly/);
+  assert.match(prompt, /request_direct_execution/);
+  assert.match(prompt, /declare_artifact/);
+  assert.match(prompt, /<name>data-checks<\/name>/);
+  assert.match(prompt, /Citation chain/);
+
+  const parts = buildWorkspacePromptParts([skill("data-checks", "Check supplied data")], true, governance);
+  assert.equal(parts.find((part) => part.id === "workspace.identity")?.content, BASE_WORKSPACE_SYSTEM_PROMPT);
+  assert.equal(parts.find((part) => part.id === "workspace.identity")?.protected, true);
+  assert.match(parts.find((part) => part.id === "specialist.identity")?.content ?? "",
+    /Only check the supplied data and explain each anomaly/);
+});
+
+test("an ordinary session retains the default science role and platform rules", () => {
+  const prompt = buildWorkspaceSystemPrompt();
+  assert.ok(prompt.startsWith(WORKSPACE_SYSTEM_PROMPT));
+  assert.match(prompt, /You are a local science analysis agent/);
+  assert.match(prompt, /Inspect data before analyzing it/);
+  assert.ok(prompt.includes(BASE_WORKSPACE_SYSTEM_PROMPT));
+  assert.doesNotMatch(prompt, /Applied user specialist/);
+});
+
 test("system prompt composes a subagent preset with an optional user specialist", () => {
   const prompt = buildWorkspaceSystemPrompt([], false, {
     specialist: { description: "Reviews statistical methods and assumptions.", instructions: "Check statistical assumptions.", name: "Statistics reviewer" },
@@ -159,6 +197,9 @@ test("system prompt composes a subagent preset with an optional user specialist"
   assert.match(prompt, /Applied user specialist Statistics reviewer/);
   assert.match(prompt, /Reviews statistical methods and assumptions/);
   assert.match(prompt, /Check statistical assumptions/);
+  assert.ok(prompt.startsWith(BASE_WORKSPACE_SYSTEM_PROMPT));
+  assert.doesNotMatch(prompt, /You are a local science analysis agent/);
+  assert.doesNotMatch(prompt, /Inspect data before analyzing it/);
 });
 
 test("system prompt injects lead subagent orchestration when enabled", () => {
