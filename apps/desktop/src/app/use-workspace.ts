@@ -29,7 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
-import { membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
+import { membershipAfterRead, readSessionFilter, sessionsOfProject, writeSessionFilter } from "./session-filter.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -1850,6 +1850,16 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     publishArtifacts();
   }, [publishArtifacts]);
 
+  /** The same for a Project, which reaches Sessions the current filter hides: the
+   *  cached outputs carry the Project, the listing does not. */
+  const forgetProjectArtifacts = useCallback((projectId: string) => {
+    for (const sessionId of sessionsOfProject(artifactsBySession.current, projectId)) {
+      delete artifactsBySession.current[sessionId];
+      membershipRef.current?.delete(sessionId);
+    }
+    publishArtifacts();
+  }, [publishArtifacts]);
+
   const mutate = useCallback(
     async (options: { dropIfCurrent?: boolean; forgetArtifacts?: boolean; id: string; operation: () => Promise<unknown> }) => {
       try {
@@ -2168,6 +2178,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             // away. It cannot stay: its Session no longer exists, and the next
             // send has to land in the inbox rather than in a Project that is
             // gone.
+            // Its Sessions went with it, and under a filter the listing cannot
+            // name them; the cached outputs can.
+            forgetProjectArtifacts(project.id);
             if (projectRef.current === project.id) {
               projectRef.current = inboxRef.current?.id;
               setActiveProjectId(inboxRef.current?.id);
