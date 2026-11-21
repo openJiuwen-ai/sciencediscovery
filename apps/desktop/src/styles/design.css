@@ -5472,3 +5472,17 @@ body.is-resizing {
 }
 .side-search-note { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 16px; }
 .side-search-note.is-error { color: var(--danger, #d4380d); }
+
+/* The list's narrowing row: chips that toggle, one of which cycles its value. */
+.side-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 6px; }
+.side-filter-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.side-filter-chip.is-on { background: rgba(127, 127, 127, 0.14); color: var(--text-strong); }

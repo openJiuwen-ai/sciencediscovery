@@ -22,6 +22,7 @@ import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.j
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { groupSearchResults, searchDetail } from "../app/session-search.js";
+import type { SessionListFilters } from "../app/session-filters.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -56,6 +57,8 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
+  /** How the list is narrowed: scope, running, artifacts, window. */
+  listFilters: SessionListFilters;
   /** What `GET /api/search` answered for the current query, if anything. */
   searchResults?: WorkbenchSearchResponse;
   /** Why the last search failed, when it did. */
@@ -135,6 +138,7 @@ export function Sidebar({
   projects,
   recent,
   running,
+  listFilters,
   searchError,
   searchQuery,
   searchResults,
@@ -384,6 +388,46 @@ export function Sidebar({
             )}
         </div>
       ) : null}
+
+      {/* Narrowing the list, applied client-side over what the page returned:
+          the workspace is small enough that a filter is cheaper than a request,
+          and it keeps 仅运行中 honest without asking the route for run state. */}
+      <div aria-label={TEXT.sidebar.filtersLabel} className="side-filters" role="group">
+        <button
+          aria-pressed={listFilters.scope === "current"}
+          className={`side-filter-chip${listFilters.scope === "current" ? " is-on" : ""}`}
+          onClick={() => actions.setListFilters({ scope: listFilters.scope === "current" ? "all" : "current" })}
+          type="button"
+        >
+          {listFilters.scope === "current" ? TEXT.sidebar.filterScopeCurrent : TEXT.sidebar.filterScopeAll}
+        </button>
+        <button
+          aria-pressed={listFilters.onlyRunning}
+          className={`side-filter-chip${listFilters.onlyRunning ? " is-on" : ""}`}
+          onClick={() => actions.setListFilters({ onlyRunning: !listFilters.onlyRunning })}
+          type="button"
+        >
+          {TEXT.sidebar.filterOnlyRunning}
+        </button>
+        <button
+          aria-pressed={listFilters.onlyWithArtifacts}
+          className={`side-filter-chip${listFilters.onlyWithArtifacts ? " is-on" : ""}`}
+          onClick={() => actions.setListFilters({ onlyWithArtifacts: !listFilters.onlyWithArtifacts })}
+          type="button"
+        >
+          {TEXT.sidebar.filterWithArtifacts}
+        </button>
+        <button
+          className={`side-filter-chip${listFilters.window !== "all" ? " is-on" : ""}`}
+          onClick={() => actions.setListFilters({
+            window: listFilters.window === "all" ? "today" : listFilters.window === "today" ? "week" : "all",
+          })}
+          type="button"
+        >
+          {listFilters.window === "today" ? TEXT.sidebar.filterWindowToday
+            : listFilters.window === "week" ? TEXT.sidebar.filterWindowWeek : TEXT.sidebar.filterWindowAll}
+        </button>
+      </div>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
