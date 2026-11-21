@@ -113,10 +113,9 @@ export const ZH = {
   /** The sidebar's search field and result list, and the session-list filters. */
   search: {
     label: "搜索会话、项目、产物",
-    placeholder: "搜索会话、项目、产物",
-    /** The field must not promise message search: the server matches names and
-     *  titles only, and the issue records content search as a follow-up. */
-    hint: "搜索会话、项目、产物；只匹配名称与标题，不搜索消息内容 · Ctrl/Cmd+K",
+    /** One word: the field says what it is, and the empty-state sentence keeps
+     *  the scope (names and titles, not message text). */
+    placeholder: "搜索",
     clear: "清除搜索",
     loading: "正在搜索…",
     count: (count: number) => `${count} 条结果`,

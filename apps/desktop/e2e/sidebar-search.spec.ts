@@ -81,6 +81,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("Ctrl+K searches, groups by kind and opens the archived Session with the keyboard", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   const mock = await installMockApi(page, {
     searchResults: SEARCH_RESULTS,
     sessions: [
@@ -93,6 +94,7 @@ test("Ctrl+K searches, groups by kind and opens the archived Session with the ke
   // The shortcut listener is attached by the mounted field's effect; pressing
   // before the sidebar has rendered would test the browser, not the app.
   await expect(field).toBeVisible();
+  await capture(page, "sidebar-search-empty");
 
   await page.keyboard.press("Control+k");
   await expect(field).toBeFocused();
@@ -106,6 +108,7 @@ test("Ctrl+K searches, groups by kind and opens the archived Session with the ke
   // The archived Session says so, and its project context is visible.
   await expect(page.locator(".side-search-archived")).toHaveText("已归档");
   await expect(page.locator(".side-search-result")).toHaveCount(3);
+  await capture(page, "sidebar-search-grouped");
 
   expect(mock.calls.some((call) => call.method === "GET" && call.path === "/api/search")).toBe(true);
 
@@ -135,6 +138,7 @@ test("Escape closes the results and restores the list", async ({ page }) => {
 });
 
 test("仅运行中 narrows the session list and survives a reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await installMockApi(page, {
     runsBySession: {
       i1: [{ events: [], run: { createdAt: CREATED_AT, id: "run-1", queueOrder: 0, status: "running" } }],
@@ -154,6 +158,7 @@ test("仅运行中 narrows the session list and survives a reload", async ({ pag
   await page.getByRole("button", { name: "仅运行中" }).click();
   await expect(running).toBeVisible();
   await expect(finished).toHaveCount(0);
+  await capture(page, "sidebar-filter-running");
 
   await page.reload();
   await expect(running).toBeVisible();
@@ -388,13 +393,49 @@ test("the English placeholder fits the 296 px field", async ({ page }) => {
   await page.goto("/");
   const field = page.locator(".side-search-input");
   await expect(field).toBeVisible();
-  await expect(field).toHaveAttribute("placeholder", "Search names and titles");
+  await expect(field).toHaveAttribute("placeholder", "Search");
   expect(await field.evaluate((input: HTMLInputElement) => {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d")!;
     context.font = getComputedStyle(input).font;
     return context.measureText(input.placeholder).width <= input.clientWidth;
   })).toBe(true);
+});
+
+test("the field is one word, has no caption and follows the session-row rhythm", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installMockApi(page, { sessions: [makeSession({ id: "i1", projectId: "inbox-1", title: "会话一" })] });
+  await page.goto("/");
+  const field = page.locator(".side-search-input");
+  await expect(field).toBeVisible();
+
+  // The field says only what it is; the accessible name carries the scope and
+  // the `kbd` chip carries the shortcut, so there is no caption or tooltip.
+  await expect(field).toHaveAttribute("placeholder", "搜索");
+  await expect(field).not.toHaveAttribute("title", /./);
+  await expect(page.locator(".side-search-hint")).toHaveCount(0);
+
+  const geometry = await page.evaluate(() => {
+    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+    const fieldBox = box(".side-search-field");
+    const importBox = box(".side-import-button");
+    const newTaskBox = box(".side-new");
+    return {
+      buttons: importBox.top - newTaskBox.bottom,
+      fieldHeight: fieldBox.height,
+      gapAbove: fieldBox.top - importBox.bottom,
+      inset: fieldBox.left - importBox.left,
+      width: importBox.width - fieldBox.width,
+    };
+  });
+  // The 36 px row height, the rows' 12 px horizontal inset, and the same
+  // vertical gap the two buttons above it use (the column gap plus the 2 px
+  // `.side-new` margin), so the block is not a third spacing rhythm.
+  expect(geometry.fieldHeight).toBe(36);
+  expect(Math.round(geometry.inset)).toBe(12);
+  expect(Math.round(geometry.width)).toBe(24);
+  expect(Math.round(geometry.buttons)).toBe(20);
+  expect(Math.round(geometry.gapAbove)).toBe(Math.round(geometry.buttons));
 });
 
 test("arrows and Escape keep working after focus leaves the field", async ({ page }) => {
@@ -447,8 +488,6 @@ test("secondary text, the archived pill and the selected marker meet AA contrast
       const values = [luminance(rgb(first)), luminance(rgb(second))].sort((left, right) => right - left);
       return (values[0]! + 0.05) / (values[1]! + 0.05);
     };
-    const sidebar = getComputedStyle(document.querySelector(".sidebar")!).backgroundColor;
-    const hint = getComputedStyle(document.querySelector(".side-search-hint")!).color;
     const detail = getComputedStyle(document.querySelector(".side-search-result-detail")!).color;
     const selected = getComputedStyle(document.querySelector(".side-search-result.is-selected")!);
     const pill = getComputedStyle(document.querySelector(".side-search-archived")!);
@@ -457,10 +496,8 @@ test("secondary text, the archived pill and the selected marker meet AA contrast
       bar: selected.boxShadow.includes("25, 25, 25"),
       detail: ratio(detail, selected.backgroundColor),
       focus: ratio(getComputedStyle(document.querySelector(".side-search-field")!).borderTopColor, "rgb(255, 255, 255)"),
-      hint: ratio(hint, sidebar),
     };
   });
-  expect(measured.hint).toBeGreaterThanOrEqual(4.5);
   expect(measured.detail).toBeGreaterThanOrEqual(4.5);
   expect(measured.archived).toBeGreaterThanOrEqual(4.5);
   expect(measured.focus).toBeGreaterThanOrEqual(3);
@@ -553,6 +590,7 @@ test("the composer keeps its arrows, Escape and Ctrl+K", async ({ page }) => {
 });
 
 test("the empty result puts the full sentence as the block title", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await installMockApi(page, { searchResults: [] });
   await page.goto("/");
   const field = page.locator(".side-search-input");
@@ -572,6 +610,7 @@ test("the empty result puts the full sentence as the block title", async ({ page
   });
   expect(type.title).toBeGreaterThanOrEqual(type.body);
   expect(type.weight).toBeGreaterThanOrEqual(600);
+  await capture(page, "sidebar-search-no-results");
 });
 
 test("仅当前项目 keeps only the open Project's rows and leaves the other fold reachable", async ({ page }) => {
@@ -680,7 +719,7 @@ test("an English search failure offers Retry outside the listbox and recovers", 
   await page.goto("/");
 
   const field = page.locator(".side-search-input");
-  await expect(field).toHaveAttribute("placeholder", "Search names and titles");
+  await expect(field).toHaveAttribute("placeholder", "Search");
   await page.keyboard.press("Control+k");
   await field.fill("archive");
 
@@ -729,6 +768,99 @@ test("a failed filter read says the result is unknown and Retry recovers the row
   // Unknown is not the same answer as "none".
   await expect(page.locator(".side-empty", { hasText: "暂时无法判断" })).toBeVisible();
   await capture(page, "sidebar-filter-failed");
+
+  fail = false;
+  await retry.click();
+  await expect(running).toBeVisible();
+  await expect(finished).toHaveCount(0);
+});
+
+test("仅当前项目 in the English locale keeps only the open Project's rows", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+  await installMockApi(page, {
+    projects: [
+      { ...DEFAULT_PROJECT, id: "project-1", name: "Sepsis study" },
+      { ...DEFAULT_PROJECT, id: "project-2", name: "Crystal study" },
+    ],
+    sessions: [
+      makeSession({ id: "s1", projectId: "project-1", title: "Session in this project" }),
+      makeSession({ id: "s2", projectId: "project-2", title: "Session in the other project" }),
+    ],
+  });
+  await page.goto("/");
+
+  await page.locator(".side-session-name", { hasText: "Session in this project" }).click();
+  await expect(page.locator(".task-head-title")).toHaveText("Session in this project");
+  await page.getByRole("button", { name: "Current project" }).click();
+
+  await expect(page.getByRole("button", { name: "Current project" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".side-session-name", { hasText: "Session in this project" })).toBeVisible();
+  await expect(page.locator(".side-session-name", { hasText: "Session in the other project" })).toHaveCount(0);
+  // The filter scopes rows, not navigation: the other Project is still there.
+  await expect(page.locator(".side-project-toggle", { hasText: "Crystal study" })).toBeVisible();
+  await capture(page, "sidebar-filter-current-project-en");
+});
+
+test("the today window in the English locale hides a Session last active before the local day", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+  const now = new Date().toISOString();
+  const older = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+  await installMockApi(page, {
+    sessions: [
+      makeSession({ createdAt: now, id: "i1", projectId: "inbox-1", title: "Session from today", updatedAt: now }),
+      makeSession({ createdAt: older, id: "i2", projectId: "inbox-1", title: "Session from ten days ago", updatedAt: older }),
+    ],
+  });
+  await page.goto("/");
+
+  const today = page.locator(".side-session-name", { hasText: "Session from today" });
+  const beforeToday = page.locator(".side-session-name", { hasText: "Session from ten days ago" });
+  await expect(today).toBeVisible();
+  await expect(beforeToday).toBeVisible();
+
+  await page.getByLabel("Time range").selectOption("today");
+
+  await expect(page.getByLabel("Time range")).toHaveValue("today");
+  await expect(today).toBeVisible();
+  await expect(beforeToday).toHaveCount(0);
+  await capture(page, "sidebar-filter-today-en");
+});
+
+test("a failed filter read in the English locale says unknown and offers Retry", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+  await installMockApi(page, {
+    runsBySession: {
+      i1: [{ events: [], run: { createdAt: CREATED_AT, id: "run-1", queueOrder: 0, status: "running" } }],
+    },
+    sessions: [
+      makeSession({ id: "i1", projectId: "inbox-1", title: "Running session" }),
+      makeSession({ id: "i2", projectId: "inbox-1", title: "Finished session" }),
+    ],
+  });
+  let fail = true;
+  await page.route("**/api/sessions/*/runs", route => fail
+    ? route.fulfill({ status: 503, json: { error: "Run state unavailable" } })
+    : route.fallback());
+  await page.goto("/");
+
+  const running = page.locator(".side-session-name", { hasText: "Running session" });
+  const finished = page.locator(".side-session-name", { hasText: "Finished session" });
+  await expect(running).toBeVisible();
+  await expect(finished).toBeVisible();
+
+  await page.getByRole("button", { name: "Running", exact: true }).click();
+
+  const failed = page.locator(".side-filters-failed");
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText("Run or artifact data could not be read");
+  const retry = failed.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  // Unknown is not the same answer as "none".
+  await expect(page.locator(".side-empty", { hasText: "Could not read the filter data" })).toBeVisible();
+  await capture(page, "sidebar-filter-failed-en");
 
   fail = false;
   await retry.click();

@@ -5042,18 +5042,22 @@ body.is-resizing {
 /* Sidebar search (#1251) and its session-list filters.              */
 /* ---------------------------------------------------------------- */
 
+/* The block follows the session-list row rhythm: the same 12 px horizontal
+   inset as `.side-new` / `.side-row` padding and the 2 px `.side-new` uses
+   between rows, so the field is not a third spacing system. */
 .side-search {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 4px 4px 0;
+  margin-top: 2px;
+  padding: 0 12px;
 }
 
 .side-search-field {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 34px;
+  height: 36px;
   padding: 0 9px;
   border: 1px solid #e2e2e2;
   border-radius: 8px;
@@ -5111,13 +5115,6 @@ body.is-resizing {
   line-height: 16px;
 }
 
-.side-search-hint {
-  padding: 4px 3px 2px;
-  color: #5f5f5f;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 .side-search-status {
   display: flex;
   flex-wrap: wrap;
@@ -5128,6 +5125,17 @@ body.is-resizing {
   color: #5a5a5a;
   font-size: 11px;
   line-height: 1.35;
+}
+
+/* The block carries the 12 px inset the row rhythm uses, so the field lines up
+   with the two buttons above it. The result panel keeps the 4 px panel inset it
+   had, so it escapes the block's inset rather than pushing its rows 8 px right
+   of the Session names they replace. */
+.side-search-results,
+.side-search-note,
+.side-search-empty,
+.side-search-error {
+  margin: 0 -12px;
 }
 
 .side-search-results {

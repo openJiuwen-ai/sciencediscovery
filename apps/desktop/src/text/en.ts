@@ -114,11 +114,9 @@ export const EN: Text = {
   /** The sidebar's search field and result list, and the session-list filters. */
   search: {
     label: "Search sessions, projects and artifacts",
-    /** Short enough for the 296 px column; the label carries the full scope. */
-    placeholder: "Search names and titles",
-    /** The field must not promise message search: the server matches names and
-     *  titles only, and the issue records content search as a follow-up. */
-    hint: "Sessions, projects and artifacts; names and titles only. Ctrl/Cmd+K",
+    /** One word: the field says what it is, the label carries the scope and the
+     *  `kbd` chip in the field already shows the shortcut. */
+    placeholder: "Search",
     clear: "Clear search",
     loading: "Searching…",
     count: (count: number) => `${count} results`,

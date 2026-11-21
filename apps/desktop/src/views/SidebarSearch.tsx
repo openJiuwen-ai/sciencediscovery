@@ -377,7 +377,6 @@ export function SidebarSearch({
           placeholder={TEXT.search.placeholder}
           ref={inputRef}
           role="combobox"
-          title={TEXT.search.hint}
           type="search"
           value={query}
         />
@@ -398,7 +397,6 @@ export function SidebarSearch({
           <kbd aria-hidden="true" className="side-search-kbd">{shortcutLabel}</kbd>
         )}
       </div>
-      <p className="side-search-hint">{TEXT.search.hint}</p>
 
       {status === "error" ? (
         <div className="side-search-error" role="alert">
