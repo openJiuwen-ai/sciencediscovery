@@ -89,7 +89,21 @@ response, malformed response or missing attempt history still blocks. Recovery
 counts known usage from the original and prior official evaluations exactly once;
 it preserves the original failed E2E evidence. Neither driver approves a baseline.
 
-### Offline repeat grading (no research generation)
+#### Per-case research package
+
+Before deleting its disposable session, each L5 case with a session attempts to
+export `<case-id>.sdresearch` and writes `research-package-export.json` in its
+Playwright output directory. The package uses the Web Complete profile with both
+full trajectory and full scientific memory disabled. The receipt records case and
+session identity, export status, any attempted shutdown status, size, and checksum.
+Failed research, judging, or shutdown can produce partial case evidence. Export time
+is separate from research and judging and defaults to 15 minutes (`E2E_BIOMNI_EXPORT_TIMEOUT_MS`).
+When the API reports that an archive exceeds the default size limit, the driver
+retries once with the same acknowledgement used by Web and records it in the
+receipt. The server still enforces the hard size limit and capacity checks.
+CI publishes both files in the existing real E2E evidence artifact.
+
+## Offline repeat grading (no research generation)
 
 For the eight historical DA-13-3 / DA-14-1 answers, create an input manifest
 with exactly four entries per case. Paths are relative to that manifest:

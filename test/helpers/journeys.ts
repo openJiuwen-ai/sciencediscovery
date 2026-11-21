@@ -1006,9 +1006,9 @@ export async function requireFirstRunState(
 }
 
 /** Best-effort cleanup for data created in an isolated E2E run. */
-export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promise<void> {
+export async function cleanupJourney(page: Page, fixture: JourneyFixture, options: { requestTimeoutMs?: number } = {}): Promise<void> {
   // Failure teardown may already have closed the page's request context.
-  const api = await request.newContext();
+  const api = await request.newContext({ timeout: options.requestTimeoutMs });
   try {
     const client = { request: api };
     // A blocked/repairing run still owns project resources. Stop and verify the

@@ -11,6 +11,7 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { exportBiomniResearchPackage } from "./helpers/biomni-research-package.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { mainRunChain } from "./helpers/run-chain.ts";
@@ -80,7 +81,8 @@ for (const sample of cases) {
     const workspaceBudget = positiveNumber("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 * 1024 ** 3);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     const preparationBudget = 1_800_000;
-    test.setTimeout(budget + 2 * evaluationBudget + 2 * preparationBudget + 360_000);
+    const exportBudget = positiveNumber("E2E_BIOMNI_EXPORT_TIMEOUT_MS", 900_000);
+    test.setTimeout(budget + 2 * evaluationBudget + 2 * preparationBudget + exportBudget + 360_000);
     expect(process.env.E2E_SWARM_TASK, "BLOCKED: isolated Swarm stack required").toBe("1");
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT", "E2E_BIOMNI_FIXTURE_ROOT", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN", "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY", "SCIENCE_TAG_PLAN");
     if ((process.env.E2E_BIOMNI_EVALUATION ?? "rubric") !== "rubric") throw new Error("L5 requires rubric scoring");
@@ -219,10 +221,40 @@ for (const sample of cases) {
         metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
         if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
       }
-      metrics.finished_at = new Date().toISOString();
-      await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
-      await testInfo.attach("benchmark-metrics", { path: testInfo.outputPath("benchmark-metrics.json"), contentType: "application/json" });
-      if (fixture) await cleanupJourney(page, fixture);
+      const packageName = `${sample.id}.sdresearch`;
+      const exportIdentity = {
+        case_id: sample.id, revision: plan.revision, retry: testInfo.retry,
+        project_id: fixture?.project.id, session_id: fixture?.session.id, run_id: metrics.run_id,
+        integration_status: metrics.integration_status, evaluation_status: metrics.evaluation.status,
+        session_shutdown_status: metrics.shutdown?.status,
+      };
+      let exportError: Error | undefined;
+      if (!fixture) {
+        metrics.research_package = { ...exportIdentity, status: "unavailable", reason: "Session was not created" };
+      } else {
+        // An unverified shutdown still fails the case. Preserve the available
+        // evidence before cleanup if the product can export a valid snapshot.
+        try {
+          const evidence = await exportBiomniResearchPackage({ baseUrl: apiBaseUrl(), headers: authorizationHeader(),
+            projectId: fixture.project.id, sessionId: fixture.session.id,
+            destination: testInfo.outputPath(packageName), timeoutMs: exportBudget });
+          metrics.research_package = { ...exportIdentity, status: "exported", file: packageName, ...evidence };
+        } catch (error) {
+          exportError = error instanceof Error ? error : new Error(String(error));
+          metrics.research_package = { ...exportIdentity, status: "error", reason: exportError.message };
+        }
+      }
+      try {
+        metrics.finished_at = new Date().toISOString();
+        await writeFile(testInfo.outputPath("research-package-export.json"), JSON.stringify(metrics.research_package, null, 2));
+        await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
+        await testInfo.attach("benchmark-metrics", { path: testInfo.outputPath("benchmark-metrics.json"), contentType: "application/json" });
+      } finally {
+        // L5 runs use unbounded request defaults. A hung project deletion must
+        // release the worker so it can run the next queued case.
+        if (fixture) await cleanupJourney(page, fixture, { requestTimeoutMs: 60_000 });
+      }
+      if (exportError && metrics.error === undefined) throw exportError;
       // Retain shutdown evidence without replacing the research failure that
       // is already propagating from catch. A cleanup-only failure still fails.
       if (metrics.cleanup_error && metrics.error === undefined) throw new Error(metrics.cleanup_error);
