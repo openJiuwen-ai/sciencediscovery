@@ -209,7 +209,7 @@ export function IdeaTreeOverrideDialog({
       <div
         aria-labelledby="idea-tree-override-title"
         aria-modal="true"
-        className="modal-panel"
+        className="modal-panel idea-tree-card"
         onPointerDown={(event) => event.stopPropagation()}
         role="dialog"
       >
@@ -282,7 +282,7 @@ export function IdeaTreeOverrideDialog({
           {status === "session" ? <p className="evolve-create-confirm-hint" role="status">{t.savedSession}</p> : null}
           {status === "global" ? <p className="evolve-create-confirm-hint" role="status">{t.savedGlobal}</p> : null}
 
-          <div className="evolve-create-footer">
+          <div className="modal-footer">
             <button className="evolve-create-cancel" onClick={onClose} type="button">{t.cancel}</button>
             <button
               className="evolve-create-cancel"
