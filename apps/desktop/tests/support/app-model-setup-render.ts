@@ -22,6 +22,8 @@ const fakeWindow = Object.assign(new EventTarget(), {
   innerWidth: 1440,
   localStorage,
   sdShell: { wizardIntroDone: true },
+  location: { hash: "", pathname: "/", origin: "http://render.example.test" },
+  history: { replaceState: () => {} },
   setInterval: () => 1,
   clearInterval: () => {},
   setTimeout,
@@ -34,7 +36,7 @@ Object.assign(globalThis, { React, window: fakeWindow, document: fakeDocument, l
 register("./render-css-loader.mjs", import.meta.url);
 const { App } = await import("../../src/App.js");
 const { Composer } = await import("../../src/views/Composer.js");
-const { SetupWizard } = await import("../../src/views/SetupWizard.js");
+const { LoginPage } = await import("../../src/views/LoginPage.js");
 const { TEXT } = await import("../../src/text.js");
 
 const now = new Date().toISOString();
@@ -132,8 +134,10 @@ function text(node: ReactTestInstance | string): string {
 let renderer: ReturnType<typeof create> | undefined;
 function root() { assert.ok(renderer); return renderer.root; }
 function assertSetup() {
-  assert.equal(root().findAllByProps({ className: "wizard-progress", "data-step": "model" }).length, 1);
-  assert.ok(root().findAllByType("h1").some(node => text(node) === TEXT.wizard.title));
+  // With no account and no model the entry page offers both ways in; the
+  // workspace stays closed until one of them succeeds.
+  assert.equal(root().findAllByProps({ className: "login-tabs" }).length, 1);
+  assert.ok(root().findAllByType("h1").some(node => text(node) === TEXT.login.title));
   assert.equal(root().findAllByProps({ className: "composer-model-pill" }).length, 0);
   assert.equal(root().findAllByType("div").filter(node => String(node.props.className).split(" ").includes("app-shell")).length, 0);
 }
@@ -157,9 +161,9 @@ try {
     assert.ok(!JSON.stringify(renderer?.toJSON()).includes("Existing history"));
     data.models = [first];
     globalModel = first.id;
-    // ModelForm's successful completion is delivered through the actual
-    // SetupWizard -> App callback; no boot or selected-model state is injected.
-    const configured = root().findByType(SetupWizard).props.onConfigured;
+    // The entry page's model path delivers success through the actual
+    // LoginPage -> App callback; no boot or selected-model state is injected.
+    const configured = root().findByType(LoginPage).props.onModelConfigured;
     assert.ok(typeof configured === "function");
     data.projects = [];
     data.sessions = [];

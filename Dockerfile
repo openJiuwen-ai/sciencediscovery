@@ -202,6 +202,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY . .
 
+# Account service the web bundle talks to. Baked at build time (Vite reads
+# VITE_* from the environment); override with --build-arg for another deployment.
+ARG VITE_ACCOUNTS_API=https://sciencediscovery.openjiuwen.com/accounts
+ENV VITE_ACCOUNTS_API=$VITE_ACCOUNTS_API
+
 RUN pnpm build && pnpm runner:binary
 
 # Patch the actual installed package, not the virtualenv's parent directory.

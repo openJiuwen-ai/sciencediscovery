@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { UserSession } from "../auth/session.js";
 import { TEXT } from "../text.js";
 
 interface Props {
+  /** The signed-in account, shown at the foot of the rail as 用户. */
+  account?: UserSession;
+  /** Whether the account surface is the one on screen. */
+  accountOpen?: boolean;
+  /** Opens the signed-in account page. */
+  onOpenAccount?: () => void;
   /** Opens the system settings surface; it is a surface over the task page,
    *  not a page of its own. */
   onOpenSettings: () => void;
@@ -44,6 +51,15 @@ function SettingsGlyph() {
   );
 }
 
+function UserGlyph() {
+  return (
+    <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13">
+      <circle cx="12" cy="8" r="3.4" />
+      <path d="M5.5 19.2c.9-3 3.4-4.7 6.5-4.7s5.6 1.7 6.5 4.7" />
+    </svg>
+  );
+}
+
 /**
  * The 64px rail: the logo, the task surface and 设置.
  *
@@ -53,8 +69,8 @@ function SettingsGlyph() {
  * collapsed left column sits at the left edge of the page itself, not in this
  * rail: the expand control is part of the surface that lost its column.
  */
-export function Rail({ onOpenSettings, onSelectTask, settingsOpen }: Props) {
-  const onTask = !settingsOpen;
+export function Rail({ account, accountOpen, onOpenAccount, onOpenSettings, onSelectTask, settingsOpen }: Props) {
+  const onTask = !settingsOpen && !accountOpen;
   return (
     <nav aria-label={TEXT.appName} className="rail">
       {/* The mark is the stylesheet's `app-mark.png`; the box carries no glyph
@@ -83,6 +99,26 @@ export function Rail({ onOpenSettings, onSelectTask, settingsOpen }: Props) {
           <span>{TEXT.rail.settings}</span>
         </button>
       </div>
+      {onOpenAccount ? (
+        <div className="rail-foot">
+          <button
+            aria-current={accountOpen ? "page" : undefined}
+            aria-label={account ? TEXT.rail.user : TEXT.login.accountTab}
+            className={`rail-item rail-user${accountOpen ? " is-active" : ""}`}
+            onClick={onOpenAccount}
+            title={account ? TEXT.rail.user : TEXT.login.accountTab}
+            type="button"
+          >
+            <span className={`rail-user-avatar${account ? "" : " is-guest"}`}>
+              {account
+                ? account.avatarUrl
+                  ? <img alt="" src={account.avatarUrl} />
+                  : account.displayName.trim().slice(0, 1).toUpperCase()
+                : <UserGlyph />}
+            </span>
+          </button>
+        </div>
+      ) : null}
     </nav>
   );
 }

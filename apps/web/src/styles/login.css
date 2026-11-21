@@ -1,0 +1,277 @@
+/*
+ * Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Full-screen sign-in: brand panel on the left, the form card on the right. */
+
+.login-page {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-window);
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(440px, .95fr);
+  background: var(--surface);
+  overflow: auto;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  padding: 56px 64px;
+  color: #fff;
+  background:
+    radial-gradient(120% 90% at 12% 8%, rgba(96, 140, 240, .34), transparent 58%),
+    linear-gradient(158deg, #0a1730 0%, #122c5e 52%, #1d4ed8 100%);
+}
+
+.login-brand-inner { max-width: 460px; }
+
+.login-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #cfe0ff;
+  background: rgba(255, 255, 255, .12);
+  border: 1px solid rgba(255, 255, 255, .2);
+}
+
+.login-brand-name {
+  margin: 20px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: #9db4e6;
+}
+
+.login-brand-title {
+  margin: 14px 0 16px;
+  font-size: 38px;
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.login-brand-tagline {
+  margin: 0 0 34px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: #c9d8f5;
+}
+
+.login-benefits { margin: 0; padding: 0; list-style: none; }
+
+.login-benefits li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 13px 0;
+  font-size: 14px;
+  color: #e6eeff;
+}
+
+.login-check {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #8fe3c8;
+  background: rgba(255, 255, 255, .13);
+}
+
+.login-check svg { width: 13px; height: 13px; }
+
+.login-brand-footnote {
+  margin: 44px 0 0;
+  font-size: 12px;
+  line-height: 1.75;
+  color: rgba(255, 255, 255, .56);
+}
+
+.login-panel {
+  display: grid;
+  place-items: center;
+  padding: 48px 56px;
+  background: var(--surface);
+}
+
+.login-card { width: 100%; max-width: 420px; }
+
+.login-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.login-card h2 {
+  margin: 8px 0 0;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text-strong);
+}
+
+.login-lead {
+  margin: 8px 0 26px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+.login-wide { width: 100%; }
+
+.login-huawei-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1px solid #111827;
+  border-radius: var(--radius-m);
+  background: #111827;
+  color: #fff;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast), transform var(--motion-fast);
+}
+
+.login-huawei-button:hover:not(:disabled) { background: #1f2937; }
+.login-huawei-button:active:not(:disabled) { transform: translateY(1px); }
+.login-huawei-button:focus-visible { outline: 3px solid var(--accent-tint); outline-offset: 2px; }
+.login-huawei-button:disabled { cursor: progress; opacity: .78; }
+
+.login-huawei-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  color: #111827;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
+.login-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: login-spin .7s linear infinite;
+}
+
+@keyframes login-spin { to { transform: rotate(360deg); } }
+
+.login-busy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 40px 0;
+}
+
+.login-busy .login-lead { margin: 0; text-align: center; }
+
+.login-consent {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 26px 0 12px;
+  font-size: 12px;
+  color: var(--muted-light);
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.login-link-button {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.login-link-button:hover { color: var(--accent-strong); text-decoration: underline; }
+
+.login-hint {
+  display: block;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.login-offline-hint { text-align: center; line-height: 1.6; }
+
+.login-form .primary-button.login-wide { min-height: 46px; }
+
+.login-done { text-align: center; }
+
+.login-done-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 16px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success-bright);
+}
+
+.login-done-mark svg { width: 24px; height: 24px; }
+.login-done h2 { margin-bottom: 8px; }
+.login-done .login-lead { margin-bottom: 22px; }
+.login-done .login-link-button { margin-top: 10px; }
+
+@media (max-width: 900px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-brand { padding: 32px 24px; }
+  .login-brand-title { font-size: 26px; }
+  .login-brand-tagline { margin-bottom: 18px; }
+  .login-benefits,
+  .login-brand-footnote { display: none; }
+  .login-panel { padding: 32px 24px 48px; }
+}

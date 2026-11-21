@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
+import { isLoopbackHost, verifyAccountAccessToken } from "./account-verification.js";
 import { randomUUID } from "node:crypto";
 import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { testProxyConnectivity } from "../proxy-connectivity.js";
@@ -1289,6 +1290,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
+      // The desktop shell has already authenticated the person through HUAWEI
+      // ID. Its local control plane still needs the internal bearer token, but
+      // asking a person to copy that token is a setup step, not a security
+      // boundary: only a loopback caller may read it. The presented account
+      // access token is checked with the account service first — a `Bearer`
+      // prefix is not proof of anything — and a Host header that is not this
+      // machine is refused so a page cannot reach the route by DNS rebinding.
+      if (request.method === "POST" && url.pathname === "/api/bootstrap/local-token") {
+        const address = request.socket.remoteAddress ?? "";
+        const loopback = address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+        if (!loopback || !isLoopbackHost(request.headers.host)) {
+          sendError(response, 403, "Forbidden");
+          return;
+        }
+        const verified = await verifyAccountAccessToken(request.headers.authorization, {
+          baseUrl: config.accountsBaseUrl ?? "",
+        });
+        if (!verified.ok) {
+          if (verified.reason === "unauthorized") sendError(response, 401, "Unauthorized");
+          else sendError(response, 503, "Account verification is unavailable");
+          return;
+        }
+        sendJson(response, 200, { token: config.authToken });
+        return;
+      }
       // F10.6p: /health used to gate on `await ready` like every route and then
       // wait out the runner client's 5s timeout — on a machine whose runner
       // wedged, every answer arrived after the shell wizard's shorter poll

@@ -131,6 +131,19 @@ ScienceDiscovery help                   显示全部命令和选项
 
 默认只监听本机。若必须对外提供服务，请先配置独立认证令牌，并只在可信网络中开放。
 
+## 华为账号登录
+
+华为账号登录是可选的：使用本地访问令牌或自定义模型同样可以进入工作台。默认配置指向公开的账号服务。由 CI 构建的可分发产物——Docker 镜像、binary release 以及 Windows/macOS 安装包——已经内置该地址，直接安装即可，不需要额外设置。
+
+直接执行 `pnpm build` 则不同：`VITE_ACCOUNTS_API` 由 Vite 在构建时内联，如果没有导出该变量（或没有对应的 `.env.local`），构建产物的账号服务地址会解析为空字符串，登录请求会打到本地 API 而不是账号服务。制作分发版本前请先导出该变量，或把 `apps/web/.env.example`、`apps/desktop/.env.example` 复制为 `.env.local` 再构建。
+
+| 变量 | 读取方 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `SCIENCE_AGENT_ACCOUNTS_URL` | 本地 API（运行时） | `https://sciencediscovery.openjiuwen.com/accounts` | 在发放本地控制面令牌前校验账号令牌；留空则关闭登录（接口 fail-closed）。 |
+| `VITE_ACCOUNTS_API` | web / desktop 构建产物（构建时） | `https://sciencediscovery.openjiuwen.com/accounts` | 登录、刷新与 `/v1/me` 请求的目标地址；修改后需要重新构建。 |
+
+两个变量放在根目录 `.env`（从 `.env.example` 复制）里，`scripts/start-stack.sh` 会先导出该文件再构建和启动，因此通过它启动的源码环境无需额外设置。自建账号服务时把两者都指向自建地址；Docker 部署由 `docker-compose.yml` 转发 `SCIENCE_AGENT_ACCOUNTS_URL`，`VITE_ACCOUNTS_API` 通过构建参数传入（`docker compose build --build-arg VITE_ACCOUNTS_API=...`）。打包后的桌面端在运行时会把自己的环境变量传给所启动的 API，变量未设置时回退到同一个公开地址，因此本地 API 也无需额外设置；界面 bundle 仍使用构建时内联的值。
+
 ## 常见问题
 
 ### 安装时提示需要管理员权限

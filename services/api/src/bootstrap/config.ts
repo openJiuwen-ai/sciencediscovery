@@ -38,6 +38,9 @@ export interface ServerConfig {
   authToken: string;
   /** How `authToken` was obtained; startup output only echoes a managed token. */
   authTokenSource?: BootstrapTokenSource;
+  /** Account service used to verify the bearer on the loopback token route.
+   *  Empty means the route fails closed instead of handing out the token. */
+  accountsBaseUrl?: string;
   dataDir: string;
   host: string;
   /** Model catalog snapshot written at packaging time. It is the offline
@@ -220,6 +223,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   return {
     authToken: authToken.token,
     authTokenSource: authToken.source,
+    accountsBaseUrl: (env.SCIENCE_AGENT_ACCOUNTS_URL ?? "").trim().replace(/\/+$/u, ""),
     dataDir,
     gatewayIdleTimeoutMs,
     gatewayTurnTimeoutMs,

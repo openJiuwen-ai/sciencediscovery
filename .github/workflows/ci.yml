@@ -627,6 +627,12 @@ jobs:
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # Vite inlines import.meta.env at build time; without it the bundled UI
+      # resolves the accounts base URL to an empty string and sign-in calls the
+      # local API instead of the account service. Scoped to this job so test
+      # jobs never inherit a production endpoint.
+      VITE_ACCOUNTS_API: https://sciencediscovery.openjiuwen.com/accounts
     strategy:
       # One architecture failing must not cancel the other: which of the two
       # broke is the first thing worth knowing.
@@ -915,6 +921,8 @@ jobs:
       # Windows runners default Python's stdio to cp1252, which crashes before
       # the Electron build unless Python is explicitly put in UTF-8 mode.
       PYTHONUTF8: "1"
+      # Compiled into apps/web and apps/desktop by the root `pnpm build`.
+      VITE_ACCOUNTS_API: https://sciencediscovery.openjiuwen.com/accounts
     steps:
       - name: Enable long paths
         shell: pwsh
@@ -1026,6 +1034,8 @@ jobs:
       UV_MANAGED_PYTHON: "1"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       SD_MAC_SIGN: "0"
+      # Compiled into apps/web and apps/desktop by the root `pnpm build`.
+      VITE_ACCOUNTS_API: https://sciencediscovery.openjiuwen.com/accounts
     steps:
       - uses: actions/checkout@v4
         with:

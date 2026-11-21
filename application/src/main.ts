@@ -5,7 +5,7 @@
 // token invisible to the user (401 → token-entry fallback page), and close
 // hides to tray (real quit via tray menu — the full running-task
 // confirmation drain is out of scope for this feature).
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, session, shell as electronShell, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, session, shell as electronShell, Tray } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -59,6 +59,16 @@ const log = (line: string): void => {
   console.log(`[sd-shell] ${line}`);
   logToDisk(line);
 };
+
+// Account service the local API verifies account tokens against. The shell and
+// the UI bundle have to agree on it, so a packaged install with nothing set in
+// the user's environment still signs in: fall back to the public service that
+// docker-compose.yml and .env.example ship as their default. An explicit empty
+// value is preserved, which keeps sign-in disabled on purpose.
+const DEFAULT_ACCOUNTS_URL = "https://sciencediscovery.openjiuwen.com/accounts";
+const accountsEnv = (): NodeJS.ProcessEnv => ({
+  SCIENCE_AGENT_ACCOUNTS_URL: (process.env.SCIENCE_AGENT_ACCOUNTS_URL ?? DEFAULT_ACCOUNTS_URL).trim(),
+});
 // [SD-PERF instrumentation] 壳侧统一毫秒打点：`[perf]` 前缀沿用既有行格式，
 // 事件名对齐 start-stack/jiuwenswarm 侧的 [SD-PERF] 命名（shell-/jw-/stack-
 // 三域时间线靠 ISO 时间戳对齐）。移除打点时 git checkout 本文件即可。
@@ -748,6 +758,7 @@ async function ensureBackend(
       ...loopbackGuard,
       ...(proxyEnv ?? {}),
       ...inplaceEnv,
+      ...accountsEnv(),
     };
     if (packaged && dataDir) {
       provisioningThisRun = needsUnpack(dataDir, packaged.resourcesPath);
@@ -1092,6 +1103,7 @@ async function startWizardBackend(dataDir: string, proxyEnv: NodeJS.ProcessEnv |
       ...loopbackGuard,
       ...(proxyEnv ?? {}),
       ...inplaceEnv,
+      ...accountsEnv(),
     };
     if (packaged) {
       provisioningThisRun = needsUnpack(dataDir, packaged.resourcesPath);
@@ -1581,6 +1593,94 @@ ipcMain.handle("sd-shell:save-token", async (_event, token: string) => {
 ipcMain.handle("sd-shell:report-locale", (_event, locale: unknown) => {
   if (locale === "zh-CN" || locale === "en") writeShellLocale(locale);
   return true;
+});
+
+// --- account session: OS-keychain-backed storage -----------------------------
+// The renderer's `localStorage` would hold the 30-day refresh token in clear
+// text, where any renderer script could read it. The session therefore lives in
+// one file under userData, encrypted with Electron's safeStorage (DPAPI /
+// Keychain / libsecret), and only the preload can ask for it.
+const ACCOUNT_SESSION_FILE = "account-session.bin";
+const ACCOUNT_SESSION_MAX_VALUE = 64 * 1024;
+const ACCOUNT_SESSION_MAX_KEY = 128;
+
+function accountSessionPath(): string {
+  return join(app.getPath("userData"), ACCOUNT_SESSION_FILE);
+}
+
+function readAccountSessionStore(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(accountSessionPath(), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const store: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string") store[key] = value;
+    }
+    return store;
+  } catch {
+    // A missing, corrupt or unreadable file reads as "signed out".
+    return {};
+  }
+}
+
+function writeAccountSessionStore(store: Record<string, string>): void {
+  const path = accountSessionPath();
+  mkdirSync(dirname(path), { recursive: true });
+  // 0600: only this OS user may read the ciphertext, matching the secrets file.
+  writeFileSync(path, JSON.stringify(store), { encoding: "utf8", mode: 0o600 });
+}
+
+function accountSessionKey(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= ACCOUNT_SESSION_MAX_KEY ? value : null;
+}
+
+ipcMain.on("sd-shell:account-session-read", (event, key: unknown) => {
+  const name = accountSessionKey(key);
+  if (!name || !safeStorage.isEncryptionAvailable()) {
+    event.returnValue = null;
+    return;
+  }
+  const sealed = readAccountSessionStore()[name];
+  if (!sealed) {
+    event.returnValue = null;
+    return;
+  }
+  try {
+    event.returnValue = safeStorage.decryptString(Buffer.from(sealed, "base64"));
+  } catch {
+    event.returnValue = null;
+  }
+});
+
+ipcMain.on("sd-shell:account-session-write", (event, key: unknown, value: unknown) => {
+  event.returnValue = false;
+  const name = accountSessionKey(key);
+  if (!name || typeof value !== "string" || value.length > ACCOUNT_SESSION_MAX_VALUE) return;
+  if (!safeStorage.isEncryptionAvailable()) return;
+  try {
+    const store = readAccountSessionStore();
+    store[name] = safeStorage.encryptString(value).toString("base64");
+    writeAccountSessionStore(store);
+    event.returnValue = true;
+  } catch {
+    event.returnValue = false;
+  }
+});
+
+ipcMain.on("sd-shell:account-session-remove", (event, key: unknown) => {
+  event.returnValue = false;
+  const name = accountSessionKey(key);
+  if (!name) return;
+  try {
+    const store = readAccountSessionStore();
+    if (name in store) {
+      delete store[name];
+      writeAccountSessionStore(store);
+    }
+    event.returnValue = true;
+  } catch {
+    event.returnValue = false;
+  }
 });
 
 // --- study-package export: native save dialog + destination-bound save --------

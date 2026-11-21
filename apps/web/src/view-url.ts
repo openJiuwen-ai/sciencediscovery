@@ -21,9 +21,11 @@
  * confirmations) is never serialized. Pure functions, no React, so the
  * mapping is unit-testable.
  *
- * Path table (top-level words are reserved: `projects`, `settings`, `usage`;
- * they must never clash with the server-owned `/api`, `/health`, `/assets`):
+ * Path table (top-level words are reserved: `login`, `projects`, `settings`,
+ * `usage`; they must never clash with the server-owned `/api`, `/health`,
+ * `/assets`):
  * - `/`                                              default landing
+ * - `/login`                                         sign-in (account, not token)
  * - `/usage`                                         global Usage page
  * - `/settings/<group>`                              system settings + group
  * - `/projects/<projectId>`                          Project
@@ -54,7 +56,7 @@ export interface ViewState {
   /** Session list filter; omitted from the URL when it is the default `active`. */
   sessionFilter?: SessionFilter;
   /** Main-area view; omitted from the URL for the default Session workbench. */
-  view?: "usage";
+  view?: "usage" | "login";
   settingsKind?: SettingsKind;
   /** Only meaningful when `settingsKind === "system"`; validated by the caller. */
   settingsGroup?: string;
@@ -84,7 +86,9 @@ function segments(pathname: string): string[] {
 export function parseViewState(pathname: string, search: string): ViewState {
   const view: ViewState = {};
   const parts = segments(pathname);
-  if (parts.length === 1 && parts[0] === "usage") {
+  if (parts.length === 1 && parts[0] === "login") {
+    view.view = "login";
+  } else if (parts.length === 1 && parts[0] === "usage") {
     view.view = "usage";
   } else if (parts.length === 2 && parts[0] === "settings" && parts[1] && (GROUP_SEGMENT.test(parts[1]) || parts[1].startsWith("runner:") && parts[1].length > 7)) {
     view.settingsKind = "system";
@@ -139,6 +143,8 @@ export function serializeViewState(view: ViewState): { pathname: string; search:
     pathname = `/projects/${encodeURIComponent(view.settingsTargetId ?? view.projectId!)}/settings`;
   } else if (view.settingsKind === "session" && view.projectId && (view.settingsTargetId ?? view.sessionId)) {
     pathname = `/projects/${encodeURIComponent(view.projectId)}/sessions/${encodeURIComponent(view.settingsTargetId ?? view.sessionId!)}/settings`;
+  } else if (view.view === "login") {
+    pathname = "/login";
   } else if (view.view === "usage") {
     pathname = "/usage";
   } else if (view.projectId && view.sessionId) {

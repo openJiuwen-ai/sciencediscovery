@@ -140,6 +140,30 @@ The most used startup options:
 The service listens on the loopback interface only. If you must expose it, configure a dedicated auth token first
 and keep the network trusted.
 
+## HUAWEI account sign-in
+
+Signing in with a HUAWEI ID is optional: a local access token or a custom model provider works without it. The
+default configuration points at the public account service. Distributables that CI builds — the Docker image, the
+binary release and the Windows/macOS installers — carry that value already, so installing one needs no extra setup.
+
+A bare `pnpm build` is different: Vite inlines `VITE_ACCOUNTS_API` at build time, so unless the variable is exported
+(or a per-app `.env.local` is present) the bundles resolve the accounts base URL to an empty string and the sign-in
+request goes to the local API instead of the account service. Export it, or copy `apps/web/.env.example` and
+`apps/desktop/.env.example` to `.env.local`, before building for distribution.
+
+| Variable | Read by | Default | Purpose |
+| --- | --- | --- | --- |
+| `SCIENCE_AGENT_ACCOUNTS_URL` | the local API, at runtime | `https://sciencediscovery.openjiuwen.com/accounts` | Verifies the account token before the API hands out the local control-plane token. Empty disables sign-in (the route fails closed). |
+| `VITE_ACCOUNTS_API` | the web and desktop bundles, at build time | `https://sciencediscovery.openjiuwen.com/accounts` | Where the sign-in flow, refresh and `/v1/me` calls go. Changing it requires rebuilding the bundles. |
+
+Both live in the root `.env` (copied from `.env.example`); `scripts/start-stack.sh` exports that file before
+building and starting, so a source checkout run through it needs no extra setup. For a self-hosted account service,
+point both at it; for Docker, `SCIENCE_AGENT_ACCOUNTS_URL` is forwarded by `docker-compose.yml` and
+`VITE_ACCOUNTS_API` is a build argument (`docker compose build --build-arg VITE_ACCOUNTS_API=...`). At runtime the
+packaged desktop app forwards its environment to the API it starts and falls back to the same public URL when the
+variable is unset, so the local API needs no setup either; the bundled UI keeps whatever was compiled in at build
+time.
+
 ## Troubleshooting
 
 ### The installer asks for administrator rights

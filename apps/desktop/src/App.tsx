@@ -24,6 +24,14 @@ import {
 import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
+import { TOKEN_STORAGE_KEY } from "./state/storage.js";
+import { AccountApiError, revokeAccountSession } from "./auth/account.js";
+import { ensureCreditsModel } from "./auth/credits-model.js";
+import { requiresLocalToken } from "./auth/gate.js";
+import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type UserSession } from "./auth/session.js";
+import { ensureFreshAccountSession } from "./auth/session-refresh.js";
+import { LoginPage, hasAuthCallback, settleAuthCallback } from "./views/LoginPage.js";
+import { AccountPage, SignedOutAccount } from "./views/AccountPage.js";
 import { cancelRun, getSubagent } from "./api/sessions.js";
 import type {
   ComposerReference,
@@ -68,7 +76,6 @@ import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
   GUIDE_STORAGE_KEY,
   RIGHT_PANEL_STORAGE_KEY,
-  TOKEN_STORAGE_KEY,
   readStoredFlag,
   writeStoredFlag,
 } from "./state/storage.js";
@@ -76,7 +83,6 @@ import { applyDocumentLanguage, TEXT } from "./text.js";
 import { inheritedApprovalMode, rememberApprovalMode } from "./app/approval-mode-preference.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { ArtifactDialog } from "./views/ArtifactDialog.js";
-import { AuthScreen } from "./views/AuthScreen.js";
 import { CheckpointRefusedProvider, CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
 import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
@@ -113,12 +119,25 @@ interface Props {
 export function App({ initialToken }: Props) {
   const [packageRequest, setPackageRequest] = useState<PackageRequest>();
   const [token, setToken] = useState(initialToken);
+  const [accountSession, setAccountSession] = useState<UserSession | undefined>(() => readSession());
+  /** The HUAWEI callback is consumed on mount, before `replaceState` strips the
+   *  fragment: a workspace that already holds a local token would otherwise
+   *  skip the sign-in page and never exchange the ticket. It is released once
+   *  an account exists, so a later sign-out stays in the workspace. */
+  const [settlingAuth, setSettlingAuth] = useState(() => hasAuthCallback(window.location.hash));
   /** Set when the server answered 401, so the gate can say "this one was
    *  refused" instead of the generic "we have no credential". */
   const [rejected, setRejected] = useState(false);
   /** 设置 opens over the task surface and holds which pane it last showed, so
    *  reopening lands where the user left off. */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** A sign-in started from the account panel comes back to it rather than to
+   *  the way-in page. The panel's return address carries `?account=1`, which is
+   *  read once here: the ticket exchange strips the address back to the page. */
+  const returnToAccount = useRef(new URLSearchParams(window.location.search).has("account"));
+  /** Opens on the panel for that return, so the workspace behind it is never
+   *  replaced by the sign-in page while the ticket is being exchanged. */
+  const [accountOpen, setAccountOpen] = useState(() => returnToAccount.current);
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroup>("general");
   /** Bumped when 设置 closes after showing 技能. The composer's `/` palette reads
    *  the skill catalog once, so a skill installed or edited behind that surface
@@ -188,12 +207,73 @@ export function App({ initialToken }: Props) {
       // A credential we could not clear is still one we do not use.
     }
   }, []);
+  // The latest account, read by callbacks that must not change identity when
+  // the account page updates the record (a new callback would restart its load).
+  const accountSessionRef = useRef(accountSession);
+  accountSessionRef.current = accountSession;
+  // Signing out drops the account, not the machine's credential: a workspace
+  // running on a custom model keeps working, and the user surface turns into a
+  // signed-out page with the one way back in.
+  const signOut = useCallback(() => {
+    const current = accountSessionRef.current;
+    if (current) void revokeAccountSession(current.accessToken).catch(() => undefined);
+    clearSession();
+    setAccountSession(undefined);
+    setAccountOpen(true);
+  }, []);
+  // The page reads the account back after every change, so the record it hands
+  // over is written through to storage as well: a rename must survive a reload.
+  const updateAccountSession = useCallback((next: UserSession) => {
+    setAccountSession(next);
+    saveSession(next);
+  }, []);
 
   // The client is rebuilt with the token, because every request carries it. A
   // token change is rare enough that re-creating it is cheaper than threading
   // a mutable header through every call site.
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
+  const creditsModelToken = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!accountSession || boot !== "ready") return;
+    if (creditsModelToken.current === accountSession.accessToken) return;
+    creditsModelToken.current = accountSession.accessToken;
+    void ensureCreditsModel(client, accountSession)
+      .then((models) => {
+        if (models) void actions.refreshCatalog();
+      })
+      .catch(() => undefined);
+  }, [accountSession, actions, boot, client]);
+  // The account session is what the composer's balance and the sidebar's user
+  // card read. The local service token alone is not an account: it is only the
+  // credential that lets the shell reach this machine.
+  useEffect(() => {
+    if (!accountSession) return;
+    let cancelled = false;
+    let timerId: number | undefined;
+    const schedule = (delay: number) => {
+      if (cancelled) return;
+      timerId = window.setTimeout(() => {
+        void ensureFreshAccountSession(accountSession).then((next) => {
+          if (!cancelled && next && next.accessToken !== accountSession.accessToken) setAccountSession(next);
+        }).catch((error: unknown) => {
+          if (!cancelled && error instanceof AccountApiError && error.denied) {
+            clearSession();
+            setAccountSession(undefined);
+            setToken("");
+          }
+        }).finally(() => {
+          schedule(Math.max(sessionRefreshDelayMs(accountSession), 30_000));
+        });
+      }, delay);
+    };
+    schedule(sessionRefreshDelayMs(accountSession));
+    return () => {
+      cancelled = true;
+      if (timerId !== undefined) window.clearTimeout(timerId);
+    };
+  }, [accountSession]);
   const resize = usePanelWidth();
 
   /** The runtime and the open Session's searches. The transcript's run cards
@@ -753,6 +833,59 @@ export function App({ initialToken }: Props) {
     actions.retryBoot();
   };
 
+  /** A HUAWEI sign-in opens the workspace directly: the credits-backed model is
+   *  registered before the new token reaches the boot effect, so the catalog is
+   *  never briefly empty (which would show the model wizard for a user who
+   *  already chose to pay with credits). */
+  const authenticate = useCallback(async (session: UserSession, localToken: string) => {
+    try {
+      await ensureCreditsModel(new ApiClient(localToken, onAuthRejected), session);
+    } catch {
+      // The gateway may be unreachable; the model wizard is the fallback.
+    }
+    // A signed-out workspace already holds this machine's token: re-accepting
+    // the same one would restart boot behind the account panel, and a sign-in
+    // that came from that panel lands on the panel itself. Only the catalog
+    // needs refreshing, which keeps the account details on screen.
+    if (localToken !== token) {
+      acceptToken(localToken);
+    } else {
+      void actions.refreshCatalog();
+    }
+    setAccountSession(session);
+    setSettlingAuth(false);
+    setAccountOpen(returnToAccount.current);
+  }, [actions, onAuthRejected, token]);
+
+  // A restored account settles the callback latch as well: the ticket is no
+  // longer the reason this render is a sign-in page.
+  useEffect(() => {
+    if (accountSession) setSettlingAuth(false);
+  }, [accountSession]);
+
+  // A sign-in started from the account panel is settled here, not on the
+  // sign-in page: the panel stays on screen, says it is confirming, and swaps
+  // to the details as soon as the ticket is exchanged.
+  const panelSettlementStarted = useRef(false);
+  useEffect(() => {
+    if (!returnToAccount.current || panelSettlementStarted.current) return;
+    panelSettlementStarted.current = true;
+    void (async () => {
+      try {
+        const settled = await settleAuthCallback(window.location.hash);
+        if (settled) {
+          await authenticate(settled.session, settled.localToken);
+          return;
+        }
+      } catch {
+        // A refused ticket or an unreachable service falls through to the
+        // panel's signed-out state, which offers the button again.
+      }
+      window.history.replaceState(null, "", window.location.pathname);
+      setSettlingAuth(false);
+    })();
+  }, [authenticate]);
+
   /** The command is a way into the surface, not only a message.
    *
    *  A command typed as text — pasted, or written without picking the skill
@@ -871,12 +1004,29 @@ export function App({ initialToken }: Props) {
     sessionId: state.sessionId,
   });
 
-  // No token is its own screen, ahead of the boot states: without one nothing
-  // the app can say about the server is knowable, including whether it is up.
-  if (token === "") {
+  // Returning from HUAWEI ID takes priority over every other gate: the ticket
+  // has to be exchanged even when the machine already has its local token (and
+  // therefore a perfectly usable, signed-out workspace). A sign-in that came
+  // from the account panel settles inside the panel instead (see above), so
+  // the page is only shown for a callback that started on it.
+  if (settlingAuth && !accountSession && !returnToAccount.current) {
     return (
       <>
-        <AuthScreen onSubmit={acceptToken} rejected={rejected} />
+        <LoginPage onAuthenticated={(session, localToken) => void authenticate(session, localToken)} />
+        <Toasts onDismiss={actions.dismissToast} toasts={state.toasts} />
+      </>
+    );
+  }
+
+  // The local service token is the only hard credential: without it even the
+  // model catalog is unreadable, so a browser that has never been handed one
+  // can only be signed in through HUAWEI ID.
+  if (requiresLocalToken(token)) {
+    return (
+      <>
+        <LoginPage
+          onAuthenticated={(session, localToken) => void authenticate(session, localToken)}
+        />
         <Toasts onDismiss={actions.dismissToast} toasts={state.toasts} />
       </>
     );
@@ -903,6 +1053,26 @@ export function App({ initialToken }: Props) {
       <>
         <OfflineScreen onRetry={actions.retryBoot} reason="unreachable" />
         <FeedbackDialog />
+      </>
+    );
+  }
+
+  // No account and no model: the entry page offers the two ways in — sign in
+  // for credits, or point the workspace at a model endpoint. Either one is
+  // enough to open the workspace; the other stays configurable from there.
+  if (!accountSession && (boot === "setup" || boot === "auth")) {
+    return (
+      <>
+        <LoginPage
+          client={client}
+          offerModelSetup
+          onAuthenticated={(session, localToken) => void authenticate(session, localToken)}
+          onModelConfigured={() => actions.finishSetup()}
+          onProvidersChanged={actions.refreshCatalog}
+          presets={state.presets}
+          providers={state.providers}
+        />
+        <Toasts onDismiss={actions.dismissToast} toasts={state.toasts} />
       </>
     );
   }
@@ -967,6 +1137,9 @@ export function App({ initialToken }: Props) {
 
   const openSettings = (group: SettingsGroup) => {
     setSettingsGroup(group);
+    // 会话 / 设置 / 用户 are peers in the rail: opening one puts the other away,
+    // so the user page is never buried under the settings surface.
+    setAccountOpen(false);
     if (group === "skills") skillsVisited.current = true;
     setSettingsOpen(true);
   };
@@ -1157,14 +1330,24 @@ export function App({ initialToken }: Props) {
     "page-task",
     taskSidebar ? "" : "sidebar-hidden",
     panelOpen ? "panel-open" : "workspace-hidden",
+    accountOpen ? "account-open" : "",
   ].filter(Boolean).join(" ");
 
   return (
     <CheckpointReplyProvider value={checkpointReply}>
       <div className={shellClass} style={shellStyle}>
         <Rail
+          account={accountSession}
+          accountOpen={accountOpen}
+          onOpenAccount={() => {
+            setSettingsOpen(false);
+            setAccountOpen(true);
+          }}
           onOpenSettings={() => openSettings(settingsGroup)}
-          onSelectTask={() => setSettingsOpen(false)}
+          onSelectTask={() => {
+            setSettingsOpen(false);
+            setAccountOpen(false);
+          }}
           settingsOpen={settingsOpen}
         />
 
@@ -1300,6 +1483,20 @@ export function App({ initialToken }: Props) {
           tool={openTool}
         />
       </div>
+      {accountOpen && accountSession ? (
+        <AccountPage
+          account={accountSession}
+          onAccountChange={updateAccountSession}
+          onSignOut={signOut}
+          onToggleSidebar={expandSidebar}
+          sidebarOpen={taskSidebar}
+        />
+      ) : accountOpen ? (
+        // After signing out the account surface shows a grey avatar and the
+        // single way back in; the workspace behind it stays usable with a
+        // custom model.
+        <SignedOutAccount pending={settlingAuth} />
+      ) : null}
 
       {settingsOpen ? (
         <SystemSettingsDialog

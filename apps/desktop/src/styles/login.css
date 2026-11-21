@@ -1,0 +1,385 @@
+/* HUAWEI account sign-in, in the setup wizard's split-screen language. */
+
+.login-page {
+  --login-ink: #191919;
+  --login-muted: #808080;
+  --login-line: #c2c2c2;
+
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 37vw, 710px);
+  height: 100vh;
+  overflow: hidden;
+  background: #fff;
+  color: var(--login-ink);
+  font-family: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+}
+
+.login-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  background: #fff;
+}
+
+.login-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 40px clamp(32px, 6.25vw, 120px) 0;
+}
+
+.login-brand-mark {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  background: url("../assets/brand/app-mark.png") center / 32px 32px no-repeat;
+}
+
+.login-brand-name {
+  color: var(--login-ink);
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: .1px;
+}
+
+.login-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 clamp(32px, 6.25vw, 120px);
+}
+
+.login-content {
+  width: 100%;
+  max-width: 544px;
+  padding-top: clamp(72px, 12.2vh, 132px);
+  padding-bottom: 64px;
+}
+
+.login-content h1 {
+  margin: 0 0 16px;
+  color: var(--login-ink);
+  font-size: 32px;
+  line-height: 48px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.login-lead {
+  margin: 0;
+  color: var(--login-muted);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.login-actions {
+  max-width: 480px;
+  margin-top: 48px;
+}
+
+/* ---------- entry choice: HUAWEI ID or a bring-your-own model ---------- */
+.login-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0 0 32px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f2f2f2;
+}
+
+.login-tab {
+  padding: 8px 20px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #6b6b6b;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+
+.login-tab:hover { color: var(--login-ink); }
+.login-tab.is-active {
+  background: #fff;
+  color: var(--login-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+
+.login-page .login-tab:focus-visible { outline: 2px solid var(--login-ink); outline-offset: 2px; }
+
+.login-model-form {
+  max-width: 480px;
+  margin-top: 48px;
+}
+
+/* The shared ModelForm ships with settings' density; these scoped rules give
+   it the wizard's 32 px controls so both entry paths read as one page. */
+.login-page .field { display: grid; gap: 4px; }
+.login-page .field + .field { margin-top: 16px; }
+.login-page .field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--login-ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+}
+.login-page .field-label .opt {
+  color: var(--login-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.login-page .field-input,
+.login-page .field-select {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--login-line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--login-ink);
+  font: inherit;
+  font-size: 14px;
+}
+.login-page .field-input:focus,
+.login-page .field-select:focus { border-color: var(--login-ink); outline: 0; }
+.login-page .field-input::placeholder { color: #b3b3b3; }
+.login-page .field-help,
+.login-page .wizard-note {
+  color: var(--login-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+.login-page .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin-top: 32px;
+}
+.login-page .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 24px;
+  border: 1px solid var(--login-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--login-ink);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease;
+}
+.login-page .secondary-button:hover:not(:disabled) { border-color: #a8a8a8; background: #f6f6f6; }
+.login-page .test-result {
+  display: block;
+  margin-top: 16px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.login-page .test-result.is-ok { background: #d5f2dc; color: #01802b; }
+.login-page .test-result.is-fail { background: #fce3e0; color: #bf0a1c; }
+.login-page .test-result.is-fail::before { content: "✗ "; }
+.login-page .test-result.is-busy { background: #f0f7ff; color: #0f5ed4; }
+
+.login-wide { width: 100%; }
+
+.login-page .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 24px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--login-ink);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background .16s ease;
+}
+
+.login-page .primary-button:hover:not(:disabled) { background: #000; }
+.login-page .primary-button:disabled { cursor: default; opacity: .45; }
+.login-page .primary-button:focus-visible { outline: 2px solid var(--login-ink); outline-offset: 2px; }
+
+.login-huawei-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--login-ink);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .16s ease;
+}
+
+.login-huawei-button:hover { background: #000; }
+.login-huawei-button:focus-visible { outline: 2px solid var(--login-ink); outline-offset: 2px; }
+
+.login-huawei-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--login-ink);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.login-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.login-status .login-lead { margin: 0; }
+
+.login-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid #e5e5e5;
+  border-top-color: var(--login-ink);
+  border-radius: 50%;
+  animation: login-spin .9s linear infinite;
+}
+
+@keyframes login-spin { to { transform: rotate(360deg); } }
+
+.login-consent {
+  margin: 16px 0 0;
+  color: var(--login-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.login-link-button {
+  display: block;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 6px;
+  border: 0;
+  background: none;
+  color: var(--login-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.login-link-button:hover { color: var(--login-ink); }
+
+.login-done-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 20px;
+  border-radius: 50%;
+  background: #d5f2dc;
+  color: #01802b;
+  font-size: 26px;
+}
+
+/* ---------- right artwork: the same panel as the setup wizard ---------- */
+/* The gradient mirrors the artwork's palette, so the panel never flashes a
+   solid colour while the large webp is fetched and decoded. */
+.login-art {
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(90% 60% at 18% 6%, rgba(255, 255, 255, .5), transparent 62%),
+    linear-gradient(168deg, #a9dced 0%, #b8e0ea 40%, #cfe7d8 68%, #efe6c9 100%);
+}
+
+.login-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/wizard/panel-model.webp");
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.login-art-copy {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  padding: 15.2vh 24px 0;
+  color: #fff;
+  text-align: center;
+  pointer-events: none;
+}
+
+.login-art-copy h2 {
+  margin: 0;
+  font-family: "HarmonyOS Sans", "Segoe UI", system-ui, sans-serif;
+  font-size: clamp(28px, 2.5vw, 48px);
+  font-weight: 400;
+  line-height: 1.12;
+  letter-spacing: .2px;
+}
+
+@media (max-width: 900px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-art { display: none; }
+}
+
+@media (max-height: 720px) {
+  .login-brand { padding-top: 20px; }
+  .login-content { padding-top: 40px; padding-bottom: 24px; }
+  .login-content h1 { font-size: 28px; line-height: 40px; }
+  .login-actions { margin-top: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-page .primary-button,
+  .login-huawei-button { transition: none; }
+  .login-spinner { animation: none; }
+}

@@ -122,6 +122,22 @@ const exportFile = {
   downloadsDir: (): Promise<string> => ipcRenderer.invoke("sd-shell:export-downloads-dir"),
 };
 
+/** The account session's storage, kept by the main process behind safeStorage.
+ *  Synchronous to match the Storage interface `packages/account-session` uses;
+ *  a read/write only happens on sign-in and rotation. */
+const accountSessionStorage = {
+  getItem: (key: string): string | null => {
+    const value: unknown = ipcRenderer.sendSync("sd-shell:account-session-read", key);
+    return typeof value === "string" ? value : null;
+  },
+  setItem: (key: string, value: string): void => {
+    ipcRenderer.sendSync("sd-shell:account-session-write", key, value);
+  },
+  removeItem: (key: string): void => {
+    ipcRenderer.sendSync("sd-shell:account-session-remove", key);
+  },
+};
+
 /** The durable list of finished exports (#1154). Rows carry no filesystem path
  *  the renderer could use for a write: the folder is for display, the token is
  *  the only handle it may hand back. */
@@ -210,6 +226,8 @@ contextBridge.exposeInMainWorld("sdShell", {
     attempt?: number;
     message?: string;
   } | null> => ipcRenderer.invoke("sd-shell:jiuwenswarm-get-state"),
+  /** Account session storage, encrypted by the main process (safeStorage). */
+  accountSessionStorage,
   /** First-run wizard. */
   wizard,
   /** Study-package export helpers (undefined outside the shell). */
