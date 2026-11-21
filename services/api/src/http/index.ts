@@ -2534,6 +2534,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             versionId: commit.version.id,
           };
         });
+        // The publication also installed the package into the catalog; that set is
+        // what `resolveRuntimeSettings` resolves `all` mode from and what a run
+        // stages, so every other catalog mutation refreshes it too.
+        store.setAvailableSkillIds(skillCatalog.ids());
         sendJson(response, 201, published);
         return;
       }
