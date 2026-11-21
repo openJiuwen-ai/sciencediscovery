@@ -83,6 +83,7 @@ import type {
   CreateProxyServerRequest,
   IdeaTreeSettings,
   IdeaTreeSettingsDetails,
+  IdeaTreeSettingsOverride,
   McpProxyPolicies,
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
@@ -2402,6 +2403,7 @@ export class SessionStore {
         else if (field === "defaultApprovalMode") effective.defaultApprovalMode = value as Session["approvalMode"];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
+        else if (field === "ideaTreeOverride") effective.ideaTreeOverride = { ...effective.ideaTreeOverride, ...value as IdeaTreeSettingsOverride };
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
         else if (field === "thinkingEffort" || field === "reviewThinkingEffort") effective[field] = value as ModelThinkingEffort;
         else effective[field] = value as string;
@@ -3351,6 +3353,15 @@ export class SessionStore {
    *  table) and filled from `DEFAULT_IDEA_TREE_SETTINGS` for any missing
    *  field. The runtime reads these when a user triggers `/idea-tree-team` in a
    *  Run — there is no per-Session override. */
+  /** The Idea Tree parameters a Session runs with: the global settings with
+   *  that Session's own overrides applied field by field. No override means the
+   *  global value unchanged, which is what every Session had before this. */
+  resolveIdeaTreeSettings(sessionId: string): IdeaTreeSettings {
+    const override = this.resolveRuntimeSettings(sessionId).effective.ideaTreeOverride;
+    const global = this.getIdeaTreeSettings();
+    return override ? { ...global, ...structuredClone(override) } : global;
+  }
+
   getIdeaTreeSettings(): IdeaTreeSettings {
     return structuredClone(this.catalog.ideaTreeSettings);
   }

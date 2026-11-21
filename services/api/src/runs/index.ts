@@ -3354,14 +3354,17 @@ function refineSessionTitleInBackground(
     });
 }
 
-export function computeSettingsSnapshot(store: SessionStore, sessionId: string): EffectiveRuntimeSettings {
+export function computeSettingsSnapshot(store: SessionStore, sessionId: string): SessionRun["settingsSnapshot"] {
   const session = store.assertSessionWritable(sessionId);
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const resolved = store.resolveRuntimeSettings(sessionId).effective;
-  const snapshot: EffectiveRuntimeSettings = {
+  const snapshot: SessionRun["settingsSnapshot"] = {
     ...structuredClone(resolved),
     enabledConnectorIds: [...new Set([...resolved.enabledConnectorIds, ...(sessionSpecialist?.connectorIds ?? [])])],
     enabledSkillIds: [...new Set([...resolved.enabledSkillIds, ...(sessionSpecialist?.enabledSkillIds ?? [])])],
+    // Frozen here, not read again when the queued run starts: a Session override
+    // applies to the runs queued after it, never to one already queued.
+    ideaTreeSettings: store.resolveIdeaTreeSettings(sessionId),
   };
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);

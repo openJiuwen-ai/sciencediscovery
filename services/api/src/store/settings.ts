@@ -28,6 +28,7 @@ import {
   type ConnectorId,
   type FreeSearchEngine,
   type IdeaTreeSettings,
+  type IdeaTreeSettingsOverride,
   type PaidSearchProvider,
   type McpProxyPolicies,
   type MemoryGraphSettings,
@@ -71,6 +72,7 @@ export const RUNTIME_SETTINGS_FIELDS = [
   "enabledConnectorIds",
   "enabledSkillLibraries",
   "enabledSkillIds",
+  "ideaTreeOverride",
   "modelId",
   "reviewModelId",
   "reviewThinkingEffort",
@@ -245,7 +247,80 @@ export function normalizeRuntimeSettings(
       normalized[field] = effort;
     }
   }
+  if (hasOwn(value, "ideaTreeOverride")) {
+    const ideaTree = normalizeIdeaTreeOverride(value.ideaTreeOverride, strict);
+    if (ideaTree) normalized.ideaTreeOverride = ideaTree;
+  }
   return normalized;
+}
+
+/** The six Idea Tree fields a layer may override, with the range each accepts.
+ *  Anything else is an unknown field: rejected in strict mode so a typo cannot
+ *  silently leave the global value in place. */
+const IDEA_TREE_OVERRIDE_FIELDS = [
+  "templateId",
+  "explorationIntensity",
+  "maxTokensPerCall",
+  "maxDepth",
+  "maxNodes",
+  "scoreDirection",
+] as const;
+
+export function normalizeIdeaTreeOverride(
+  value: unknown,
+  strict: boolean,
+): IdeaTreeSettingsOverride | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    if (strict) throw new Error("ideaTreeOverride must be an object");
+    return undefined;
+  }
+  if (strict) {
+    const unknown = Object.keys(value).find(
+      (key) => !IDEA_TREE_OVERRIDE_FIELDS.includes(key as (typeof IDEA_TREE_OVERRIDE_FIELDS)[number]),
+    );
+    if (unknown) throw new Error(`ideaTreeOverride has an unknown field: ${unknown}`);
+  }
+  const override: IdeaTreeSettingsOverride = {};
+  if (hasOwn(value, "templateId")) {
+    const templateId = value.templateId;
+    if (templateId === "scientific-hypothesis-general/v1" || templateId === "water-treatment-materials/v1") {
+      override.templateId = templateId;
+    } else if (strict) {
+      throw new Error("ideaTreeOverride.templateId is not a registered template");
+    }
+  }
+  if (hasOwn(value, "explorationIntensity")) {
+    const intensity = value.explorationIntensity;
+    if (intensity === "quick" || intensity === "standard" || intensity === "deep") {
+      override.explorationIntensity = intensity;
+    } else if (strict) {
+      throw new Error("ideaTreeOverride.explorationIntensity must be quick, standard, or deep");
+    }
+  }
+  if (hasOwn(value, "scoreDirection")) {
+    const direction = value.scoreDirection;
+    if (direction === "maximize" || direction === "minimize") {
+      override.scoreDirection = direction;
+    } else if (strict) {
+      throw new Error("ideaTreeOverride.scoreDirection must be maximize or minimize");
+    }
+  }
+  const bounds: Record<string, readonly [number, number]> = {
+    maxTokensPerCall: [256, 32768],
+    maxDepth: [1, 20],
+    maxNodes: [2, 10_000],
+  };
+  for (const [field, [min, max]] of Object.entries(bounds)) {
+    if (!hasOwn(value, field)) continue;
+    const numeric = value[field];
+    if (typeof numeric !== "number" || !Number.isInteger(numeric) || numeric < min || numeric > max) {
+      if (strict) throw new Error(`ideaTreeOverride.${field} must be an integer between ${min} and ${max}`);
+      continue;
+    }
+    override[field as "maxTokensPerCall" | "maxDepth" | "maxNodes"] = numeric;
+  }
+  return Object.keys(override).length ? override : undefined;
 }
 
 const TIMEOUT_SETTING_FIELDS = [
