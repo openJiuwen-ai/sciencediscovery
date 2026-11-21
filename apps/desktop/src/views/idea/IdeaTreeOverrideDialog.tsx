@@ -21,7 +21,11 @@
  * re-reads, and the global settings themselves. Cancel writes nothing, and the
  * dialog never sends a message — the composer keeps the last word.
  *
- * The six fields are the ones the settings catalog exposes; the per-call token
+ * The fields are drawn with the same Group/Row/Select the Idea Tree settings
+ * page uses, so the card reads as that form rather than a lookalike, and the
+ * actions carry the evolve dialog's own button classes.
+ *
+ * The five fields are the ones the settings catalog exposes; the per-call token
  * cap that used to sit among them was removed (#1281) and is not offered here.
  */
 
@@ -34,8 +38,10 @@ import { updateSession } from "../../api/sessions.js";
 import { getIdeaTreeSettings, updateIdeaTreeSettings } from "../../api/settings.js";
 import { TEXT } from "../../text.js";
 import { claimsEscape } from "../dialog-escape.js";
+import { Group, Row, Select } from "../settings/rows.js";
 
 const t = TEXT.ideaTreeOverride;
+const fields = TEXT.settings.system.ideaTree;
 
 /** The five fields a layer may override, taken from a full settings object. */
 function overrideOf(settings: IdeaTreeSettingsDetails): IdeaTreeSettingsOverride {
@@ -52,6 +58,20 @@ function numberFrom(raw: string, fallback: number): number {
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
+
+const TEMPLATES = [
+  { label: fields.templateGeneral, value: "scientific-hypothesis-general/v1" },
+  { label: fields.templateWater, value: "water-treatment-materials/v1" },
+];
+const INTENSITIES = [
+  { label: fields.quick, value: "quick" },
+  { label: fields.standard, value: "standard" },
+  { label: fields.deep, value: "deep" },
+];
+const DIRECTIONS = [
+  { label: fields.maximize, value: "maximize" },
+  { label: fields.minimize, value: "minimize" },
+];
 
 export function IdeaTreeOverrideDialog({
   client,
@@ -151,89 +171,80 @@ export function IdeaTreeOverrideDialog({
           </button>
         </header>
 
-        <div className="idea-tree-override-body">
-          <p className="idea-tree-override-hint">{t.hint}</p>
+        <div className="evolve-create-body">
+          <p className="evolve-create-confirm-hint">{t.hint}</p>
 
           {status === "loading" ? <p className="status-strip">{t.loading}</p> : null}
 
           {draft === undefined ? null : (
-            <div className="idea-tree-override-fields">
-              <label className="idea-tree-override-field">
-                <span>{t.template}</span>
-                <select
-                  aria-label={t.template}
-                  onChange={(event) => patch({ templateId: event.target.value as IdeaTreeSettingsDetails["templateId"] })}
+            <Group heading={fields.scopeHeading}>
+              <Row hint={fields.templateHint} title={fields.template}>
+                <Select
+                  label={fields.template}
+                  onChange={(value) => patch({ templateId: value as IdeaTreeSettingsDetails["templateId"] })}
+                  options={TEMPLATES}
                   value={draft.templateId}
-                >
-                  <option value="scientific-hypothesis-general/v1">{t.templateGeneral}</option>
-                  <option value="water-treatment-materials/v1">{t.templateWater}</option>
-                </select>
-              </label>
-
-              <label className="idea-tree-override-field">
-                <span>{t.intensity}</span>
-                <select
-                  aria-label={t.intensity}
-                  onChange={(event) => patch({ explorationIntensity: event.target.value as IdeaTreeSettingsDetails["explorationIntensity"] })}
+                />
+              </Row>
+              <Row hint={fields.intensityHint} title={fields.intensity}>
+                <Select
+                  label={fields.intensity}
+                  onChange={(value) => patch({ explorationIntensity: value as IdeaTreeSettingsDetails["explorationIntensity"] })}
+                  options={INTENSITIES}
                   value={draft.explorationIntensity}
-                >
-                  <option value="quick">{t.quick}</option>
-                  <option value="standard">{t.standard}</option>
-                  <option value="deep">{t.deep}</option>
-                </select>
-              </label>
-
-              <label className="idea-tree-override-field">
-                <span>{t.direction}</span>
-                <select
-                  aria-label={t.direction}
-                  onChange={(event) => patch({ scoreDirection: event.target.value as IdeaTreeSettingsDetails["scoreDirection"] })}
+                />
+              </Row>
+              <Row hint={fields.directionHint} title={fields.direction}>
+                <Select
+                  label={fields.direction}
+                  onChange={(value) => patch({ scoreDirection: value as IdeaTreeSettingsDetails["scoreDirection"] })}
+                  options={DIRECTIONS}
                   value={draft.scoreDirection}
-                >
-                  <option value="maximize">{t.maximize}</option>
-                  <option value="minimize">{t.minimize}</option>
-                </select>
-              </label>
-
-              <label className="idea-tree-override-field">
-                <span>{t.maxDepth}</span>
+                />
+              </Row>
+              <Row hint={fields.maxDepthHint} title={fields.maxDepth}>
                 <input
-                  aria-label={t.maxDepth}
+                  aria-label={fields.maxDepth}
+                  className="field-input"
                   min={1}
                   onChange={(event) => patch({ maxDepth: numberFrom(event.target.value, draft.maxDepth) })}
                   type="number"
                   value={draft.maxDepth}
                 />
-              </label>
-
-              <label className="idea-tree-override-field">
-                <span>{t.maxNodes}</span>
+              </Row>
+              <Row hint={fields.maxNodesHint} title={fields.maxNodes}>
                 <input
-                  aria-label={t.maxNodes}
+                  aria-label={fields.maxNodes}
+                  className="field-input"
                   min={2}
                   onChange={(event) => patch({ maxNodes: numberFrom(event.target.value, draft.maxNodes) })}
                   type="number"
                   value={draft.maxNodes}
                 />
-              </label>
-            </div>
+              </Row>
+            </Group>
           )}
 
-          {sessionId === undefined ? <p className="idea-tree-override-note">{t.noSession}</p> : null}
-          {failure === undefined ? null : <p className="idea-tree-override-failure" role="alert">{failure}</p>}
-          {status === "session" ? <p className="idea-tree-override-note" role="status">{t.savedSession}</p> : null}
-          {status === "global" ? <p className="idea-tree-override-note" role="status">{t.savedGlobal}</p> : null}
-        </div>
+          {sessionId === undefined ? <p className="evolve-create-confirm-hint">{t.noSession}</p> : null}
+          {failure === undefined ? null : <p className="evolve-create-blocked" role="alert">{failure}</p>}
+          {status === "session" ? <p className="evolve-create-confirm-hint" role="status">{t.savedSession}</p> : null}
+          {status === "global" ? <p className="evolve-create-confirm-hint" role="status">{t.savedGlobal}</p> : null}
 
-        <footer className="modal-actions">
-          <button className="button-secondary" disabled={busy} onClick={onClose} type="button">{t.cancel}</button>
-          <button className="button-secondary" disabled={busy || draft === undefined || sessionId === undefined} onClick={() => void saveSession()} type="button">
-            {t.saveSession}
-          </button>
-          <button className="button-primary" disabled={busy || draft === undefined} onClick={() => void saveGlobal()} type="button">
-            {t.saveGlobal}
-          </button>
-        </footer>
+          <div className="evolve-create-footer">
+            <button className="evolve-create-cancel" onClick={onClose} type="button">{t.cancel}</button>
+            <button
+              className="evolve-create-cancel"
+              disabled={busy || draft === undefined || sessionId === undefined}
+              onClick={() => void saveSession()}
+              type="button"
+            >
+              {t.saveSession}
+            </button>
+            <button className="evolve-create-submit" disabled={busy || draft === undefined} onClick={() => void saveGlobal()} type="button">
+              {t.saveGlobal}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
