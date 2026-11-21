@@ -1,6 +1,13 @@
 ---
 name: science-research-team
 description: Use this skill to orchestrate a multi-domain research team for literature/evidence research and data analysis. Dispatches the right domain(s) based on the user's request, runs each domain to completion with its own loop, then synthesizes into reports. Load when the user needs rigorous research with knowledge or data analysis.
+kind: team-skill
+members:
+  - literature-searcher
+  - evidence-extractor
+  - code-engineer
+  - result-evaluator
+  - report-writer
 ---
 
 # Science Research Team Skill

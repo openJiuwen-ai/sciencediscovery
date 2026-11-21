@@ -96,7 +96,8 @@ export const SKILL_LIMITS = {
   skillMarkdownBytes: 512 * 1024,
 } as const;
 
-const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
+/** Version shipped with each bundled skill, surfaced by the asset hub exporter. */
+export const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "antibody-design": "1.0.0",
   "assessment-screening": "1.0.0",
   "code-engineer": "1.0.0",
@@ -119,7 +120,9 @@ const FRONTMATTER_KEYS = new Set([
   "allowed-tools",
   "compatibility",
   "description",
+  "kind",
   "license",
+  "members",
   "metadata",
   "name",
 ]);

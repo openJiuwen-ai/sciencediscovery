@@ -1,0 +1,19 @@
+{
+  "antibody-design": { "domain": "biology", "subdomain": "protein_and_structure" },
+  "assessment-screening": { "domain": "research_tools", "subdomain": "data_analysis_and_processing" },
+  "citation-reviewer": { "domain": "research_tools", "subdomain": "scientific_writing" },
+  "code-engineer": { "domain": "research_tools", "subdomain": "general_tools" },
+  "computation-reviewer": { "domain": "research_tools", "subdomain": "data_analysis_and_processing" },
+  "creative-material-design": { "domain": "chemistry_and_materials", "subdomain": "cheminformatics" },
+  "evidence-extractor": { "domain": "research_tools", "subdomain": "database_and_knowledge" },
+  "evolve-design": { "domain": "research_tools", "subdomain": "general_tools" },
+  "idea-tree-team": { "domain": "research_tools", "subdomain": "general_tools" },
+  "insight-aggregator": { "domain": "research_tools", "subdomain": "data_analysis_and_processing" },
+  "life-science-evidence-brief": { "domain": "medical_and_pharmacy", "subdomain": "database_and_knowledge" },
+  "literature-searcher": { "domain": "research_tools", "subdomain": "database_and_knowledge" },
+  "report-writer": { "domain": "research_tools", "subdomain": "scientific_writing" },
+  "result-evaluator": { "domain": "research_tools", "subdomain": "data_analysis_and_processing" },
+  "science-research-team": { "domain": "research_tools", "subdomain": "general_tools" },
+  "skill-creator": { "domain": "research_tools", "subdomain": "general_tools" },
+  "structure-pocket-inspection": { "domain": "biology", "subdomain": "protein_and_structure" }
+}

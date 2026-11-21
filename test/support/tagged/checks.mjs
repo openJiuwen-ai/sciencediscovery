@@ -25,6 +25,15 @@ export const checks = [
   { id: 'check:docs', command: ['pnpm', 'docs:check'], tags: [...host, 'tier:l1'] },
   { id: 'check:catalog', command: ['pnpm', 'ci:catalog:check'], tags: [...host, 'tier:l1'] },
   { id: 'check:e2e-metadata', command: ['node', 'test/check-e2e-meta.mjs'], tags: [...host, 'tier:l1'] },
+  // The hub's exporter and site are not another project's suite; without
+  // these, `pnpm hub:test` ran nowhere in CI. They run in the UT layer, not
+  // L1: L1 installs but does not build, and the exporter imports the
+  // specialist sources, whose `@sciencediscovery/*` imports resolve to
+  // `dist/`. UT already builds the workspace, so the dependency closure here
+  // is incremental.
+  { id: 'check:hub-tests', command: ['pnpm', 'hub:test'], tags: [...host] },
+  { id: 'check:hub-typecheck', command: ['pnpm', 'hub:typecheck'], tags: [...host] },
+  { id: 'check:hub-build', command: ['pnpm', 'hub:build'], tags: [...host] },
   // The harness decides what every other case is, so its own regression suite
   // is planned with them rather than trusted.
   { id: 'check:tagged-selftest', command: ['node', 'test/support/tagged/selftest.mjs'], tags: host },
