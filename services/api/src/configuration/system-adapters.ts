@@ -117,7 +117,6 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
           ] },
           enumField("explorationIntensity", "Exploration intensity", intensities, current.explorationIntensity),
           enumField("scoreDirection", "Score direction", directions, current.scoreDirection),
-          numberField("maxTokensPerCall", "Tokens per call", current.maxTokensPerCall ?? 32768, "Integer from 256 to 32768."),
           numberField("maxDepth", "Maximum depth", current.maxDepth, "Integer from 1 to 20."),
           numberField("maxNodes", "Maximum nodes", current.maxNodes, "Integer from 2 to 10000."),
         );

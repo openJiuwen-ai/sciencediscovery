@@ -12,7 +12,6 @@ const SETTINGS = {
   templateId: "scientific-hypothesis-general/v1",
   explorationIntensity: "standard",
   maxTokens: null,
-  maxTokensPerCall: 32768,
   maxDepth: 5,
   maxNodes: 100,
   scoreDirection: "maximize",

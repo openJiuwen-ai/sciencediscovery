@@ -113,10 +113,9 @@ test("an unknown free search engine is tagged as client input so the route answe
 
 
 test("Idea Tree settings reject template-owned fields and discard their legacy catalog values", () => {
-  const updated = normalizeIdeaTreeSettings({templateId: "water-treatment-materials/v1", explorationIntensity: "deep", maxTokens: 120000, maxTokensPerCall: 6000}, DEFAULT_IDEA_TREE_SETTINGS);
+  const updated = normalizeIdeaTreeSettings({templateId: "water-treatment-materials/v1", explorationIntensity: "deep", maxTokens: 120000}, DEFAULT_IDEA_TREE_SETTINGS);
   const restored = resolveIdeaTreeSettings(JSON.parse(JSON.stringify(updated)));
   assert.equal(restored.maxTokens, 120000);
-  assert.equal(restored.maxTokensPerCall, 6000);
   assert.equal(restored.templateId, "water-treatment-materials/v1");
   assert.equal(restored.explorationIntensity, "deep");
   assert.equal(normalizeIdeaTreeSettings({maxTokens: null}, restored).maxTokens, null);
@@ -126,16 +125,26 @@ test("Idea Tree settings reject template-owned fields and discard their legacy c
   const legacy = resolveIdeaTreeSettings({maxRounds: 6, candidatesPerRound: 2, maxSearchRounds: 10, assessorActivity: {weight: 1}});
   assert.equal("maxRounds" in legacy, false);
   assert.equal("assessorActivity" in legacy, false);
-  for (const input of [{maxTokens: -1}, {maxTokensPerCall: 255}]) {
+  for (const input of [{maxTokens: -1}]) {
     assert.throws(() => normalizeIdeaTreeSettings(input, restored));
   }
 });
 
 
-test("Idea Tree accepts the server Lead Agent output ceiling", () => {
-  assert.equal(DEFAULT_IDEA_TREE_SETTINGS.maxTokensPerCall, 32768);
-  assert.equal(normalizeIdeaTreeSettings({maxTokensPerCall: 32768}, DEFAULT_IDEA_TREE_SETTINGS).maxTokensPerCall, 32768);
-  assert.throws(() => normalizeIdeaTreeSettings({maxTokensPerCall: 32769}, DEFAULT_IDEA_TREE_SETTINGS));
+test("a stored Idea Tree row that still carries the removed per-call cap loads without it", () => {
+  // #1281 removed maxTokensPerCall. An upgraded deployment still has it in its
+  // catalog row: reading must not throw, and the value must not come back.
+  assert.equal("maxTokensPerCall" in DEFAULT_IDEA_TREE_SETTINGS, false);
+  const stored = { ...DEFAULT_IDEA_TREE_SETTINGS, maxTokensPerCall: 8192, templateId: "water-treatment-materials/v1" as const };
+  const resolved = resolveIdeaTreeSettings(stored);
+  assert.equal("maxTokensPerCall" in resolved, false);
+  assert.equal(resolved.templateId, "water-treatment-materials/v1");
+  // A stale client sending it is ignored the same way, whatever the value.
+  for (const stale of [255, 8192, 32769]) {
+    const updated = normalizeIdeaTreeSettings({ maxTokensPerCall: stale, maxDepth: 6 } as never, DEFAULT_IDEA_TREE_SETTINGS);
+    assert.equal("maxTokensPerCall" in updated, false);
+    assert.equal(updated.maxDepth, 6);
+  }
 });
 
 test("Idea Tree stages inherit unless given their own effort, and the map survives storage", () => {

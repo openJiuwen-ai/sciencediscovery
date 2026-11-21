@@ -309,7 +309,6 @@ export interface IdeaTreeSettings {
   templateId: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity: "quick" | "standard" | "deep";
   maxTokens?: number | null;
-  maxTokensPerCall?: number;
   /** 建树默认参数 */
   maxDepth: number;
   maxNodes: number;
@@ -333,7 +332,6 @@ export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
   templateId: "scientific-hypothesis-general/v1",
   explorationIntensity: "standard",
   maxTokens: null,
-  maxTokensPerCall: 32768,
   maxDepth: 5,
   maxNodes: 100,
   scoreDirection: "maximize",
@@ -344,7 +342,6 @@ export interface IdeaTreeSettingsDetails {
   templateId: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity: "quick" | "standard" | "deep";
   maxTokens?: number | null;
-  maxTokensPerCall?: number;
   maxDepth: number;
   maxNodes: number;
   scoreDirection: "maximize" | "minimize";
@@ -359,7 +356,6 @@ export interface UpdateIdeaTreeSettingsRequest {
   templateId?: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity?: "quick" | "standard" | "deep";
   maxTokens?: number | null;
-  maxTokensPerCall?: number;
   maxDepth?: number;
   maxNodes?: number;
   scoreDirection?: "maximize" | "minimize";

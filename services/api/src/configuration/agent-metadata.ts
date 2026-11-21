@@ -60,10 +60,10 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     deepseekEnabled: boolean, fetchProvider: { kind: "string", choices: ["jina", "tavily", "exa", "deepseek"] }, freeSearchEngines: ids, paidSearchProviders: ids,
     searchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, fetchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, proxyPolicy: id,
   }, activation: "next_run", diagnostics: [] },
-  "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree registered template, intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
+  "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree registered template, intensity, score direction, or a bounded depth or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
     templateId: { kind: "string", choices: ["scientific-hypothesis-general/v1", "water-treatment-materials/v1"] },
     explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },
-    maxTokensPerCall: { kind: "integer", minimum: 256, maximum: 32768 }, maxDepth: { kind: "integer", minimum: 1, maximum: 20 },
+    maxDepth: { kind: "integer", minimum: 1, maximum: 20 },
     maxNodes: { kind: "integer", minimum: 2, maximum: 10000 },
   }, activation: "next_run", diagnostics: [] },
 };

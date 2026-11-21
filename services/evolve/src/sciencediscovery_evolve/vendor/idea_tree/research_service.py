@@ -32,7 +32,6 @@ class Settings(BaseModel):
     pruneMinAssessments: int = Field(default=3, ge=1, le=100)
     pruneScoreGap: float = Field(default=2.5, ge=0, le=9)
     maxTokens: int | None = Field(default=None, ge=1)
-    maxTokensPerCall: int = Field(default=32768, ge=256, le=32768)
     designSystemPrompt: str | None = Field(default=None, max_length=24000)
     aggregatorSystemPrompt: str | None = Field(default=None, max_length=24000)
     propagateInsightSystemPrompt: str | None = Field(default=None, max_length=24000)

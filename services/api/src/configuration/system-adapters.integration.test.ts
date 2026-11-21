@@ -80,7 +80,6 @@ test("CFG-T35: Idea Tree accepts bounded fields and refuses prompts, weights and
   assert.equal(saved.explorationIntensity, "deep");
   assert.equal(saved.maxDepth, 4);
   assert.equal(saved.maxNodes, 20);
-  assert.equal(saved.maxTokensPerCall, before.maxTokensPerCall);
   assert.equal(saved.templateId, before.templateId);
   assert.equal(saved.designSystemPrompt, before.designSystemPrompt);
 });
