@@ -213,7 +213,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
     current = { templateId: idea.templateId, explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
-      maxTokensPerCall: idea.maxTokensPerCall, maxDepth: idea.maxDepth, maxNodes: idea.maxNodes };
+      maxDepth: idea.maxDepth, maxNodes: idea.maxNodes };
   } else current = { modelId: effective.modelId ?? null };
   const selected = (await resources(id)).filter(row => (!input.targetId || row.id === input.targetId) && (!query || matches(query, `${row.id} ${row.name} ${row.model ?? ""}`)));
   if (input.targetId && !selected.length) throw new ConfigurationError("CONFIGURATION_RESOURCE_UNAVAILABLE", "The requested installed resource was not found");

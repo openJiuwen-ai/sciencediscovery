@@ -1243,8 +1243,6 @@ export const ZH = {
         tokens: "token 上限",
         tokensHint: "单次研究可用的总 token；留空表示不额外限制。",
         noCap: "不额外限制",
-        tokensPerCall: "单次调用 token",
-        tokensPerCallHint: "一次模型调用最多使用的 token。",
         promptsHeading: "阶段提示词覆盖",
         designPrompt: "设计阶段",
         aggregatorPrompt: "汇总阶段",

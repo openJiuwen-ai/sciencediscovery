@@ -151,6 +151,10 @@ def is_permanent_quota(detail: str) -> bool:
     return 'insufficient_quota' in detail.lower()
 
 
+# The budget check sets this aside before one model call. It is a reservation,
+# not a cap: since #1281 the request itself sends no max_tokens.
+OUTPUT_RESERVATION_TOKENS = 32768
+
 class IdeaTreeEngine:
     # Retry budget for the model transport, shared by 429 and 5xx: one retry
     # after the first attempt. The protocol-compatibility suite pins exactly
@@ -224,9 +228,11 @@ class IdeaTreeEngine:
             remaining -= step
         self.check_stop()
 
-    def transport(self, system, payload, ceiling, effort=None):
+    def transport(self, system, payload, effort=None):
         # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
-        fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)
+        # No max_tokens either: the per-call cap was removed (#1281), so the call
+        # leaves that ceiling to the model and the service behind it.
+        fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))])
         if effort:
             # The control plane narrows it to a stop the model accepts.
             fields['reasoning_effort'] = effort
@@ -280,9 +286,9 @@ class IdeaTreeEngine:
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape
         for attempt in range(2):
             self.check_stop()
-            ceiling = self.state['settings']['maxTokensPerCall']
-            # Conservative UTF-8 bound; no tokenizer/model dependency in the state engine.
-            estimate = len((system + json.dumps(payload, ensure_ascii=False)).encode()) + ceiling + 256
+            # Reservation only, not a cap: the request no longer sends max_tokens
+            # (#1281). The bound stays so the total-budget check keeps its shape.
+            estimate = len((system + json.dumps(payload, ensure_ascii=False)).encode()) + OUTPUT_RESERVATION_TOKENS + 256
             async with self.usage_lock:
                 budget = self.state['settings'].get('maxTokens')
                 if budget and self.state['tokens'] + self.state.get('unreportedBudgetEstimate', 0) + self.reserved + estimate > budget:
@@ -294,7 +300,7 @@ class IdeaTreeEngine:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
-                    raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling, self.role_effort(role))
+                    raw, usage = await asyncio.to_thread(self.transport, system, payload, self.role_effort(role))
                 received = True
             finally:
                 async with self.usage_lock:

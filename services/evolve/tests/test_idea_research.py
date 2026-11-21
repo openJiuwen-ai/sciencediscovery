@@ -300,7 +300,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(persisted['usageKnown'])
         self.assertEqual(persisted['activities'][-1]['status'], 'failed')
         # Just enough for one stage; a stale failed-call reserve would block it.
-        self.state['settings']['maxTokens'] = len((engine.role_prompt('design') + '\nReturn JSON only, matching: {"text":"..."}' + '{}').encode()) + self.state['settings']['maxTokensPerCall'] + 256
+        self.state['settings']['maxTokens'] = len((engine.role_prompt('design') + '\nReturn JSON only, matching: {"text":"..."}' + '{}').encode()) + 32768 + 256  # the reservation constant, not a cap
         self.assertEqual(await engine.ask('design', {}), {'text': 'valid design'})
         self.assertEqual(len(calls), 2)
         self.assertEqual(engine.reserved, 0)
@@ -526,9 +526,9 @@ def test_transport_leaves_temperature_to_the_provider(monkeypatch):
     monkeypatch.setattr('urllib.request.urlopen', urlopen)
     with tempfile.TemporaryDirectory() as root:
         engine = IdeaTreeEngine(dict(id='r'), ResearchStore(Path(root)), dict(url='http://model.test/v1/chat/completions', token='t'))
-        assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+        assert engine.transport('system', dict(a=1)) == ('{}', 7)
     assert 'temperature' not in sent[0]
-    assert sent[0]['max_tokens'] == 100
+    assert 'max_tokens' not in sent[0], 'the per-call cap is gone: the request carries no max_tokens'
 
 
 def rate_limit_error(url, after='1', error_type='rate_limit_exceeded'):
@@ -568,7 +568,7 @@ def transport_with_faults(monkeypatch, faults):
 def test_transport_retries_transient_429_then_succeeds(monkeypatch):
     # Issue #1232: one 429 with Retry-After: 1, then success, must continue.
     engine, attempts, sleeps = transport_with_faults(monkeypatch, [rate_limit_error])
-    assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+    assert engine.transport('system', dict(a=1)) == ('{}', 7)
     assert len(attempts) == 2
     assert sum(sleeps) == pytest.approx(1.0)
 
@@ -577,7 +577,7 @@ def test_transport_gives_up_after_bounded_429_retries(monkeypatch):
     # Repeated 429s terminate after the existing two-attempt budget, with a clear reason.
     engine, attempts, sleeps = transport_with_faults(monkeypatch, [rate_limit_error, rate_limit_error])
     with pytest.raises(RuntimeError, match='Model HTTP 429: retry budget exhausted after 2 attempts'):
-        engine.transport('system', dict(a=1), 100)
+        engine.transport('system', dict(a=1))
     assert len(attempts) == 2
     assert sum(sleeps) == pytest.approx(1.0)
 
@@ -586,7 +586,7 @@ def test_transport_does_not_retry_permanent_quota_429(monkeypatch):
     # A 429 that reports exhausted quota/billing is permanent, not transient.
     engine, attempts, sleeps = transport_with_faults(monkeypatch, [lambda url: rate_limit_error(url, error_type='insufficient_quota')])
     with pytest.raises(RuntimeError, match='Model HTTP 429: permanent quota error, not retried'):
-        engine.transport('system', dict(a=1), 100)
+        engine.transport('system', dict(a=1))
     assert len(attempts) == 1
     assert sleeps == []
 
@@ -601,7 +601,7 @@ def test_transport_retry_wait_respects_pause(monkeypatch):
 
     monkeypatch.setattr(time, 'sleep', pausing_sleep)
     with pytest.raises(Interrupted):
-        engine.transport('system', dict(a=1), 100)
+        engine.transport('system', dict(a=1))
     assert len(attempts) == 1
 
 
@@ -611,7 +611,7 @@ def test_transport_still_retries_500_then_succeeds(monkeypatch):
         return urllib.error.HTTPError(url, 503, 'Service Unavailable', {}, io.BytesIO(b'{"error":"original temporary provider cause"}'))
 
     engine, attempts, sleeps = transport_with_faults(monkeypatch, [server_error])
-    assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+    assert engine.transport('system', dict(a=1)) == ('{}', 7)
     assert len(attempts) == 2
     assert sum(sleeps) == pytest.approx(0.5)
 
@@ -654,7 +654,7 @@ def test_each_stage_asks_for_its_own_effort_and_unset_stages_ask_for_none(monkey
         assert [engine.role_effort(role) for role in ('design', 'activity', 'sustainability', 'aggregate')] == ['max', 'low', 'low', None]
         asyncio.run(engine.ask('design', {}))
         assert sent[-1]['reasoning_effort'] == 'max'
-        engine.transport('system', dict(a=1), 100)
+        engine.transport('system', dict(a=1))
         assert 'reasoning_effort' not in sent[-1]
         # A research created before stages had efforts carries none.
         del state['settings']['roleThinkingEfforts']

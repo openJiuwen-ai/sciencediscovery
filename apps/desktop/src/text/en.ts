@@ -1223,8 +1223,6 @@ export const EN: Text = {
         tokens: "Token limit",
         tokensHint: "Total tokens one research may use; empty means no extra cap.",
         noCap: "No extra cap",
-        tokensPerCall: "Tokens per call",
-        tokensPerCallHint: "The most one model call may use.",
         promptsHeading: "Stage prompt overrides",
         designPrompt: "Design stage",
         aggregatorPrompt: "Aggregate stage",

@@ -100,7 +100,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
       scoreDirection: draft.scoreDirection,
       maxDepth: draft.maxDepth,
       maxNodes: draft.maxNodes,
-      ...(draft.maxTokensPerCall === undefined ? {} : { maxTokensPerCall: draft.maxTokensPerCall }),
       // `null` is the API's "no per-research cap"; an empty box means exactly that.
       maxTokens: draft.maxTokens ?? null,
       ...(draft.designSystemPrompt === undefined ? {} : { designSystemPrompt: draft.designSystemPrompt }),
@@ -180,16 +179,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
                 placeholder={t.noCap}
                 type="number"
                 value={number(draft.maxTokens)}
-              />
-            </Row>
-            <Row hint={t.tokensPerCallHint} title={t.tokensPerCall}>
-              <input
-                aria-label={t.tokensPerCall}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxTokensPerCall: value }); }}
-                type="number"
-                value={number(draft.maxTokensPerCall)}
               />
             </Row>
           </Group>

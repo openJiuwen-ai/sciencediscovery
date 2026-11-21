@@ -284,7 +284,6 @@ export interface IdeaResearchSettings {
   pruneMinAssessments: number;
   pruneScoreGap: number;
   maxTokens?: number | null;
-  maxTokensPerCall: number;
 }
 export interface IdeaResearchActivity {
   role: string;

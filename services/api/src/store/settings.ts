@@ -548,6 +548,9 @@ export function normalizeIdeaTreeSettings(
   input: UpdateIdeaTreeSettingsRequest,
   current: IdeaTreeSettings,
 ): IdeaTreeSettings {
+  // `maxTokensPerCall` used to live here (#1281). A stored settings row or a
+  // stale client may still send it; it is dropped silently rather than rejected,
+  // so an upgraded deployment reads its own catalog without a migration.
   const retiredField = [
     "maxRounds",
     "candidatesPerRound",
@@ -559,7 +562,6 @@ export function normalizeIdeaTreeSettings(
   if (retiredField) throw new Error(`${retiredField} is configured by the selected template and exploration intensity`);
   const templateId = input.templateId ?? current.templateId;
   const explorationIntensity = input.explorationIntensity ?? current.explorationIntensity;
-  const maxTokensPerCall = boundedInteger(input.maxTokensPerCall, "maxTokensPerCall", 256, 32768, current.maxTokensPerCall ?? 32768);
   const maxTokens = input.maxTokens === null ? null : input.maxTokens === undefined ? current.maxTokens ?? null
     : boundedInteger(input.maxTokens, "maxTokens", 1, Number.MAX_SAFE_INTEGER, 1);
   const maxDepth = boundedInteger(input.maxDepth, "maxDepth", 1, 20, current.maxDepth);
@@ -582,7 +584,7 @@ export function normalizeIdeaTreeSettings(
   return {
     templateId,
     explorationIntensity,
-    maxTokens, maxTokensPerCall,
+    maxTokens,
     maxDepth,
     maxNodes,
     scoreDirection,
@@ -609,7 +611,6 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
       ? value.explorationIntensity
       : DEFAULT_IDEA_TREE_SETTINGS.explorationIntensity,
     maxTokens: typeof value.maxTokens === "number" ? value.maxTokens : null,
-    maxTokensPerCall: typeof value.maxTokensPerCall === "number" ? value.maxTokensPerCall : 32768,
     maxDepth: typeof value.maxDepth === "number" ? value.maxDepth : DEFAULT_IDEA_TREE_SETTINGS.maxDepth,
     maxNodes: typeof value.maxNodes === "number" ? value.maxNodes : DEFAULT_IDEA_TREE_SETTINGS.maxNodes,
     scoreDirection: value.scoreDirection === "maximize" || value.scoreDirection === "minimize"
