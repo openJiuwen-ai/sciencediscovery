@@ -88,10 +88,14 @@ const DIRECTIONS = [
 export function IdeaTreeOverrideDialog({
   client,
   onClose,
+  onConfirm,
   sessionId,
 }: {
   client: ApiClient;
   onClose: () => void;
+  /** Present when an Idea Tree command is waiting for this card: confirming
+   *  writes the Session override and then lets the shell send the command. */
+  onConfirm?: () => void;
   /** The conversation whose research settings would change; absent on the
    *  landing page, where there is nothing to override yet. */
   sessionId?: string;
@@ -186,6 +190,7 @@ export function IdeaTreeOverrideDialog({
       setPins(override);
       setHasOverride(!empty);
       setStatus("session");
+      onConfirm?.();
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
       setStatus("failed");
@@ -343,7 +348,7 @@ export function IdeaTreeOverrideDialog({
               onClick={() => void saveSession()}
               type="button"
             >
-              {t.saveSession}
+              {onConfirm === undefined ? t.saveSession : t.confirmSend}
             </button>
             <button
               className="evolve-create-cancel"

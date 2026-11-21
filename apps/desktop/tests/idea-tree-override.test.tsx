@@ -209,6 +209,29 @@ test("the number fields keep the last good value instead of holding one the writ
     const patch = calls.find((call) => call.method === "PATCH");
     assert.equal(patch, undefined, "no write for a value the form never accepted");
     assert.equal(depth!.props.value, 5, "the field still shows the last accepted value");
+test("confirming sends the command after writing the Session override", async () => {
+  const { calls, client } = stubClient();
+  const confirmed: number[] = [];
+  let view: { toJSON: () => unknown; root: never; unmount: () => void };
+  await act(async () => {
+    view = create(
+      <IdeaTreeOverrideDialog
+        client={client as never}
+        onClose={() => {}}
+        onConfirm={() => { confirmed.push(1); }}
+        sessionId="s1"
+      />,
+    ) as never;
+  });
+  await flush();
+  try {
+    await act(async () => { click(view as never, "确认并发送"); });
+    await flush();
+    // The parameters go to the Session first, then the command is allowed out.
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.equal(patch?.path, "/api/sessions/s1");
+    assert.equal(confirmed.length, 1, "the shell was told to send");
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "global untouched");
   } finally {
     await act(async () => { view.unmount(); });
   }
