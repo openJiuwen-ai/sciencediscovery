@@ -23,6 +23,7 @@ export type RuntimeSettingsField =
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
+  | "ideaTreeOverride"
   | "modelId"
   | "reviewModelId"
   | "reviewThinkingEffort"
@@ -65,6 +66,11 @@ export interface RuntimeSettingsOverrides {
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
+  /** Idea Tree research parameters overridden for one layer. Only the six
+   *  fields the settings editors expose can be overridden; the rest keep the
+   *  value from the layer below, and `resolveIdeaTreeSettings` fills whatever
+   *  no layer set from the global settings. */
+  ideaTreeOverride?: IdeaTreeSettingsOverride;
   modelId?: string;
   reviewModelId?: string;
   /** Thinking effort of the Reviewer Specialist's semantic (Deep) review,
@@ -89,6 +95,10 @@ export interface EffectiveRuntimeSettings {
   enabledSkillLibraries: EnabledSkillLibrary[];
   /** Resolved skill set: the whole catalog in `all` mode, the whitelist in `selected`. */
   enabledSkillIds: string[];
+  /** Idea Tree overrides after the layer merge, still partial: the run resolves
+   *  them against the global settings when it freezes its snapshot, which is
+   *  where the complete object ends up (`ideaTreeSettings` there). */
+  ideaTreeOverride?: IdeaTreeSettingsOverride;
   modelId?: string;
   reviewModelId?: string;
   reviewThinkingEffort?: ModelThinkingEffort;
@@ -310,6 +320,18 @@ export interface IdeaTreeSettings {
 
   /** PROPAGATE 阶段 insight 合成指令覆盖。只影响合成指令文本，不触碰 runtime 的 childDigest 校验与逐级传播队列 */
   propagateInsightSystemPrompt?: string;
+}
+
+/** The six Idea Tree fields a Project or Session layer may override. Each is
+ *  optional: a layer overrides the fields it means to change and inherits the
+ *  rest, so a Session that only lowers `maxDepth` keeps the global template. */
+export interface IdeaTreeSettingsOverride {
+  templateId?: IdeaTreeSettings["templateId"];
+  explorationIntensity?: IdeaTreeSettings["explorationIntensity"];
+  maxTokensPerCall?: number;
+  maxDepth?: number;
+  maxNodes?: number;
+  scoreDirection?: IdeaTreeSettings["scoreDirection"];
 }
 
 export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
