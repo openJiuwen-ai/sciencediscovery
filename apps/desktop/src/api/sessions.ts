@@ -17,6 +17,7 @@ import type {
   ArtifactVersionProvenance,
   CreateSessionRequest,
   Project,
+  RuntimeSettingsDetails,
   ScientificArtifact,
   ScientificArtifactVersion,
   Session,
@@ -112,6 +113,13 @@ export function updateSession(
     body: JSON.stringify(body),
     method: "PATCH",
   });
+}
+
+/** The Session's own settings record: `overrides` is what it has pinned,
+ *  `sources` says which layer each field came from. The Idea Tree card reads
+ *  this so it opens on the values in force rather than on the global ones. */
+export function getSessionSettings(client: ApiClient, sessionId: string): Promise<RuntimeSettingsDetails> {
+  return client.request<RuntimeSettingsDetails>(`/api/sessions/${encodeURIComponent(sessionId)}/settings`);
 }
 
 /** The only place a run id is available after the fact: `POST /messages`

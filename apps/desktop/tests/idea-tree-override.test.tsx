@@ -31,6 +31,9 @@ const GLOBAL = {
   maxNodes: 100,
 };
 
+/** What the Session has pinned; a case can change it before mounting. */
+let SESSION_OVERRIDES: Record<string, unknown> = {};
+
 function stubClient() {
   const calls: { method: string; path: string; body: unknown }[] = [];
   return {
@@ -42,6 +45,9 @@ function stubClient() {
           path,
           body: init?.body === undefined ? undefined : JSON.parse(init.body),
         });
+        // The card reads two records: the deployment's Idea Tree settings, and
+        // the Session's own (which carries the override).
+        if (path.endsWith("/settings")) return { overrides: { ideaTreeOverride: SESSION_OVERRIDES }, sources: {}, effective: {} };
         return GLOBAL;
       },
     } as never,
@@ -200,6 +206,24 @@ test("the number fields keep the last good value instead of holding one the writ
     assert.equal(patch, undefined, "no write for a value the form never accepted");
     assert.equal(depth!.props.value, 5, "the field still shows the last accepted value");
   } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("the card opens on what the Session pinned, not on the deployment values", async () => {
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const { client } = stubClient();
+  const { markup, view } = await mount(client, "s1");
+  try {
+    // 3 is what this Session runs with; the global value is 5. Showing 5 would
+    // mean the reader cannot tell what is actually in force, and a second save
+    // would re-pin the old number.
+    assert.match(markup(), /"value":3/);
+    // The deployment values are still the baseline the other fields follow.
+    assert.match(markup(), /"value":100/);
+    assert.match(markup(), /本次会话已固定部分参数/);
+  } finally {
+    SESSION_OVERRIDES = {};
     await act(async () => { view.unmount(); });
   }
 });

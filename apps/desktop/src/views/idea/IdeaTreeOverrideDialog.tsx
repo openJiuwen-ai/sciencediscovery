@@ -31,10 +31,10 @@
 
 import { useEffect, useState } from "react";
 
-import type { IdeaTreeSettingsDetails, IdeaTreeSettingsOverride, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
+import type { IdeaTreeSettingsDetails, IdeaTreeSettingsOverride, RuntimeSettingsDetails, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "../../api/client.js";
-import { updateSession } from "../../api/sessions.js";
+import { getSessionSettings, updateSession } from "../../api/sessions.js";
 import { getIdeaTreeSettings, updateIdeaTreeSettings } from "../../api/settings.js";
 import { TEXT } from "../../text.js";
 import { claimsEscape } from "../dialog-escape.js";
@@ -97,18 +97,28 @@ export function IdeaTreeOverrideDialog({
   sessionId?: string;
 }) {
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
-  /** The values the card opened with: what "unchanged" means for each field. */
+  /** The deployment values: what each field falls back to. */
   const [inherited, setInherited] = useState<IdeaTreeSettingsDetails>();
+  /** Whether this Session pins anything today, which is what 跟随全局 can undo. */
+  const [hasOverride, setHasOverride] = useState(false);
   const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "failed">("loading");
   const [failure, setFailure] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
-    getIdeaTreeSettings(client)
-      .then((value) => {
+    // The global values are what every unpinned field follows; the Session's own
+    // record says which fields it pinned. Opening on the global values alone
+    // would show 5 for a Session that runs with 3, and re-saving would re-pin.
+    Promise.all([
+      getIdeaTreeSettings(client),
+      sessionId === undefined ? Promise.resolve(undefined) : getSessionSettings(client, sessionId),
+    ])
+      .then(([value, session]: [IdeaTreeSettingsDetails, RuntimeSettingsDetails | undefined]) => {
         if (cancelled) return;
-        setDraft(value);
+        const pinned = session?.overrides?.ideaTreeOverride ?? {};
+        setDraft({ ...value, ...pinned });
         setInherited(value);
+        setHasOverride(Object.keys(pinned).length > 0);
         setStatus("idle");
       })
       .catch((reason: unknown) => {
@@ -119,7 +129,7 @@ export function IdeaTreeOverrideDialog({
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, sessionId]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -151,6 +161,7 @@ export function IdeaTreeOverrideDialog({
     setFailure(undefined);
     try {
       await updateSession(client, sessionId, { ideaTreeOverride: override });
+      setHasOverride(true);
       setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -183,6 +194,7 @@ export function IdeaTreeOverrideDialog({
     try {
       await updateSession(client, sessionId, { ideaTreeOverride: null });
       setDraft(inherited);
+      setHasOverride(false);
       setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -210,6 +222,7 @@ export function IdeaTreeOverrideDialog({
 
         <div className="evolve-create-body">
           <p className="evolve-create-confirm-hint">{t.hint}</p>
+          {hasOverride ? <p className="evolve-create-confirm-hint" role="note">{t.pinned}</p> : null}
 
           {status === "loading" ? <p className="status-strip">{t.loading}</p> : null}
 
@@ -281,7 +294,7 @@ export function IdeaTreeOverrideDialog({
             </button>
             <button
               className="evolve-create-cancel"
-              disabled={busy || sessionId === undefined}
+              disabled={busy || sessionId === undefined || !hasOverride}
               onClick={() => void inheritGlobal()}
               type="button"
             >

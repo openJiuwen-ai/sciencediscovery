@@ -277,6 +277,7 @@ export const ZH = {
     maxNodes: "最大节点数",
     saveSession: "只用于本次会话",
     inheritGlobal: "跟随全局设置",
+    pinned: "本次会话已固定部分参数；其余字段仍跟随全局设置。",
     saveGlobal: "覆盖全局设置",
     cancel: "取消",
     loading: "正在读取…",

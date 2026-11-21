@@ -277,6 +277,7 @@ export const EN: Text = {
     maxNodes: "Maximum nodes",
     saveSession: "Use for this conversation",
     inheritGlobal: "Follow the global settings",
+    pinned: "This conversation pins some parameters; the others still follow the global settings.",
     saveGlobal: "Overwrite the global settings",
     cancel: "Cancel",
     loading: "Reading…",
