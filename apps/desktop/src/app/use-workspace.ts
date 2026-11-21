@@ -32,6 +32,7 @@ import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./sess
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { isSearchable, SEARCH_DEBOUNCE_MS } from "./session-search.js";
+import { DEFAULT_SESSION_FILTERS, filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -207,6 +208,8 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
+  /** Which Sessions the sidebar's four filters keep; the list reads it. */
+  listFilters: SessionListFilters;
   /** The query the search field holds, and what `GET /api/search` answered. */
   searchQuery: string;
   searchResults?: WorkbenchSearchResponse;
@@ -243,6 +246,8 @@ export interface WorkspaceActions {
   deleteSession: (session: Session, onSettled?: () => void) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => Promise<void>;
+  /** The list's narrowing: scope, running, artifacts, window. */
+  setListFilters: (next: Partial<SessionListFilters>) => void;
   /** The sidebar's search field: debounced `GET /api/search`. */
   search: (query: string) => void;
   /** Open what a result names. */
@@ -398,6 +403,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // The listing is unfiltered now — archived Sessions are read for membership
   // and the sidebar draws the active subset — so there is no three-way state to
   // keep here any more.
+  /** How the list is narrowed: scope, running, artifacts, time window. */
+  const [listFilters, setListFiltersState] = useState<SessionListFilters>(DEFAULT_SESSION_FILTERS);
   /** The query the field holds, the answer it produced and why it failed. */
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<WorkbenchSearchResponse>();
@@ -2512,11 +2519,22 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // Session nobody has written in is not a row the reader asked for.
   const listedByProject = useMemo(() => {
     const listed: Record<string, Session[]> = {};
+    const context: FilterContext = {
+      now: Date.now(),
+      runningSessionId: running ? sessionId : undefined,
+      withArtifacts: new Set(Object.entries(artifactsBySession.current)
+        .filter(([, outputs]) => outputs.length > 0)
+        .map(([id]) => id)),
+    };
     for (const [projectId, sessions] of Object.entries(sessionsByProject)) {
-      listed[projectId] = withConversation(sessions);
+      const visible = withConversation(sessions);
+      // 仅当前项目 hides the other folds rather than emptying them, so the
+      // sidebar shows one Project's Sessions and nothing else.
+      listed[projectId] = listFilters.scope === "current" && projectId !== activeProjectId
+        ? [] : filterSessions(visible, listFilters, context);
     }
     return listed;
-  }, [sessionsByProject]);
+  }, [activeProjectId, listFilters, outputs, running, sessionId, sessionsByProject]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
@@ -2557,6 +2575,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
+      setListFilters: (next) => setListFiltersState((current) => ({ ...current, ...next })),
       search,
       openSearchResult,
       createProject: createProjectAndOpen,
@@ -2764,6 +2783,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
+    listFilters,
     searchQuery,
     searchResults,
     searchError,
