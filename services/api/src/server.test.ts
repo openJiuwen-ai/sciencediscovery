@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -4185,7 +4185,24 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
   assert.equal(published.response.status, 201);
   assert.equal(published.body.libraryId, "project-skills");
   assert.equal(published.body.skillId, "agent-created-demo");
-  assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
+  // Confirming publishes the reviewed package to the Library *and* installs it in
+  // the Skill catalog, which is what the Skills page lists and a Session selects.
+  const installed = await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization });
+  assert.equal(installed.status, 200);
+  assert.equal(((await installed.json()) as { id: string }).id, "agent-created-demo");
+  const listed = await jsonRequest<{ id: string }[]>(`${origin}/api/skills`, { headers: authorization });
+  assert.ok(listed.body.some((skill) => skill.id === "agent-created-demo"), "the Skills list carries it");
+  // And a Project created now inherits it through the `all` selection mode.
+  const afterConfirm = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "After the Skill was confirmed" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const afterSettings = await jsonRequest<{ effective: { enabledSkillIds: string[] } }>(
+    `${origin}/api/projects/${afterConfirm.body.id}/settings`, { headers: authorization },
+  );
+  assert.ok(afterSettings.body.effective.enabledSkillIds.includes("agent-created-demo"),
+    "and it is selectable, not merely listed");
   const libraries = await jsonRequest<SkillLibrary[]>(`${origin}/api/skill-libraries`, { headers: authorization });
   const projectLibrary = libraries.body.find((library) => library.id === "project-skills");
   assert.equal(projectLibrary?.headVersionId, published.body.versionId);

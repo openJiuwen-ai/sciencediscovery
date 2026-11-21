@@ -154,7 +154,7 @@ Reviewer 卡片列出了 growth-report.md 中没有关联到记录证据的数�
 
 Agent 会写出一个包含 `SKILL.md`、脚本，常常还有报告模板的软件包，并在沙箱中用 [`plant-growth.csv`](../../examples/plant-growth.csv) 测试脚本，最后创建一份 **待处理草稿**。此时还没有安装任何东西。
 
-打开 **系统设置 → Skills**，打开草稿，阅读 **查看变更**：`SKILL.md` 的说明、脚本以及其他文件都可以直接修改，这正是审核的意义。**发布到** 保持为项目 Skill 库，点击 **发布 Skill**。已发布的库中 Skill 只在开启了该库的范围内进入运行，所以在左侧栏打开该 Project 的菜单，选择 **设置**，在 **Skill 库** 中开启 **Project Skills** 并保存。
+打开 **系统设置 → Skills**，打开草稿，阅读 **查看变更**：`SKILL.md` 的说明、脚本以及其他文件都可以直接修改，这正是审核的意义。**发布到** 保持为项目 Skill 库，点击 **发布 Skill**。确认时会同时把这条 Skill 装进技能目录和 **Project Skills**，因此它立刻出现在 Skills 列表里、也能在 Session 中选用；库保留的是这次审核版本的存档。
 
 在这个 Project 中新建一个 Session，按第 1 步再次上传 [`plant-growth.csv`](../../examples/plant-growth.csv)，发送：
 

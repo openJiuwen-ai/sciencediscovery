@@ -154,7 +154,7 @@ An analysis worth repeating should become a Skill. In the Session from step 1, s
 
 The Agent writes a package with a `SKILL.md`, a script and often a report template, tests the script on [`plant-growth.csv`](../../examples/plant-growth.csv) in the sandbox, and finishes by creating a **pending draft**. Nothing is installed yet.
 
-Open **System settings → Skills**, open the draft and read **Review changes**: the `SKILL.md` instructions, the script and any other file can all be edited, which is the point of the review. Leave **Publish to** at **Project Skills** and select **Publish Skill**. Published library Skills reach a run only where their library is turned on, so open the Project's menu in the left sidebar, choose **Settings**, turn on **Project Skills** under **Skill libraries**, and save.
+Open **System settings → Skills**, open the draft and read **Review changes**: the `SKILL.md` instructions, the script and any other file can all be edited, which is the point of the review. Leave **Publish to** at **Project Skills** and select **Publish Skill**. Confirming installs the Skill in the Skill catalog as well as in **Project Skills**, so it appears in the Skills list and is selectable in a Session straight away; the Library keeps the versioned archive of what was reviewed.
 
 Create a new Session in that Project, upload [`plant-growth.csv`](../../examples/plant-growth.csv) again as in step 1, and send:
 
