@@ -91,7 +91,7 @@ import { MemoryCardDialog } from "./views/MemoryCardDialog.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
-import { IdeaResearchCard } from "./views/idea/IdeaResearchCard.js";
+import { IdeaResearchCards } from "./views/idea/IdeaResearchCard.js";
 import { IdeaResearchPanel } from "./views/idea/IdeaResearchPanel.js";
 import { LegacyIdeaCard, LegacyIdeaTreePanel, useLegacyIdeaTree } from "./views/idea/LegacyIdeaTree.js";
 import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
@@ -1211,33 +1211,6 @@ export function App({ initialToken }: Props) {
                   the ending that already happened, and a new answer that
                   happens to stream a card of the same step must not wear that
                   ending's badge for a frame. */}
-              {/* One card per research; the panel is where the tree and the
-                  controls live, so the card itself only opens it. */}
-              {/* The research list is the way in, so a list that could not be
-                  read is said here: an empty column would otherwise read as
-                  "nothing was ever started" when the sidecar is simply down. */}
-              {idea.unavailable || idea.error || legacy.error ? (
-                <p className="idea-notice" role="alert">
-                  {idea.unavailable ? TEXT.ideaTree.unavailable : idea.error ?? legacy.error}
-                </p>
-              ) : null}
-              {legacy.graph ? (
-                <LegacyIdeaCard
-                  graph={legacy.graph}
-                  onOpen={() => { setLegacyOpen(true); setIdeaResearchId(undefined); setEvolveRunId(undefined); setPanelGroup("task"); setWorkspaceOpen(true); }}
-                />
-              ) : null}
-              {idea.views.length ? (
-                <div className="idea-cards">
-                  {idea.views.map((view) => (
-                    <IdeaResearchCard
-                      key={view.research.id}
-                      onOpen={showIdeaResearch}
-                      view={view}
-                    />
-                  ))}
-                </div>
-              ) : null}
               <CheckpointRefusedProvider value={state.running ? undefined : autoContinue.refusedStep}>
                 <Conversation
                   onOpenConfigurationSettings={openSettings}
@@ -1246,6 +1219,26 @@ export function App({ initialToken }: Props) {
                   configuration={configuration}
                   onConfigurationChange={actions.refreshConfiguration}
                   configurationReadOnly={isEvidenceSessionReadOnly(state.detail) || state.detail?.archivedAt !== undefined}
+                  // One card per research; the panel is where the tree and the
+                  // controls live, so the card itself only opens it. These are
+                  // the transcript's foot, not its header: `Conversation` draws
+                  // them after the last turn, where an Evolve run card also sits.
+                  // They keep their order: researches, the legacy graph that
+                  // predates them, and a list that could not be read. An empty
+                  // column would otherwise read as "nothing was ever started"
+                  // when the sidecar is down.
+                  ideaCards={idea.views.length ? <IdeaResearchCards onOpen={showIdeaResearch} views={idea.views} /> : null}
+                  ideaLegacy={legacy.graph ? (
+                    <LegacyIdeaCard
+                      graph={legacy.graph}
+                      onOpen={() => { setLegacyOpen(true); setIdeaResearchId(undefined); setEvolveRunId(undefined); setPanelGroup("task"); setWorkspaceOpen(true); }}
+                    />
+                  ) : null}
+                  ideaNotice={idea.unavailable || idea.error || legacy.error ? (
+                    <p className="idea-notice" role="alert">
+                      {idea.unavailable ? TEXT.ideaTree.unavailable : idea.error ?? legacy.error}
+                    </p>
+                  ) : null}
                   // A search keeps running after the turn that started it, so its
                   // card is the last thing the conversation produced. It draws
                   // nothing at all for a session that has no searches.

@@ -6,7 +6,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { IdeaResearchView } from "@sciencediscovery/schema";
-import { IdeaResearchCard, ideaCardTitle } from "../src/views/idea/IdeaResearchCard.js";
+import { IdeaResearchCard, IdeaResearchCards, ideaCardTitle } from "../src/views/idea/IdeaResearchCard.js";
 import { TEXT } from "../src/text.js";
 
 const t = TEXT.ideaTree;
@@ -35,6 +35,22 @@ test("the whole card is the way into the panel, like a search card", async () =>
   await act(async () => { buttons[0]!.props.onClick(); });
   assert.deepEqual(opened, ["research-1"]);
   card.unmount();
+});
+
+test("each card in a session of several opens its own research", async () => {
+  const opened: string[] = [];
+  let cards!: ReactTestRenderer;
+  await act(async () => {
+    cards = create(React.createElement(IdeaResearchCards, {
+      onOpen: (id) => opened.push(id),
+      views: [view(), view({ id: "research-2", objective: "第二个研究" })],
+    }));
+  });
+  const buttons = cards.root.findAll((node) => node.type === "button");
+  assert.equal(buttons.length, 2, "one card per research, in list order");
+  await act(async () => { buttons[1]!.props.onClick(); });
+  assert.deepEqual(opened, ["research-2"]);
+  cards.unmount();
 });
 
 test("the card carries the engine's phase, round, batch and an honest token count", async () => {
