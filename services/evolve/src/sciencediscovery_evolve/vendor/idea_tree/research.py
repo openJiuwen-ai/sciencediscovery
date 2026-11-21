@@ -198,11 +198,6 @@ class IdeaTreeEngine:
     def assessors(self):
         return self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))['assessors']
 
-    def role_effort(self, role):
-        """The stage's own thinking effort, if one was configured; assessors share `assess`."""
-        stage = 'assess' if role in {item['id'] for item in self.assessors()} else role
-        return self.state['settings'].get('roleThinkingEfforts', {}).get(stage)
-
     def retry_delay(self, error: urllib.error.HTTPError, attempt: int) -> float:
         """Backoff before retrying `attempt` (0-based). Honors the provider's
         Retry-After delay when it is a plain number of seconds, capped so the
@@ -228,14 +223,12 @@ class IdeaTreeEngine:
             remaining -= step
         self.check_stop()
 
-    def transport(self, system, payload, effort=None):
+    def transport(self, system, payload):
         # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
         # No max_tokens either: the per-call cap was removed (#1281), so the call
         # leaves that ceiling to the model and the service behind it.
+        # No reasoning_effort either: every stage keeps the model profile's own thinking level.
         fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))])
-        if effort:
-            # The control plane narrows it to a stop the model accepts.
-            fields['reasoning_effort'] = effort
         body = json.dumps(fields).encode()
         request = urllib.request.Request(self.endpoint['url'], data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.endpoint['token']})
         for attempt in range(self.MAX_ATTEMPTS):
@@ -300,7 +293,7 @@ class IdeaTreeEngine:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
-                    raw, usage = await asyncio.to_thread(self.transport, system, payload, self.role_effort(role))
+                    raw, usage = await asyncio.to_thread(self.transport, system, payload)
                 received = True
             finally:
                 async with self.usage_lock:

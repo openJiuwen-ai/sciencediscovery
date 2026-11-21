@@ -20,7 +20,6 @@ import {
   DEFAULT_WEB_SETTINGS,
   type EnabledSkillLibrary,
   FREE_SEARCH_ORDER,
-  IDEA_TREE_THINKING_ROLES,
   isSkillSelectionMode,
   migrateLegacyWebSettings,
   MODEL_THINKING_EFFORTS,
@@ -28,9 +27,7 @@ import {
   SKILL_SELECTION_FIELDS,
   type ConnectorId,
   type FreeSearchEngine,
-  type IdeaTreeRoleThinkingEfforts,
   type IdeaTreeSettings,
-  type IdeaTreeThinkingRole,
   type PaidSearchProvider,
   type McpProxyPolicies,
   type MemoryGraphSettings,
@@ -515,26 +512,6 @@ function boundedInteger(
   return numeric;
 }
 
-/** Per-stage efforts in canonical stage order. A `null` stage inherits. On
- *  write an unknown stage or level is rejected; on load it is dropped. */
-function normalizeRoleThinkingEfforts(input: unknown, strict: boolean): IdeaTreeRoleThinkingEfforts | undefined {
-  if (input === undefined || input === null) return undefined;
-  if (!isRecord(input)) {
-    if (strict) throw new Error("roleThinkingEfforts must be an object");
-    return undefined;
-  }
-  const unknownRole = Object.keys(input).find((role) => !IDEA_TREE_THINKING_ROLES.includes(role as IdeaTreeThinkingRole));
-  if (strict && unknownRole) throw new Error(`roleThinkingEfforts has an unknown stage: ${unknownRole}`);
-  const efforts: IdeaTreeRoleThinkingEfforts = {};
-  for (const role of IDEA_TREE_THINKING_ROLES) {
-    const effort = input[role];
-    if (effort === undefined || effort === null) continue;
-    if (isThinkingEffort(effort)) efforts[role] = effort;
-    else if (strict) throw new Error(`roleThinkingEfforts.${role} must be low, medium, high, xhigh, or max`);
-  }
-  return Object.keys(efforts).length ? efforts : undefined;
-}
-
 /**
  * Normalize an Idea Tree settings update against the current stored value.
  *
@@ -543,6 +520,10 @@ function normalizeRoleThinkingEfforts(input: unknown, strict: boolean): IdeaTree
  * - Numeric fields are range-validated and omitted fields retain the current
  *   value. Template and exploration intensity own research budgets and
  *   assessor definitions, so callers cannot configure them here.
+ * - `roleThinkingEfforts` is no longer a setting: every stage follows the
+ *   research model's own thinking level. A payload that still carries it is
+ *   ignored, and a stored map is dropped on load, so the old per-stage
+ *   overrides stop applying without failing anyone's save.
  */
 export function normalizeIdeaTreeSettings(
   input: UpdateIdeaTreeSettingsRequest,
@@ -578,9 +559,6 @@ export function normalizeIdeaTreeSettings(
   const propagateInsightSystemPrompt = hasOwn(input, "propagateInsightSystemPrompt")
     ? optionalString(input.propagateInsightSystemPrompt)
     : current.propagateInsightSystemPrompt;
-  const roleThinkingEfforts = hasOwn(input, "roleThinkingEfforts")
-    ? normalizeRoleThinkingEfforts(input.roleThinkingEfforts, true)
-    : current.roleThinkingEfforts;
   return {
     templateId,
     explorationIntensity,
@@ -591,7 +569,6 @@ export function normalizeIdeaTreeSettings(
     ...(designSystemPrompt ? { designSystemPrompt } : {}),
     ...(aggregatorSystemPrompt ? { aggregatorSystemPrompt } : {}),
     ...(propagateInsightSystemPrompt ? { propagateInsightSystemPrompt } : {}),
-    ...(roleThinkingEfforts ? { roleThinkingEfforts: structuredClone(roleThinkingEfforts) } : {}),
   };
 }
 
@@ -626,7 +603,5 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
       ? { propagateInsightSystemPrompt: value.propagateInsightSystemPrompt.trim() }
       : {}),
   };
-  const roleThinkingEfforts = normalizeRoleThinkingEfforts(value.roleThinkingEfforts, false);
-  if (roleThinkingEfforts) current.roleThinkingEfforts = roleThinkingEfforts;
   return current;
 }

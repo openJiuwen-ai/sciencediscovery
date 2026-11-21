@@ -28,8 +28,7 @@
  */
 
 import { useEffect, useState } from "react";
-import type { IdeaTreeSettingsDetails, IdeaTreeThinkingRole, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
-import { IDEA_TREE_THINKING_ROLES } from "@sciencediscovery/schema";
+import type { IdeaTreeSettingsDetails, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
 import type { ApiClient } from "../../api/client.js";
 import { ApiRequestError } from "../../api/client.js";
 import { getIdeaTreeSettings, updateIdeaTreeSettings } from "../../api/settings.js";
@@ -52,11 +51,6 @@ const DIRECTIONS = [
   { label: t.maximize, value: "maximize" },
   { label: t.minimize, value: "minimize" },
 ];
-const FOLLOW_MODEL = "follow-model";
-const EFFORTS = [FOLLOW_MODEL, "low", "medium", "high", "xhigh", "max"].map((value) => ({
-  label: value === FOLLOW_MODEL ? t.followModel : value,
-  value,
-}));
 
 /** A number typed into the form; empty means "the server's default", which is `null`
  *  for `maxTokens` and "omit the field" for the others. */
@@ -105,7 +99,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
       ...(draft.designSystemPrompt === undefined ? {} : { designSystemPrompt: draft.designSystemPrompt }),
       ...(draft.aggregatorSystemPrompt === undefined ? {} : { aggregatorSystemPrompt: draft.aggregatorSystemPrompt }),
       ...(draft.propagateInsightSystemPrompt === undefined ? {} : { propagateInsightSystemPrompt: draft.propagateInsightSystemPrompt }),
-      ...(draft.roleThinkingEfforts === undefined ? {} : { roleThinkingEfforts: draft.roleThinkingEfforts }),
     };
     try {
       const saved = await updateIdeaTreeSettings(client, body);
@@ -119,7 +112,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
   };
 
   const number = (value: number | null | undefined) => (value === null || value === undefined ? "" : String(value));
-  const effortFor = (role: IdeaTreeThinkingRole): string => draft?.roleThinkingEfforts?.[role] ?? FOLLOW_MODEL;
 
   return (
     <LoadGate loaded={loaded}>
@@ -196,23 +188,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
                   placeholder={t.promptPlaceholder}
                   rows={3}
                   value={value ?? ""}
-                />
-              </Row>
-            ))}
-          </Group>
-          <Group heading={t.thinkingHeading}>
-            {IDEA_TREE_THINKING_ROLES.map((role) => (
-              <Row hint={t.thinkingHint} key={role} title={t.roles[role]}>
-                <Select
-                  label={t.roles[role]}
-                  onChange={(value) => {
-                    const next = { ...(draft.roleThinkingEfforts ?? {}) };
-                    if (value === FOLLOW_MODEL) delete next[role];
-                    else next[role] = value as NonNullable<IdeaTreeSettingsDetails["roleThinkingEfforts"]>[IdeaTreeThinkingRole];
-                    patch({ roleThinkingEfforts: next });
-                  }}
-                  options={EFFORTS}
-                  value={effortFor(role)}
                 />
               </Row>
             ))}
