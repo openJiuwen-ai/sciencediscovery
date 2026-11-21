@@ -5426,12 +5426,16 @@ body.is-resizing {
    会话管理 page they may have left. */
 .session-archived-banner { margin:0; padding:8px 16px; border-top:1px solid var(--border); background:rgba(127,127,127,0.08); color:var(--muted); font-size:12px; line-height:18px; }
 
-/* The sidebar's search field and its results. The route matches names and
-   titles, not message bodies, so the field's copy says what it does. */
-.side-search { padding: 0 10px 6px; }
+/* The sidebar's search field and its results. The field names only itself: what
+   a search box does needs no caption, and the shortcut is the chip inside it.
+   The field follows the row rhythm around it — 12 px inset, 36 px tall, and the
+   same 2 px `.side-new` adds — so the gaps above and below read as one list. */
+.side-search { padding: 0 12px; margin-top: 2px; }
 .side-search-field {
+  box-sizing: border-box;
   width: 100%;
-  padding: 4px 8px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill, 999px);
   background: transparent;
@@ -5439,7 +5443,7 @@ body.is-resizing {
   font-size: 12px;
   line-height: 18px;
 }
-.side-search-results { max-height: 46vh; overflow-y: auto; padding: 0 10px 8px; }
+.side-search-results { max-height: 46vh; overflow-y: auto; padding: 0 0 8px; }
 .side-search-group + .side-search-group { margin-top: 8px; }
 .side-search-heading {
   display: block;

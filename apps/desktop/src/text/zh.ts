@@ -288,7 +288,7 @@ export const ZH = {
     filterWindowToday: "今天",
     filterWindowWeek: "近 7 天",
     filterWindowAll: "不限时间",
-    searchPlaceholder: "搜索会话、项目、产物",
+    searchPlaceholder: "搜索",
     searchLabel: "搜索",
     searchProjects: "项目",
     searchSessions: "会话",
