@@ -29,6 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
+import { readSessionFilter, writeSessionFilter } from "./session-filter.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -47,6 +48,7 @@ import {
   createProject as createProjectRequest,
   createSession,
   deleteProject as deleteProjectRequest,
+  archiveSession as archiveSessionRequest,
   deleteSession,
   ensureInbox,
   getSession,
@@ -58,6 +60,7 @@ import {
   listWorkspaceFiles,
   readArtifactVersion,
   readWorkspaceFile,
+  restoreSession as restoreSessionRequest,
   type DocumentBytes,
   renameProject as renameProjectRequest,
   updateSession,
@@ -76,6 +79,7 @@ import type {
   Session,
   SessionArtifactOutput,
   SessionDetail,
+  SessionListState,
   SessionRun,
   SessionRunStatus,
   WorkspaceFile,
@@ -172,6 +176,8 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
+  /** Which Sessions the sidebar asked for; the filter renders from this. */
+  sessionFilter: SessionListState;
   /** Every Project's Sessions, keyed by Project id and including the inbox.
    *  The sidebar reads a Project's list from here; `recent` is the inbox's
    *  slice of it. */
@@ -197,7 +203,14 @@ export interface WorkspaceActions {
   /** Answer one authorization request raised by the running turn. */
   decidePermission: (requestId: string, decision: PermissionDecision) => Promise<void>;
   /** Opens the confirmation dialog; the deletion itself happens on accept. */
+  /** Reversible: asks first, because it makes the Session read-only and tears
+   *  down a scientific-environment kernel it is using. */
+  archiveSession: (session: Session) => void;
   deleteSession: (session: Session) => void;
+  /** The inverse; nothing is destroyed, so it does not ask. */
+  restoreSession: (session: Session) => void;
+  /** The sidebar's 活动 / 已归档 / 全部 choice. */
+  setSessionFilter: (state: SessionListState) => void;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
   deleteProject: (project: Project) => void;
@@ -333,6 +346,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [projects, setProjects] = useState<Project[]>([]);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
+  // Which Sessions the sidebar asks the server for. `active` is the route's own
+  // default, so an archived Session is invisible until the user asks for it —
+  // and a Session archived in the web client is exactly the case this client
+  // has to be able to reach. The choice is remembered across reloads.
+  const [sessionFilter, setSessionFilterState] = useState<SessionListState>(() =>
+    readSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage));
+  const sessionFilterRef = useRef<SessionListState>(sessionFilter);
+  sessionFilterRef.current = sessionFilter;
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
   // to tell one draft from the next — see `landingKey`.
@@ -762,11 +783,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       }
       const known = await listProjects(client);
       const entries = await Promise.all(
-        [...known, inbox].map(async (project) => [project.id, await listSessions(client, project.id)] as const),
+        [...known, inbox].map(async (project) =>
+          [project.id, await listSessions(client, project.id, sessionFilterRef.current)] as const),
       );
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       setSessionsByProject(Object.fromEntries(entries));
+      // 切换过滤 or an archive can take the open Session out of the listing. It
+      // must not stay on screen while the list no longer carries it: the header
+      // would describe a row the reader cannot see, and the next send would go
+      // somewhere that is not listed at all.
+      if (sessionRef.current !== undefined && !sessions.some((session) => session.id === sessionRef.current)) {
+        startDraft();
+      }
       // The artifact list spans Sessions; read the ones this app has not seen,
       // and forget the ones the listing no longer has.
       pruneArtifacts(sessions);
@@ -777,6 +806,16 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       return undefined;
     }
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
+
+  /** Keep the sidebar's choice and re-read the lists with it. Persisted, because
+   *  a reload must not silently return the reader to 活动. */
+  const setSessionFilter = useCallback((next: SessionListState) => {
+    setSessionFilterState(next);
+    sessionFilterRef.current = next;
+    writeSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage, next);
+    void refreshSessionLists();
+  }, [refreshSessionLists]);
+
 
   /**
    * Create a Session in the current Project and make it the open one.
@@ -2066,6 +2105,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
+      setSessionFilter,
       createProject: createProjectAndOpen,
       deleteProject: (project) =>
         confirmAction({
@@ -2097,6 +2137,20 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           },
           title: project.name,
         }),
+      archiveSession: (session) =>
+        confirmAction({
+          accept: TEXT.menu.archive,
+          // The consequences are the server's, and the reader has to know them
+          // before the call: read-only, and a scientific-environment kernel torn
+          // down with whatever persistent memory was not on disk.
+          body: TEXT.errors.archiveWarning(sessionTitle(session.title)),
+          eyebrow: TEXT.menu.archive,
+          onAccept: () =>
+            mutate({ id: session.id, operation: () => archiveSessionRequest(client, session.id) }),
+          title: TEXT.errors.archiveTitle(sessionTitle(session.title)),
+        }),
+      restoreSession: (session) =>
+        mutate({ id: session.id, operation: () => restoreSessionRequest(client, session.id) }),
       deleteSession: (session) =>
         confirmAction({
           accept: TEXT.menu.delete,
@@ -2227,6 +2281,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
+    sessionFilter,
     sessionId,
     sessionsByProject: listedByProject,
     tabs,
