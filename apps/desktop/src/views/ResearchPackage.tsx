@@ -12,6 +12,7 @@ import { formatBytes } from "../app/format-bytes.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
+import { formatOmission } from "./research-package-omissions.js";
 import { exportPollStep } from "./research-package-poll.js";
 import "../styles/research-package.css";
 
@@ -549,13 +550,13 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               {inspection ? <>
                 <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
                 {/* The package's own omissions, from `inspection.manifest.omissions`
-                    — never a fixed list. They are rendered verbatim, in manifest
-                    order: the array mixes short machine tokens with whole
-                    sentences, and rewriting either would misreport the package.
+                    — never a fixed list. Machine tokens stay verbatim; the
+                    explanatory sentences the API writes are shown in the
+                    dialog's language (see research-package-omissions.ts).
                     There is no scroll area of its own; the dialog body scrolls. */}
                 <div className="research-import-omissions">
                   <p className="research-import-omissions-heading">{t.importOmissions(inspection.manifest.omissions.length)}</p>
-                  {inspection.manifest.omissions.length > 0 ? <ul className="research-import-omissions-list">{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul> : null}
+                  {inspection.manifest.omissions.length > 0 ? <ul className="research-import-omissions-list">{inspection.manifest.omissions.map((item, index) => <li key={index}>{formatOmission(item)}</li>)}</ul> : null}
                 </div>
               </> : null}
 

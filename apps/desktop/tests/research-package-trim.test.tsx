@@ -18,11 +18,30 @@ import assert from "node:assert/strict";
 // Classic JSX runtime under tsx, so React has to be in scope here.
 import React from "react";
 
-import { TEXT } from "../src/text.js";
+import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { ResearchPackage, copyStatusLine, taskErrorMessage } from "../src/views/ResearchPackage.js";
 import { act, create } from "./support/dom-renderer.js";
 
 const t = TEXT.researchPackage;
+
+/** The fixed explanatory entries `services/api/src/research-snapshots.ts` writes
+ *  into a manifest, copied here so the assertions name the server's wording. */
+const SERVER_PROSE = {
+  memorySummary: "科学记忆以摘要形式保留；完整科学记忆节点和关系未包含在本包中。",
+  inheritedMemorySummary: "来源只有科学记忆摘要，无法从摘要恢复完整节点和关系。",
+  inheritedHistory: "来源包含必要导入的研究记录；完整导出仅包含当前已有内容，无法补回原包省略的历史。",
+  necessaryScope: "必要导出保留当前结果及依赖证据；不包含完整历史版本、思考分片和原始事件流。直接溯源引用的执行代码和日志保留原文，其余历史执行默认不带。继续研究仅复制本包已有内容。",
+  trimmedScope: "导出范围省略工作区文件：3。",
+};
+/** Machine tokens name one missing object, run or file: no translation applies. */
+const MACHINE_TOKENS = [
+  "cas:9f2c:unavailable source object",
+  "artifact:artifact-1:source session is unavailable",
+  "trajectory:session-1:2 more entries could not be read; the entries listed above are only the first few.",
+  "workspace:session-1:a.csv:unreadable",
+  "evolve:run-1:candidate source files could not be read while exporting.",
+  "version:plan-1:unavailable source object",
+];
 
 // The renderer only silences its act() warning when the environment says so.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -223,6 +242,98 @@ test("a package whose manifest omits nothing says so and renders no list", async
     assert.ok(markup.includes(t.importOmissions(0)), "the line states that nothing was left out");
     assert.equal(view.root.findAllByProps({ className: "research-import-omissions-list" }).length, 0,
       "no list is drawn for an empty manifest array");
+  });
+});
+
+test("the English import dialog localizes the server's prose and keeps machine tokens verbatim", async (context) => {
+  const previous = getLanguage();
+  setLanguage("en");
+  try {
+    const entries = [...MACHINE_TOKENS, ...Object.values(SERVER_PROSE)];
+    await withView(context, React.createElement(ResearchPackage, {
+      ...props,
+      client: client({
+        inspection: { manifest: { omissions: entries, source: { title: "pkg" } }, objectCount: 0, recordsBytes: 0 },
+      }),
+      request: { kind: "import", projectId: "p1" },
+    }), async (view) => {
+      const input = view.root.findAllByProps({ type: "file" })[0]!;
+      const chosen = new File([new Uint8Array([1, 2, 3, 4])], "prose.sdresearch");
+      await act(async () => {
+        (input.props.onChange as (event: unknown) => void)({ target: { files: [chosen] } });
+        await Promise.resolve();
+      });
+      const markup = rendered(view);
+      const en = TEXT.researchPackage;
+      let cursor = -1;
+      for (const token of MACHINE_TOKENS) {
+        const at = markup.indexOf(token);
+        assert.ok(at > cursor, `machine tokens keep their manifest order: ${token}`);
+        cursor = at;
+      }
+      for (const sentence of Object.values(SERVER_PROSE)) {
+        assert.equal(markup.includes(sentence), false, `the en dialog does not echo the server's Chinese: ${sentence}`);
+      }
+      // The count carried by `导出范围省略…：N。` survives the localization.
+      assert.ok(markup.includes(en.omissionScopeTrimmed("workspace files", 3)), "the trimmed-scope count is kept");
+      assert.ok(markup.includes(en.omissionMemorySummary), "the memory-summary sentence is English");
+      assert.ok(markup.includes(en.omissionInheritedMemorySummary), "the inherited memory sentence is English");
+      assert.ok(markup.includes(en.omissionInheritedHistory), "the inherited-history sentence is English");
+      assert.ok(markup.includes(en.omissionNecessaryScope), "the necessary-scope sentence is English");
+      assert.ok(markup.includes(en.importOmissions(entries.length)), "the count still counts every manifest entry");
+    });
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("the Chinese import dialog shows the server's prose in Chinese and keeps machine tokens verbatim", async (context) => {
+  const previous = getLanguage();
+  setLanguage("zh-CN");
+  try {
+    const entries = [...MACHINE_TOKENS, ...Object.values(SERVER_PROSE)];
+    await withView(context, React.createElement(ResearchPackage, {
+      ...props,
+      client: client({
+        inspection: { manifest: { omissions: entries, source: { title: "pkg" } }, objectCount: 0, recordsBytes: 0 },
+      }),
+      request: { kind: "import", projectId: "p1" },
+    }), async (view) => {
+      const input = view.root.findAllByProps({ type: "file" })[0]!;
+      const chosen = new File([new Uint8Array([1, 2, 3, 4])], "prose.sdresearch");
+      await act(async () => {
+        (input.props.onChange as (event: unknown) => void)({ target: { files: [chosen] } });
+        await Promise.resolve();
+      });
+      const markup = rendered(view);
+      for (const token of MACHINE_TOKENS) assert.ok(markup.includes(token), `machine token stays verbatim: ${token}`);
+      for (const sentence of Object.values(SERVER_PROSE)) assert.ok(markup.includes(sentence), `the zh dialog keeps the Chinese prose: ${sentence}`);
+      assert.equal(markup.includes(TEXT.researchPackage.omissionNecessaryScope), true, "the active zh dictionary supplies the sentence");
+      assert.equal(markup.includes("Not carried in this export"), false, "no English omission prose in the zh dialog");
+    });
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("a non-string omission cannot blank the import dialog", async (context) => {
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: client({
+      inspection: { manifest: { omissions: [42, { detail: "unreadable" }, "cas:kept"], source: { title: "pkg" } }, objectCount: 0, recordsBytes: 0 },
+    }),
+    request: { kind: "import", projectId: "p1" },
+  }), async (view) => {
+    const input = view.root.findAllByProps({ type: "file" })[0]!;
+    const chosen = new File([new Uint8Array([1, 2, 3, 4])], "malformed.sdresearch");
+    await act(async () => {
+      (input.props.onChange as (event: unknown) => void)({ target: { files: [chosen] } });
+      await Promise.resolve();
+    });
+    const markup = rendered(view);
+    assert.ok(markup.includes(t.omissionUnreadable), "a malformed entry is reported, not rendered");
+    assert.ok(markup.includes("cas:kept"), "the readable entries still render");
+    assert.ok(markup.includes(t.importOmissions(3)), "the count still counts the malformed entries");
   });
 });
 
