@@ -2,17 +2,30 @@
  * detail. Colours, radii and borders come from the shared tokens so the surface
  * matches the rest of the desktop client rather than inventing its own. */
 
+/* The Idea Tree surfaces ride at the foot of the transcript, so they inherit
+ * the message column's width instead of carrying page-level padding: this slot
+ * is inside `.messages`, beside the Evolve cards, and its own horizontal
+ * padding would narrow the cards relative to both. The negative top margin
+ * gives back the last message's bottom margin, exactly as `.evolve-runs` does,
+ * so the block reads as one row step below the prose. */
+.idea-tree-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: -18px;
+}
+
 .idea-cards {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 0 24px 8px;
 }
 
-/* A list that could not be read is said in the conversation, above the cards:
- * an empty column would otherwise read as "nothing was ever started". */
+/* A list that could not be read is said at the foot of the transcript, after
+ * the cards: an empty column would otherwise read as "nothing was ever
+ * started". */
 .idea-notice {
-  margin: 0 24px 8px;
+  margin: 0;
   padding: 8px 12px;
   border: 1px solid var(--warning-border);
   border-radius: var(--radius-m);

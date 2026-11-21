@@ -22,6 +22,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ApiClient } from "../src/api/client.js";
 import type { ChatMessage, SessionDetail, WorkspaceFile } from "../src/api/types.js";
+import type { IdeaResearchView } from "@sciencediscovery/schema";
+import { IdeaResearchCards } from "../src/views/idea/IdeaResearchCard.js";
 import { emptyRunStream, type RunStreamState } from "../src/run-stream/model.js";
 import type { RunReplay } from "../src/run-stream/replay.js";
 import { Conversation } from "../src/views/Conversation.js";
@@ -524,4 +526,74 @@ test("an untyped standalone timeout notice does not invent a terminated run", ()
   assert.match(markup, /<h3>超时提示<\/h3>/);
   assert.match(markup, /legacy opaque timeout/);
   assert.doesNotMatch(markup, /运行超时|运行已终止|运行已停止/);
+});
+
+/** One research as the API reports it; the card reads only these fields. */
+function research(id: string, objective: string): IdeaResearchView {
+  return {
+    research: {
+      id, objective, status: "running", phase: "building_tree", round: 1, batch: [], batchCompleted: 0,
+      tokens: 0, usageKnown: false, reason: null, modelId: "model-x", currentNodeId: null,
+      settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
+    },
+    graph: { edges: [], nodes: [], objective, revision: 1, treeId: "tree-1", updatedAt: "2026-11-18T00:00:00Z" },
+  };
+}
+
+function ideaCards(views: readonly IdeaResearchView[]): React.ReactElement {
+  return <IdeaResearchCards onOpen={() => undefined} views={views} />;
+}
+
+/** Each needle's position, asserting it exists so an absent marker cannot look
+ *  like a passing order. */
+function positions(markup: string, needles: readonly string[]): number[] {
+  return needles.map((needle) => {
+    const at = markup.indexOf(needle);
+    assert.notEqual(at, -1, `${needle} is missing from the markup`);
+    return at;
+  });
+}
+
+test("one research is drawn at the foot of the transcript, not pinned above it", () => {
+  const markup = render({
+    detail: detail([message("q", "user", "QUESTION-TOP"), message("a", "assistant", "ANSWER-BOTTOM")]),
+    ideaCards: ideaCards([research("research-1", "FIRST-RESEARCH")]),
+    evolve: <div className="evolve-runs">EVOLVE-CARD</div>,
+  });
+  const order = positions(markup, ["QUESTION-TOP", "ANSWER-BOTTOM", "FIRST-RESEARCH", "EVOLVE-CARD"]);
+  assert.deepEqual([...order].sort((left, right) => left - right), order,
+    "the card belongs after the messages and before the searches");
+  // It is inside the scrolling transcript column, where the Evolve cards live,
+  // rather than a sibling the session pins above it.
+  assert.ok(markup.indexOf('class="messages"') < markup.indexOf('class="idea-tree-slot"'));
+  assert.equal(markup.match(/class="idea-cards"/gu)?.length, 1);
+  assert.equal(markup.match(/class="evolve-run-card idea-run-card/gu)?.length, 1);
+});
+
+test("two researches keep their list order at the foot of the transcript", () => {
+  const markup = render({
+    detail: detail([message("q", "user", "QUESTION-TOP"), message("a", "assistant", "ANSWER-BOTTOM")]),
+    ideaCards: ideaCards([research("research-1", "FIRST-RESEARCH"), research("research-2", "SECOND-RESEARCH")]),
+    evolve: <div className="evolve-runs">EVOLVE-CARD</div>,
+  });
+  const order = positions(markup, ["QUESTION-TOP", "ANSWER-BOTTOM", "FIRST-RESEARCH", "SECOND-RESEARCH", "EVOLVE-CARD"]);
+  assert.deepEqual([...order].sort((left, right) => left - right), order);
+  assert.equal(markup.match(/class="evolve-run-card idea-run-card/gu)?.length, 2);
+});
+
+test("the legacy card and an unreadable list sit between the cards and the searches", () => {
+  const markup = render({
+    detail: detail([message("q", "user", "QUESTION-TOP")]),
+    ideaCards: ideaCards([research("research-1", "FIRST-RESEARCH")]),
+    ideaLegacy: <div className="evolve-run-card idea-run-card is-legacy">LEGACY-CARD</div>,
+    ideaNotice: <p className="idea-notice" role="alert">IDEA-NOTICE</p>,
+    evolve: <div className="evolve-runs">EVOLVE-CARD</div>,
+  });
+  const order = positions(markup, ["QUESTION-TOP", "FIRST-RESEARCH", "LEGACY-CARD", "IDEA-NOTICE", "EVOLVE-CARD"]);
+  assert.deepEqual([...order].sort((left, right) => left - right), order);
+});
+
+test("a session with no Idea Tree surfaces draws no empty foot-of-transcript block", () => {
+  const markup = render({ detail: detail([message("q", "user", "QUESTION-TOP")]) });
+  assert.doesNotMatch(markup, /idea-tree-slot/);
 });

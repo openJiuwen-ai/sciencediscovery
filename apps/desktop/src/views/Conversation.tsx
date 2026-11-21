@@ -77,8 +77,15 @@ interface Props {
   replays: readonly RunReplay[];
   /** The run streaming right now, which has no persisted answer to take. */
   run: RunStreamState;
+  /** The session's Idea Tree researches, drawn after the last turn rather than
+   *  pinned above the transcript. The three surfaces keep the order the
+   *  session lists them in: the research cards, the legacy graph's card, and
+   *  the notice that the list could not be read. */
+  ideaCards?: ReactNode;
+  ideaLegacy?: ReactNode;
+  ideaNotice?: ReactNode;
   /** What the conversation produced that outlives it: the session's searches,
-   *  drawn after the last turn. */
+   *  drawn after the last turn and after the Idea Tree surfaces. */
   evolve?: ReactNode;
 }
 
@@ -263,6 +270,9 @@ export function Conversation({
   pending,
   replays,
   run,
+  ideaCards,
+  ideaLegacy,
+  ideaNotice,
   evolve,
   workspaceFiles,
 }: Props) {
@@ -521,6 +531,13 @@ export function Conversation({
           <span>{TEXT.conversation.configurationRefreshFailed}</span>
           <button type="button" onClick={() => void configuration.refresh()}>{TEXT.conversation.retryConfiguration}</button>
         </div> : null}
+        {ideaCards != null || ideaLegacy != null || ideaNotice != null ? (
+          <div className="idea-tree-slot">
+            {ideaCards}
+            {ideaLegacy}
+            {ideaNotice}
+          </div>
+        ) : null}
         {evolve}
         {loading ? <div className="status-strip">{TEXT.boot.checking}</div> : null}
       </div>
