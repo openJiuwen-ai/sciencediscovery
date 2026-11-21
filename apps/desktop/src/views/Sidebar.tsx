@@ -299,7 +299,7 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* The list default is 活动, so a Session archived in the web client is
+      {/* The list default is 活跃, so a Session archived in the web client is
           invisible until the reader asks for it. This is that ask. */}
       <div aria-label={TEXT.sidebar.filterLabel} className="side-filter" role="group">
         {(["active", "archived", "all"] as const).map((value) => (

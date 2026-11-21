@@ -265,7 +265,7 @@ export const ZH = {
     noTasks: "暂无会话",
     showMore: "显示更多",
     filterLabel: "会话范围",
-    filterActive: "活动",
+    filterActive: "活跃",
     filterArchived: "已归档",
     filterAll: "全部",
     collapseSidebar: "收起侧栏",
