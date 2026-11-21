@@ -83,6 +83,7 @@ import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
 import { draftEvolveDirection } from "./api/evolve.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
+import { IdeaTreeOverrideDialog } from "./views/idea/IdeaTreeOverrideDialog.js";
 import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
 import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
@@ -1026,6 +1027,10 @@ export function App({ initialToken }: Props) {
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
+  /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row. */
+  const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
+  const openIdeaTree = () => setIdeaTreeOpen(true);
+
   /**
    * A 上游文件 link inside the open artifact dialog.
    *
@@ -1107,6 +1112,7 @@ export function App({ initialToken }: Props) {
     onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
     onEvolve: openEvolve,
+    onIdeaTree: openIdeaTree,
     onOpenSettings: () => openSettings("models"),
     // A skill that has a setup surface opens it instead of dropping its
     // command into the draft — the same dialog 会话设置's evolve row opens.
@@ -1359,6 +1365,14 @@ export function App({ initialToken }: Props) {
       ) : null}
 
       {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
+
+      {ideaTreeOpen ? (
+        <IdeaTreeOverrideDialog
+          client={client}
+          onClose={() => setIdeaTreeOpen(false)}
+          sessionId={state.detail?.id}
+        />
+      ) : null}
 
       {evolveCreate === undefined ? null : (
         <EvolveCreateDialog
