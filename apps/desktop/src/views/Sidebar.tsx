@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { projectWithName } from "../app/project-name.js";
@@ -151,6 +151,7 @@ export function Sidebar({
   const [creating, setCreating] = useState(false);
   /** Which search result the arrow keys are on; -1 is "none". */
   const [activeHit, setActiveHit] = useState(-1);
+  const searchField = useRef<HTMLInputElement>(null);
   /** Folded-up Projects, by id. Empty means every fold is open — the state a
    *  column of two or three Projects should start in — and a Project created
    *  later inherits it without being added anywhere. */
@@ -160,6 +161,24 @@ export function Sidebar({
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const stars = useGithubStars();
+
+  useEffect(() => {
+    // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
+    // It lives on the document because the field is not focused yet — that is the
+    // whole point of the shortcut.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchField.current?.focus();
+        return;
+      }
+      if (event.key === "Escape" && searchField.current === document.activeElement) {
+        searchField.current?.blur();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const anchor = (event: { clientX: number; clientY: number }) => ({
     x: event.clientX,
@@ -344,6 +363,7 @@ export function Sidebar({
         <input
           aria-label={TEXT.sidebar.searchLabel}
           className="side-search-field"
+          ref={searchField}
           onChange={(event) => { setActiveHit(-1); onSearch(event.target.value); }}
           onKeyDown={(event) => {
             const hits = flatResults(searchResults?.results ?? []);
