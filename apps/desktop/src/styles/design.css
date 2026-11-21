@@ -5500,9 +5500,12 @@ body.is-resizing {
 
 /* The sidebar's search field and its results. The field names only itself: what
    a search box does needs no caption, and the shortcut is the chip inside it.
-   The field follows the row rhythm around it — 12 px inset, 36 px tall, and the
-   same 2 px `.side-new` adds — so the gaps above and below read as one list. */
-.side-search { padding: 0 12px; margin-top: 2px; }
+   The column is a flex stack with its own 18 px rhythm, and the rows inside it
+   carry their own 12 px inset — so the field adds no margin of its own (any would
+   be extra air on top of that rhythm) and no horizontal padding (any would push
+   the box 12 px right of the rows it sits between). Its box lines up with a row's
+   box, and its 12 px text inset lines up with a row's name. */
+.side-search { padding: 0; }
 .side-search-field {
   box-sizing: border-box;
   width: 100%;
