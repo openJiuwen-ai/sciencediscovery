@@ -15,6 +15,7 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
+import { CREDITS_PROVIDER_NAME } from "../../auth/credits-model.js";
 import {
   deleteModel,
   listProviderModels,
@@ -227,17 +228,22 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
                       </svg>
                     )}
                   </button>
-                  <button
-                    aria-label={TEXT.settings.model.delete}
-                    className="model-icon-button"
-                    onClick={() => removeProfile(profile, name)}
-                    title={TEXT.settings.model.delete}
-                    type="button"
-                  >
-                    <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
-                      <path d="M4.5 6.5h15M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7M6.5 6.5l.8 12.2c0 .9.8 1.6 1.7 1.6h6c.9 0 1.7-.7 1.7-1.6l.8-12.2" />
-                    </svg>
-                  </button>
+                  {/* The credits model is recreated by the app on every sign-in,
+                      so deleting it only produces a confusing gap until the
+                      next reload: it has no delete action. */}
+                  {provider?.name === CREDITS_PROVIDER_NAME ? null : (
+                    <button
+                      aria-label={TEXT.settings.model.delete}
+                      className="model-icon-button"
+                      onClick={() => removeProfile(profile, name)}
+                      title={TEXT.settings.model.delete}
+                      type="button"
+                    >
+                      <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
+                        <path d="M4.5 6.5h15M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7M6.5 6.5l.8 12.2c0 .9.8 1.6 1.7 1.6h6c.9 0 1.7-.7 1.7-1.6l.8-12.2" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
                 {open ? (
                   <div className="model-row-detail">

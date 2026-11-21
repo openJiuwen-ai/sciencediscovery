@@ -125,6 +125,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError, isLegacyUnavailableError } from "./api.js";
+import { ensureCreditsModel } from "./auth/credits-model.js";
 import { sessionDisplayTitle } from "./session-title.js";
 import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
@@ -218,6 +219,10 @@ import {
 import { ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
 import { AgentActivityPanel, type ActivityFocus } from "./AgentActivityPanel.js";
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
+import { LoginPage } from "./LoginPage.js";
+import { AccountApiError, fetchAccountMe, revokeAccountSession } from "./auth/account.js";
+import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type UserSession } from "./auth/session.js";
+import { ensureFreshAccountSession } from "./auth/session-refresh.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
 import { SourcePreview } from "./SourcePreview.js";
@@ -1144,6 +1149,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const { locale, setLocale, t } = useLocale();
   const [token, setToken] = useState(() => initialToken ?? readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
   const [models, setModels] = useState<ModelProfile[]>([]);
+  const [startupLoaded, setStartupLoaded] = useState(false);
   const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
   const [modelProviderPresets, setModelProviderPresets] = useState<ModelProviderPreset[]>([]);
   // The catalog lives in a process-wide registry so the synchronous lookups in
@@ -1224,6 +1230,47 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [usageAnalytics, setUsageAnalytics] = useState<ModelUsageAnalyticsSummary>();
   const [usageFilters, setUsageFilters] = useState<UsageAnalyticsUiFilters>({});
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
+  // Sign-in is a full-screen takeover, not a main-area view: it owns the whole
+  // window and must not be rewritten by the URL sync below.
+  const [loginRoute, setLoginRoute] = useState(() => initialView.view === "login");
+  // The signed-in account, mirrored from storage so the sidebar can show who is
+  // signed in and offer a way out; undefined when browsing without an account.
+  const [accountSession, setAccountSession] = useState<UserSession | undefined>(() => readSession());
+  // The access token is short-lived while refresh tokens last for weeks. Refresh
+  // a little before expiry so in-flight model calls never observe an expired
+  // bearer token, and refuse only when the server says the session itself ended.
+  useEffect(() => {
+    if (!accountSession) return;
+    let cancelled = false;
+    let timerId: number | undefined;
+
+    const schedule = (delay: number) => {
+      if (cancelled) return;
+      timerId = window.setTimeout(() => {
+        void ensureFreshAccountSession(accountSession).then((next) => {
+          if (!cancelled && next && next.accessToken !== accountSession.accessToken) {
+            setAccountSession(next);
+          }
+        }).catch((error: unknown) => {
+          if (!cancelled && error instanceof AccountApiError && error.denied) {
+            clearSession();
+            setAccountSession(undefined);
+            window.location.assign("/login");
+          }
+        }).finally(() => {
+          // On a network failure, back off briefly instead of retrying with a
+          // zero delay against an unavailable service.
+          schedule(Math.max(sessionRefreshDelayMs(accountSession), 30_000));
+        });
+      }, delay);
+    };
+
+    schedule(sessionRefreshDelayMs(accountSession));
+    return () => {
+      cancelled = true;
+      if (timerId !== undefined) window.clearTimeout(timerId);
+    };
+  }, [accountSession]);
   // `/evolve-design` runs for the active session, plus which one the panel shows. The
   // card is the only persistent handle a search has (the command never creates
   // a chat run), so the list is kept even when the panel is closed.
@@ -1889,6 +1936,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // popstate handler so this effect re-runs — and normalizes the URL — even
   // when the navigation changed no state at all.
   useEffect(() => {
+    if (loginRoute) return;
     if (!projectsLoaded || !sessionsLoaded) return;
     const view: ViewState = {
       artifact: artifactModalName,
@@ -1921,7 +1969,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const url = `${next}${window.location.hash}`;
     if (replace) window.history.replaceState(null, "", url);
     else window.history.pushState(null, "", url);
-  }, [activeProjectId, activeSessionId, artifactModalName, trajectorySession, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView]);
+  }, [activeProjectId, activeSessionId, artifactModalName, trajectorySession, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView, loginRoute]);
 
   // Leaving a Session closes its inline trajectory view: switching back must
   // not silently reopen it and rewrite the path. The activeSessionId guard
@@ -1947,6 +1995,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       if (view.settingsKind === "system") openSystemSettings();
       else cancelSystemSettings();
       setWorkspaceView(view.view === "usage" ? "usage" : "session");
+      setLoginRoute(view.view === "login");
       const projectId = view.projectId && projects.some((project) => project.id === view.projectId)
         ? view.projectId
         : projects[0]?.id;
@@ -2082,8 +2131,24 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       // the project request alone, so a hung settings read cannot keep the
       // sidebar on its skeleton after the project list has already arrived.
       onProjectsSettled: () => setProjectsLoaded(true),
-    }), reportStartupError);
+    }), reportStartupError).then(() => setStartupLoaded(true));
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
+
+  // A signed-in account always has a model: the account's credit gateway is
+  // registered on its behalf, so chat works without visiting the registry.
+  // One attempt per token — a failure stays visible as "configure a model"
+  // rather than retrying behind the user's back.
+  const creditsModelToken = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!startupLoaded || !accountSession) return;
+    if (creditsModelToken.current === accountSession.accessToken) return;
+    creditsModelToken.current = accountSession.accessToken;
+    void ensureCreditsModel(client, accountSession)
+      .then((next) => {
+        if (next) setModels(next);
+      })
+      .catch(() => undefined);
+  }, [accountSession, client, startupLoaded]);
 
   useEffect(() => {
     void client.searchWorkbench().then((response) => setWorkbenchIndex(response.results)).catch((reason: Error) => setError(reason));
@@ -3785,6 +3850,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
   }
 
+  function refreshAccountBalance(): void {
+    const session = readSession();
+    if (!session) return;
+    void fetchAccountMe(session.accessToken)
+      .then((me) => {
+        const next = { ...session, balanceCredits: me.credit.balanceCredits };
+        saveSession(next);
+        setAccountSession(next);
+      })
+      .catch(() => undefined);
+  }
+
   function applySessionRunEvent(
     sessionId: string,
     sessionTitle: string | undefined,
@@ -3800,6 +3877,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ));
     if (streamEvent.type === "run.completed") {
       setTimelineMessageIds((current) => ({ ...current, [sessionId]: streamEvent.message.id }));
+    }
+    if (streamEvent.type === "run.completed" || streamEvent.type === "run.failed" || streamEvent.type === "run.cancelled") {
+      // Credits are held before the run and settled after it, so the balance
+      // shown in the account card is stale until the run finishes.
+      refreshAccountBalance();
     }
     if (streamEvent.type === "run.status" && streamEvent.status === "running") {
       setTimelineMessageIds((current) => forgetSession(current, sessionId));
@@ -5036,6 +5118,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     );
   }
 
+  if (loginRoute) {
+    return (
+      <LoginPage
+        onAuthenticated={() => {
+          window.history.replaceState(null, "", "/");
+          setAccountSession(readSession());
+          setLoginRoute(false);
+        }}
+      />
+    );
+  }
+
   return (
     <ErrorDiagnosticClient.Provider value={client}><RuntimeConfigClient.Provider value={client}><ResearchContinuationContext.Provider value={continuationTasks}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
@@ -5248,6 +5342,26 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <button className="settings-button feedback-entry" onClick={() => openFeedback()}>
           <span><FeedbackIcon size={17} /></span><span>{t("feedback.entry")}</span>
         </button>
+        {accountSession ? (
+          <div className="account-card">
+            <span aria-hidden="true" className="account-avatar">{accountSession.displayName.slice(0, 1)}</span>
+            <span className="account-identity">
+              <strong>{accountSession.displayName}</strong>
+              <small>{t("account.credits", { count: accountSession.balanceCredits })}</small>
+            </span>
+            <button
+              className="account-sign-out"
+              onClick={() => {
+                void revokeAccountSession(accountSession.accessToken).catch(() => undefined);
+                clearSession();
+                setAccountSession(undefined);
+                window.location.assign("/login");
+              }}
+              title={t("account.signOut")}
+              type="button"
+            >{t("account.signOut")}</button>
+          </div>
+        ) : null}
       </aside>
 
       <main className="main-area">

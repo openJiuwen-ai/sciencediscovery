@@ -133,6 +133,49 @@ body.is-resizing {
   background: #e6e6e6;
 }
 
+/* 用户 sits at the bottom of the rail, below the navigation group. Its avatar
+   is the whole entry, sized and placed to share the sidebar footer's centre
+   line with the star and feedback pills. */
+.rail-foot {
+  width: 48px;
+  margin-top: auto;
+  padding-top: 8px;
+  padding-bottom: 2px;
+  display: flex;
+  justify-content: center;
+}
+
+.rail-user {
+  width: 32px;
+  height: 28px;
+  gap: 0;
+}
+
+/* The avatar alone is the entry; the title carries the name for hover. */
+.rail-user-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #e3e3e3;
+  color: #191919;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.rail-user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rail-user-avatar svg { width: 13px; height: 13px; }
+
+.rail-user-avatar.is-guest { color: #9b9b9b; }
+
 /* ── sidebars ─────────────────────────────────────────────────────────────────── */
 
 .sidebar,
