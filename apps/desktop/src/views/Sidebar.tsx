@@ -21,7 +21,7 @@ import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
-import { groupSearchResults, searchDetail } from "../app/session-search.js";
+import { flatResults, groupSearchResults, moveHit, searchDetail } from "../app/session-search.js";
 import type { SessionListFilters } from "../app/session-filters.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
@@ -149,6 +149,8 @@ export function Sidebar({
   const [menu, setMenu] = useState<MenuState>();
   const [renaming, setRenaming] = useState<Renaming>();
   const [creating, setCreating] = useState(false);
+  /** Which search result the arrow keys are on; -1 is "none". */
+  const [activeHit, setActiveHit] = useState(-1);
   /** Folded-up Projects, by id. Empty means every fold is open — the state a
    *  column of two or three Projects should start in — and a Project created
    *  later inherits it without being added anywhere. */
@@ -342,7 +344,31 @@ export function Sidebar({
         <input
           aria-label={TEXT.sidebar.searchLabel}
           className="side-search-field"
-          onChange={(event) => onSearch(event.target.value)}
+          onChange={(event) => { setActiveHit(-1); onSearch(event.target.value); }}
+          onKeyDown={(event) => {
+            const hits = flatResults(searchResults?.results ?? []);
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              setActiveHit((current) => moveHit(current, event.key === "ArrowDown" ? 1 : -1, hits.length));
+              return;
+            }
+            if (event.key === "Enter") {
+              const hit = hits[activeHit];
+              if (hit !== undefined) {
+                event.preventDefault();
+                setActiveHit(-1);
+                onSearchOpen(hit);
+              }
+              return;
+            }
+            if (event.key === "Escape") {
+              // Escape drops the query and puts the list back, rather than
+              // leaving the reader in a search they did not mean to start.
+              event.preventDefault();
+              setActiveHit(-1);
+              onSearch("");
+            }
+          }}
           placeholder={TEXT.sidebar.searchPlaceholder}
           type="search"
           value={searchQuery}
@@ -365,9 +391,9 @@ export function Sidebar({
                     </span>
                     {group.results.map((result) => (
                       <button
-                        className="side-search-hit"
+                        className={`side-search-hit${flatResults(searchResults?.results ?? [])[activeHit] === result ? " is-active" : ""}`}
                         key={`${result.kind}:${result.id}`}
-                        onClick={() => onSearchOpen(result)}
+                        onClick={() => { setActiveHit(-1); onSearchOpen(result); }}
                         type="button"
                       >
                         <span className="side-search-hit-label">

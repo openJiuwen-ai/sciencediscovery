@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 
 import { StubClient, split } from "./api-stub.js";
 import { searchWorkbench } from "../src/api/workbench.js";
-import { groupSearchResults, isSearchable, searchDetail } from "../src/app/session-search.js";
+import {
+  flatResults, groupSearchResults, isSearchable, moveHit, searchDetail,
+} from "../src/app/session-search.js";
 import type { WorkbenchSearchResult } from "../src/api/types.js";
 
 function hit(kind: WorkbenchSearchResult["kind"], label: string, over: Partial<WorkbenchSearchResult> = {}) {
@@ -46,4 +48,16 @@ test("an empty query is not sent, and an archived result is marked", () => {
   assert.equal(isSearchable("  "), false);
   assert.equal(isSearchable("晶"), true);
   assert.equal(hit("session", "a", { archived: true }).archived, true);
+});
+
+test("the arrow keys walk the grouped order and wrap", () => {
+  const rows = [hit("project", "p"), hit("session", "s"), hit("artifact", "a")];
+  assert.deepEqual(flatResults(rows).map((row) => row.kind), ["project", "session", "artifact"],
+    "the flat order is the grouped order");
+
+  assert.equal(moveHit(-1, 1, 3), 0, "nothing selected: down takes the first row");
+  assert.equal(moveHit(-1, -1, 3), 2, "and up takes the last");
+  assert.equal(moveHit(2, 1, 3), 0, "down past the end wraps");
+  assert.equal(moveHit(0, -1, 3), 2, "up past the start wraps");
+  assert.equal(moveHit(0, 1, 0), -1, "an empty result list has nothing to select");
 });

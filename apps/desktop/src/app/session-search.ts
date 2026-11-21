@@ -57,3 +57,21 @@ export function searchDetail(result: WorkbenchSearchResult): string {
 export function isSearchable(query: string): boolean {
   return query.trim().length > 0;
 }
+
+/** The flat order the arrow keys walk: the grouped order, top to bottom. */
+export function flatResults(results: readonly WorkbenchSearchResult[]): WorkbenchSearchResult[] {
+  return groupSearchResults(results).flatMap((group) => group.results);
+}
+
+/**
+ * Where `ArrowDown` / `ArrowUp` land.
+ *
+ * It wraps, because a result list is short and a key that stops dead at the last
+ * row reads as broken. `-1` means "nothing selected yet": down goes to the first
+ * row and up to the last, so the first keypress always selects something.
+ */
+export function moveHit(index: number, delta: -1 | 1, count: number): number {
+  if (count <= 0) return -1;
+  if (index < 0) return delta === 1 ? 0 : count - 1;
+  return (index + delta + count) % count;
+}
