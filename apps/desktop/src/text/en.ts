@@ -264,7 +264,7 @@ export const EN: Text = {
    *  (the shell bridge pushes progress; this is the idle wording). */
   ideaTreeOverride: {
     title: "Idea Tree parameters",
-    hint: "Used by the next research without changing the global settings. Only 覆盖全局设置 writes them back.",
+    hint: "The next research uses these values without changing the global settings; only the global button below writes them back.",
     template: "Research template",
     templateGeneral: "General scientific hypothesis",
     templateWater: "Water-treatment materials",
