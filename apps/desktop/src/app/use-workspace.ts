@@ -31,7 +31,7 @@ import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
-import { isSearchable, SEARCH_DEBOUNCE_MS } from "./session-search.js";
+import { isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
 import { DEFAULT_SESSION_FILTERS, filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
@@ -411,6 +411,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [searchError, setSearchError] = useState<string>();
   const searchTicket = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** A search hit for an artifact, waiting for the panel to list it. */
+  const pendingArtifact = useRef<PendingArtifact | undefined>(undefined);
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
   /** Every Session a read has seen, archived ones included. Pruning runs against
@@ -2354,6 +2356,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   );
 
   /**
+   * Finish an artifact search hit: the panel lists a Session's artifacts after
+   * `openSession` reads it, so the document opens when its output turns up.
+   *
+   * The wait is dropped as soon as the reader is on another Session — opening a
+   * document they have already left would put it over the wrong conversation.
+   */
+  useEffect(() => {
+    const pending = pendingArtifact.current;
+    if (pending === undefined) return;
+    if (sessionId !== pending.sessionId) {
+      pendingArtifact.current = undefined;
+      return;
+    }
+    const hit = pendingArtifactHit(outputs, pending);
+    if (hit === undefined) return;
+    pendingArtifact.current = undefined;
+    void openArtifact(hit);
+  }, [openArtifact, outputs, sessionId]);
+
+  /**
    * Show another version of the artifact a tab already holds.
    *
    * The tab keeps its id and its place in the strip: a version is a property of
@@ -2558,7 +2580,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       ? TEXT.sidebar.recent
       : activeProject.name;
 
-  /** Open what a result names: a Session, a Project, or an artifact's Session. */
+  /** Open what a result names: a Session, a Project, or an artifact's Session —
+   *  and, for an artifact, the document itself once the panel lists it. */
   const openSearchResult = useCallback((result: WorkbenchSearchResult) => {
     setSearchQuery("");
     setSearchResults(undefined);
@@ -2566,7 +2589,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       selectProject(result.id);
       return;
     }
-    if (result.sessionId !== undefined) void openSession(result.sessionId);
+    if (result.sessionId === undefined) return;
+    // The document is opened by the effect below rather than here: its output
+    // arrives with the panel listing, which `openSession` starts now.
+    pendingArtifact.current = result.kind === "artifact"
+      ? { artifactId: result.id, sessionId: result.sessionId }
+      : undefined;
+    void openSession(result.sessionId);
   }, [openSession, selectProject]);
 
 

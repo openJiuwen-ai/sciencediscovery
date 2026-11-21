@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { WorkbenchSearchResult, WorkbenchSearchResultKind } from "../api/types.js";
+import type { SessionArtifactOutput, WorkbenchSearchResult, WorkbenchSearchResultKind } from "../api/types.js";
+import { outputSessionId } from "./artifact-groups.js";
 
 /** How long the field waits after the last keystroke before it asks the route.
  *  The web palette uses the same figure. */
@@ -74,4 +75,35 @@ export function moveHit(index: number, delta: -1 | 1, count: number): number {
   if (count <= 0) return -1;
   if (index < 0) return delta === 1 ? 0 : count - 1;
   return (index + delta + count) % count;
+}
+
+/** An artifact result whose document is not open yet: the panel lists its
+ *  Session's artifacts after the read that `openSession` starts, and the click
+ *  completes once that list holds it. */
+export interface PendingArtifact {
+  artifactId: string;
+  sessionId: string;
+}
+
+/**
+ * The listed output a pending artifact result names.
+ *
+ * A hit carries an id; opening a document needs the whole output — its newest
+ * version and the path the preview reads. The panel lists every Session's
+ * output, so the result is matched against that list rather than fetched again.
+ *
+ * Output written before the Session field existed belongs to no Session and is
+ * shown under the open one, so it counts as a match for the Session we opened.
+ * An id listed only under a different Session is not opened: the reader would
+ * land on a document the panel shows somewhere else.
+ */
+export function pendingArtifactHit(
+  outputs: readonly SessionArtifactOutput[],
+  pending: PendingArtifact,
+): SessionArtifactOutput | undefined {
+  return outputs.find((output) => {
+    if (output.artifact.id !== pending.artifactId) return false;
+    const owner = outputSessionId(output);
+    return owner === pending.sessionId || owner === "";
+  });
 }
