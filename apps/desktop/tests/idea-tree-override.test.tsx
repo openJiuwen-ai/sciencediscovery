@@ -178,3 +178,28 @@ test("with no conversation the session write is refused and said so", async () =
     await act(async () => { view.unmount(); });
   }
 });
+
+test("the number fields keep the last good value instead of holding one the write path rejects", async () => {
+  const { calls, client } = stubClient();
+  const { view } = await mount(client, "s1");
+  try {
+    const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void; value?: number } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大深度");
+    assert.ok(depth);
+    // Empty, zero, a fraction and an out-of-range value all leave 5 in place:
+    // the Session normalizer wants an integer from 1 to 20, and a form that can
+    // hold 0 or 3.5 is a form whose save button fails.
+    for (const raw of ["", "0", "3.5", "21"]) {
+      await act(async () => { depth!.props.onChange?.({ target: { value: raw } }); });
+    }
+    await act(async () => { click(view, "只用于本次会话"); });
+    await flush();
+    // Nothing differs from what the card loaded, so nothing is written.
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.equal(patch, undefined, "no write for a value the form never accepted");
+    assert.equal(depth!.props.value, 5, "the field still shows the last accepted value");
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});

@@ -61,9 +61,14 @@ function overrideOf(
   return override;
 }
 
-function numberFrom(raw: string, fallback: number): number {
+/** A number the card may hold. Both write paths reject anything else — the
+ *  Session normalizer wants an integer in range, the global editor the same — so
+ *  an emptied box or `3.5` keeps the previous value instead of producing a form
+ *  that cannot be saved. */
+function integerFrom(raw: string, min: number, max: number, fallback: number): number {
   const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
+  if (!Number.isInteger(value) || value < min || value > max) return fallback;
+  return value;
 }
 
 const TEMPLATES = [
@@ -135,10 +140,17 @@ export function IdeaTreeOverrideDialog({
 
   const saveSession = async () => {
     if (!draft || !sessionId) return;
+    const override = overrideOf(draft, inherited ?? draft);
+    // Nothing differs from what the card opened with: the Session already runs
+    // with these values, so there is nothing to override and no write to make.
+    if (Object.keys(override).length === 0) {
+      setStatus("session");
+      return;
+    }
     setStatus("saving");
     setFailure(undefined);
     try {
-      await updateSession(client, sessionId, { ideaTreeOverride: overrideOf(draft, inherited ?? draft) });
+      await updateSession(client, sessionId, { ideaTreeOverride: override });
       setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -232,7 +244,8 @@ export function IdeaTreeOverrideDialog({
                   aria-label={fields.maxDepth}
                   className="field-input"
                   min={1}
-                  onChange={(event) => patch({ maxDepth: numberFrom(event.target.value, draft.maxDepth) })}
+                  max={20}
+                  onChange={(event) => patch({ maxDepth: integerFrom(event.target.value, 1, 20, draft.maxDepth) })}
                   type="number"
                   value={draft.maxDepth}
                 />
@@ -242,7 +255,8 @@ export function IdeaTreeOverrideDialog({
                   aria-label={fields.maxNodes}
                   className="field-input"
                   min={2}
-                  onChange={(event) => patch({ maxNodes: numberFrom(event.target.value, draft.maxNodes) })}
+                  max={10000}
+                  onChange={(event) => patch({ maxNodes: integerFrom(event.target.value, 2, 10_000, draft.maxNodes) })}
                   type="number"
                   value={draft.maxNodes}
                 />
