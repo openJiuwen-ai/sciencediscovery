@@ -358,7 +358,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** Every Session an unfiltered read has seen. Pruning runs against this, or
    *  not at all: a filtered listing is a subset, and treating its complement as
    *  "gone" would drop artifacts of Sessions that still exist. */
-  const membershipRef = useRef<ReadonlySet<string> | undefined>(undefined);
+  const membershipRef = useRef<Set<string> | undefined>(undefined);
   sessionFilterRef.current = sessionFilter;
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
@@ -759,11 +759,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  also wrote survives under the Session that made it — only the deleted
    *  Session's versions leave. */
   const pruneArtifacts = useCallback(
-    (sessions: readonly Session[], keepSessionId?: string) => {
-      const live = new Set(sessions.map((session) => session.id));
-      // A Session just deleted is the one case a filtered read can still settle:
-      // the caller knows what it removed.
-      if (keepSessionId !== undefined) live.delete(keepSessionId);
+    (sessionIds: readonly string[]) => {
+      const live = new Set(sessionIds);
       let dropped = false;
       for (const id of Object.keys(artifactsBySession.current)) {
         if (live.has(id)) continue;
@@ -813,9 +810,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         membershipRef.current,
       );
       if (membership.snapshot !== undefined) membershipRef.current = membership.snapshot;
-      if (membership.pruneAgainst !== undefined) {
-        pruneArtifacts(membership.pruneAgainst.map((id) => ({ id }) as Session));
-      }
+      if (membership.pruneAgainst !== undefined) pruneArtifacts(membership.pruneAgainst);
       for (const session of sessions) readSessionArtifacts(session.id);
       return sessions;
     } catch (reason) {
@@ -1847,18 +1842,30 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     });
   }, []);
 
+  /** Forget one Session's cached outputs. The delete path knows exactly which
+   *  Session went; a filtered listing cannot prove it, so it cannot do this. */
+  const forgetSessionArtifacts = useCallback((id: string) => {
+    if (artifactsBySession.current[id] === undefined) return;
+    delete artifactsBySession.current[id];
+    publishArtifacts();
+  }, [publishArtifacts]);
+
   const mutate = useCallback(
-    async (options: { dropIfCurrent?: boolean; id: string; operation: () => Promise<unknown> }) => {
+    async (options: { dropIfCurrent?: boolean; forgetArtifacts?: boolean; id: string; operation: () => Promise<unknown> }) => {
       try {
         await options.operation();
       } catch (reason) {
         report(reason);
         return;
       }
+      if (options.forgetArtifacts) {
+        forgetSessionArtifacts(options.id);
+        membershipRef.current?.delete(options.id);
+      }
       if (options.dropIfCurrent && sessionRef.current === options.id) startDraft();
       await refreshSessionLists();
     },
-    [refreshSessionLists, report, startDraft],
+    [forgetSessionArtifacts, refreshSessionLists, report, startDraft],
   );
 
   /** The same write, gated on the version the read was made for: a pick that
@@ -2211,7 +2218,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           body: TEXT.errors.deleteWarning(sessionTitle(session.title)),
           eyebrow: TEXT.menu.delete,
           onAccept: () =>
-            mutate({ dropIfCurrent: true, id: session.id, operation: () => deleteSession(client, session.id) }),
+            mutate({ dropIfCurrent: true, forgetArtifacts: true, id: session.id, operation: () => deleteSession(client, session.id) }),
           title: sessionTitle(session.title),
         }),
       decidePermission,

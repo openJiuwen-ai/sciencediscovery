@@ -20,6 +20,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
+import { useWorkspace } from "../src/app/use-workspace.js";
+import type { ApiClient } from "../src/api/client.js";
+import { act as domAct, create as domCreate } from "./support/dom-renderer.js";
 import {
   SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead, readSessionFilter,
   writeSessionFilter,
@@ -139,11 +142,17 @@ test("a filtered refresh never prunes the artifact catalog of the Sessions it hi
   // the sequence to pin. The snapshot from 全部 is what keeps them.
   const filtered = membershipAfterRead("archived", ["b"], all.snapshot);
   assert.deepEqual(filtered.pruneAgainst, whole, "the hidden Session must survive pruning");
-  assert.equal(filtered.snapshot, undefined, "and a subset must not become the snapshot");
+  // The snapshot grows by what the filtered read returned - those Sessions
+  // provably exist - but never shrinks to the subset.
+  assert.deepEqual([...(filtered.snapshot ?? [])].sort(), whole);
 
-  const again = membershipAfterRead("archived", ["b"], all.snapshot);
-  assert.deepEqual(again.pruneAgainst, whole, "a second refresh under the same filter behaves the same");
+  const again = membershipAfterRead("archived", ["b"], filtered.snapshot);
+  assert.deepEqual([...(again.pruneAgainst ?? [])].sort(), whole,
+    "a second refresh under the same filter behaves the same");
 
-  // Before any unfiltered read, nothing is known, so nothing may be pruned.
-  assert.deepEqual(membershipAfterRead("archived", ["b"], undefined), {});
+  // Before any unfiltered read, nothing is known about the hidden Sessions, so
+  // nothing may be pruned - but the id the read returned is now known to exist.
+  const cold = membershipAfterRead("archived", ["b"], undefined);
+  assert.equal(cold.pruneAgainst, undefined, "no pruning before the workspace is known");
+  assert.deepEqual([...(cold.snapshot ?? [])], ["b"]);
 });
