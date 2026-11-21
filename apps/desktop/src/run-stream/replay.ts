@@ -69,7 +69,7 @@ export interface ReplayPlacement {
   /** Renders after this message. */
   following: Map<string, RunReplay[]>;
   /** Renders in this message's place. */
-  replacing: Map<string, RunStreamState>;
+  replacing: Map<string, RunReplay>;
   /** Renders after the transcript. */
   trailing: RunReplay[];
 }
@@ -135,7 +135,7 @@ export function placeReplays(
   const placement: ReplayPlacement = { following: new Map(), replacing: new Map(), trailing: [] };
   for (const replay of replays) {
     if (replay.messageId !== undefined && present.has(replay.messageId)) {
-      placement.replacing.set(replay.messageId, replay.state);
+      placement.replacing.set(replay.messageId, replay);
       continue;
     }
     if (replay.userMessageId !== undefined && present.has(replay.userMessageId)) {

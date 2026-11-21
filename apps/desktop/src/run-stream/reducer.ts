@@ -212,6 +212,8 @@ export function reduceRunStream(
       return {
         ...advanced,
         ...runTimes(advanced, event.run),
+        // The opening frames may be absent when a stream reconnects.
+        runId: advanced.runId ?? event.run?.id,
         status: event.status,
         terminal: advanced.terminal || isTerminalRunStatus(event.status),
       };

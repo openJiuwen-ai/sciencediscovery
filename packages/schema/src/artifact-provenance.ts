@@ -14,7 +14,8 @@
 
 import type { EnvironmentRevision, ExecutionLanguage } from "./environment.js";
 import type { CasObjectRef, ExecutionRun, ReviewRun } from "./provenance.js";
-import type { ChatMessage, ComposerReference } from "./session.js";
+import type { ChatMessage, ComposerReference, SessionRun } from "./session.js";
+import type { Subagent } from "./subagent.js";
 
 export type ScientificArtifactKind = "dataset" | "figure" | "html" | "json" | "latex" | "markdown" | "notebook" | "other" | "report" | "structure";
 export type ArtifactOrigin = "legacy_auto" | "llm_declared" | "mcp_download" | "server_generated" | "user_upload";
@@ -75,6 +76,55 @@ export interface ScientificArtifactVersion {
 export interface SessionArtifactOutput {
   artifact: ScientificArtifact;
   version: ScientificArtifactVersion;
+}
+
+/**
+ * Attribute declared versions to their top-level conversation run, following
+ * subagent ancestry when necessary. Unknown or cyclic lineages stay unassigned.
+ * A run keeps the highest version it wrote of each artifact.
+ */
+export function groupArtifactOutputsByRun(
+  outputs: readonly SessionArtifactOutput[],
+  runs: readonly Pick<SessionRun, "id">[],
+  subagents: readonly Pick<Subagent, "id" | "parentTurnId">[],
+): ReadonlyMap<string, readonly SessionArtifactOutput[]> {
+  const runIds = new Set(runs.map((run) => run.id));
+  const parentTurnBySubagentId = new Map(subagents.map((subagent) => [subagent.id, subagent.parentTurnId]));
+  const byRunAndArtifact = new Map<string, Map<string, SessionArtifactOutput>>();
+
+  function rootRunId(turnId: string | undefined): string | undefined {
+    const visited = new Set<string>();
+    let current = turnId;
+    while (current && !visited.has(current)) {
+      if (runIds.has(current)) return current;
+      visited.add(current);
+      current = parentTurnBySubagentId.get(current);
+    }
+    return undefined;
+  }
+
+  for (const output of outputs) {
+    const runId = rootRunId(output.version.turnId);
+    if (!runId) continue;
+    const byArtifact = byRunAndArtifact.get(runId) ?? new Map<string, SessionArtifactOutput>();
+    const existing = byArtifact.get(output.artifact.id);
+    if (!existing
+      || output.version.version > existing.version.version
+      || (output.version.version === existing.version.version
+        && output.version.createdAt > existing.version.createdAt)) {
+      byArtifact.set(output.artifact.id, output);
+    }
+    byRunAndArtifact.set(runId, byArtifact);
+  }
+
+  return new Map([...byRunAndArtifact].map(([runId, byArtifact]) => [
+    runId,
+    [...byArtifact.values()].toSorted((left, right) =>
+      left.version.createdAt.localeCompare(right.version.createdAt)
+      || left.version.version - right.version.version
+      || left.artifact.name.localeCompare(right.artifact.name),
+    ),
+  ]));
 }
 
 /** Line range returned for one `read_artifact` page. */

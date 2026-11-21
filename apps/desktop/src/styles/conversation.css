@@ -81,6 +81,83 @@
   line-height: 1.65;
   color: var(--text);
 }
+.run-artifacts {
+  margin: 12px 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.run-artifacts > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.run-artifacts > ul,
+.message .text .run-artifacts > ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-artifacts > ul > li,
+.message .text .run-artifacts > ul > li { margin: 0; }
+.run-artifact-row,
+.run-artifact-toggle {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.run-artifact-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 7px 12px;
+  text-align: start;
+  font-size: 13px;
+}
+.run-artifact-row:hover,
+.run-artifact-toggle:hover { background: var(--surface-soft); }
+.run-artifact-row[aria-current="true"] {
+  background: var(--primary-soft);
+  box-shadow: inset 2px 0 var(--primary);
+  color: var(--primary-strong);
+}
+.run-artifacts button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.run-artifact-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.run-artifact-count,
+.run-artifact-version {
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.run-artifact-count { background: var(--surface-sunk); }
+.run-artifact-version {
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+.run-artifact-chevron { color: var(--muted); }
+.run-artifact-toggle {
+  padding: 6px 12px;
+  color: var(--primary-strong);
+  font-size: 12px;
+}
 .message .text .msg-list {
   margin: 8px 0;
   padding-left: 22px;
