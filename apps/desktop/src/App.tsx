@@ -90,6 +90,7 @@ import { Conversation } from "./views/Conversation.js";
 import { draftEvolveDirection } from "./api/evolve.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
 import { IdeaTreeOverrideDialog } from "./views/idea/IdeaTreeOverrideDialog.js";
+import { defersIdeaSend } from "./idea/send-gate.js";
 import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
 import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
@@ -329,6 +330,8 @@ export function App({ initialToken }: Props) {
   /** The Idea Tree parameters card. Declared with the other state, above the
    *  early returns, so the hook order never depends on which branch renders. */
   const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
+  /** An Idea Tree command waiting for its parameters; the card is open on it. */
+  const [pendingIdeaSend, setPendingIdeaSend] = useState<string>();
   /** A design command the dialog placed in the composer instead of sending.
    *  Held here because the composer has two mounts — the welcome page and the
    *  conversation — and the dialog opens over either. Cleared when the composer
@@ -906,8 +909,8 @@ export function App({ initialToken }: Props) {
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
-  const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput) => {
-    if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return; }
+  const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput, ideaConfirmed = false): boolean => {
+    if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return true; }
     // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
     // question about the sentence only, so the detour below — which is for
@@ -918,7 +921,7 @@ export function App({ initialToken }: Props) {
       setAwaitingRun(true);
       const message = composeEvolveMessage(command, content);
       void actions.send(direction ? appendEvolveDirection(message, direction) : message);
-      return;
+      return true;
     }
     const goal = evolveCommandGoal(content);
     if (goal !== undefined) {
@@ -927,7 +930,16 @@ export function App({ initialToken }: Props) {
         checkpointMode: evolveCommandCheckpointMode(content),
         goal: goal === "" ? undefined : goal,
       });
-      return;
+      return true;
+    }
+    if (defersIdeaSend(content, ideaConfirmed)) {
+      // #1277: the parameters card opens before an Idea Tree command leaves, but
+      // the command is not intercepted — `confirmIdeaSend` sends the same draft
+      // unchanged once the card is confirmed. The composer keeps it meanwhile,
+      // because this send did not happen.
+      setPendingIdeaSend(content);
+      setIdeaTreeOpen(true);
+      return false;
     }
     if (isIdeaTreeCommand(content)) {
       // The command stays a message: the agent runs its preparation and calls
@@ -943,6 +955,7 @@ export function App({ initialToken }: Props) {
       setAwaitingIdea(true);
     }
     void actions.send(content);
+    return true;
   };
 
   /** The current `sendMessage`, read at press time. Holding it in a ref is
@@ -1204,7 +1217,30 @@ export function App({ initialToken }: Props) {
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
   /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row. */
-  const openIdeaTree = () => setIdeaTreeOpen(true);
+  const openIdeaTree = () => {
+    setPendingIdeaSend(undefined);
+    setIdeaTreeOpen(true);
+  };
+
+  /** The card was confirmed: send the command that was waiting for it. */
+  const confirmIdeaSend = () => {
+    const pending = pendingIdeaSend;
+    setPendingIdeaSend(undefined);
+    setIdeaTreeOpen(false);
+    if (pending === undefined) return;
+    // The composer kept the draft when the send was deferred; sending it now
+    // clears it, so the same words are not left behind in the box.
+    setSeededCommand({ nonce: Date.now(), text: "" });
+    sendMessage(pending, undefined, undefined, true);
+  };
+
+  /** The card was dismissed: nothing is sent and the draft comes back. */
+  const cancelIdeaSend = () => {
+    const pending = pendingIdeaSend;
+    setPendingIdeaSend(undefined);
+    setIdeaTreeOpen(false);
+    if (pending !== undefined) setSeededCommand({ nonce: Date.now(), text: pending });
+  };
 
   /**
    * A 上游文件 link inside the open artifact dialog.
@@ -1561,7 +1597,8 @@ export function App({ initialToken }: Props) {
       {ideaTreeOpen ? (
         <IdeaTreeOverrideDialog
           client={client}
-          onClose={() => setIdeaTreeOpen(false)}
+          onClose={pendingIdeaSend === undefined ? () => setIdeaTreeOpen(false) : cancelIdeaSend}
+          onConfirm={pendingIdeaSend === undefined ? undefined : confirmIdeaSend}
           sessionId={state.detail?.id}
         />
       ) : null}
