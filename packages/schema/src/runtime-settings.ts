@@ -95,9 +95,9 @@ export interface EffectiveRuntimeSettings {
   enabledSkillLibraries: EnabledSkillLibrary[];
   /** Resolved skill set: the whole catalog in `all` mode, the whitelist in `selected`. */
   enabledSkillIds: string[];
-  /** Idea Tree overrides after the layer merge, still partial: the run resolves
-   *  them against the global settings when it freezes its snapshot, which is
-   *  where the complete object ends up (`ideaTreeSettings` there). */
+  /** Idea Tree overrides after the layer merge, still partial. A research is
+   *  created with `resolveIdeaTreeSettings(sessionId)`, which applies these to
+   *  the global settings; the run snapshot deliberately does not freeze them. */
   ideaTreeOverride?: IdeaTreeSettingsOverride;
   modelId?: string;
   reviewModelId?: string;
@@ -322,9 +322,11 @@ export interface IdeaTreeSettings {
   propagateInsightSystemPrompt?: string;
 }
 
-/** The five Idea Tree fields a Project or Session layer may override. Each is
- *  optional: a layer overrides the fields it means to change and inherits the
- *  rest, so a Session that only lowers `maxDepth` keeps the global template. */
+/** The five Idea Tree fields a Session may override — the catalog scopes the
+ *  setting to `system` and `session`, so a Global or Project write has the field
+ *  stripped. Each member is optional: a Session overrides what it means to
+ *  change and inherits the rest, so lowering `maxDepth` keeps the global
+ *  template. */
 export interface IdeaTreeSettingsOverride {
   templateId?: IdeaTreeSettings["templateId"];
   explorationIntensity?: IdeaTreeSettings["explorationIntensity"];

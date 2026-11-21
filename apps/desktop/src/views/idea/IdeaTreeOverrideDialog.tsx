@@ -151,17 +151,23 @@ export function IdeaTreeOverrideDialog({
   const saveSession = async () => {
     if (!draft || !sessionId) return;
     const override = overrideOf(draft, inherited ?? draft);
-    // Nothing differs from what the card opened with: the Session already runs
-    // with these values, so there is nothing to override and no write to make.
-    if (Object.keys(override).length === 0) {
+    const empty = Object.keys(override).length === 0;
+    // An empty diff means two different things. With nothing pinned it means the
+    // Session already runs with these values, so there is nothing to write. With
+    // pins in place it is the natural undo — the reader put every field back to
+    // the deployment value — and the write has to happen, or the Session keeps
+    // the pins it no longer shows.
+    if (empty && !hasOverride) {
       setStatus("session");
       return;
     }
     setStatus("saving");
     setFailure(undefined);
     try {
+      // An empty object is how the normalizer is told "no override": it rebuilds
+      // the set from this payload, so a partial one leaves the other pins alone.
       await updateSession(client, sessionId, { ideaTreeOverride: override });
-      setHasOverride(true);
+      setHasOverride(!empty);
       setStatus("session");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -178,7 +184,12 @@ export function IdeaTreeOverrideDialog({
       maxTokens: draft.maxTokens ?? null,
     };
     try {
-      setDraft(await updateIdeaTreeSettings(client, body));
+      // Both sides of the diff move: a later Session save would otherwise pin a
+      // field at the value it already inherits, and 跟随全局设置 would restore
+      // the pre-write numbers.
+      const next = await updateIdeaTreeSettings(client, body);
+      setDraft(next);
+      setInherited(next);
       setStatus("global");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
