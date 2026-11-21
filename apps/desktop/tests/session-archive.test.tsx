@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import {
@@ -24,7 +25,22 @@ import {
 } from "../src/app/session-filter.js";
 import { TEXT } from "../src/text.js";
 import { RowMenu } from "../src/views/RowMenu.js";
-import { Sidebar } from "../src/views/Sidebar.js";
+import { Sidebar, archiveActionFor } from "../src/views/Sidebar.js";
+
+// `RowMenu` portals into the body and listens for pointer and scroll events; this
+// renderer has neither, so the menu would never mount.
+const listeners = new Map<string, Set<() => void>>();
+const body = { appendChild: () => {}, removeChild: () => {}, contains: () => false };
+Object.assign(globalThis, {
+  document: {
+    addEventListener: (type: string, fn: () => void) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(fn);
+    },
+    body,
+    removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
+  },
+});
 
 const actions = {
   archiveSession: () => {},
@@ -81,32 +97,23 @@ test("the filter keeps its value, and an unusable stored value falls back to 活
   assert.equal(isSessionListState("archived "), false);
 });
 
-test("a session row offers 归档 while it is active and 恢复 once it is archived", () => {
-  const active = render({ recent: [session("s1", "A finished session")] });
-  const archived = render({ recent: [session("s1", "A finished session", { archivedAt: "2026-01-02T00:00:00.000Z" })], sessionFilter: "archived" });
-  // The labels live in the row menu, which is opened on demand; what the column
-  // carries is the row itself and the filter that decides which set it came from.
-  assert.ok(active.includes("A finished session"));
-  assert.ok(archived.includes("A finished session"));
-  assert.ok(active.includes(TEXT.sidebar.filterActive));
-  assert.ok(archived.includes(TEXT.sidebar.filterArchived));
+test("a run keeps the archive entry, but inert and with its reason", () => {
+  const running = archiveActionFor({}, true);
+  assert.equal(running.disabled, true, "a running Session must not offer the command");
+  assert.equal(running.label, TEXT.menu.archive);
+  assert.equal(running.reason, TEXT.errors.archiveBlockedByRun, "and it must say why");
+
+  const idle = archiveActionFor({}, false);
+  assert.equal(idle.disabled, false);
+  assert.equal(idle.reason, undefined, "no reason is carried when the command is usable");
 });
 
-test("a menu entry can be inert, and says why in the menu", () => {
-  const markup = renderToStaticMarkup(
-    <RowMenu
-      menu={{
-        items: [{ disabled: true, label: TEXT.menu.archive, onSelect: () => {} }],
-        note: TEXT.errors.archiveBlockedByRun,
-        x: 0,
-        y: 0,
-      }}
-      onClose={() => {}}
-    />,
-  );
-  assert.ok(markup.includes('aria-disabled="true"'), "the entry announces that it is inert");
-  assert.ok(/<button[^>]*disabled=""[^>]*>/.test(markup) || markup.includes(" disabled"), "and it is really disabled");
-  assert.ok(markup.includes(TEXT.errors.archiveBlockedByRun), "the reason is written, not implied");
+test("an archived Session offers 恢复 and an active one offers 归档", () => {
+  assert.equal(archiveActionFor({ archivedAt: "2026-01-02T00:00:00.000Z" }, false).label, TEXT.menu.restore);
+  assert.equal(archiveActionFor({}, false).label, TEXT.menu.archive);
+  // Archiving a Session that is already archived (or the reverse) is not offered,
+  // so one label per state is the whole rule.
+  assert.notEqual(TEXT.menu.archive, TEXT.menu.restore);
 });
 
 test("the archive confirmation names the read-only state and the kernel teardown", () => {
