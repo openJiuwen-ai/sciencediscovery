@@ -209,7 +209,7 @@ export interface WorkspaceActions {
   deleteSession: (session: Session) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => void;
-  /** The sidebar's 活动 / 已归档 / 全部 choice. */
+  /** The sidebar's 活跃 / 已归档 / 全部 choice. */
   setSessionFilter: (state: SessionListState) => void;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
@@ -820,7 +820,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
 
   /** Keep the sidebar's choice and re-read the lists with it. Persisted, because
-   *  a reload must not silently return the reader to 活动. */
+   *  a reload must not silently return the reader to 活跃. */
   const setSessionFilter = useCallback((next: SessionListState) => {
     setSessionFilterState(next);
     sessionFilterRef.current = next;
@@ -2196,7 +2196,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
               return;
             }
             adoptSessionReply(updated);
-            // The row stays visible under 全部/已归档, so only 活动 is about to
+            // The row stays visible under 全部/已归档, so only 活跃 is about to
             // lose it; closing the conversation there is the archive's doing, not
             // a filter's.
             if (sessionFilterRef.current === "active" && sessionRef.current === updated.id) startDraft();
