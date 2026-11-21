@@ -277,9 +277,9 @@
 }
 
 /* The body already supplies the 28px gutter, so the footer adds height only —
-   otherwise the actions sit 56px in while the controls end at 28px. Sticky,
-   because the footer is the last child of the element that scrolls: on a short
-   window the actions would otherwise scroll away with the rows. */
+   otherwise the actions sit 56px in while the controls end at 28px. It is the
+   last child of the element that scrolls, so `sticky` holds it against that
+   element's bottom edge and the actions stay reachable while the rows scroll. */
 .idea-tree-card .modal-footer {
   position: sticky;
   bottom: 0;
@@ -289,7 +289,7 @@
   gap: 8px;
   margin-top: 6px;
   padding: 16px 0 20px;
-  background: var(--surface-raised, #fff);
+  background: var(--surface);
 }
 
 /* A label that wraps mid-word reads as a different button; these are short. */
