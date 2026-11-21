@@ -417,3 +417,64 @@ test("a global write keeps the Session's pins on screen, and the new deployment 
     await act(async () => { view.unmount(); });
   }
 });
+
+/** A client whose Idea Tree settings read fails, for the states below. */
+function failingClient() {
+  const calls: { method: string; path: string }[] = [];
+  return {
+    calls,
+    client: {
+      request: async (path: string, init?: { method?: string }) => {
+        const method = init?.method ?? "GET";
+        calls.push({ method, path });
+        if (method === "GET" && !path.endsWith("/settings")) throw new Error("settings unavailable");
+        return { overrides: {}, sources: {}, effective: {} };
+      },
+    } as never,
+  };
+}
+
+test("a failed settings read disables the Session action instead of leaving it inert", async () => {
+  const { client } = failingClient();
+  // The 会话设置 entry: no command waiting, so there is nothing to send.
+  const { markup, view } = await mount(client, "s1");
+  try {
+    assert.match(markup(), /settings unavailable/);
+    const save = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => String(node.props.children) === "只用于本次会话");
+    assert.ok(save, "the save action is drawn");
+    assert.equal(save!.props.disabled, true, "nothing to save, so it must not be pressable");
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a failed settings read still lets a waiting command out", async () => {
+  const { client } = failingClient();
+  const confirmed: number[] = [];
+  let view: { toJSON: () => unknown; root: never; unmount: () => void };
+  await act(async () => {
+    view = create(
+      <IdeaTreeOverrideDialog
+        client={client as never}
+        onClose={() => {}}
+        onConfirm={() => { confirmed.push(1); }}
+        sessionId="s1"
+      />,
+    ) as never;
+  });
+  await flush();
+  try {
+    const save = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => String(node.props.children) === "确认并发送");
+    assert.ok(save, "the confirm action is drawn");
+    assert.equal(save!.props.disabled, false, "the command has to be releasable");
+    await act(async () => { save!.props.onClick?.(); });
+    await flush();
+    assert.equal(confirmed.length, 1, "the command was let out without a write");
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
