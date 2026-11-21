@@ -105,6 +105,11 @@ export function IdeaTreeOverrideDialog({
    *  pressing 覆盖全局设置 without editing cannot write the pin into the
    *  deployment. */
   const [opened, setOpened] = useState<IdeaTreeSettingsDetails>();
+  /** What this Session pins, as the server has it. The form is rebuilt from the
+   *  deployment *plus* these after any global write: showing the deployment
+   *  alone would hide a pin that is still in force, and the card would claim the
+   *  conversation moved to a value it does not run with. */
+  const [pins, setPins] = useState<IdeaTreeSettingsOverride>({});
   /** Whether this Session pins anything today, which is what 跟随全局 can undo. */
   const [hasOverride, setHasOverride] = useState(false);
   const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "unchanged" | "failed">("loading");
@@ -126,6 +131,7 @@ export function IdeaTreeOverrideDialog({
         setDraft(start);
         setOpened(start);
         setInherited(value);
+        setPins(pinned);
         setHasOverride(Object.keys(pinned).length > 0);
         setStatus("idle");
       })
@@ -175,6 +181,7 @@ export function IdeaTreeOverrideDialog({
       // An empty object is how the normalizer is told "no override": it rebuilds
       // the set from this payload, so a partial one leaves the other pins alone.
       await updateSession(client, sessionId, { ideaTreeOverride: override });
+      setPins(override);
       setHasOverride(!empty);
       setStatus("session");
     } catch (reason) {
@@ -202,11 +209,24 @@ export function IdeaTreeOverrideDialog({
     try {
       // Both sides of the diff move: a later Session save would otherwise pin a
       // field at the value it already inherits, and 跟随全局设置 would restore
-      // the pre-write numbers.
+      // the pre-write numbers. The form is rebuilt from the new deployment plus
+      // the pins still in force — `next` alone would drop them from the display
+      // while the Session keeps running them.
       const next = await updateIdeaTreeSettings(client, body);
-      setDraft(next);
+      let inForce = pins;
+      if (sessionId !== undefined) {
+        try {
+          inForce = (await getSessionSettings(client, sessionId)).overrides?.ideaTreeOverride ?? {};
+        } catch {
+          // A read that fails must not lose the pins the card already knows.
+          inForce = pins;
+        }
+      }
       setInherited(next);
-      setOpened(next);
+      setPins(inForce);
+      setDraft({ ...next, ...inForce });
+      setOpened({ ...next, ...inForce });
+      setHasOverride(Object.keys(inForce).length > 0);
       setStatus("global");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -222,6 +242,7 @@ export function IdeaTreeOverrideDialog({
     try {
       await updateSession(client, sessionId, { ideaTreeOverride: null });
       setDraft(inherited);
+      setPins({});
       setHasOverride(false);
       setStatus("session");
     } catch (reason) {
