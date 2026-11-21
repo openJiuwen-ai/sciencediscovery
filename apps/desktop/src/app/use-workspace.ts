@@ -29,7 +29,9 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
+import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
+import { isSearchable, SEARCH_DEBOUNCE_MS } from "./session-search.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -82,6 +84,8 @@ import type {
   SessionListState,
   SessionRun,
   SessionRunStatus,
+  WorkbenchSearchResponse,
+  WorkbenchSearchResult,
   WorkspaceFile,
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
@@ -177,6 +181,9 @@ export interface WorkspaceState {
   selectedModelId?: string;
   sessionId?: string;
   /** Which Sessions the sidebar asked for; the filter renders from this. */
+  searchQuery: string;
+  searchResults?: WorkbenchSearchResponse;
+  searchError?: string;
   sessionFilter: SessionListState;
   /** Every Project's Sessions, keyed by Project id and including the inbox.
    *  The sidebar reads a Project's list from here; `recent` is the inbox's
@@ -209,6 +216,10 @@ export interface WorkspaceActions {
   deleteSession: (session: Session) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => void;
+  /** The sidebar's search field: debounced `GET /api/search`. */
+  search: (query: string) => void;
+  /** Open what a result names. */
+  openSearchResult: (result: WorkbenchSearchResult) => void;
   /** The sidebar's 活跃 / 已归档 / 全部 choice. */
   setSessionFilter: (state: SessionListState) => void;
   /** The same gate for a Project: accepting removes it with every Session it
@@ -350,6 +361,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // default, so an archived Session is invisible until the user asks for it —
   // and a Session archived in the web client is exactly the case this client
   // has to be able to reach. The choice is remembered across reloads.
+  /** The query the field holds, the answer it produced and why it failed. */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<WorkbenchSearchResponse>();
+  const [searchError, setSearchError] = useState<string>();
+  const searchTicket = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [sessionFilter, setSessionFilterState] = useState<SessionListState>(() =>
     readSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage));
   const sessionFilterRef = useRef<SessionListState>(sessionFilter);
@@ -818,6 +835,35 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       return undefined;
     }
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
+
+  /** Ask the route for a query, once it settles.
+   *
+   *  The route matches names and titles; the field's copy says so. Each request
+   *  takes a ticket so an answer for an older query cannot paint over a newer
+   *  one, and the timer is cleared on every keystroke. */
+  const search = useCallback((query: string) => {
+    setSearchQuery(query);
+    setSearchError(undefined);
+    searchTicket.current += 1;
+    const ticket = searchTicket.current;
+    if (searchTimer.current !== undefined) clearTimeout(searchTimer.current);
+    if (!isSearchable(query)) {
+      setSearchResults(undefined);
+      return;
+    }
+    searchTimer.current = setTimeout(() => {
+      void searchWorkbench(client, query.trim())
+        .then((response) => {
+          if (ticket !== searchTicket.current) return;
+          setSearchResults(response);
+        })
+        .catch((reason: unknown) => {
+          if (ticket !== searchTicket.current) return;
+          // The route's own sentence, not a rewrite of it.
+          setSearchError(reason instanceof Error ? reason.message : TEXT.sidebar.searchFailed);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+  }, [client]);
 
   /** Keep the sidebar's choice and re-read the lists with it. Persisted, because
    *  a reload must not silently return the reader to 活跃. */
@@ -2149,11 +2195,25 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       ? TEXT.sidebar.recent
       : activeProject.name;
 
+  /** Open what a result names: a Session, a Project, or an artifact's Session. */
+  const openSearchResult = useCallback((result: WorkbenchSearchResult) => {
+    setSearchQuery("");
+    setSearchResults(undefined);
+    if (result.kind === "project") {
+      selectProject(result.id);
+      return;
+    }
+    if (result.sessionId !== undefined) void openSession(result.sessionId);
+  }, [openSession, selectProject]);
+
+
   const actions: WorkspaceActions = useMemo(
     () => ({
       clearAttachments,
       closeTab,
       confirmAction,
+      search,
+      openSearchResult,
       setSessionFilter,
       createProject: createProjectAndOpen,
       deleteProject: (project) =>
@@ -2351,6 +2411,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
+    searchQuery,
+    searchResults,
+    searchError,
     sessionFilter,
     sessionId,
     sessionsByProject: listedByProject,

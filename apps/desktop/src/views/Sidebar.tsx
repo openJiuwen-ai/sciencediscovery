@@ -20,7 +20,8 @@ import type { WorkspaceActions } from "../app/use-workspace.js";
 import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
 import { openFeedback } from "../feedback/open.js";
-import type { Project, Session, SessionListState } from "../api/types.js";
+import type { Project, Session, SessionListState, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
+import { groupSearchResults, searchDetail } from "../app/session-search.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -38,6 +39,10 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
+  /** The field asks the workspace to run `GET /api/search`. */
+  onSearch: (query: string) => void;
+  /** A result was chosen: a Session opens, a Project switches, an artifact opens. */
+  onSearchOpen: (result: WorkbenchSearchResult) => void;
   onExportSession?: (session: Session) => void;
   onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
@@ -51,6 +56,12 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
+  /** What `GET /api/search` answered for the current query, if anything. */
+  searchResults?: WorkbenchSearchResponse;
+  /** Why the last search failed, when it did. */
+  searchError?: string;
+  /** The query the results belong to; the field is controlled from the workspace. */
+  searchQuery: string;
   /** Which Sessions the list is showing; `actions.setSessionFilter` changes it. */
   sessionFilter: SessionListState;
   sessionsByProject: Record<string, Session[]>;
@@ -123,6 +134,11 @@ export function Sidebar({
   projects,
   recent,
   running,
+  searchError,
+  searchQuery,
+  searchResults,
+  onSearch,
+  onSearchOpen,
   sessionFilter,
   sessionsByProject,
 }: Props) {
@@ -298,6 +314,59 @@ export function Sidebar({
           <img alt="" aria-hidden="true" src={migrationIcon} /><span>{TEXT.researchPackage.import}</span>
         </button>
       </div>
+
+      {/* The route matches names and titles, not message bodies, so the field
+          says only what it can do. */}
+      <div className="side-search">
+        <input
+          aria-label={TEXT.sidebar.searchLabel}
+          className="side-search-field"
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder={TEXT.sidebar.searchPlaceholder}
+          type="search"
+          value={searchQuery}
+        />
+      </div>
+      {searchQuery.trim() !== "" ? (
+        <div className="side-search-results">
+          {searchError !== undefined ? (
+            <p className="side-search-note is-error" role="alert">{searchError}</p>
+          ) : searchResults === undefined ? null
+            : searchResults.results.length === 0 ? (
+              <p className="side-search-note">{TEXT.sidebar.searchEmpty(searchQuery.trim())}</p>
+            ) : (
+              <>
+                {groupSearchResults(searchResults.results).map((group) => (
+                  <div className="side-search-group" key={group.kind}>
+                    <span className="side-search-heading">
+                      {group.kind === "project" ? TEXT.sidebar.searchProjects
+                        : group.kind === "session" ? TEXT.sidebar.searchSessions : TEXT.sidebar.searchArtifacts}
+                    </span>
+                    {group.results.map((result) => (
+                      <button
+                        className="side-search-hit"
+                        key={`${result.kind}:${result.id}`}
+                        onClick={() => onSearchOpen(result)}
+                        type="button"
+                      >
+                        <span className="side-search-hit-label">
+                          {result.label}
+                          {result.archived === true ? (
+                            <span className="side-search-badge">{TEXT.sidebar.searchArchived}</span>
+                          ) : null}
+                        </span>
+                        <span className="side-search-hit-detail">{searchDetail(result)}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {searchResults.hasMore ? (
+                  <p className="side-search-note">{TEXT.sidebar.searchMore(searchResults.total)}</p>
+                ) : null}
+              </>
+            )}
+        </div>
+      ) : null}
 
       {/* The list default is 活跃, so a Session archived in the web client is
           invisible until the reader asks for it. This is that ask. */}

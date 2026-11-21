@@ -1182,6 +1182,11 @@ export function App({ initialToken }: Props) {
             projects={state.projects}
             recent={state.recent}
             running={state.running}
+            searchError={state.searchError}
+            searchQuery={state.searchQuery}
+            searchResults={state.searchResults}
+            onSearch={(query) => actions.search(query)}
+            onSearchOpen={(result) => actions.openSearchResult(result)}
             sessionFilter={state.sessionFilter}
             sessionsByProject={state.sessionsByProject}
           />
