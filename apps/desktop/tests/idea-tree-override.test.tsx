@@ -478,3 +478,48 @@ test("a failed settings read still lets a waiting command out", async () => {
     await act(async () => { view.unmount(); });
   }
 });
+
+test("a failed write keeps the Session action pressable, so the reader can retry", async () => {
+  // The read succeeded, so the draft is there; the PATCH fails. Disabling the
+  // button here would strand the card until an unrelated edit reset the status.
+  let attempts = 0;
+  const calls: { method: string; path: string; body: unknown }[] = [];
+  const client = {
+    request: async (path: string, init?: { body?: string; method?: string }) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body === undefined ? undefined : JSON.parse(init.body);
+      calls.push({ method, path, body });
+      if (path.endsWith("/settings")) return { overrides: {}, sources: {}, effective: {} };
+      if (method === "PATCH") {
+        attempts += 1;
+        if (attempts === 1) throw new Error("Session write refused");
+        return {} as never;
+      }
+      return GLOBAL;
+    },
+  } as never;
+
+  const { view } = await mount(client, "s1");
+  try {
+    const depth = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大深度");
+    await act(async () => { depth!.props.onChange?.({ target: { value: "3" } }); });
+
+    const save = () => (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => String(node.props.children) === "只用于本次会话");
+
+    await act(async () => { save()!.props.onClick?.(); });
+    await flush();
+    assert.equal(attempts, 1, "the write was attempted");
+    assert.equal(save()!.props.disabled, false, "the retry must stay pressable");
+
+    await act(async () => { save()!.props.onClick?.(); });
+    await flush();
+    assert.equal(attempts, 2, "the second press retried the write");
+    assert.equal(calls.filter((call) => call.method === "PATCH").length, 2);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
