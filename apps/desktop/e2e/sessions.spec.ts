@@ -246,12 +246,10 @@ test("a run's replayed record cannot undo a newer name", async ({ page }) => {
   await expect(page.locator(".task-head-title")).toHaveText("钙钛矿带隙");
   await expect(page.locator(".side-session-name", { hasText: "钙钛矿带隙" })).toBeVisible();
 
-  // The composer's permission row reads the same record: the replay carried the
-  // older 完全访问 with the older name, and neither may land.
-  await page.getByRole("button", { name: "会话设置" }).click();
-  await expect(
-    page.getByRole("button", { name: /权限模式/u }).locator(".session-menu-value"),
-  ).toHaveText("询问");
+  // The composer's permission control reads the same record: the replay carried
+  // the older 完全访问 with the older name, and neither may land. The control is
+  // its own button since #1204 — 会话设置 no longer carries a row for it.
+  await expect(page.locator(".composer-permission")).toHaveText("请求批准");
 });
 
 test("a draft left in one Project is not carried to the next", async ({ page }) => {

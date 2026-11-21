@@ -81,18 +81,11 @@ function render(
 
 /** 会话设置's rows are rendered directly, since the menu they belong to is
  *  only mounted while open. */
-function settingsMenu(
-  approvalMode?: "ask_for_dangerous" | "always_allow",
-  running = false,
-  evolve = false,
-): string {
+function settingsMenu(evolve = false): string {
   return renderToStaticMarkup(
     <SessionSettingsMenu
-      approvalMode={approvalMode}
-      onApprovalMode={() => {}}
       onClose={() => {}}
       onEvolve={evolve ? () => {} : undefined}
-      running={running}
     />,
   );
 }
@@ -102,8 +95,8 @@ test("the composer offers the model pill, upload and session settings", () => {
   assert.match(markup, /class="composer-model-pill"/);
   assert.match(markup, /aria-label="上传文件"/);
   assert.match(markup, /aria-label="会话设置"/);
-  // The footer selector is the visible door (#1204) and 会话设置 still lists the
-  // mode; the retired pilot class must not come back alongside them.
+  // The footer selector is the only door to the mode (#1204) now that 会话设置
+  // no longer lists it; the retired pilot class must not come back.
   assert.doesNotMatch(markup, /composer-permission-pill/);
   assert.doesNotMatch(markup, /class="composer-options"/);
   const longName = "Desktop configuration 长模型名称 85fedd8a-9420-47f7-9790-1ece4fd4cfa4";
@@ -153,22 +146,25 @@ test("the files the turn carries sit above the input, and an empty tray takes no
   assert.match(empty, /class="composer"/u);
 });
 
-test("会话设置 carries 权限模式 and 专家, each with its current value", () => {
-  const markup = settingsMenu("ask_for_dangerous");
-  assert.match(markup, />权限模式</);
-  assert.match(markup, />询问</);
+test("会话设置 carries 专家 and leaves 权限模式 to the footer control", () => {
+  const markup = settingsMenu();
   assert.match(markup, />专家</);
   assert.match(markup, />无</);
-  // Both rows open a panel; neither is a dead end.
+  // The mode has its own control beside these settings (#1204); the row here was
+  // the same two choices behind a second door.
+  assert.doesNotMatch(markup, /权限模式/);
+  assert.doesNotMatch(markup, /询问|完全访问/);
+  assert.doesNotMatch(markup, /编辑外部文件和使用互联网时始终询问/);
+  // The row that is left opens a panel; it is not a dead end.
   assert.match(markup, /aria-haspopup="true"/);
   assert.match(markup, /为此对话绑定一位个人专家。/);
 });
 
 test("会话设置 carries the way into program evolution above its own settings", () => {
-  const markup = settingsMenu("ask_for_dangerous", false, true);
+  const markup = settingsMenu(true);
   assert.match(markup, />程序演进实验</);
   // It is an action, not a setting: it has no current value and no flyout.
-  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("权限模式"));
+  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("专家"));
   assert.doesNotMatch(markup, /aria-haspopup="true"[\s\S]*?程序演进实验/);
 
   // Without somewhere to go — a static render — the row is not drawn.
@@ -228,9 +224,7 @@ test("the 专家 row names the bound expert rather than saying 无", () => {
   const markup = renderToStaticMarkup(
     <SessionSettingsMenu
       experts={EXPERTS}
-      onApprovalMode={() => {}}
       onClose={() => {}}
-      running={false}
       selectedSpecialistId="e2"
     />,
   );
@@ -275,13 +269,12 @@ test("the 专家 row is named by its label and value, and its hint is attached",
   assert.doesNotMatch(markup, /role="tooltip"/);
 });
 
-test("the permission row reads the mode the session is in", () => {
-  assert.match(settingsMenu("always_allow"), />完全访问</);
-  assert.match(settingsMenu("ask_for_dangerous"), />询问</);
-});
-
 test("permission cannot be switched mid-run", () => {
-  assert.match(settingsMenu(undefined, true), /<button[^>]*aria-expanded="false"[^>]*disabled=""/);
+  // The footer control is the only door now, so it is the one that has to lock:
+  // a policy change mid-run would land on a turn already running under the old
+  // one.
+  const markup = render(true);
+  assert.match(markup, /<button[^>]*class="composer-permission[^"]*"[^>]*disabled=""/);
 });
 
 test("the landing arrangement carries the project and the approval mode under the card", () => {
@@ -602,9 +595,4 @@ test("with no mode chosen neither permission option claims to be the choice", ()
   const markup = renderToStaticMarkup(<PermissionFlyout onApprovalMode={() => {}} onClose={() => {}} />);
   assert.equal(markup.split("is-selected").length - 1, 0, "no row is marked");
   assert.equal(markup.split("session-flyout-check").length - 1, 0, "no tick is drawn");
-});
-
-test("the settings row names the mode, asking when none is set", () => {
-  assert.match(settingsMenu(undefined), />询问</);
-  assert.match(settingsMenu("always_allow"), />完全访问</);
 });
