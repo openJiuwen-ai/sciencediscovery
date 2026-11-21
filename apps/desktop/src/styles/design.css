@@ -5425,3 +5425,50 @@ body.is-resizing {
 /* An archived Session says so where the reader is about to type, not only on the
    会话管理 page they may have left. */
 .session-archived-banner { margin:0; padding:8px 16px; border-top:1px solid var(--border); background:rgba(127,127,127,0.08); color:var(--muted); font-size:12px; line-height:18px; }
+
+/* The sidebar's search field and its results. The route matches names and
+   titles, not message bodies, so the field's copy says what it does. */
+.side-search { padding: 0 10px 6px; }
+.side-search-field {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+}
+.side-search-results { max-height: 46vh; overflow-y: auto; padding: 0 10px 8px; }
+.side-search-group + .side-search-group { margin-top: 8px; }
+.side-search-heading {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.side-search-hit {
+  display: block;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.side-search-hit:hover { background: rgba(127, 127, 127, 0.12); }
+.side-search-hit-label { display: block; font-size: 12px; line-height: 18px; }
+.side-search-hit-detail { display: block; color: var(--muted); font-size: 11px; line-height: 16px; }
+.side-search-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.side-search-note { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 16px; }
+.side-search-note.is-error { color: var(--danger, #d4380d); }
