@@ -1400,7 +1400,7 @@ export const ZH = {
         description: "描述",
         descriptionPlaceholder: "显示在列表中的简短描述",
         instructions: "指令",
-        instructionsHint: "这些指令会附加在应用的基础提示词之后。",
+        instructionsHint: "定义专家的角色与工作方式，工具和权限仍遵循平台规则。",
         instructionsPlaceholder: "例如：检查缺失值，并说明每项异常的判断依据。",
         runtime: "运行时",
         runtimeHint: "外部运行时使用对应的命令行智能体。",

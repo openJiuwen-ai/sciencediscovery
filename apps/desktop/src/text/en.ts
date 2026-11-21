@@ -1380,7 +1380,7 @@ export const EN: Text = {
         description: "Description",
         descriptionPlaceholder: "A short description shown in lists",
         instructions: "Instructions",
-        instructionsHint: "These instructions are appended to the application's base prompt.",
+        instructionsHint: "Define this specialist's role and workflow. Platform tool and permission rules still apply.",
         instructionsPlaceholder: "For example, flag missing values and explain each anomaly.",
         runtime: "Runtime",
         runtimeHint: "An external runtime uses the matching command-line agent.",
