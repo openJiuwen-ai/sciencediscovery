@@ -29,7 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
-import { membershipAfterRead, readSessionFilter, sessionsOfProject, writeSessionFilter } from "./session-filter.js";
+import { forgetProject, membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -1853,10 +1853,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** The same for a Project, which reaches Sessions the current filter hides: the
    *  cached outputs carry the Project, the listing does not. */
   const forgetProjectArtifacts = useCallback((projectId: string) => {
-    for (const sessionId of sessionsOfProject(artifactsBySession.current, projectId)) {
-      delete artifactsBySession.current[sessionId];
-      membershipRef.current?.delete(sessionId);
-    }
+    const sweep = forgetProject(artifactsBySession.current, membershipRef.current, projectId);
+    for (const sessionId of sweep.removed) delete artifactsBySession.current[sessionId];
+    if (sweep.membership !== undefined) membershipRef.current = sweep.membership;
     publishArtifacts();
   }, [publishArtifacts]);
 
