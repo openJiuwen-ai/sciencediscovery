@@ -288,6 +288,45 @@ test("run snapshots preserve explicit effort for an unknown DeepSeek gateway", a
 });
 
 
+test("a Session's Idea Tree override is exactly what its next run freezes", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `idea-tree-override-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const project = await store.createProject("Idea tree override");
+  const session = await store.createSession(project.id, "Idea tree override", model.id);
+
+  // No override: the run gets the global settings, which is what every Session had before.
+  const global = store.getIdeaTreeSettings();
+  assert.deepEqual(computeSettingsSnapshot(store, session.id).ideaTreeSettings, global);
+
+  await store.updateSession(session.id, { ideaTreeOverride: { maxDepth: 3, scoreDirection: "minimize" } });
+  const overridden = computeSettingsSnapshot(store, session.id).ideaTreeSettings;
+  assert.equal(overridden?.maxDepth, 3);
+  assert.equal(overridden?.scoreDirection, "minimize");
+  // The fields the Session did not override keep coming from the global settings.
+  assert.equal(overridden?.templateId, global.templateId);
+  assert.equal(overridden?.maxNodes, global.maxNodes);
+
+  // A later global change reaches the inherited field, never the overridden one.
+  await store.updateIdeaTreeSettings({ maxNodes: 42 });
+  const afterGlobal = computeSettingsSnapshot(store, session.id).ideaTreeSettings;
+  assert.equal(afterGlobal?.maxNodes, 42);
+  assert.equal(afterGlobal?.maxDepth, 3);
+
+  // Another Session in the same project sees the global value, not this one's override.
+  const sibling = await store.createSession(project.id, "Sibling", model.id);
+  assert.equal(computeSettingsSnapshot(store, sibling.id).ideaTreeSettings?.maxDepth, global.maxDepth);
+  assert.equal(computeSettingsSnapshot(store, sibling.id).ideaTreeSettings?.maxNodes, 42);
+});
+
 test("computeSettingsSnapshot rejects a session whose effective model was deleted", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-missing-model-${Date.now()}-${process.pid}`);

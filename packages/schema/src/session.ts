@@ -28,7 +28,7 @@ import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef, ReviewerSkipReason } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SessionReviewerSpecialistSettings, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, IdeaTreeSettingsOverride, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SessionReviewerSpecialistSettings, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -613,6 +613,9 @@ export interface UpdateSessionRequest {
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
+  /** Idea Tree parameters overridden for this Session only; the fields left out
+   *  keep the global value. */
+  ideaTreeOverride?: IdeaTreeSettingsOverride;
   modelId?: string;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";

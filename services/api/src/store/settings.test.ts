@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_IDEA_TREE_SETTINGS, DEFAULT_WEB_SETTINGS, DEFAULT_SYSTEM_QUOTA_SETTINGS } from "@sciencediscovery/schema";
 
-import { normalizeIdeaTreeSettings, resolveIdeaTreeSettings, normalizeWebSettings, normalizeQuotaSettings, resolveQuotaSettings } from "./settings.js";
+import { normalizeIdeaTreeOverride, normalizeIdeaTreeSettings, resolveIdeaTreeSettings, normalizeWebSettings, normalizeQuotaSettings, resolveQuotaSettings } from "./settings.js";
 
 test("subagent concurrency quota validates input and survives catalog normalization", () => {
   for (const value of [0, -1, 11, 1.5, "2", null]) {
@@ -112,6 +112,21 @@ test("an unknown free search engine is tagged as client input so the route answe
 });
 
 
+
+test("the Idea Tree override accepts only the five exposed fields, within their ranges", () => {
+  assert.deepEqual(
+    normalizeIdeaTreeOverride({ maxDepth: 3, maxNodes: 20, scoreDirection: "minimize" }, true),
+    { maxDepth: 3, maxNodes: 20, scoreDirection: "minimize" },
+  );
+  // Out of range or unknown fields are rejected in strict mode, so a typo cannot
+  // silently leave the global value in place.
+  for (const bad of [{ maxDepth: 0 }, { maxDepth: 21 }, { maxNodes: 1 }, { maxNodes: 10_001 }, { maxTokensPerCall: 4096 }, { templateId: "nope" }]) {
+    assert.throws(() => normalizeIdeaTreeOverride(bad as never, true), /ideaTreeOverride/);
+  }
+  // A permissive read drops what it cannot use instead of failing the load.
+  assert.equal(normalizeIdeaTreeOverride({ maxDepth: 0, maxTokensPerCall: 1 }, false), undefined);
+  assert.equal(normalizeIdeaTreeOverride(undefined, true), undefined);
+});
 test("Idea Tree settings reject template-owned fields and discard their legacy catalog values", () => {
   const updated = normalizeIdeaTreeSettings({templateId: "water-treatment-materials/v1", explorationIntensity: "deep", maxTokens: 120000}, DEFAULT_IDEA_TREE_SETTINGS);
   const restored = resolveIdeaTreeSettings(JSON.parse(JSON.stringify(updated)));
