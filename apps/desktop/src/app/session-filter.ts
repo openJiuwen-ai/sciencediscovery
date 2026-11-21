@@ -14,7 +14,7 @@
 
 import type { SessionListState } from "../api/types.js";
 
-/** Where the sidebar's 活动 / 已归档 / 全部 choice is kept. The list default is
+/** Where the sidebar's 活跃 / 已归档 / 全部 choice is kept. The list default is
  *  `active`, so a Session archived elsewhere is invisible until the user asks
  *  for it; the choice has to outlive a reload or the archived rows they just
  *  found disappear again. */

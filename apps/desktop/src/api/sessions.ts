@@ -264,7 +264,7 @@ export function deleteSession(client: ApiClient, sessionId: string): Promise<{ d
   });
 }
 
-/** Reversible: the Session stops appearing in 活动 and becomes read-only. The
+/** Reversible: the Session stops appearing in 活跃 and becomes read-only. The
  *  service answers with the Session as stored, which is what the row shows. */
 export function archiveSession(client: ApiClient, sessionId: string): Promise<Session> {
   return client.request<Session>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, {
@@ -273,7 +273,7 @@ export function archiveSession(client: ApiClient, sessionId: string): Promise<Se
 }
 
 /** The inverse of {@link archiveSession}; the service answers with the restored
- *  Session so the row can move back into 活动 without a second read. */
+ *  Session so the row can move back into 活跃 without a second read. */
 export function restoreSession(client: ApiClient, sessionId: string): Promise<Session> {
   return client.request<Session>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {
     method: "POST",
