@@ -186,6 +186,7 @@ export const EN: Text = {
     loading: "Reading…",
     savedSession: "This conversation will use these settings",
     savedGlobal: "Written to the global settings",
+    unchanged: "Nothing was changed here, so the global settings are untouched.",
     noSession: "Open a conversation to change the settings for it alone.",
   },
 

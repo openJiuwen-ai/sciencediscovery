@@ -97,11 +97,17 @@ export function IdeaTreeOverrideDialog({
   sessionId?: string;
 }) {
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
-  /** The deployment values: what each field falls back to. */
+  /** The deployment values: what each field falls back to, and what a Session
+   *  override is measured against. */
   const [inherited, setInherited] = useState<IdeaTreeSettingsDetails>();
+  /** The values the card opened with — global plus this Session's pins. The
+   *  global write is measured against these, so opening a pinned Session and
+   *  pressing 覆盖全局设置 without editing cannot write the pin into the
+   *  deployment. */
+  const [opened, setOpened] = useState<IdeaTreeSettingsDetails>();
   /** Whether this Session pins anything today, which is what 跟随全局 can undo. */
   const [hasOverride, setHasOverride] = useState(false);
-  const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "failed">("loading");
+  const [status, setStatus] = useState<"loading" | "idle" | "saving" | "session" | "global" | "unchanged" | "failed">("loading");
   const [failure, setFailure] = useState<string>();
 
   useEffect(() => {
@@ -116,7 +122,9 @@ export function IdeaTreeOverrideDialog({
       .then(([value, session]: [IdeaTreeSettingsDetails, RuntimeSettingsDetails | undefined]) => {
         if (cancelled) return;
         const pinned = session?.overrides?.ideaTreeOverride ?? {};
-        setDraft({ ...value, ...pinned });
+        const start = { ...value, ...pinned };
+        setDraft(start);
+        setOpened(start);
         setInherited(value);
         setHasOverride(Object.keys(pinned).length > 0);
         setStatus("idle");
@@ -179,9 +187,17 @@ export function IdeaTreeOverrideDialog({
     if (!draft) return;
     setStatus("saving");
     setFailure(undefined);
+    // Only what this card was used to change. The diff against `inherited`
+    // would carry a Session's pins into the deployment as soon as one exists.
+    const changed = overrideOf(draft, opened ?? draft);
+    const tokensChanged = (draft.maxTokens ?? null) !== (opened?.maxTokens ?? null);
+    if (Object.keys(changed).length === 0 && !tokensChanged) {
+      setStatus("unchanged");
+      return;
+    }
     const body: UpdateIdeaTreeSettingsRequest = {
-      ...overrideOf(draft, inherited ?? draft),
-      maxTokens: draft.maxTokens ?? null,
+      ...changed,
+      ...(tokensChanged ? { maxTokens: draft.maxTokens ?? null } : {}),
     };
     try {
       // Both sides of the diff move: a later Session save would otherwise pin a
@@ -190,6 +206,7 @@ export function IdeaTreeOverrideDialog({
       const next = await updateIdeaTreeSettings(client, body);
       setDraft(next);
       setInherited(next);
+      setOpened(next);
       setStatus("global");
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : String(reason));
@@ -292,6 +309,7 @@ export function IdeaTreeOverrideDialog({
           {failure === undefined ? null : <p className="evolve-create-blocked" role="alert">{failure}</p>}
           {status === "session" ? <p className="evolve-create-confirm-hint" role="status">{t.savedSession}</p> : null}
           {status === "global" ? <p className="evolve-create-confirm-hint" role="status">{t.savedGlobal}</p> : null}
+          {status === "unchanged" ? <p className="evolve-create-confirm-hint" role="status">{t.unchanged}</p> : null}
 
           <div className="modal-footer">
             <button className="evolve-create-cancel" onClick={onClose} type="button">{t.cancel}</button>

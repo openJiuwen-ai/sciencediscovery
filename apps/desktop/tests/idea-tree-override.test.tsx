@@ -138,10 +138,14 @@ test("following the global settings clears the override", async () => {
   }
 });
 
-test("overwriting the global settings writes them and touches no Session", async () => {
+test("overwriting the global settings writes the edit and touches no Session", async () => {
   const { calls, client } = stubClient();
   const { view } = await mount(client, "s1");
   try {
+    const nodes = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大节点数");
+    await act(async () => { nodes!.props.onChange?.({ target: { value: "120" } }); });
     await act(async () => { click(view, "覆盖全局设置"); });
     await flush();
     assert.equal(calls.filter((call) => call.method === "PATCH").length, 0, "no session write");
@@ -149,8 +153,8 @@ test("overwriting the global settings writes them and touches no Session", async
     assert.ok(put, "the global settings are written");
     assert.equal(put!.path, "/api/settings/idea-tree");
     const body = put!.body as Record<string, unknown>;
-    // `maxTokens` (the per-research budget) still travels; the per-call cap is gone.
-    assert.equal(body.maxTokens, null);
+    assert.equal(body.maxNodes, 120);
+    // The per-call cap left with #1281 and must not come back through this card.
     assert.equal("maxTokensPerCall" in body, false);
   } finally {
     await act(async () => { view.unmount(); });
@@ -271,6 +275,47 @@ test("a global write rebases the diff, so nothing is pinned at the value it inhe
       [],
     );
   } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("opening a pinned Session and overwriting the global settings writes nothing", async () => {
+  // Deployment 5, this Session pinned at 3. The card opens on 3 because that is
+  // what the Session runs with; pressing 覆盖全局设置 without editing must not
+  // carry that pin into the deployment.
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const { calls, client } = stubClient();
+  const { markup, view } = await mount(client, "s1");
+  try {
+    assert.match(markup(), /"value":3/, "the card opens on the pinned value");
+    await act(async () => { click(view, "覆盖全局设置"); });
+    await flush();
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 0,
+      "an untouched card writes nothing to the deployment");
+    assert.match(markup(), /没有需要写入全局的改动/);
+  } finally {
+    SESSION_OVERRIDES = {};
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("an edited field is the only one the global write carries", async () => {
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const { calls, client } = stubClient();
+  const { view } = await mount(client, "s1");
+  try {
+    const nodes = (view.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onChange?: (event: { target: { value: string } }) => void } }[] })
+      .findAllByType("input")
+      .find((node) => node.props["aria-label"] === "最大节点数");
+    await act(async () => { nodes!.props.onChange?.({ target: { value: "120" } }); });
+    await act(async () => { click(view, "覆盖全局设置"); });
+    await flush();
+    const put = calls.find((call) => call.method === "PUT");
+    assert.ok(put, "the edit is written");
+    // Only the field that was edited: the Session's maxDepth pin stays a pin.
+    assert.deepEqual(put!.body, { maxNodes: 120 });
+  } finally {
+    SESSION_OVERRIDES = {};
     await act(async () => { view.unmount(); });
   }
 });
