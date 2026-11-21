@@ -13,6 +13,7 @@ import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
 import { exportPollStep } from "./research-package-poll.js";
+import { omissionRows } from "./research-package-omissions.js";
 import "../styles/research-package.css";
 
 export interface PackageRequest {
@@ -90,6 +91,14 @@ export function taskErrorMessage(error?: string): string | undefined {
   return [t.exportMissing, t.exportPollingFailed, t.taskMissing, t.taskExpired, t.taskRestarted, t.failed, t.legacyUnavailable]
     .includes(trimmed) ? trimmed : undefined;
 }
+
+/**
+ * Every omission the manifest carries is shown; `research-package-omissions.ts`
+ * turns each entry into a row: the package's own text verbatim, with only the
+ * dialog's family name beside it. The count the card prints is `items.length`,
+ * never the number of rows that happen to be pretty: a package whose entries are
+ * all reference-shaped must not read as complete.
+ */
 
 export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
   const t = TEXT.researchPackage;
@@ -477,6 +486,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const overLimitAcknowledged = limitKey !== undefined && acknowledgedLimitKey === limitKey;
   const blockedByLimit = overLimit && !overLimitAcknowledged;
   const formatLimit = (bytes: number) => formatBytes(bytes);
+  // Every manifest entry becomes a row, and the summary counts all of them: a
+  // package whose entries are all reference-shaped must not read as complete.
+  const importOmissions = inspection
+    ? omissionRows(inspection.manifest.omissions, t.omissionText)
+    : [];
   return <>
     {readOnly ? <div className="research-package-resume"><div><strong>{t.readOnlyTitle}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <div className="research-package-source">{t.contextFrom} <button aria-label={t.source} onClick={() => onOpen(branch.sourceSessionId)} type="button">{sourceTitle ?? t.source}</button></div> : null}
@@ -546,7 +560,21 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
                 <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
                 <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
               </div>
-              {inspection ? <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p> : null}
+              {inspection ? <>
+                <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
+                {/* The package's own omissions, from `inspection.manifest.omissions`
+                    — never a fixed list, and never a subset: every entry is a row and
+                    the count is its length. A row's id, path and reason are the
+                    package's own text; the count line, the family name, the hover hint,
+                    the not-readable marker and the placeholder for an entry that cannot
+                    be described are the dialog's words. The list starts collapsed — the
+                    count is the useful part, the rows are one click away. */}
+                {importOmissions.length > 0 ? <details className="research-import-omissions">
+                  <summary>{t.importOmissions(importOmissions.length)}</summary>
+                  <ul className="research-import-omissions-list">{importOmissions.map((row) => <li key={row.key} title={row.hint}>{row.label}</li>)}</ul>
+                </details> : <p className="research-import-omissions is-empty">{t.importOmissions(0)}</p>}
+              </> : null}
+
             </div>
           ) : (
             <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
