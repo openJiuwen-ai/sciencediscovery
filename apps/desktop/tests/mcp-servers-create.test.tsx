@@ -45,6 +45,7 @@ function fakeClient(options: {
   createError?: string;
   importError?: string;
   servers?: unknown[];
+  testServer?: Record<string, unknown>;
 } = {}) {
   const calls: Call[] = [];
   let imported = 0;
@@ -61,7 +62,7 @@ function fakeClient(options: {
         return server({ name: "Files" });
       }
       if (method === "PUT" && path === `/api/mcp/servers/${SERVER_ID}`) return server();
-      if (path.endsWith("/test")) return server({ tools: [{ annotations: {}, description: "Read a file", inputSchema: {}, name: "read_file", schemaHash: "h" }] });
+      if (path.endsWith("/test")) return server({ tools: [{ annotations: {}, description: "Read a file", inputSchema: {}, name: "read_file", schemaHash: "h" }], ...options.testServer });
       if (path === "/api/mcp/servers/import") {
         imported += 1;
         if (options.importError !== undefined && imported > 1) throw new Error(options.importError);
@@ -79,10 +80,10 @@ async function flush(times = 12): Promise<void> {
   for (let index = 0; index < times; index += 1) await Promise.resolve();
 }
 
-async function mount(client: ApiClient): Promise<ReactTestRenderer> {
+async function mount(client: ApiClient, onToast: React.ComponentProps<typeof McpServers>["onToast"] = () => {}): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(React.createElement(McpServers, { client, onConfirm: () => {}, onToast: () => {} }));
+    renderer = create(React.createElement(McpServers, { client, onConfirm: () => {}, onToast }));
   });
   await act(async () => { await flush(); });
   return renderer;
@@ -338,6 +339,20 @@ test("the import preview reads the transport the way the route does", async () =
   assert.ok(rows.some((row) => row.includes("both") && row.includes("http · https://mcp.test/b")), "url wins over command, as the route decides");
   assert.ok(rows.some((row) => row.includes("sse") && row.includes("sse · https://mcp.test/c")), JSON.stringify(rows));
   renderer.unmount();
+});
+
+test("testing a disabled OAuth server awaiting consent does not report success", async () => {
+  const authorization = { state: "required" };
+  const api = fakeClient({
+    servers: [server({ enabled: false, status: "disabled", authorization })],
+    testServer: { enabled: false, status: "disabled", authorization, tools: [] },
+  });
+  const toasts: Array<{ message: string; tone?: string }> = [];
+  const renderer = await mount(api, (message, tone) => { toasts.push({ message, tone }); });
+  await act(async () => { button(renderer.root, t.test).props.onClick(); await flush(); });
+  assert.deepEqual(toasts, [{ message: t.unauthorized, tone: "error" }]);
+  assert.equal(api.calls.filter((call) => call.path.endsWith("/test")).length, 1);
+  await act(async () => renderer.unmount());
 });
 
 test("new MCP defaults are disabled HTTP with 60 seconds and cancel resets input", async () => {
