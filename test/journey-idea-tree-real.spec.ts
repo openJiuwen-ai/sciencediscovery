@@ -24,7 +24,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
    * CostSideEffects: Billable model calls; temporary project and model are deleted and settings restored.
    */
   test("real Idea Tree research completes and survives reload", { tag: "@real" }, async ({ page, journey }, testInfo) => {
-    test.setTimeout(540_000);
+    test.setTimeout(900_000);
     journey.scenario({ goal: "Explore a small materials research question and retrieve the result after reload", preconditions: ["Isolated stack and live model credentials"] });
     const real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     await requireRealStack(testInfo);
@@ -51,7 +51,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
       };
       let researchId: string;
       await journey.step("Inspect completed research", "At least one candidate has a score and insight", async () => {
-        await expect.poll(async () => (await read())[0]?.research.status, { timeout: 350_000 }).toBe("completed");
+        await expect.poll(async () => (await read())[0]?.research.status, { timeout: 720_000 }).toBe("completed");
         const [{ graph, research }] = await read();
         researchId = research.id;
         const candidates = graph.nodes.filter((node: any) => node.kind === "candidate");
