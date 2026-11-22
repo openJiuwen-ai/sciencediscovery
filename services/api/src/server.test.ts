@@ -7996,6 +7996,7 @@ test("model registry persists multiple profiles and assigns them per session", a
   assert.equal(missingTokenRun.status, 200);
   const missingTokenStream = await missingTokenRun.text();
   assert.match(missingTokenStream, /"type":"run.failed"/);
+  assert.match(missingTokenStream, /"errorCode":"model-credential-missing"/);
   assert.match(missingTokenStream, /saved API token/);
   const unchanged = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${review.body.id}`, { headers: authorization });
   assert.equal(unchanged.body.messages.length, 0);

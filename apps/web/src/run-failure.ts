@@ -21,6 +21,7 @@ import { translateActive } from "./i18n/index.js";
 const FAILURE_MESSAGE_KEYS: Record<RunFailureCode, MessageKey> = {
   SESSION_MODEL_UNAVAILABLE: "composer.modelUnavailable",
   "invalid-tool-call": "runFailure.invalid-tool-call",
+  "model-credential-missing": "runFailure.model-credential-missing",
   "rate-limited": "runFailure.rate-limited",
   "semantic-error": "runFailure.semantic-error",
   "server-error": "runFailure.server-error",

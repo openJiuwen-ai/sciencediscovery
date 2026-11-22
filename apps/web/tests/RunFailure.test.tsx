@@ -43,10 +43,24 @@ test("the Chinese locale renders the plain cause in Chinese", () => {
 });
 
 test("every stable failure class has a zh-CN message", () => {
-  for (const code of ["invalid-tool-call", "rate-limited", "semantic-error", "server-error", "timeout", "transport-error", "unauthorized"] as const) {
+  for (const code of ["invalid-tool-call", "model-credential-missing", "rate-limited", "semantic-error", "server-error", "timeout", "transport-error", "unauthorized"] as const) {
     const key = `runFailure.${code}` as const;
     assert.ok(zhCN[key], `${key} needs a zh-CN message`);
   }
+});
+
+test("a model without a saved API key points at the model settings", () => {
+  setActiveLocale("en");
+  assert.match(
+    formatRunFailure("model-credential-missing"),
+    /no saved API key, so the run cannot start\. Add one in Settings › Models/,
+  );
+  setActiveLocale("zh-CN");
+  assert.match(
+    formatRunFailure("model-credential-missing"),
+    /没有保存 API Key，运行无法开始。到 设置 › 模型 补上后重试。/,
+  );
+  setActiveLocale("en");
 });
 
 test("missing and future failure classes have localized recovery guidance", () => {

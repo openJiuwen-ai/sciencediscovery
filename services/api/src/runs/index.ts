@@ -882,7 +882,7 @@ async function executeAgentRun(
   }
   const apiToken = store.getModelApiToken(selectedModel.id);
   if (!apiToken && !store.modelAllowsMissingToken(selectedModel)) {
-    throw new ApiStatusError(400, "The selected model does not have a saved API token");
+    throw new ApiStatusError(400, "The selected model does not have a saved API token", "model-credential-missing");
   }
   if (cancelledRuns.has(runId) || requestAbortController.signal.aborted) {
     await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });

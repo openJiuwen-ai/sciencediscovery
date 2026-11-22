@@ -578,6 +578,7 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
 export type RunFailureCode =
   | "SESSION_MODEL_UNAVAILABLE"
   | "invalid-tool-call"
+  | "model-credential-missing"
   | "rate-limited"
   | "semantic-error"
   | "server-error"

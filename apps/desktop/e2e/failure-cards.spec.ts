@@ -213,3 +213,115 @@ for (const kind of ["runner_exec", "kernel_idle", undefined] as const) {
     }
   });
 }
+
+test("a model without a saved API key is explained in both languages", async ({ page, journey }) => {
+  const raw = "The selected model does not have a saved API token";
+  let turn = 0;
+  const session = makeSession({ title: "缺少密钥的模型" });
+  const runs: ReplayRecord[] = [];
+  const mock = await installMockApi(page, { sessions: [session], runsBySession: { [session.id]: runs } });
+  await page.addInitScript(({ key, token }) => {
+    localStorage.setItem(key, token);
+    if (localStorage.getItem("sciencediscovery-desktop:locale") === null) {
+      localStorage.setItem("sciencediscovery-desktop:locale", "zh-CN");
+    }
+  }, { key: TOKEN_STORAGE_KEY, token: randomUUID() });
+
+  // The Session view also reads the configuration queue and the Idea Tree
+  // list and graph; without these the mock's loud 404 would sit in the
+  // evidence frame.
+  await page.route(`**/api/sessions/${session.id}/configuration-requests`, route => route.fulfill({
+    body: JSON.stringify({ items: [] }), contentType: "application/json", status: 200,
+  }));
+  await page.route(`**/api/sessions/${session.id}/idea-tree/research`, route => route.fulfill({
+    body: JSON.stringify({ items: [] }), contentType: "application/json", status: 200,
+  }));
+  await page.route(`**/api/sessions/${session.id}/idea-tree/graph*`, route => route.fulfill({
+    body: JSON.stringify({ graph: null, hasIdeaTreeRun: false, treeIds: [] }), contentType: "application/json", status: 200,
+  }));
+
+  // The selected model has no saved API key, so the backend fails the run
+  // before it reaches any provider. The SSE frame carries the stable code and
+  // the original English sentence, which is what 技术详情 must keep.
+  await page.route(`**/api/sessions/${session.id}/messages`, async route => {
+    turn++;
+    const { content } = route.request().postDataJSON() as { content: string };
+    const user = { id: `user-${turn}`, role: "user", content, createdAt: CREATED_AT };
+    const run = {
+      id: `run-${turn}`, sessionId: session.id, userMessageId: user.id,
+      createdAt: CREATED_AT, finishedAt: CREATED_AT, prompt: content, queueOrder: turn, status: "failed",
+    };
+    const events = [
+      { run: { ...run, status: "running" }, type: "run.queued" },
+      { model: { name: "Qwen Max" }, runId: run.id, settings: {}, type: "run.started" },
+      { error: raw, errorCode: "model-credential-missing", type: "run.failed" },
+      { run, status: run.status, type: "run.status" },
+    ];
+    const stored = mock.state.sessions[0];
+    if (!stored) throw new Error("Mock Session is missing");
+    stored.messages = [...(stored.messages ?? []), user];
+    runs.push({ run, events });
+    await route.fulfill({
+      body: events.map((event, index) => `id: ${index + 1}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+      contentType: "text/event-stream", status: 200,
+    });
+  });
+
+  const cards = page.locator(".run-failure");
+  const openSession = async () => {
+    await page.goto("/");
+    const project = page.locator(".side-project-toggle").filter({ hasText: "默认项目" });
+    await expect(project).toBeVisible();
+    if (await project.getAttribute("aria-expanded") === "false") await project.click();
+    const group = page.locator(".side-project").filter({ has: project }).locator("..");
+    await group.locator(".side-session").filter({ hasText: session.title }).click();
+    await expect(page.locator("#composer-textarea")).toBeEnabled();
+  };
+
+  journey.scenario({
+    goal: "模型没有保存 API Key 时，用户能直接读懂失败原因和修复入口，原始诊断仍可按需展开。",
+    preconditions: ["Desktop Vite 页面", "每页独立的内存 API/SSE mock，无真实后端或模型", "模型注册表里没有保存 API Key"],
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSession();
+
+  await journey.step("中文界面读懂缺少 API Key 的失败", "卡片标题和正文用中文说明模型没有保存 API Key，并指出到 设置 › 模型 补上；原始诊断默认折叠。", async () => {
+    await page.locator("#composer-textarea").fill("Summarize the last experiment");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(cards).toHaveCount(1);
+    await expect(cards.locator("h3")).toHaveText("模型还没有配置 API Key");
+    await expect(cards.locator(".run-failure-summary")).toHaveText(
+      "这个模型在设置里没有保存 API Key，运行无法开始。到 设置 › 模型 补上后重试。",
+    );
+    await expect(cards.locator("pre")).toBeHidden();
+    const summaryBox = await cards.locator(".run-failure-summary").boundingBox();
+    const detailsBox = await cards.locator(".run-failure-details").boundingBox();
+    if (!summaryBox || !detailsBox) throw new Error("Failure card has no visible bounds");
+    expect(summaryBox.y + summaryBox.height).toBeLessThanOrEqual(detailsBox.y);
+  });
+
+  await journey.step("展开中文技术详情核对原始诊断", "展开后显示稳定失败码 model-credential-missing 和模型服务返回的原始英文句子。", async () => {
+    await cards.locator("summary").click();
+    await expect(cards.locator("pre")).toBeVisible();
+    await expect(cards.locator("pre")).toHaveText(raw);
+    await expect(cards.locator(".run-failure-code")).toHaveText("model-credential-missing");
+  });
+
+  await journey.step("英文界面重放同一失败", "切换界面语言并重新打开会话后，同一历史失败卡片用英文说明原因和设置入口，技术详情仍然折叠。", async () => {
+    await page.evaluate(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+    await openSession();
+    await expect(cards).toHaveCount(1);
+    await expect(cards.locator("h3")).toHaveText("Model has no API key");
+    await expect(cards.locator(".run-failure-summary")).toHaveText(
+      "This model has no saved API key, so the run cannot start. Add one in Settings › Models and try again.",
+    );
+    await expect(cards.locator("pre")).toBeHidden();
+  });
+
+  await journey.step("展开英文技术详情核对原始诊断", "英文界面展开后同样保留原始失败码和模型服务返回的原句。", async () => {
+    await cards.locator("summary").click();
+    await expect(cards.locator("pre")).toBeVisible();
+    await expect(cards.locator("pre")).toHaveText(raw);
+    await expect(cards.locator(".run-failure-code")).toHaveText("model-credential-missing");
+  });
+});
