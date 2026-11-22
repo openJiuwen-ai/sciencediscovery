@@ -60,6 +60,7 @@ function fakeClient(options: {
         if (options.createError !== undefined) throw new Error(options.createError);
         return server({ name: "Files" });
       }
+      if (method === "PUT" && path === `/api/mcp/servers/${SERVER_ID}`) return server();
       if (path.endsWith("/test")) return server({ tools: [{ annotations: {}, description: "Read a file", inputSchema: {}, name: "read_file", schemaHash: "h" }] });
       if (path === "/api/mcp/servers/import") {
         imported += 1;
@@ -109,7 +110,7 @@ test("添加服务器 opens an empty form and posts without an id, then names th
 
   const name = textInputs(renderer.root)[0]!;
   await act(async () => { name.props.onChange({ target: { value: "Files" } }); });
-  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
   await act(async () => { await flush(); });
 
   const posts = api.calls.filter((call) => call.method === "POST" && call.path === "/api/mcp/servers");
@@ -129,7 +130,7 @@ test("a refused create keeps the form open with the reason", async () => {
   await act(async () => { await flush(); });
   const name = textInputs(renderer.root)[0]!;
   await act(async () => { name.props.onChange({ target: { value: "Files" } }); });
-  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
   await act(async () => { await flush(); });
 
   const markup = JSON.stringify(renderer.toJSON());
@@ -198,7 +199,7 @@ test("Edit after a create opens the record's own fields, not the creation result
   await act(async () => { await flush(); });
   const name = textInputs(renderer.root)[0]!;
   await act(async () => { name.props.onChange({ target: { value: "Files" } }); });
-  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
   await act(async () => { await flush(); });
   assert.match(JSON.stringify(renderer.toJSON()), /read_file/, "the creation result is on screen");
   await act(async () => { button(renderer.root, t.done).props.onClick(); });
@@ -253,7 +254,7 @@ test("添加服务器 starts the new server switched off, as import does", async
   await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
   await act(async () => { await flush(); });
   await act(async () => { textInputs(renderer.root)[0]!.props.onChange({ target: { value: "Files" } }); });
-  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
   await act(async () => { await flush(); });
   const post = api.calls.find((call) => call.method === "POST" && call.path === "/api/mcp/servers");
   assert.equal((post!.body as { enabled: boolean }).enabled, false);
@@ -265,7 +266,7 @@ test("saving the create form without a name says so instead of doing nothing", a
   const renderer = await mount(api);
   await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
   await act(async () => { await flush(); });
-  await act(async () => { button(renderer.root, TEXT.settings.system.save).props.onClick(); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
   await act(async () => { await flush(); });
   assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
   assert.match(JSON.stringify(renderer.toJSON()), new RegExp(t.nameRequired));
@@ -337,4 +338,47 @@ test("the import preview reads the transport the way the route does", async () =
   assert.ok(rows.some((row) => row.includes("both") && row.includes("http · https://mcp.test/b")), "url wins over command, as the route decides");
   assert.ok(rows.some((row) => row.includes("sse") && row.includes("sse · https://mcp.test/c")), JSON.stringify(rows));
   renderer.unmount();
+});
+
+test("new MCP defaults are disabled HTTP with 60 seconds and cancel resets input", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  const open = async () => { await act(async () => { button(renderer.root, t.addServer).props.onClick(); }); };
+  await open();
+  const input = (label: string) => renderer.root.findByProps({ "aria-label": label });
+  assert.equal(renderer.root.findByProps({ type: "checkbox" }).props.checked, false);
+  assert.equal(renderer.root.findByProps({ "aria-label": t.transport }).props.value, "http");
+  assert.equal(input(t.timeout).props.value, "60");
+  await act(async () => { input(t.name).props.onChange({ target: { value: "Discard me" } }); });
+  await act(async () => { button(renderer.root, TEXT.settings.cancel).props.onClick(); });
+  assert.equal(renderer.root.findAllByType("form").length, 0);
+  await open();
+  assert.equal(input(t.name).props.value, "");
+  assert.equal(input(t.timeout).props.value, "60");
+  assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
+  await act(async () => renderer.unmount());
+});
+
+test("invalid native form constraints prevent a write", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, t.addServer).props.onClick(); });
+  await act(async () => { renderer.root.findByProps({ "aria-label": t.name }).props.onChange({ target: { value: "Files" } }); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => false } }); });
+  assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
+  assert.equal(renderer.root.findByProps({ "aria-label": t.timeout }).props.max, "600");
+  await act(async () => renderer.unmount());
+});
+
+test("editing another field preserves spaced and empty legacy MCP arguments", async () => {
+  const args = ["/srv/my MCP/echo.mjs", "", "--quiet"];
+  const api = fakeClient({ servers: [server({ args })] });
+  const renderer = await mount(api);
+  await act(async () => { button(renderer.root, TEXT.settings.edit).props.onClick(); });
+  assert.equal(renderer.root.findByProps({ "aria-label": t.args }).props.value, args.join("\n"));
+  await act(async () => { renderer.root.findByProps({ "aria-label": t.name }).props.onChange({ target: { value: "Renamed" } }); });
+  await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: { reportValidity: () => true } }); });
+  const write = api.calls.find((call) => call.method === "PUT");
+  assert.deepEqual((write?.body as { args: string[] }).args, args);
+  await act(async () => renderer.unmount());
 });

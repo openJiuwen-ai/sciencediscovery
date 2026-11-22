@@ -107,12 +107,12 @@ test("creates, edits, calls and deletes a custom MCP server in desktop settings"
     journey.note(`Project: ${active.project.id}; session: ${active.session.id}.`);
     await openSession(page, active);
     const settings = page.getByRole("dialog", { name: "设置", exact: true });
-    const form = page.getByRole("dialog", { name: "新增 MCP 服务器", exact: true });
+    const form = page.getByRole("dialog", { name: "新建服务器", exact: true });
     const card = settings.locator(".settings-card").filter({ hasText: name });
     await journey.step("Open the Add MCP server dialog", "The form defaults to Streamable HTTP, a disabled server, and a 60-second tool timeout.", async () => {
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await settings.getByRole("button", { name: "MCP 服务器", exact: true }).click();
-      await settings.getByRole("button", { name: "新增 MCP 服务器", exact: true }).click();
+      await settings.getByRole("button", { name: "添加服务器", exact: true }).click();
       await expect(form.getByRole("checkbox", { name: "启用服务" })).not.toBeChecked();
       await expect(form.getByLabel("传输方式")).toHaveValue("http");
       await expect(form.getByRole("spinbutton", { name: "超时（秒）" })).toHaveValue("60");
@@ -123,6 +123,7 @@ test("creates, edits, calls and deletes a custom MCP server in desktop settings"
       await form.getByLabel("命令", { exact: true }).fill(process.execPath);
       await form.getByLabel("参数", { exact: true }).fill(fileURLToPath(new URL("../../../test/fixtures/mcp-echo.mjs", import.meta.url)));
       await form.getByRole("button", { name: "保存", exact: true }).click();
+      await form.getByRole("button", { name: "完成", exact: true }).click();
       await expect(form).toBeHidden();
       await expect(card).toBeVisible();
       const server = (await getServers()).find((item) => item.name === name);

@@ -157,7 +157,7 @@ export function SystemSettingsDialog({
           <McpServers
             client={client}
             onConfirm={actions.confirmAction}
-            onToast={(message) => actions.toast(message)}
+            onToast={actions.toast}
           />
         );
       case "specialists":

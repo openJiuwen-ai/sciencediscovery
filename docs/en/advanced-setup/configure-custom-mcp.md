@@ -14,11 +14,11 @@ This guide covers custom MCP management in system settings. Existing built-in so
 
 ## Add and manage a server
 
-1. In the desktop UI, open **Settings → MCP servers** and choose **Add MCP server**. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
+1. In the desktop UI, open **Settings → MCP servers** and choose **Add server**. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
 2. Enter a name and optional description, select a transport, and complete its fields.
 3. Set **Tool timeout (seconds)**. The default is 60, with an allowed integer range of 1-600. This timeout cannot be disabled.
 4. The enable checkbox controls the entire server and is unchecked for a new configuration. Edit the server to change it later. The Web UI also has a toggle in the list.
-5. In the desktop UI, select **Test** on the server card. In the Web UI, expand the server and select **Test connection** to see the discovered tools, descriptions and input schemas. If a test fails, correct the configuration and retry.
+5. In the desktop UI, creation automatically tests the connection and shows the result in the dialog. Choose **Done** to return to the list, or **Test** on a saved server card to retry. In the Web UI, expand the server and select **Test connection** to see the discovered tools, descriptions and input schemas. If a test fails, correct the configuration and retry.
 
 | Transport | Fields |
 |---|---|
