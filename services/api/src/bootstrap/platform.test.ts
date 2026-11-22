@@ -131,3 +131,59 @@ test("Evolve binds the latest user scope to the scored baseline and refuses inco
   assert.match(customScript.refusedBecause ?? "", /cannot tell good from bad/);
   assert.deepEqual(scoredGoal?.scorecard.direction, { editable: ["weight"] });
 });
+
+test("a second create after a succeeded search is refused by name when mode is missing, and starts when it is complete", async context => {
+  // #1318: the first search in the session has finished (`succeeded`), so the
+  // one-search-at-a-time guard lets the second create through. Without a
+  // `mode`, `measureOf()` returned undefined and preflight read
+  // `criterion.measure.kind`, throwing the opaque TypeError the issue reports.
+  const dataDir = await mkdtemp(resolve(tmpdir(), "evolve-platform-second-"));
+  const config = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir });
+  const platform = createPlatformServices(config, repositoryRoot, { mcpTransport: offlineMcpTransport });
+  const { store, evolveAvailability, evolveOrchestrator, evolutionStore } = platform;
+  context.after(async () => {
+    store.close();
+    await rm(dataDir, { force: true, recursive: true });
+  });
+  await store.load();
+  await evolutionStore.initialize();
+  const model = await store.createModel({
+    apiToken: "test-token", baseUrl: "http://127.0.0.1:1/v1", model: "fixture", name: "Fixture",
+  });
+  const project = await store.createProject("Second search");
+  const session = await store.createSession(project.id, "Second search", { modelId: model.id });
+  context.mock.getter(evolveAvailability, "ready", () => true);
+  context.mock.method(evolveAvailability, "connection", async () => config.evolve);
+  context.mock.method(evolveOrchestrator, "sandboxCapability", async () => ({
+    available: true, backend: "bwrap" as const,
+  }));
+  context.mock.method(evolveOrchestrator, "probe", async () => ({
+    baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1,
+  }));
+  context.mock.method(evolveOrchestrator, "start", async () => ({ id: "run-2", status: "running" as const }));
+  const finished = await evolutionStore.createRun({
+    goal: {} as EvolveGoal, id: "run-done", sessionId: session.id,
+  });
+  await evolutionStore.patchRun(finished.id, { status: "succeeded" });
+
+  const runtime = platform.evolveRuntimeFactory({ sessionId: session.id, modelId: model.id, emit: async () => {} });
+  assert.ok(runtime);
+  const proposal: EvolveRunProposal = {
+    statement: "Tune policy", howScored: "Fixture score", mode: "npu_job",
+    startingPointText: '{"weight":1}', editableFields: ["weight"],
+    evaluatorSource: "# SCIENCE_AGENT_SHARDS and SCIENCE_AGENT_RESULT",
+    split: { gateShards: 8, rolloutShards: 4, seed: 0, shardRows: 20, testShards: 2, trainRows: null },
+    expansions: 8, workers: 1,
+  };
+
+  // The second create of #1318, a proposal whose `mode` never arrived.
+  const missingMode = await runtime.createEvolveRun({ ...proposal, mode: undefined as never });
+  assert.equal(missingMode.run, undefined);
+  assert.match(missingMode.refusedBecause ?? "", /mode/);
+  assert.match(missingMode.refusedBecause ?? "", /dataset_metric/);
+
+  // The same session, a complete proposal: the finished run released it.
+  const started = await runtime.createEvolveRun(proposal);
+  assert.equal(started.refusedBecause, undefined);
+  assert.equal(started.run?.id, "run-2");
+});

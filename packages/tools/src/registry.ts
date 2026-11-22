@@ -594,6 +594,14 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // The model gets only the bounded sentence below; whoever debugs the turn
+      // gets the name and the stack here. Without this line an unexpected
+      // TypeError arrived as a one-line TOOL_EXECUTION_FAILED with nothing in
+      // any log to locate it (#1318).
+      console.error(
+        `[tool] ${call.name} threw ${error instanceof Error ? error.name : typeof error}: ${message}`
+        + (error instanceof Error && error.stack ? `\n${error.stack}` : ""),
+      );
       const invocation = error && typeof error === "object" && "invocation" in error
         ? (error as { invocation?: { attempts?: unknown[]; error?: McpError } }).invocation
         : undefined;
