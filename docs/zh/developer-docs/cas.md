@@ -63,10 +63,10 @@ CAS 只追加，没有修改、删除、清理或列举接口。删除 Session �
 agent 随后用适合格式的工具修改文件，或重新运行生成工具（例如修改数据后重新生成 PDF），再调用：
 
 ```json
-{"artifact_id":"original-id","base_version_id":"materialized-version-id","path":"edited-report.md"}
+{"artifact_id":"original-id","base_version_id":"materialized-version-id","path":"edited-report.md","force_new_version":false}
 ```
 
-以上参数传给 `declare_artifact`。显式修订沿用原 Artifact ID 和名称，新增不可变版本，并将基准版本记录为输入依赖。现有引用 chip 映射随版本保留，新声明的同名映射覆盖旧映射；这不替代对引用正确性的审核。文件内容不会被通用文本转换，二进制和特殊格式仍由相应工具负责编辑；已有 Artifact 的 kind 不允许跨版本改变。
+以上参数传给 `declare_artifact`。显式修订沿用原 Artifact ID 和名称，新增不可变版本，并将基准版本记录为输入依赖。当显式 publish 的 `content.hash`、`content.size` 和 `mediaType` 与最新版本完全一致时，该调用是 no-op：直接返回该最新版本，既不写新版本，也不写基准版本的输入依赖边，`currentVersion`/`updatedAt` 不变；`force_new_version` 默认为 `false`；需要为未变化的字节强制生成新版本号（例如仅补充注释或说明的重发）时，显式传 `true` 退出该行为。现有引用 chip 映射随版本保留，新声明的同名映射覆盖旧映射；这不替代对引用正确性的审核。文件内容不会被通用文本转换，二进制和特殊格式仍由相应工具负责编辑；已有 Artifact 的 kind 不允许跨版本改变。
 
 发布要求基准版本仍为最新；否则返回 `ARTIFACT_VERSION_CONFLICT`，本地编辑保留。agent 应获取最新版本到另一条路径并显式合并，不能静默覆盖。相同工具调用的重放复用已发布版本（持久化 publication ID），不同内容的重放报冲突。比较与目录更新在当前单进程 SessionStore 内同步完成，沿用现有目录持久化机制，不提供多 API 写进程之间的分布式锁。
 
