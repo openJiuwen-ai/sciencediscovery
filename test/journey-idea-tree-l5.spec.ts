@@ -10,13 +10,31 @@ const cases = [
   { id: "recovery", title: "Resume a materials research", template: "scientific-hypothesis-general/v1", prompt: "Investigate how repeated wetting affects the durability of biodegradable packaging. Consider measurable controls, uncertainty and practical feasibility. Do not retrieve literature.", pause: true },
 ] as const;
 
+// The engine settles a research in one of these states. Only `completed` grows
+// a scored candidate, so every wait below stops on any of them and then names
+// the persisted reason: a run that failed a model call must not be reported as
+// a value mismatch after burning its whole poll budget.
+const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
+
+// `standard` is three rounds of three candidates with three independent
+// assessors, so the waits are ordered under the 7200s case budget instead of
+// summing past it: 300s to create + (120s running + 480s paused + 300s resumed)
+// + 5400s terminal = 6600s, leaving ~600s for the composer command, the reload
+// and cleanup. Every cap below is below the case timeout, so a slow research
+// fails as "status never settled" rather than being killed inside cleanup.
+const createBudget = 300_000;
+const runningBudget = 120_000;
+const pausedBudget = 480_000;
+const resumedBudget = 300_000;
+const terminalBudget = 5_400_000;
+
 for (const scenario of cases) {
   /**
    * E2E-META
    * Purpose: Verify real-model multi-round Idea Tree results and recovery through a user session.
    * Steps:
-   *   1. Configure standard exploration, create a session and start research from the composer.
-   *   2. For the recovery case, pause in progress and continue manually.
+   *   1. Configure standard exploration on the Session, create it and start research from the composer.
+   *   2. For the recovery case, pause an in-progress research and continue it manually.
    *   3. Inspect completed candidates, independent assessments and propagated root insight; reload and retrieve persisted results.
    * Environment: Isolated API/web, Runner and evolve services on Linux.
    * Type: real
@@ -26,73 +44,83 @@ for (const scenario of cases) {
    * MCP: none requested
    * OtherExternal: configured live LLM endpoint.
    * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN.
-   * CostSideEffects: Billable model calls; temporary project and model deleted and global settings restored.
+   * CostSideEffects: Billable model calls for a three-round standard research; the override is session-scoped and the temporary project and model are deleted.
    */
-  test(`L5 Idea Tree: ${scenario.title}`, { tag: ["@real", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l5", "@sandbox:bubblewrap"] }, async ({ page, journey }, info) => {
+  test(`L5 Idea Tree: ${scenario.title}`, { tag: ["@real", "@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l5", "@sandbox:bubblewrap"] }, async ({ page, journey }, info) => {
     test.setTimeout(7_200_000);
     journey.scenario({ goal: scenario.title, preconditions: ["Isolated stack with evolve", "Real model credentials", "Standard exploration: up to three rounds"] });
     const real = requireRealEnv(info, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     await requireRealStack(info);
     const headers = authorizationHeader();
-    const settingsUrl = `${apiBaseUrl()}/api/settings/idea-tree`;
-    const originalResponse = await page.request.get(settingsUrl, { headers });
-    expect(originalResponse.ok()).toBe(true);
-    const original = await originalResponse.json();
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
+    const researchUrl = () => `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
     const read = async () => {
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, { headers, timeout: 15_000, maxRetries: 2 });
+      const response = await page.request.get(researchUrl(), { headers, timeout: 15_000, maxRetries: 2 });
       expect(response.ok()).toBe(true);
       return (await response.json()).items;
     };
+    const researchById = async () => (await read()).find((item: any) => item.research.id === researchId);
+    const status = async () => (await researchById())?.research.status;
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
-        const settings = await page.request.put(settingsUrl, { headers, data: { templateId: scenario.template, explorationIntensity: "standard" } });
-        expect(settings.ok()).toBe(true);
         fixture = await createProjectAndSession(page, { model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
+        // Session scope, not the deployment: the override dies with this Session,
+        // so no restore step can be skipped by a killed worker and a shared stack
+        // keeps its own Idea Tree settings.
+        const override = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
+        expect(override.ok()).toBe(true);
+        const existingIds = new Set((await read()).map((item: any) => item.research.id));
         await openProjectSession(page, fixture);
         await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
-        await expect.poll(async () => (await read()).length, { timeout: 300_000 }).toBeGreaterThan(0);
-        researchId = (await read())[0].research.id;
+        // Identify this run by the id that was not there before the command was
+        // sent: the list is shared by every research in the Session.
+        await expect.poll(async () => (await read()).filter((item: any) => !existingIds.has(item.research.id)).length, { timeout: createBudget, message: "the /idea-tree command should start exactly one new research" }).toBe(1);
+        researchId = (await read()).find((item: any) => !existingIds.has(item.research.id)).research.id;
       });
       if (scenario.pause) {
         await journey.step("Pause and resume", "Research reaches paused state and can continue without losing its identity", async () => {
-          const endpoint = `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
+          const endpoint = researchUrl();
+          // The pause is only meaningful while the engine is running; sending it
+          // blind would either race a research that just completed or wait out the
+          // whole paused budget on a run that can no longer pause.
+          await expect.poll(status, { timeout: runningBudget, message: "the research should be running before it is paused" }).toBe("running");
           const pause = await page.request.post(endpoint, { headers, data: { operation: "pause", researchId } });
           expect(pause.ok()).toBe(true);
-          await expect.poll(async () => (await read()).find((item: any) => item.research.id === researchId)?.research.status, { timeout: 1_800_000 }).toBe("paused");
+          await expect.poll(status, { timeout: pausedBudget, message: "the pause operation should settle the research as paused" }).toBe("paused");
           const resume = await page.request.post(endpoint, { headers, data: { operation: "continue", researchId } });
           expect(resume.ok()).toBe(true);
+          await expect.poll(async () => (await status()) === "paused" ? "paused" : "resumed", { timeout: resumedBudget, message: "the continued research should leave the paused state" }).toBe("resumed");
         });
       }
       await journey.step("Inspect completed research", "Multiple rounds complete with scored candidates, assessments and root insight", async () => {
-        await expect.poll(async () => (await read()).find((item: any) => item.research.id === researchId)?.research.status, { timeout: 6_600_000 }).toBe("completed");
-        const { research, graph } = (await read()).find((item: any) => item.research.id === researchId);
+        await expect.poll(async () => {
+          const current = await status();
+          return terminalStatuses.includes(current) ? current : null;
+        }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).not.toBeNull();
+        const { research, graph } = (await researchById())!;
+        expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
+        expect(research.settings).toMatchObject({ templateId: scenario.template, explorationIntensity: "standard" });
         expect(research.round).toBeGreaterThanOrEqual(2);
         const candidates = graph.nodes.filter((node: any) => node.kind === "candidate" && node.status === "done");
         expect(candidates.length).toBeGreaterThan(0);
+        const assessors = scenario.id === "iteration" ? ["activity", "stability", "sustainability"] : ["scientificValidity", "evidenceReadiness", "feasibility"];
         for (const candidate of candidates) {
           expect(typeof candidate.score).toBe("number");
           expect(candidate.insight?.trim()).toBeTruthy();
-          const assessors = scenario.id === "iteration" ? ["activity", "stability", "sustainability"] : ["scientificValidity", "evidenceReadiness", "feasibility"];
-          for (const role of assessors) expect(typeof candidate.stages[role]?.score).toBe("number");
+          for (const role of assessors) expect(typeof candidate.stages?.[role]?.score, `candidate ${candidate.id} should carry the ${role} assessment`).toBe("number");
         }
         expect(graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
       await journey.step("Reopen results", "The completed research and root insight remain available after reload", async () => {
         await page.reload();
-        const saved = (await read()).find((item: any) => item.research.id === researchId);
+        const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
-        expect(saved.graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
+        expect(saved?.graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
     } finally {
-      try {
-        if (fixture) await cleanupJourney(page, fixture);
-      } finally {
-        const restored = await page.request.put(settingsUrl, { headers, data: { templateId: original.templateId, explorationIntensity: original.explorationIntensity } });
-        expect(restored.ok()).toBe(true);
-      }
+      if (fixture) await cleanupJourney(page, fixture);
     }
   });
 }
