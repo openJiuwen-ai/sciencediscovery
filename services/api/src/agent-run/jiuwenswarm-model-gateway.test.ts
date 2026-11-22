@@ -1096,6 +1096,71 @@ test("gateway reports an empty terminal turn after reasoning-only output as a mi
   } finally { await g.close(); }
 });
 
+test("gateway retries a reasoning-only empty terminal turn within the same request", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  const { createServer } = await import('node:http');
+  let requests = 0;
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    requests += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (requests === 1) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighed the evidence, wrote nothing" } }] })}\n\n`);
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      return;
+    }
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "recovered answer" } }] })}\n\n`);
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const g = await startModelGateway({ baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: 'synthetic', proxy: { mode: 'direct' } }, POLICY, AbortSignal.timeout(5000));
+  try {
+    const response = await fetch(g.url + '/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${g.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'synthetic' }], stream: true }) });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(requests, 2, "the empty terminal turn is replayed once instead of ending the agent turn");
+    assert.equal((body.match(/weighed the evidence/g) ?? []).length, 1, "the retry does not replay hidden reasoning");
+    assert.match(body, /recovered answer/);
+    assert.match(body, /\[DONE\]/);
+    assert.doesNotMatch(body, /empty terminal turn/i, "the recovered request does not surface the hiccup");
+    const summaries = lines.filter(line => line.startsWith("[model-sse-summary] "))
+      .map(line => JSON.parse(line.slice("[model-sse-summary] ".length)));
+    assert.equal(summaries.length, 1, "one summary line for the request that succeeded");
+    assert.deepEqual(summaries[0].retryErrors, ["reasoning_only"]);
+    assert.equal(summaries[0].retries, 1);
+    assert.equal(summaries[0].error, undefined);
+  } finally { await g.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});
+
+test("gateway stops retrying an empty terminal turn at the bound and reports a readable failure", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  const { createServer } = await import('node:http');
+  let requests = 0;
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    requests += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const g = await startModelGateway({ baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: 'synthetic', proxy: { mode: 'direct' } }, POLICY, AbortSignal.timeout(5000));
+  try {
+    const response = await fetch(g.url + '/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${g.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'synthetic' }] }) });
+    assert.equal(response.status, 502);
+    const body = await response.text();
+    assert.equal(requests, 3, "two retries plus the initial request");
+    assert.match(body, /returned no answer for this step after 2 retries/i);
+    assert.match(body, /empty terminal turn/i);
+    assert.match(body, /requestId=model-/);
+    const summaries = lines.filter(line => line.startsWith("[model-sse-summary] "))
+      .map(line => JSON.parse(line.slice("[model-sse-summary] ".length)));
+    assert.deepEqual(summaries[0].retryErrors, ["empty_completion", "empty_completion"]);
+    assert.deepEqual(summaries[0].error, { classification: "empty_completion" });
+  } finally { await g.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});
+
 test("gateway retries one reasoning-only network interruption without replaying the hidden thought", async (t) => {
   const lines: string[] = [];
   t.mock.method(console, "info", (line: string) => lines.push(String(line)));
