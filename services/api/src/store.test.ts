@@ -395,6 +395,111 @@ test("server-generated Artifacts reject non-server versions with the same logica
   assert.equal(serverUpdate.version.version, 2);
 });
 
+interface PersistedArtifactCatalogRow {
+  artifactVersions: Array<{ artifactId: string; createdAt: string; id: string; version: number }>;
+  artifacts: Array<{ currentVersion: number; id: string }>;
+}
+
+/** Rewrite the persisted catalog row while no SessionStore holds it. */
+function editPersistedArtifactCatalog(root: string, edit: (catalog: PersistedArtifactCatalogRow) => void): void {
+  const database = new DatabaseSync(resolve(root, "catalog.sqlite"));
+  try {
+    const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+    const catalog = JSON.parse(row.json) as PersistedArtifactCatalogRow;
+    edit(catalog);
+    database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  } finally {
+    database.close();
+  }
+}
+
+test("Artifact versions are numbered above the stored versions, not from a stale currentVersion pointer", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-allocation-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Artifact version allocation");
+  const session = await store.createSession(project.id, "Version numbers", {}, {}, { allowUnconfiguredModel: true });
+  const allocate = (hash: string, size: number) => store.createArtifactVersion({
+    content: { hash: hash.repeat(64), size },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  const first = await allocate("a", 1);
+  const second = await allocate("b", 2);
+  assert.deepEqual([first.version.version, second.version.version], [1, 2]);
+
+  // #1300: a pointer that fell behind the versions on disk used to hand out a
+  // number that already existed.
+  editPersistedArtifactCatalog(tempRoot, (catalog) => {
+    catalog.artifacts.find((artifact) => artifact.id === first.artifact.id)!.currentVersion = 0;
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const third = await reopened.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 3 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  assert.equal(third.version.version, 3);
+  assert.deepEqual(reopened.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2, 3]);
+});
+
+test("a catalog holding duplicate Artifact version numbers is renumbered on load", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-duplicates-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Duplicate version numbers");
+  const session = await store.createSession(project.id, "Duplicates", {}, {}, { allowUnconfiguredModel: true });
+  const first = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 1 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "b".repeat(64), size: 2 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  editPersistedArtifactCatalog(tempRoot, (catalog) => {
+    for (const version of catalog.artifactVersions.filter((entry) => entry.artifactId === first.artifact.id)) {
+      version.version = 1;
+    }
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const versions = reopened.listArtifactVersions(session.id, first.artifact.id);
+  assert.deepEqual(versions.map((version) => version.version), [1, 2]);
+  assert.deepEqual(versions.map((version) => version.id).sort(), [first.version.id, second.version.id].sort());
+  assert.equal(reopened.getArtifact(session.id, first.artifact.id)?.currentVersion, 2);
+
+  // The repair is persisted, so a second load sees the same numbers.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.deepEqual(reloaded.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2]);
+
+  // A new version continues above the repaired range instead of colliding.
+  const third = await reloaded.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 3 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  assert.equal(third.version.version, 3);
+});
+
 test("SessionStore persists global package sources and migrates old catalogs to upstream", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-sources-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

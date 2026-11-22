@@ -557,6 +557,46 @@ function buildWorkspaceProvenanceIndex(
   return index;
 }
 
+/**
+ * #1300: version numbers are per-Artifact and were only ever derived from
+ * `artifact.currentVersion`, so a catalog written by an older build (or edited
+ * by hand) can hold two versions of one Artifact under the same number, which
+ * makes "v3" ambiguous in the UI and in citations. Keep the first number in
+ * (createdAt, id) order and move each later collision to a free number above the
+ * Artifact's highest one. Returns whether anything changed.
+ */
+function repairDuplicateArtifactVersionNumbers(
+  artifacts: Map<string, ScientificArtifact>,
+  versions: readonly ScientificArtifactVersion[],
+): boolean {
+  const byArtifactId = new Map<string, ScientificArtifactVersion[]>();
+  for (const version of versions) {
+    const values = byArtifactId.get(version.artifactId) ?? [];
+    values.push(version);
+    byArtifactId.set(version.artifactId, values);
+  }
+  let repaired = false;
+  for (const [artifactId, entries] of byArtifactId) {
+    const seen = new Set<number>();
+    let next = entries.reduce((highest, entry) => Math.max(highest, entry.version), 0) + 1;
+    let repairedArtifact = false;
+    for (const entry of entries.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)
+      || left.id.localeCompare(right.id))) {
+      if (seen.has(entry.version)) {
+        while (seen.has(next)) next += 1;
+        entry.version = next;
+        repairedArtifact = true;
+      }
+      seen.add(entry.version);
+    }
+    if (!repairedArtifact) continue;
+    const artifact = artifacts.get(artifactId);
+    if (artifact) artifact.currentVersion = Math.max(artifact.currentVersion, ...entries.map((entry) => entry.version));
+    repaired = true;
+  }
+  return repaired;
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409 | 503, readonly code?: string) {
     super(message);
@@ -1376,7 +1416,9 @@ export class SessionStore {
         ...(savedVersion.sourcePath ? { sourcePath: savedVersion.sourcePath } : { sourcePath: artifact.logicalName }),
       } satisfies ScientificArtifactVersion];
     });
-    const migratedArtifactCatalog = JSON.stringify(artifacts) !== JSON.stringify(savedArtifacts)
+    const repairedArtifactVersionNumbers = repairDuplicateArtifactVersionNumbers(artifactsById, artifactVersions);
+    const migratedArtifactCatalog = repairedArtifactVersionNumbers
+      || JSON.stringify(artifacts) !== JSON.stringify(savedArtifacts)
       || JSON.stringify(artifactVersions) !== JSON.stringify(savedArtifactVersions);
     const savedReviewerSpecialistLevel: unknown = saved.reviewerSpecialistLevel;
     const reviewerSpecialistLevel = savedReviewerSpecialistLevel === "smart"
@@ -5682,6 +5724,18 @@ export class SessionStore {
     await this.writeArray(this.messagesPath(sessionId), messages);
   }
 
+  /**
+   * #1300: allocate from the catalogue's own maximum instead of trusting
+   * `artifact.currentVersion`, which can lag behind the versions on disk.
+   */
+  private nextArtifactVersionNumber(artifact: ScientificArtifact): number {
+    const highestStored = this.catalog.artifactVersions.reduce(
+      (highest, version) => version.artifactId === artifact.id ? Math.max(highest, version.version) : highest,
+      0,
+    );
+    return Math.max(highestStored, artifact.currentVersion) + 1;
+  }
+
   async createArtifactVersion(input: {
     artifactId?: string;
     baseVersionId?: string;
@@ -5794,8 +5848,14 @@ export class SessionStore {
       sessionId: input.sessionId,
       ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
       ...(input.turnId ? { turnId: input.turnId } : {}),
-      version: artifact.currentVersion + 1,
+      version: this.nextArtifactVersionNumber(artifact),
     };
+    // The allocation above cannot collide on its own; keep the invariant checked
+    // so a catalog that somehow holds the number again fails loudly instead of
+    // silently creating a second "v3".
+    if (this.catalog.artifactVersions.some((existing) => existing.artifactId === artifact.id
+      && existing.version === version.version))
+      throw new Error("ARTIFACT_VERSION_DUPLICATE: Artifact version number is already allocated; local file preserved");
     artifact.currentVersion = version.version;
     artifact.updatedAt = now;
     this.catalog.artifactVersions.push(version);
