@@ -18,15 +18,26 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 
 // `standard` is three rounds of three candidates with three independent
 // assessors, so the waits are ordered under the 7200s case budget instead of
-// summing past it: 300s to create + (120s running + 480s paused + 300s resumed)
-// + 5400s terminal = 6600s, leaving ~600s for the composer command, the reload
+// summing past it: 600s to create + (120s running + 480s paused + 300s resumed)
+// + 4800s terminal = 6300s, leaving ~900s for the composer command, the reload
 // and cleanup. Every cap below is below the case timeout, so a slow research
 // fails as "status never settled" rather than being killed inside cleanup.
-const createBudget = 300_000;
+//
+// 600s to create is measured, not guessed: on this head a run of the recovery
+// prompt spent more than 300s preparing its inputs — the agent was still on
+// turn 5, one turn carrying 142K input tokens — before it could call
+// `create_idea_research`, while a second run of the same prompt completed the
+// whole research in 23.4m. The step also stops waiting the moment the run
+// settles without a research, so a run that will never create one fails at that
+// point instead of burning the budget.
+const createBudget = 600_000;
 const runningBudget = 120_000;
 const pausedBudget = 480_000;
 const resumedBudget = 300_000;
-const terminalBudget = 5_400_000;
+const terminalBudget = 4_800_000;
+
+// A session run reports one of these once it can no longer produce a research.
+const settledRunStatuses = ["blocked", "cancelled", "completed", "failed", "interrupted"];
 
 for (const scenario of cases) {
   /**
@@ -62,6 +73,11 @@ for (const scenario of cases) {
     };
     const researchById = async () => (await read()).find((item: any) => item.research.id === researchId);
     const status = async () => (await researchById())?.research.status;
+    const readRuns = async () => {
+      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, { headers, timeout: 15_000, maxRetries: 2 });
+      expect(response.ok()).toBe(true);
+      return (await response.json()) as Array<{ id: string; status: string; error?: string }>;
+    };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
         fixture = await createProjectAndSession(page, { model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
@@ -75,8 +91,15 @@ for (const scenario of cases) {
         await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
         // Identify this run by the id that was not there before the command was
-        // sent: the list is shared by every research in the Session.
-        await expect.poll(async () => (await read()).filter((item: any) => !existingIds.has(item.research.id)).length, { timeout: createBudget, message: "the /idea-tree command should start exactly one new research" }).toBe(1);
+        // sent: the list is shared by every research in the Session. A run that
+        // settles without creating one cannot recover, so it fails here with its
+        // own status instead of waiting out the creation budget.
+        await expect.poll(async () => {
+          if ((await read()).some((item: any) => !existingIds.has(item.research.id))) return "created";
+          const runs = await readRuns();
+          const newest = runs[runs.length - 1];
+          return newest && settledRunStatuses.includes(newest.status) ? `settled:${newest.status}` : "waiting";
+        }, { timeout: createBudget, message: "the /idea-tree command should create one research before its run settles" }).toBe("created");
         researchId = (await read()).find((item: any) => !existingIds.has(item.research.id)).research.id;
       });
       if (scenario.pause) {
