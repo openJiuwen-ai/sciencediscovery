@@ -73,9 +73,15 @@ test("AR-01 child edits a fixed artifact version without copying its text", {
     expect(versions[1].baseVersionId).toBe(baseVersionId);
     expect(versions[1].inputArtifactVersionIds).toContain(baseVersionId);
     const republishCall = stub.calls.find(c => c.route === "editor" && c.step === 4);
-    const republished = JSON.parse(republishCall?.results.at(-1) ?? "{}") as { version?: number; version_id?: string };
-    expect(republished.version, "an unchanged republish must not create v3").toBe(2);
-    expect(republished.version_id).toBe(versions[1]?.id);
+    // Inside a Swarm child the tool message is a Python-repr dict wrapping the receipt
+    // ({'result': '{"version":2,…}'}), so parsing the whole string as JSON fails on the
+    // wrapper's quote. Read the fields with a regex like the scripted steps above: it
+    // matches both the bare receipt and the wrapped one.
+    const republishReceipt = republishCall?.results.at(-1) ?? "";
+    const republishedVersion = republishReceipt.match(/"version"\s*:\s*(\d+)/)?.[1];
+    const republishedVersionId = [...republishReceipt.matchAll(/"version_id"\s*:\s*"([^"]+)"/g)].at(-1)?.[1];
+    expect(republishedVersion, "an unchanged republish must not create v3").toBe("2");
+    expect(republishedVersionId).toBe(versions[1]?.id);
     // read_artifact itself is not used in the model script: inspect persisted bytes via API.
     const { apiBaseUrl, authorizationHeader } = await import("./e2e-auth.js");
     const contents = await Promise.all(versions.map(async v => {
