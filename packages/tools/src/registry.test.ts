@@ -695,3 +695,31 @@ test("shared source cooldown reaches agents as timing, fallback and evidence gui
   assert.equal(response.isError, true);
   assert.deepEqual(JSON.parse(response.content), { ok: false, error: { attempts: 0, ...error } });
 });
+
+test("an unexpected tool exception is logged with its name and stack, while the model gets the bounded message", async () => {
+  // #1318: the failure reached the agent as a one-line TOOL_EXECUTION_FAILED
+  // and no log held the stack, so there was nothing to look up. The model still
+  // gets only the classified message; the log is for whoever debugs the turn.
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  try {
+    const registry = new ToolRegistry([{
+      name: "explode", label: "explode", description: "explode", parameters: Type.Object({}),
+      async execute() { throw new TypeError("Cannot read properties of undefined (reading 'kind')"); },
+    }], { createResultMessage: resultMessage });
+    const result = await registry.execute({ id: "boom", name: "explode", args: {} }, new AbortController().signal);
+
+    assert.equal(result.isError, true);
+    const details = JSON.parse(result.content) as { error: { code: string; message: string; retryable: boolean } };
+    assert.equal(details.error.code, "TOOL_EXECUTION_FAILED");
+    assert.equal(details.error.message, "Cannot read properties of undefined (reading 'kind')");
+    assert.equal(details.error.retryable, false);
+
+    const log = lines.join("\n");
+    assert.match(log, /\[tool\] explode threw TypeError/);
+    assert.match(log, /registry\.test\.ts/);
+  } finally {
+    console.error = original;
+  }
+});

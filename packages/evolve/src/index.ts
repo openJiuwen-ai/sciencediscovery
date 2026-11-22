@@ -401,6 +401,12 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     label: "Create evolution run",
     name: "create_evolve_run",
     parameters: evolveParameters,
+    // What the run cannot be built without. The model gateway withholds a call
+    // that leaves one out and asks for a complete one; a call that arrives
+    // anyway (the last recovery attempt, or a caller outside the gateway) is
+    // answered by `startProposedRun`'s own refusal. `mode` is first because it
+    // is the one whose absence used to reach `measureOf` and crash (#1318).
+    requiredArguments: ["mode", "statement", "howScored", "expansions", "workers"],
   };
   tools.push(createEvolveRun);
   // Captured once so the tool body calls a local binding: reading the optional

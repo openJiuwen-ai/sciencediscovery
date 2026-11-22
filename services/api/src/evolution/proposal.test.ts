@@ -129,6 +129,34 @@ test("no active search, or a caller that cannot answer, starts normally", async 
   assert.equal(silent.run?.id, "run-1");
 });
 
+test("a proposal with no mode is refused by name, not with a TypeError", async () => {
+  // The crash in #1318. `measureOf()` had no default, so a missing mode fell
+  // out of it as `undefined`; preflight then read `criterion.measure.kind` and
+  // threw `Cannot read properties of undefined (reading 'kind')`, which the
+  // tool reported as an opaque TOOL_EXECUTION_FAILED. The second create in a
+  // session runs with a finished — not active — first run, so it reaches here.
+  const { deps: d } = deps({ activeRuns: async () => [{ id: "run-done", status: "succeeded" }] });
+  const result = await startProposedRun(proposal({ mode: undefined as never }), d);
+
+  assert.equal(result.run, undefined);
+  assert.match(result.refusedBecause ?? "", /mode/);
+  assert.match(result.refusedBecause ?? "", /dataset_metric/);
+  assert.match(result.refusedBecause ?? "", /custom_script/);
+});
+
+test("an unrecognised mode is refused with the modes that are accepted", async () => {
+  // A typo or an older spelling must get the same actionable refusal: the
+  // allowed values are the sentence the model needs to re-issue the call.
+  const result = await startProposedRun(
+    proposal({ mode: "dataset-metric" as never }), deps().deps,
+  );
+
+  assert.equal(result.run, undefined);
+  assert.match(result.refusedBecause ?? "", /dataset-metric/);
+  assert.match(result.refusedBecause ?? "", /dataset_metric/);
+  assert.match(result.refusedBecause ?? "", /llm_judge/);
+});
+
 test("a goal records direct execution only when the host has none and the user allowed it", async () => {
   // The proposal carries the user's answer; the host decides whether it means
   // anything. Both have to agree before a goal can claim its candidates ran

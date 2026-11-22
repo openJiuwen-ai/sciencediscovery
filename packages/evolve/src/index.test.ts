@@ -206,3 +206,11 @@ test("the budget tool reports what the run will record, including a setting it c
   assert.match(text, /Run total: 600000 tokens, 7200s/);
   assert.match(text, /say so there instead of promising it/);
 });
+
+test("the create tool declares the arguments a proposal cannot be built without", () => {
+  // The run's model gateway withholds a call that leaves one of these out and
+  // asks the model to re-issue it. `mode` is first because its absence used to
+  // reach measureOf() as an undefined switch value and crash preflight (#1318).
+  const create = createEvolveTools(runtime()).find((tool) => tool.name === "create_evolve_run")!;
+  assert.deepEqual(create.requiredArguments, ["mode", "statement", "howScored", "expansions", "workers"]);
+});

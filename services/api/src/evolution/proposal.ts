@@ -365,7 +365,31 @@ function hasJsonObjectStartingPoint(text: string | undefined): boolean {
   }
 }
 
+/** The scoring modes `measureOf` can build a measure for. The tool's own schema
+ *  offers the same set; this list is what a refusal can name, so one place
+ *  decides the accepted values and the sentence that reports them. */
+const PROPOSAL_MODES = [
+  "dataset_metric", "test_gate", "custom_script", "llm_judge", "npu_job",
+] as const;
+
+function isProposalMode(value: unknown): value is EvolveRunProposal["mode"] {
+  return typeof value === "string" && (PROPOSAL_MODES as readonly string[]).includes(value);
+}
+
+/** Why a proposal's `mode` cannot be used, in the terms its author can act on. */
+function modeProblem(mode: unknown): string {
+  const named = mode === undefined || mode === null
+    ? "mode is missing"
+    : `mode ${JSON.stringify(mode)} is not recognised`;
+  return `${named}; it has to be one of ${PROPOSAL_MODES.join(", ")}. The scoring mode decides `
+    + "how a candidate is measured, so a run without one has no scorecard to rank by";
+}
+
 function shapeOf(proposal: EvolveRunProposal): string | undefined {
+  // Checked first: every branch below reads the mode, and a proposal without
+  // one used to fall all the way through `measureOf` and crash preflight with
+  // `Cannot read properties of undefined (reading 'kind')` (#1318).
+  if (!isProposalMode(proposal.mode)) return modeProblem(proposal.mode);
   const needsStart = proposal.mode !== "test_gate";
   if (needsStart && !proposal.startingPointPath && !proposal.startingPointText?.trim()) {
     return "there is no starting point. Point startingPointPath at a file in the workspace, "
@@ -651,6 +675,12 @@ async function measureOf(
         kind: "test_gate",
         testCmd: proposal.testCmd!.split(/\s+/).filter(Boolean),
       };
+    default:
+      // Unreachable through `startProposedRun` — `shapeOf` refuses an unknown
+      // mode before the goal is assembled — but this is the reader that threw
+      // the TypeError in #1318 when a proposal reached it without one. Answer
+      // with a refusal naming the field so any other caller stays recoverable.
+      throw new ProposalRefusal(modeProblem(proposal.mode));
   }
 }
 
