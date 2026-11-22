@@ -41,6 +41,10 @@ export const TOKEN_STORAGE_KEY = `${CURRENT_PREFIX}-token`;
  *  change cannot collide with a key `apps/web` already owns. */
 
 export const RIGHT_PANEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:right-panel`;
+/** Whether the task column is folded away. Unlike the panel, which starts
+ *  closed, this starts open: folding it is a request for more room, so only an
+ *  explicit "0" hides the column on the next start (#1291). */
+export const SIDEBAR_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:sidebar`;
 /** The interface language picked in 设置 › 通用. Namespaced rather than shared
  *  with `apps/web`: the two front ends may be read on the same origin, and a
  *  choice made here should not reword the other one without being asked. */
@@ -111,6 +115,12 @@ export function writeStoredText(storage: ReadableStorage, key: string, value: st
 
 export function readStoredFlag(storage: ReadableStorage, key: string): boolean {
   return safeRead(storage, key) === "1";
+}
+
+/** A flag whose default is on: only an explicit "0" turns it off, so a first
+ *  run, a cleared store, or a storage that refuses to answer all keep it on. */
+export function readStoredFlagOnByDefault(storage: ReadableStorage, key: string): boolean {
+  return safeRead(storage, key) !== "0";
 }
 
 export function writeStoredFlag(storage: ReadableStorage, key: string, value: boolean): void {
