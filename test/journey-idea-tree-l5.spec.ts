@@ -78,9 +78,30 @@ for (const scenario of cases) {
       expect(response.ok()).toBe(true);
       return (await response.json()) as Array<{ id: string; status: string; error?: string }>;
     };
+    // A `blocked` run is waiting for a person: `permissions/index.ts` reports
+    // "Waiting for permission decision" and `runs/index.ts` reports "Waiting for
+    // configuration decision" with the same run status. Reading both lists turns
+    // that into a named card instead of a bare status.
+    const pendingPermissions = async () => {
+      const response = await page.request.get(`${apiBaseUrl()}/api/permission-requests?sessionId=${fixture!.session.id}`, { headers, timeout: 15_000, maxRetries: 2 });
+      if (!response.ok()) return [];
+      return ((await response.json()) as Array<{ state: string; summary?: string }>).filter((item) => item.state === "pending");
+    };
+    const pendingConfigurations = async () => {
+      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/configuration-requests`, { headers, timeout: 15_000, maxRetries: 2 });
+      if (!response.ok()) return [];
+      return ((await response.json()).items ?? []) as Array<{ capabilityId?: string; state?: string }>;
+    };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
-        fixture = await createProjectAndSession(page, { model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
+        // A three-round standard research prepares inputs with governed tools, and
+        // the default approval mode parks the run as `blocked` on the first one
+        // with nobody to answer the card — measured: two runs settled as `blocked`
+        // after ~10 min without ever creating a research. Approval surfaces have
+        // their own journeys (`journey-governed-download-approval`,
+        // `journey-sandbox-network-consent`); this case exists to check research
+        // results, so the Session allows the tools it needs.
+        fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
         // Session scope, not the deployment: the override dies with this Session,
         // so no restore step can be skipped by a killed worker and a shared stack
         // keeps its own Idea Tree settings.
@@ -93,12 +114,22 @@ for (const scenario of cases) {
         // Identify this run by the id that was not there before the command was
         // sent: the list is shared by every research in the Session. A run that
         // settles without creating one cannot recover, so it fails here with its
-        // own status instead of waiting out the creation budget.
+        // own status instead of waiting out the creation budget — `expect.poll`
+        // retries any other value, so the settled case has to throw.
         await expect.poll(async () => {
           if ((await read()).some((item: any) => !existingIds.has(item.research.id))) return "created";
           const runs = await readRuns();
           const newest = runs[runs.length - 1];
-          return newest && settledRunStatuses.includes(newest.status) ? `settled:${newest.status}` : "waiting";
+          if (newest && settledRunStatuses.includes(newest.status)) {
+            const permissions = await pendingPermissions();
+            const configurations = await pendingConfigurations();
+            const cards = [
+              permissions.length ? `permission requests: ${permissions.map((item) => item.summary ?? "pending").join(" | ")}` : "",
+              configurations.length ? `configuration requests: ${configurations.map((item) => `${item.capabilityId ?? "?"}:${item.state ?? "?"}`).join(", ")}` : "",
+            ].filter(Boolean).join("; ");
+            throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research${cards ? ` (${cards})` : " (no pending card)"}`);
+          }
+          return "waiting";
         }, { timeout: createBudget, message: "the /idea-tree command should create one research before its run settles" }).toBe("created");
         researchId = (await read()).find((item: any) => !existingIds.has(item.research.id)).research.id;
       });
