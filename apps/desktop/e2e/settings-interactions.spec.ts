@@ -408,8 +408,8 @@ test.describe("MCP 服务器", () => {
     const mock = await installMockApi(page);
     journey.scenario({ goal: "Add a custom MCP server in desktop settings", preconditions: ["Empty MCP list"] });
     const settings = await openSettings(page, "MCP 服务器");
-    const create = settings.getByRole("button", { name: "新增 MCP 服务器", exact: true });
-    const form = page.getByRole("dialog", { name: "新增 MCP 服务器" });
+    const create = settings.getByRole("button", { name: "添加服务器", exact: true });
+    const form = page.getByRole("dialog", { name: "新建服务器" });
     const name = form.getByRole("textbox", { name: "名称", exact: true });
     const transport = form.getByLabel("传输方式");
     const save = form.getByRole("button", { name: "保存", exact: true });
@@ -442,6 +442,7 @@ test.describe("MCP 服务器", () => {
       await expect(name).toHaveValue("Local Echo");
       await expect(args).toHaveValue(`${scriptPath}\n--quiet`);
       await save.click();
+      await form.getByRole("button", { name: "完成", exact: true }).click();
       await expect(form).toBeHidden();
       await expect(settings.locator(".settings-card").filter({ hasText: "Local Echo" })).toBeVisible();
       expect(mock.state.mcpServers).toHaveLength(1);

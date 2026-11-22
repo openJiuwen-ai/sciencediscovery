@@ -676,12 +676,10 @@ describe("the data sources page", () => {
     assert.ok(markup.includes(TEXT.settings.system.mcp.help), "the page does not explain default selection");
   });
 
-  it("opens no blank form", () => {
-    // 新增服务器 is gone: a server is written from the row that already has
-    // one, so the page mounts with every form closed and offers no way in.
+  it("keeps the create form closed until the user opens it", () => {
+    // Creation is offered by the loaded pane; no dialog opens on mount.
     const markup = page();
     assert.ok(!markup.includes("settings-card is-form"), "a form is mounted before a row was picked");
-    assert.ok(!markup.includes(TEXT.settings.system.mcp.add), "新增服务器 is still drawn");
   });
 });
 
