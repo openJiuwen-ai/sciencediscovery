@@ -520,7 +520,7 @@ whole matrix. Both manual entries accept `max-parallel` values of 1, 2 or 4.
 Invalid reusable-workflow inputs fail planning before any worker starts.
 Merge queue, nightly and release-tag runs use two workers.
 
-The real case counts are L3 **9**, L4 **20**, L5 **64**. L5 includes 45 active
+The real case counts are L3 **9**, L4 **20**, L5 **66**. L5 includes 45 active
 public BiomniBench-DA tasks, with one task per isolated worker, sharing the
 selected concurrency limit and a six-hour worker ceiling including preparation. The
 other 50 upstream tasks remain private. The seeded literature-review journey
