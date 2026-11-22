@@ -397,12 +397,20 @@ produced, and whether the provider streamed reasoning (`hasReasoning`). A reques
 that ends in an error carries its classification on that same line. The line has
 no prompts, answers, arguments, headers or credentials, and
 is what real E2E keeps in `stack.log`. A task turn that completed with no
-non-whitespace text and no tool call is rejected: `502` before a response starts,
-or a `model_gateway_error` event when reasoning already reached the client.
+non-whitespace text and no tool call is an error, not a final answer.
 `hasReasoning: true` marks a model that spent its budget thinking and is
 classified `reasoning_only`; a relay that sent nothing at all is
-`empty_completion`. Both still fail the request. The message keeps the request IDs and framing summary. Housekeeping and compaction
-are exempt because an empty auxiliary response is not a final answer.
+`empty_completion`. The gateway replays a task request that fails with that
+shape up to `MAX_EMPTY_TURN_RETRIES` (2) times before giving up, and a replay
+commits no text and no tool call and does not send the hidden reasoning
+downstream again; the replays are counted in `retryErrors` on that line. When
+that budget is exhausted the request fails with `502` before a response
+starts, or with a `model_gateway_error` event when reasoning already reached
+the client; that failure keeps the wire classification, carries the readable
+"no answer for this step after 2 retries" message, and classifies the run as
+`server-error` rather than `semantic-error`. The message keeps the request IDs
+and framing summary. Housekeeping and compaction are exempt because an empty
+auxiliary response is not a final answer.
 
 Set `SCIENCE_AGENT_TRACE_MODEL_STREAM=1` on the Node API process to enable
 `[model-stream]` diagnostics (restart required). They record a request ID and
