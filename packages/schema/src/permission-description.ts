@@ -64,7 +64,16 @@ export type PermissionDescription =
   | { kind: "artifact-download"; name: string; path: string }
   | { command: string; hostAlias: string; kind: "remote-job"; mode: string }
   | { hostname?: string; kind: "web"; operation: "fetch" | "search"; query?: string }
-  | { kind: "tool-call"; toolName?: string };
+  | {
+    /**
+     * The arguments being approved, verbatim (a shell command, a JSON object),
+     * when the tool's own resource cannot carry them: `run_shell` approves the
+     * fixed `workspace-code` resource, so the command exists nowhere else.
+     */
+    detail?: string;
+    kind: "tool-call";
+    toolName?: string;
+  };
 
 export type PermissionDescriptionKind = PermissionDescription["kind"];
 
@@ -224,7 +233,8 @@ export function normalizePermissionDescription(value: unknown): PermissionDescri
     }
     case "tool-call": {
       const toolName = text(raw.toolName);
-      return { kind: "tool-call", ...(toolName ? { toolName } : {}) };
+      const detail = text(raw.detail, MAX_COMMAND);
+      return { kind: "tool-call", ...(detail ? { detail } : {}), ...(toolName ? { toolName } : {}) };
     }
     default:
       return undefined;

@@ -185,6 +185,20 @@ const JIUWENSWARM_APPROVAL_RESOURCE: ReadonlyMap<string, string> = new Map([
   ["execution_cancel", "workspace-code"],
 ]);
 
+/**
+ * The arguments the question is about, when its `summary` names the tool and then the call it would make:
+ * `run_shell: rm -rf out`, `mcp__custom-1__to_kelvin: {"celsius": -40}`. The approval card must carry them: for
+ * run_shell the approved resource is the fixed `workspace-code`, so the command exists nowhere else on the request.
+ * A summary that does not name this tool yields no detail instead of a guess.
+ */
+function approvalCallDetail(question: ApprovalQuestion): string | undefined {
+  const toolName = question.toolName?.trim();
+  const summary = question.summary?.trim();
+  if (!toolName || !summary?.startsWith(`${toolName}:`)) return undefined;
+  const detail = summary.slice(toolName.length + 1).trim();
+  return detail || undefined;
+}
+
 /** JiuwenSwarm's own todo tools, left visible to the model unless planning is `update_plan`. */
 export const JIUWENSWARM_TODO_TOOLS = ["todo_create", "todo_modify", "todo_list", "todo_get"] as const;
 
@@ -551,10 +565,17 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // （当前模式默认需确认） > 选择「会话内记住」…") is internal wording that the card would show verbatim.
     const resource = (question.toolName && (JIUWENSWARM_APPROVAL_RESOURCE.get(question.toolName) ?? question.toolName))
       ?? question.resource ?? question.summary ?? "tool call";
+    // What the user is actually approving: the command or arguments the tool would run. `summary` is the only
+    // place JiuwenSwarm puts them, and the structured card replaces that sentence, so keep them as fields.
+    const detail = approvalCallDetail(question);
     // A human can take arbitrarily long to answer; that wait must not itself look "stalled".
     const release = this.beginExternalWait();
     const decided = (ask
-      ? ask({ description: question.toolName ? { kind: "tool-call", toolName: question.toolName } : { kind: "tool-call" },
+      ? ask({ description: {
+          ...(detail ? { detail } : {}),
+          kind: "tool-call",
+          ...(question.toolName ? { toolName: question.toolName } : {}),
+        },
         resource, summary: question.summary ?? question.resource ?? "tool call",
         ...(question.toolCallId ? { toolCallId: question.toolCallId } : {}) }, this.controller.signal)
       : Promise.resolve("deny" as const));
