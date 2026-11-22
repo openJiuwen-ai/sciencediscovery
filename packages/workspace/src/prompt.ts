@@ -322,7 +322,7 @@ export interface WorkspaceAgentOptions {
    * ScienceDiscovery approval (session approval mode and standing grants apply). The answer goes back to JiuwenSwarm.
    */
   requestApproval?: (
-    request: { resource: string; summary: string; toolCallId?: string },
+    request: { description?: import("@sciencediscovery/schema").PermissionDescription; resource: string; summary: string; toolCallId?: string },
     signal?: AbortSignal,
   ) => Promise<"allow_once" | "allow_matching" | "deny">;
   localRunnerAllowed?: boolean;

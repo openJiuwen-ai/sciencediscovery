@@ -2301,7 +2301,10 @@ test("a JiuwenSwarm approval question is put to the user as ours and the answer 
     const requestApproval = async (request: unknown) => { asked.push(request); return "allow_matching" as const; };
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ requestApproval } as never)).execute("go");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.deepEqual(asked, [{ resource: "run_shell: rm -rf out", summary: "run_shell: rm -rf out", toolCallId: "q1" }]);
+    // The card is composed from `description`; `summary` stays the canonical
+    // English sentence, and the tool name is absent from this question.
+    assert.deepEqual(asked, [{ description: { kind: "tool-call" },
+      resource: "run_shell: rm -rf out", summary: "run_shell: rm -rf out", toolCallId: "q1" }]);
     assert.deepEqual(answered, { decision: "allow_matching" });
     assert.equal(adapter.requests.at(-1).body.decision, "allow_matching");
   } finally {

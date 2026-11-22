@@ -12,6 +12,64 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { PermissionAction, PermissionDescriptionRenderers } from "@sciencediscovery/schema";
+
+/** The workspace an approval covers, as an adverbial: 会话工作区 / 子代理 X. */
+function permissionWorkspace(subagentId: string | undefined): string {
+  return subagentId ? `子代理 ${subagentId}` : "会话工作区";
+}
+
+/** 在会话工作区中 / 在子代理 X 中 / 在 build-01 上的会话工作区中. */
+function permissionWhere(remoteHostAlias: string | undefined, subagentId: string | undefined): string {
+  const workspace = permissionWorkspace(subagentId);
+  return remoteHostAlias ? `在 ${remoteHostAlias} 上的${workspace}中` : `在${workspace}中`;
+}
+
+/**
+ * The approval sentence, composed from the request's structured description
+ * (#1305). A persisted request is replayed through whichever dictionary is in
+ * force, so switching language never leaves a card in the language it was
+ * created in. The canonical English sentence stays on the request itself.
+ */
+const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
+  shell: ({ remoteHostAlias, subagentId }) => `${permissionWhere(remoteHostAlias, subagentId)}运行 Shell 脚本`,
+  python: ({ remoteHostAlias, subagentId }) => `${permissionWhere(remoteHostAlias, subagentId)}运行 Python 代码`,
+  language: ({ language, remoteHostAlias, subagentId }) => `${permissionWhere(remoteHostAlias, subagentId)}运行 ${language} 代码`,
+  "file-copy": ({ fileCount }) => `在已授权的工作区之间复制 ${fileCount} 个选中的文件`,
+  npu: ({ operation, subject, subagentId }) => `在${permissionWorkspace(subagentId)}中${operation === "run" ? "运行" : "取消"}主机 NPU 任务 ${subject}`,
+  "direct-host": ({ account, command, cwd, runnerId, subagentId, target, workspaceRoot }) =>
+    `直接在主机上执行：Runner ${runnerId}，目标 ${target}，账号 ${account}，工作区 ${workspaceRoot}，目录 ${cwd || "."}`
+    + `${subagentId ? `，子代理 ${subagentId}` : ""}。不会隔离文件系统、进程或网络，主机凭据可能可被访问；`
+    + `主机上的影响无法全部追踪或回滚。同类授权只覆盖本次 Agent 运行中的这条命令和这个范围，没有固定有效期。`
+    + `批准不会执行命令。命令：\n${command}`,
+  "specialist-runtime": ({ runtime, workspaceRoot }) =>
+    `在 API 主机上直接运行 ${runtime}（${workspaceRoot}）。这会移除本任务的外层沙箱；平台工具仍各自需要授权。`,
+  network: ({ hosts, purpose, runnerId }) =>
+    `本次 Agent 运行允许 ${runnerId} 上的沙箱网络访问：${hosts.join("、")}。用途：${purpose}。`,
+  environment: ({ environmentId, language, manager, name, operation, runnerId }) => {
+    const runner = runnerId ? `（Runner ${runnerId}）` : "";
+    switch (operation) {
+      case "create": return `创建命名 ${language ?? ""} 环境 ${name ?? environmentId ?? ""}${runner}`;
+      case "delete": return `删除命名环境 ${environmentId ?? ""}${runner}`;
+      case "install": return `在命名环境 ${environmentId ?? ""} 中安装 ${manager ?? ""} 软件包${runner}`;
+      case "setup": return `在所选 Runner 上初始化科研环境${runner}`;
+      case "uninstall": return `从命名环境 ${environmentId ?? ""} 中卸载软件包${runner}`;
+    }
+  },
+  "workspace-sync": ({ direction, paths, runnerId }) =>
+    `${direction === "pull" ? `从 Runner ${runnerId} 拉取` : `推送至 Runner ${runnerId}`}：${paths.join("、")}`,
+  "skill-publish": ({ proposalCount, subagentId }) =>
+    subagentId
+      ? `从子代理 ${subagentId} 发布 ${proposalCount} 个技能库提案`
+      : `在本会话中发布 ${proposalCount} 个技能库提案`,
+  "mcp-tool": ({ recovered, sourceId, toolId }) => `调用${recovered ? "修复后的 " : " "}MCP 工具 ${sourceId}/${toolId}`,
+  "artifact-download": ({ name, path }) => `下载 ${name} 到工作区路径 ${path}`,
+  "remote-job": ({ command, hostAlias, mode }) => `在 ${hostAlias} 上运行 ${mode.toUpperCase()} 任务：${command}`,
+  web: ({ hostname, operation, query }) =>
+    operation === "fetch" ? `获取 ${hostname ?? ""} 的公开网页内容` : `检索公开网络：“${query ?? ""}”`,
+  "tool-call": ({ toolName }) => `在本会话中运行${toolName ? `工具 ${toolName}` : "工具调用"}`,
+};
+
 /**
  * Every user-visible string, in one place — Simplified Chinese.
  *
@@ -644,6 +702,20 @@ export const ZH = {
     decided: "决定时间",
     execution: "执行",
     toolCall: "工具调用",
+    /** The action as a noun phrase, for a request whose producer sent no
+     *  structured description (a request recorded before #1305, or one from a
+     *  client that supplies only `summary`). */
+    actions: {
+      artifact_download: "下载产物",
+      code: "运行本地代码",
+      connector: "使用连接器",
+      direct_code: "在主机上直接执行（无沙箱）",
+      directory: "访问目录",
+      host: "连接主机",
+      remote_job: "运行远程任务",
+      sandbox_network: "沙箱网络访问",
+    } satisfies Record<PermissionAction, string>,
+    description: PERMISSION_DESCRIPTIONS,
   },
 
   wizard: {

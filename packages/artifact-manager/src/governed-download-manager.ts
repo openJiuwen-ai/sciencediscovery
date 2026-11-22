@@ -29,6 +29,7 @@ import type {
   McpToolResult,
   PermissionAction,
   PermissionAuthorization,
+  PermissionDescription,
   PermissionRequest,
   Project,
   ProxyPolicy,
@@ -67,7 +68,7 @@ export interface GovernedDownloadStore {
     action: PermissionAction,
     resource: string,
     summary: string,
-    context?: { executionId?: string; toolCallId?: string },
+    context?: { description?: PermissionDescription; executionId?: string; toolCallId?: string },
   ): Promise<
     | { allowed: true; authorization: PermissionAuthorization }
     | { allowed: false; request: PermissionRequest }
@@ -267,7 +268,11 @@ export class GovernedDownloadManager {
       "artifact_download",
       artifactResource(provisional),
       `Download ${candidate.logicalName} to workspace path ${input.destination.path}`,
-      { executionId: invocation.turnId, toolCallId: invocation.toolCallId },
+      {
+        description: { kind: "artifact-download", name: candidate.logicalName, path: input.destination.path },
+        executionId: invocation.turnId,
+        toolCallId: invocation.toolCallId,
+      },
     );
     let plan: ArtifactPlan;
     if (permission.allowed) {

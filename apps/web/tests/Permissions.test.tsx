@@ -62,6 +62,7 @@ test("pending permission details fold without hiding the decision buttons", () =
   const request: PermissionRequest = {
     action: "code",
     createdAt: "2026-01-01T00:00:00.000Z",
+    description: { kind: "python" },
     id: "request-1",
     projectId: "project-1",
     resource: "workspace-code",
@@ -78,7 +79,7 @@ test("pending permission details fold without hiding the decision buttons", () =
   }));
   assert.match(html, /Permission required/);
   assert.match(html, /Run local code/);
-  assert.match(html, /Run Python code in the Session workspace/);
+  assert.match(html, /Run Python code in the Session workspace/, "the card composes the sentence from the structured description");
   assert.match(html, /aria-expanded="false"/);
   // Resource details fold, while pending decisions remain directly actionable.
   assert.doesNotMatch(html, /workspace-code/);
@@ -110,6 +111,53 @@ test("expanded permission card exposes the independent decisions", () => {
   assert.match(html, /class="secondary-button"[^>]*>Allow once</);
   assert.match(html, /class="secondary-button"[^>]*>Allow same type</);
   assert.match(html, /class="danger-button"[^>]*>Deny</);
+});
+
+test("the approval sentence follows the reader's language, not the API's English", () => {
+  const render = (request: PermissionRequest, locale: "en" | "zh-CN") =>
+    renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    })));
+  const shell: PermissionRequest = {
+    action: "code", createdAt: "2026-10-18T00:00:00.000Z", description: { kind: "shell" },
+    id: "request-shell", projectId: "project-1", resource: "workspace-code", sessionId: "session-1",
+    state: "pending", summary: "Run a shell script in the Session workspace",
+  };
+  const chinese = render(shell, "zh-CN");
+  assert.match(chinese, /在会话工作区中运行 Shell 脚本/);
+  assert.doesNotMatch(chinese, /Run a shell script/);
+  assert.match(render(shell, "en"), /Run a shell script in the Session workspace/);
+
+  const direct: PermissionRequest = {
+    ...shell,
+    action: "direct_code",
+    description: {
+      account: "user:1000:1000", command: "printf hello\nrm -rf build", cwd: "", kind: "direct-host",
+      runnerId: "local", target: "machine:instance", workspaceRoot: "/data/projects/session-1/workspace",
+    },
+    id: "request-direct",
+    summary: "DIRECT HOST EXECUTION: Runner local, machine:instance",
+  };
+  const directChinese = render(direct, "zh-CN");
+  assert.match(directChinese, /直接在主机上执行/);
+  assert.match(directChinese, /不会隔离文件系统、进程或网络/);
+  assert.match(directChinese, /命令：\nprintf hello\nrm -rf build/, "the command keeps its newlines");
+  assert.doesNotMatch(directChinese, /DIRECT HOST EXECUTION/);
+});
+
+test("a request without a description gets a localized action instead of English prose", () => {
+  const render = (request: PermissionRequest) => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" },
+    createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    })));
+  const legacy: PermissionRequest = {
+    action: "connector", createdAt: "2026-10-18T00:00:00.000Z", id: "request-legacy", projectId: "project-1",
+    resource: "pubmed:search:BRCA1", sessionId: "session-1", state: "pending", summary: "Query PubMed for BRCA1",
+  };
+  const html = render(legacy);
+  assert.match(html, /请求：使用连接器/);
+  assert.doesNotMatch(html, /Query PubMed for BRCA1/);
+  assert.match(render({ ...legacy, description: { kind: "mcp-tool", sourceId: "pubmed", toolId: "search" } }), /调用 MCP 工具 pubmed\/search/);
 });
 
 test("permission cards hide decided requests", () => {
@@ -172,6 +220,8 @@ test("standing grants are listable and revocable", () => {
 
 test("direct consent is visibly unsandboxed and retains exact command whitespace", () => {
   const request: PermissionRequest = { id: "direct", action: "direct_code", createdAt: "2026-01-01T00:00:00Z",
+    description: { command: "printf 'a  b'", kind: "direct-host", runnerId: "machine", target: "machine",
+      account: "user", workspaceRoot: "workspace", cwd: "" },
     resource: "direct:bound-scope", sessionId: "session", state: "pending",
     summary: "DIRECT HOST EXECUTION: machine, account user, cwd workspace. No isolation.\nprintf 'a  b'\n" };
   const html = renderToStaticMarkup(createElement(PermissionCards, {
@@ -189,6 +239,7 @@ test("network consent names hosts and purpose in the conversation without expand
   const html = renderToStaticMarkup(createElement(PermissionCards, {
     expandedCards: {}, onToggleCard: noopToggle, onDecision: async () => {},
     requests: [{ action: "sandbox_network", createdAt: "2026-10-18T00:00:00Z", id: "network",
+      description: { hosts: ["eutils.ncbi.nlm.nih.gov:443"], kind: "network", purpose: "Retrieve requested PubMed records.", runnerId: "local" },
       sessionId: "s", resource: "sandbox-network:scoped-digest", state: "pending",
       summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records." }],
   }));

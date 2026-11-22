@@ -137,6 +137,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
                 }
                 return options.permission.requirePrivilege({
                   action,
+                  description: { kind: "mcp-tool", sourceId: tool.sourceId, toolId: tool.toolId },
                   executionId: options.turnId,
                   resource,
                   signal: permissionSignal,

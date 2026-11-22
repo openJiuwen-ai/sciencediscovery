@@ -29,6 +29,7 @@ export * from "./evolve-direction.js";
 export * from "./search-graph.js";
 export * from "./session.js";
 export * from "./permission.js";
+export * from "./permission-description.js";
 export * from "./sandbox-network.js";
 export * from "./environment.js";
 export * from "./execution.js";

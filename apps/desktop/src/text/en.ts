@@ -20,7 +20,64 @@
  * Placeholders and units stay in step with `zh.ts` by construction.
  */
 
+import type { PermissionDescriptionRenderers } from "@sciencediscovery/schema";
+
 import type { Text } from "./zh.js";
+
+/** in the Session workspace / in subagent X. */
+function permissionScope(subagentId: string | undefined): string {
+  return subagentId ? `in subagent ${subagentId}` : "in the Session workspace";
+}
+
+/** Run a shell script on build-01 in the Session workspace. */
+function permissionWhere(remoteHostAlias: string | undefined, subagentId: string | undefined): string {
+  return `${remoteHostAlias ? `on ${remoteHostAlias} ` : ""}${permissionScope(subagentId)}`;
+}
+
+/**
+ * The approval sentence, composed from the request's structured description
+ * (#1305). Wording here never comes from the server: the API has no Session
+ * locale, so the client is the only place that knows the reader's language.
+ */
+const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
+  shell: ({ remoteHostAlias, subagentId }) => `Run a shell script ${permissionWhere(remoteHostAlias, subagentId)}`,
+  python: ({ remoteHostAlias, subagentId }) => `Run Python code ${permissionWhere(remoteHostAlias, subagentId)}`,
+  language: ({ language, remoteHostAlias, subagentId }) => `Run ${language} code ${permissionWhere(remoteHostAlias, subagentId)}`,
+  "file-copy": ({ fileCount }) => `Copy ${fileCount} selected files between authorized Workspaces`,
+  npu: ({ operation, subject, subagentId }) => operation === "run"
+    ? `Run host NPU workload ${subject} ${permissionScope(subagentId)}`
+    : `Cancel host NPU job ${subject} ${permissionScope(subagentId)}`,
+  "direct-host": ({ account, command, cwd, runnerId, subagentId, target, workspaceRoot }) =>
+    `DIRECT HOST EXECUTION: Runner ${runnerId}, ${target}, account ${account}, workspace ${workspaceRoot}, cwd ${cwd || "."}`
+    + `${subagentId ? `, subagent ${subagentId}` : ""}. No sandbox filesystem, process or network isolation; host credentials may be accessible.`
+    + ` Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL.`
+    + ` Approval does not execute. Command:\n${command}`,
+  "specialist-runtime": ({ runtime, workspaceRoot }) =>
+    `Run ${runtime} directly on the API host in ${workspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
+  network: ({ hosts, purpose, runnerId }) =>
+    `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`,
+  environment: ({ environmentId, language, manager, name, operation, runnerId }) => {
+    const runner = runnerId ? ` on Runner ${runnerId}` : "";
+    switch (operation) {
+      case "create": return `Create named ${language ?? ""} environment ${name ?? environmentId ?? ""}${runner}`;
+      case "delete": return `Delete named environment ${environmentId ?? ""}${runner}`;
+      case "install": return `Install ${manager ?? ""} packages in named environment ${environmentId ?? ""}${runner}`;
+      case "setup": return `Set up scientific environments on the selected Runner${runner}`;
+      case "uninstall": return `Uninstall packages from named environment ${environmentId ?? ""}${runner}`;
+    }
+  },
+  "workspace-sync": ({ direction, paths, runnerId }) => `${direction} Runner ${runnerId}: ${paths.join(", ")}`,
+  "skill-publish": ({ proposalCount, subagentId }) => subagentId
+    ? `Publish ${proposalCount} Skill Library proposal(s) from subagent ${subagentId}`
+    : `Publish ${proposalCount} Skill Library proposal(s) in this Session`,
+  "mcp-tool": ({ recovered, sourceId, toolId }) => `Call ${recovered ? "repaired " : ""}MCP tool ${sourceId}/${toolId}`,
+  "artifact-download": ({ name, path }) => `Download ${name} to workspace path ${path}`,
+  "remote-job": ({ command, hostAlias, mode }) => `Run ${mode.toUpperCase()} job on ${hostAlias}: ${command}`,
+  web: ({ hostname, operation, query }) => operation === "fetch"
+    ? `Fetch public web content from ${hostname ?? ""}`
+    : `Search the public web for “${query ?? ""}”`,
+  "tool-call": ({ toolName }) => `Run ${toolName ? `tool ${toolName}` : "a tool call"} in this Session`,
+};
 
 export const EN: Text = {
   configurationLegacy: {
@@ -619,6 +676,17 @@ export const EN: Text = {
     decided: "Decided",
     execution: "Execution",
     toolCall: "Tool call",
+    actions: {
+      artifact_download: "Download an artifact",
+      code: "Run local code",
+      connector: "Use a connector",
+      direct_code: "Execute directly on the host (no sandbox)",
+      directory: "Access a directory",
+      host: "Connect to a host",
+      remote_job: "Run a remote job",
+      sandbox_network: "Sandbox network access",
+    },
+    description: PERMISSION_DESCRIPTIONS,
   },
 
   wizard: {

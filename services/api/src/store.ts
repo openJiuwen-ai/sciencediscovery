@@ -19,7 +19,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
-import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds, isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds, isEvidenceSessionReadOnly, normalizePermissionDescription } from "@sciencediscovery/schema";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -106,6 +106,7 @@ import type {
   PermissionAuthorization,
   PermissionAuthorizationSource,
   PermissionDecision,
+  PermissionDescription,
   PermissionEpoch,
   PermissionGrant,
   PermissionGrantScope,
@@ -6304,7 +6305,10 @@ export class SessionStore {
       "remote_job",
       `remote_job:${host.id}:${input.mode}:${id}`,
       `Run ${input.mode.toUpperCase()} job on ${host.alias}: ${command.slice(0, 180)}`,
-      context,
+      {
+        ...context,
+        description: { command: command.slice(0, 180), hostAlias: host.alias, kind: "remote-job", mode: input.mode },
+      },
     );
     const autoAccepted = permission.allowed;
     const job: RemoteJob = {
@@ -6832,7 +6836,7 @@ export class SessionStore {
     action: PermissionAction,
     resourceValue: string,
     summaryValue: string,
-    context: { executionId?: string; toolCallId?: string } = {},
+    context: { description?: PermissionDescription; executionId?: string; toolCallId?: string } = {},
   ): Promise<
     { allowed: true; authorization: PermissionAuthorization }
     | { allowed: false; request: PermissionRequest }
@@ -6908,9 +6912,11 @@ export class SessionStore {
       else await this.appendPermissionAuthorizations([authorization]);
       return { allowed: true, authorization: structuredClone(authorization) };
     }
+    const description = normalizePermissionDescription(context.description);
     const request: PermissionRequest = {
       action,
       createdAt: new Date().toISOString(),
+      ...(description ? { description } : {}),
       ...(context.executionId ? { executionId: context.executionId } : {}),
       id: randomUUID(),
       projectId: session.projectId,
