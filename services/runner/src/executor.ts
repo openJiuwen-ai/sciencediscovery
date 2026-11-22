@@ -175,6 +175,21 @@ export function executionTimeoutMs(value: number | undefined, fallback: number):
   return timeoutMs;
 }
 
+/**
+ * Resolves the lifetime bound of one execution from the two limits that apply
+ * to it: the request's value (the deployment's Execution timeout setting,
+ * relayed by the API) and the Runner's own configured bound. Both are upper
+ * bounds, and 0 means unlimited on either side, so the stricter positive value
+ * wins and an unlimited side never removes the other side's bound.
+ */
+export function boundedExecutionTimeoutMs(requested: number | undefined, configured: number): number {
+  const requestedLimit = executionTimeoutMs(requested, 0);
+  const configuredLimit = executionTimeoutMs(configured, 0);
+  return requestedLimit > 0 && configuredLimit > 0
+    ? Math.min(requestedLimit, configuredLimit)
+    : Math.max(requestedLimit, configuredLimit);
+}
+
 export function resolveQuotaBytes(value: number | undefined, fallback: number, label: string): number {
   const bytes = value ?? fallback;
   if (!Number.isSafeInteger(bytes) || bytes < 0) {
