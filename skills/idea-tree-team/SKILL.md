@@ -1,6 +1,6 @@
 ---
 name: idea-tree-team
-description: Prepare supplied inputs for autonomous Idea Tree research and explain its saved results.
+description: Use when the composer message starts with /idea-tree or /idea-tree-team, or the user explicitly asks for autonomous Idea Tree research: prepare supplied inputs for the research and explain its saved results.
 ---
 
 # Idea Tree Research
