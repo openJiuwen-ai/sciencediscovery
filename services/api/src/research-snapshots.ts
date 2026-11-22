@@ -1068,6 +1068,20 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           ids.id(artifact.id);
           for (const version of artifact.versions ?? []) ids.id(version.id);
         }
+        // #1300: numbers are restored verbatim, so a package that gives one
+        // Artifact the same number twice would put two versions of it under one
+        // label and the by-number lookup would serve the wrong one. An unusable
+        // number is refused too: the restore skips it and the version keeps its
+        // provisional one, which then collides with a package number just as
+        // badly. Reject both before anything is created, so a refused import
+        // leaves no partial catalog behind.
+        for (const artifact of records.artifacts ?? []) {
+          const numbers = (artifact.versions ?? []).map((version) => version.version);
+          if (numbers.some((number) => !Number.isSafeInteger(number) || number <= 0))
+            throw new SessionStoreHttpError("ARTIFACT_VERSION_INVALID: the package carries a version number that is not a positive integer", 400);
+          if (new Set(numbers).size !== numbers.length)
+            throw new SessionStoreHttpError("ARTIFACT_VERSION_DUPLICATE: the package repeats a version number for one Artifact", 400);
+        }
         // CAS addresses are content identities and remain stable across imports. Put one
         // object at a time: a directory-backed map would materialise the whole package.
         for (const hash of imported.objects.keys()) {

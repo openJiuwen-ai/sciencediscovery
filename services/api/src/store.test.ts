@@ -396,7 +396,7 @@ test("server-generated Artifacts reject non-server versions with the same logica
 });
 
 interface PersistedArtifactCatalogRow {
-  artifactVersions: Array<{ artifactId: string; createdAt: string; id: string; version: number }>;
+  artifactVersions: Array<Record<string, unknown> & { artifactId: string }>;
   artifacts: Array<{ currentVersion: number; id: string }>;
 }
 
@@ -439,7 +439,12 @@ test("Artifact versions are numbered above the stored versions, not from a stale
 
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
+  // #1300: the load also lifts a pointer that lagged, so publishing an edit of
+  // the newest version is no longer rejected as a stale base.
+  assert.equal(reopened.getArtifact(session.id, first.artifact.id)?.currentVersion, 2);
   const third = await reopened.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: second.version.id,
     content: { hash: "c".repeat(64), size: 3 },
     kind: "dataset",
     logicalName: "counts.csv",
@@ -448,6 +453,109 @@ test("Artifact versions are numbered above the stored versions, not from a stale
   });
   assert.equal(third.version.version, 3);
   assert.deepEqual(reopened.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2, 3]);
+});
+
+test("an import keeps the package's own version numbers", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-import-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Imported version numbers");
+  const session = await store.createSession(project.id, "Import", {}, {}, { allowUnconfiguredModel: true });
+  const first = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 1 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  const second = await store.createArtifactVersion({
+    content: { hash: "b".repeat(64), size: 2 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  const operationId = "import-operation";
+  await store.setResearchSnapshots([{
+    sessionId: session.id,
+    snapshot: {
+      createdAt: new Date().toISOString(),
+      operationId,
+      packageChecksum: "0".repeat(64),
+      role: "imported_snapshot",
+      sessionIds: [session.id],
+      state: "importing",
+    },
+  }]);
+
+  await store.withResearchRestoration(operationId, async () => {
+    // A normally numbered package keeps 1..N exactly: the numbers
+    // `createArtifactVersion` provisionally allocated must not shift it.
+    await store.restoreArtifactVersionLineage(session.id, first.version.id, [], first.version.createdAt, 1);
+    await store.restoreArtifactVersionLineage(session.id, second.version.id, [], second.version.createdAt, 2);
+    await store.restoreArtifactMetadata(session.id, first.artifact.id, first.artifact);
+    assert.deepEqual(store.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2]);
+    assert.equal(store.getArtifact(session.id, first.artifact.id)?.currentVersion, 2);
+
+    // A well-formed package keeps the numbers it carries.
+    await store.restoreArtifactVersionLineage(session.id, second.version.id, [], second.version.createdAt, 5);
+    await store.restoreArtifactMetadata(session.id, first.artifact.id, first.artifact);
+    assert.deepEqual(store.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 5]);
+    assert.equal(store.getArtifact(session.id, first.artifact.id)?.currentVersion, 5);
+  });
+});
+
+test("a catalog with malformed version numbers and timestamps still loads", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-malformed-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Malformed version numbers");
+  const session = await store.createSession(project.id, "Malformed", {}, {}, { allowUnconfiguredModel: true });
+  for (const [hash, size] of [["a", 1], ["b", 2], ["c", 3]] as const) {
+    await store.createArtifactVersion({
+      content: { hash: hash.repeat(64), size },
+      kind: "dataset",
+      logicalName: "counts.csv",
+      mediaType: "text/csv",
+      sessionId: session.id,
+    });
+  }
+  const artifactId = store.listProjectArtifacts(project.id)[0]!.id;
+  editPersistedArtifactCatalog(tempRoot, (catalog) => {
+    const rows = catalog.artifactVersions.filter((entry) => entry.artifactId === artifactId);
+    const unusable = rows[0]!;
+    const undated = rows[1]!;
+    const duplicate = rows[2]!;
+    unusable.version = "not-a-number";
+    delete undated.createdAt;
+    duplicate.version = 1;
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  const numbers = reopened.listArtifactVersions(session.id, artifactId).map((version) => version.version);
+  assert.equal(numbers.length, 3);
+  assert.ok(numbers.every((number) => Number.isSafeInteger(number) && number > 0), `unusable numbers: ${numbers.join(",")}`);
+  assert.equal(new Set(numbers).size, 3);
+
+  // A pointer that is not a usable number must not survive the load and turn the
+  // next allocation into NaN.
+  editPersistedArtifactCatalog(tempRoot, (catalog) => {
+    delete (catalog.artifacts.find((artifact) => artifact.id === artifactId) as { currentVersion?: number }).currentVersion;
+  });
+  const afterPointerRepair = new SessionStore(tempRoot);
+  await afterPointerRepair.load();
+  assert.equal(afterPointerRepair.getArtifact(session.id, artifactId)?.currentVersion, 3);
+  const fourth = await afterPointerRepair.createArtifactVersion({
+    content: { hash: "d".repeat(64), size: 4 },
+    kind: "dataset",
+    logicalName: "counts.csv",
+    mediaType: "text/csv",
+    sessionId: session.id,
+  });
+  assert.equal(fourth.version.version, 4);
 });
 
 test("a catalog holding duplicate Artifact version numbers is renumbered on load", async (context) => {

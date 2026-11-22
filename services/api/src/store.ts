@@ -558,43 +558,79 @@ function buildWorkspaceProvenanceIndex(
 }
 
 /**
- * #1300: version numbers are per-Artifact and were only ever derived from
- * `artifact.currentVersion`, so a catalog written by an older build (or edited
- * by hand) can hold two versions of one Artifact under the same number, which
- * makes "v3" ambiguous in the UI and in citations. Keep the first number in
- * (createdAt, id) order and move each later collision to a free number above the
- * Artifact's highest one. Returns whether anything changed.
+ * #1300: version numbers are per-Artifact, and both writers used to trust a
+ * single number (`artifact.currentVersion + 1`, or an imported package's own
+ * numbering), so a catalog written by an older build or edited by hand could
+ * hold two versions of one Artifact under the same number and "v3" became
+ * ambiguous in the UI, in by-number lookups and in citations. Normalise on
+ * load: keep the first number in (createdAt, id) order, move each later
+ * collision above the Artifact's highest number, and lift `currentVersion` to
+ * the highest number that actually exists. Groups whose numbers are already
+ * unique are left untouched, and a field that is not a safe integer is treated
+ * as missing so a hand-edited catalog still loads. Returns whether anything
+ * changed.
  */
-function repairDuplicateArtifactVersionNumbers(
+function normalizeArtifactVersionNumbers(
   artifacts: Map<string, ScientificArtifact>,
   versions: readonly ScientificArtifactVersion[],
 ): boolean {
+  const usableVersionNumber = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0;
   const byArtifactId = new Map<string, ScientificArtifactVersion[]>();
   for (const version of versions) {
     const values = byArtifactId.get(version.artifactId) ?? [];
     values.push(version);
     byArtifactId.set(version.artifactId, values);
   }
-  let repaired = false;
-  for (const [artifactId, entries] of byArtifactId) {
-    const seen = new Set<number>();
-    let next = entries.reduce((highest, entry) => Math.max(highest, entry.version), 0) + 1;
-    let repairedArtifact = false;
-    for (const entry of entries.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)
-      || left.id.localeCompare(right.id))) {
-      if (seen.has(entry.version)) {
-        while (seen.has(next)) next += 1;
-        entry.version = next;
-        repairedArtifact = true;
-      }
-      seen.add(entry.version);
-    }
-    if (!repairedArtifact) continue;
-    const artifact = artifacts.get(artifactId);
-    if (artifact) artifact.currentVersion = Math.max(artifact.currentVersion, ...entries.map((entry) => entry.version));
-    repaired = true;
+  let changed = false;
+  // A pointer that is not a whole number cannot be compared or incremented, and
+  // it would otherwise survive every load and turn the next allocation into NaN.
+  for (const artifact of artifacts.values()) {
+    if (Number.isSafeInteger(artifact.currentVersion) && artifact.currentVersion >= 0) continue;
+    artifact.currentVersion = 0;
+    changed = true;
   }
-  return repaired;
+  for (const [artifactId, entries] of byArtifactId) {
+    const numbers = entries.map((entry) => entry.version);
+    const taken = new Set<number>();
+    let highest = 0;
+    for (const number of numbers) {
+      if (!usableVersionNumber(number)) continue;
+      taken.add(number);
+      highest = Math.max(highest, number);
+    }
+    const artifact = artifacts.get(artifactId);
+    const assigned = new Set(taken);
+    if (assigned.size === numbers.length) {
+      if (artifact && highest > artifact.currentVersion) {
+        artifact.currentVersion = highest;
+        changed = true;
+      }
+      continue;
+    }
+    let next = highest + 1;
+    const ordered = entries.toSorted((left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? ""))
+      || String(left.id ?? "").localeCompare(String(right.id ?? "")));
+    const seen = new Set<number>();
+    for (const entry of ordered) {
+      const number = entry.version;
+      if (usableVersionNumber(number) && !seen.has(number)) {
+        seen.add(number);
+        continue;
+      }
+      while (seen.has(next) || taken.has(next)) next += 1;
+      entry.version = next;
+      seen.add(next);
+      assigned.add(next);
+      changed = true;
+    }
+    const repairedHighest = Math.max(0, ...assigned);
+    if (artifact && repairedHighest > artifact.currentVersion) {
+      artifact.currentVersion = repairedHighest;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export class SessionStoreHttpError extends Error {
@@ -1416,8 +1452,8 @@ export class SessionStore {
         ...(savedVersion.sourcePath ? { sourcePath: savedVersion.sourcePath } : { sourcePath: artifact.logicalName }),
       } satisfies ScientificArtifactVersion];
     });
-    const repairedArtifactVersionNumbers = repairDuplicateArtifactVersionNumbers(artifactsById, artifactVersions);
-    const migratedArtifactCatalog = repairedArtifactVersionNumbers
+    const normalizedArtifactVersionNumbers = normalizeArtifactVersionNumbers(artifactsById, artifactVersions);
+    const migratedArtifactCatalog = normalizedArtifactVersionNumbers
       || JSON.stringify(artifacts) !== JSON.stringify(savedArtifacts)
       || JSON.stringify(artifactVersions) !== JSON.stringify(savedArtifactVersions);
     const savedReviewerSpecialistLevel: unknown = saved.reviewerSpecialistLevel;
@@ -5725,15 +5761,24 @@ export class SessionStore {
   }
 
   /**
-   * #1300: allocate from the catalogue's own maximum instead of trusting
-   * `artifact.currentVersion`, which can lag behind the versions on disk.
+   * #1300: allocation never trusts `artifact.currentVersion`, which can lag
+   * behind the versions on disk, and it never hands out a number that is already
+   * stored for this Artifact.
    */
   private nextArtifactVersionNumber(artifact: ScientificArtifact): number {
-    const highestStored = this.catalog.artifactVersions.reduce(
-      (highest, version) => version.artifactId === artifact.id ? Math.max(highest, version.version) : highest,
-      0,
-    );
-    return Math.max(highestStored, artifact.currentVersion) + 1;
+    const pointer = Number.isSafeInteger(artifact.currentVersion) && artifact.currentVersion > 0 ? artifact.currentVersion : 0;
+    let highest = 0;
+    const taken = new Set<number>();
+    for (const version of this.catalog.artifactVersions) {
+      if (version.artifactId !== artifact.id) continue;
+      if (typeof version.version === "number" && Number.isSafeInteger(version.version) && version.version > 0) {
+        taken.add(version.version);
+        highest = Math.max(highest, version.version);
+      }
+    }
+    let next = Math.max(highest, pointer) + 1;
+    while (taken.has(next)) next += 1;
+    return next;
   }
 
   async createArtifactVersion(input: {
@@ -5850,12 +5895,6 @@ export class SessionStore {
       ...(input.turnId ? { turnId: input.turnId } : {}),
       version: this.nextArtifactVersionNumber(artifact),
     };
-    // The allocation above cannot collide on its own; keep the invariant checked
-    // so a catalog that somehow holds the number again fails loudly instead of
-    // silently creating a second "v3".
-    if (this.catalog.artifactVersions.some((existing) => existing.artifactId === artifact.id
-      && existing.version === version.version))
-      throw new Error("ARTIFACT_VERSION_DUPLICATE: Artifact version number is already allocated; local file preserved");
     artifact.currentVersion = version.version;
     artifact.updatedAt = now;
     this.catalog.artifactVersions.push(version);
@@ -5888,6 +5927,12 @@ export class SessionStore {
     version.baseVersionId = originalBaseVersionId;
     version.createdAt = createdAt;
     if (originalVersion !== undefined && Number.isSafeInteger(originalVersion) && originalVersion > 0) {
+      // #1300: a package exported from a catalog that already held duplicate
+      // numbers would otherwise re-create them here, and the by-number lookup
+      // would then materialise the wrong bytes.
+      // A package's own numbers are preserved: the import integrity check
+      // compares them one by one. `restoreArtifactMetadata` then rejects a
+      // package that gives one Artifact the same number twice (#1300).
       version.version = originalVersion;
       const artifact = this.catalog.artifacts.find((item) => item.id === version.artifactId)!;
       artifact.currentVersion = Math.max(...this.catalog.artifactVersions.filter((item) => item.artifactId === artifact.id).map((item) => item.version));
