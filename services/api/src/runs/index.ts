@@ -1296,6 +1296,7 @@ async function executeAgentRun(
       const result = await provenanceRecorder.declareWorkspaceArtifact({
         artifactId: input.artifactId, baseVersionId: input.baseVersionId,
         ...(input.artifactId && input.toolCallId ? { publicationId: `${turnId}:${input.toolCallId}` } : {}),
+        ...(input.artifactId && input.forceNewVersion ? { forceNewVersion: true } : {}),
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,
         path: input.path,

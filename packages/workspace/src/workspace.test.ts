@@ -1032,7 +1032,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "force_new_version", "name", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -1102,6 +1102,8 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", ...alias }), /cannot rename or batch/);
   await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
   assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
+  await declare.execute("revision-forced", { artifact_id: "artifact-1", base_version_id: "version-1", force_new_version: true, path: "edit.dat" });
+  assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", forceNewVersion: true, toolCallId: "revision-forced", path: "edit.dat" });
   const listed = await list.execute("list", {});
   assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /llm_declared/);
   const readResult = await read.execute("read", { name: "result" });

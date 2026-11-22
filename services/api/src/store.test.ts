@@ -455,6 +455,127 @@ test("Artifact versions are numbered above the stored versions, not from a stale
   assert.deepEqual(reopened.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2, 3]);
 });
 
+test("an explicit republish of the newest body returns that version instead of a duplicate", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-unchanged-republish-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Unchanged republish");
+  const session = await store.createSession(project.id, "Report", {}, {}, { allowUnconfiguredModel: true });
+  const firstBody = { hash: "a".repeat(64), size: 42 };
+  const first = await store.createArtifactVersion({
+    content: firstBody,
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  });
+  const publishedAt = first.artifact.updatedAt;
+
+  // #1317: the model republished a document after a verification pass that
+  // changed nothing, and the old behaviour appended v2 with the same bytes.
+  const unchanged = await store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: first.version.id,
+    content: firstBody,
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  });
+  assert.equal(unchanged.version.id, first.version.id, "the existing newest version is returned");
+  assert.equal(unchanged.version.version, 1);
+  assert.equal(unchanged.artifact.currentVersion, 1);
+  assert.equal(unchanged.artifact.updatedAt, publishedAt, "a no-op publish must not reorder the Project");
+  assert.equal(store.getArtifact(session.id, first.artifact.id)?.updatedAt, publishedAt);
+  assert.deepEqual(store.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1]);
+
+  // The no-op must not bypass the guards that ran before it: a kind change and a
+  // non-server writer on a server-generated Artifact are still rejected.
+  await assert.rejects(store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: first.version.id,
+    content: firstBody,
+    kind: "dataset",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  }), /Artifact kind cannot change across versions/);
+  const generated = await store.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 44 },
+    kind: "json",
+    logicalName: "server.json",
+    mediaType: "application/json",
+    origin: "server_generated",
+    sessionId: session.id,
+  });
+  await assert.rejects(store.createArtifactVersion({
+    artifactId: generated.artifact.id,
+    baseVersionId: generated.version.id,
+    content: generated.version.content,
+    kind: "json",
+    logicalName: "server.json",
+    mediaType: "application/json",
+    sessionId: session.id,
+  }), /Server-generated Artifacts accept new versions only from a server-generated writer/);
+
+  // Different bytes still create the next version.
+  const changed = await store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: first.version.id,
+    content: { hash: "b".repeat(64), size: 43 },
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  });
+  assert.equal(changed.version.version, 2);
+
+  // Republishing the new body is again a no-op, not v3.
+  const unchangedAgain = await store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: changed.version.id,
+    content: { hash: "b".repeat(64), size: 43 },
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  });
+  assert.equal(unchangedAgain.version.id, changed.version.id);
+  assert.deepEqual(store.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2]);
+
+  // A caller that really wants a new number can ask for one.
+  const forced = await store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: changed.version.id,
+    content: { hash: "b".repeat(64), size: 43 },
+    forceNewVersion: true,
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/markdown",
+    sessionId: session.id,
+  });
+  assert.equal(forced.version.version, 3);
+
+  // mediaType is part of the comparison: the same bytes under a different media
+  // type are a new representation, not a duplicate.
+  const retyped = await store.createArtifactVersion({
+    artifactId: first.artifact.id,
+    baseVersionId: forced.version.id,
+    content: { hash: "b".repeat(64), size: 43 },
+    kind: "markdown",
+    logicalName: "README.md",
+    mediaType: "text/plain",
+    sessionId: session.id,
+  });
+  assert.equal(retyped.version.version, 4);
+
+  // The two no-ops were never persisted as versions.
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.listArtifactVersions(session.id, first.artifact.id).map((version) => version.version), [1, 2, 3, 4]);
+});
+
 test("an import keeps the package's own version numbers", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-import-${Date.now()}-${process.pid}`);
   context.after(() => rm(tempRoot, { force: true, recursive: true }));

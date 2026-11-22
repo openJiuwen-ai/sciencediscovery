@@ -121,8 +121,15 @@ for (const binary of [false, true]) test(`immutable artifact edit roundtrip, bin
   assert.equal((await reopened.createArtifactVersion(publish)).version.id, second.version.id, "durable retry identity");
   await assert.rejects(reopened.createArtifactVersion({ ...publish, content: first.version.content }), /PUBLICATION_CONFLICT/);
   await assert.rejects(reopened.createArtifactVersion({ ...publish, publicationId: "different-call" }), /VERSION_CONFLICT/);
-  const concurrent = await Promise.allSettled(["writer-a", "writer-b"].map(publicationId =>
-    reopened.createArtifactVersion({ ...publish, baseVersionId: second.version.id, publicationId })));
+  // #1317: an unchanged republish is now a no-op, so the two writers publish
+  // different bytes. They still race on the same base, which is the conflict
+  // this assertion is about.
+  const concurrent = await Promise.allSettled(["writer-a", "writer-b"].map(async (publicationId) => {
+    const bytes = Buffer.from(edited);
+    bytes[bytes.length - 1] = publicationId === "writer-a" ? 0 : 1;
+    return reopened.createArtifactVersion({ ...publish, baseVersionId: second.version.id,
+      content: await cas.put(bytes), publicationId });
+  }));
   assert.equal(concurrent.filter(r => r.status === "fulfilled").length, 1);
   assert.equal(concurrent.filter(r => r.status === "rejected").length, 1);
   assert.deepEqual(await readFile(join(childRoot, "editable.dat")), edited, "conflicts preserve edits");

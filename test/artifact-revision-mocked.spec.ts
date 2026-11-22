@@ -8,11 +8,12 @@ import { researchModel } from "./helpers/research-model.ts";
 
 /**
  * E2E-META
- * Purpose: Edit a large parent Artifact in an isolated Swarm child without retranscribing its content.
+ * Purpose: Edit a large parent Artifact in an isolated Swarm child without retranscribing its content, and keep an unchanged republish as a no-op.
  * Steps:
  *   1. Generate and declare a large report in the parent workspace.
  *   2. Give a child only the immutable reference; import, patch and explicitly publish a revision.
- *   3. Verify both immutable versions and exact content, and short metadata-only materialization output.
+ *   3. Republish the same body explicitly; the newest version must stay v2.
+ *   4. Verify both immutable versions and exact content, and short metadata-only materialization output.
  * Environment: Isolated Swarm stack, local Runner and offline research model.
  * Type: mocked
  * LLM: Scripted local provider through the real model gateway.
@@ -28,7 +29,7 @@ test("AR-01 child edits a fixed artifact version without copying its text", {
 }, async ({ page, journey }, info) => {
   expect(process.env.E2E_SWARM_TASK, "requires native task delegation into Swarm").toBe("1");
   test.setTimeout(180_000);
-  journey.scenario({ goal: "Original bytes enter an isolated child; its edit creates one explicit new version", preconditions: ["Swarm task delegation", "local sandbox"] });
+  journey.scenario({ goal: "Original bytes enter an isolated child; its edit creates one explicit new version, and an unchanged republish adds none", preconditions: ["Swarm task delegation", "local sandbox"] });
   let artifactId = "", baseVersionId = "";
   const stub = await researchModel({
     main: [
@@ -49,7 +50,12 @@ test("AR-01 child edits a fixed artifact version without copying its text", {
       () => ({ tools: [{ name: "materialize_artifact", arguments: { artifact_id: artifactId, version: 1, path: "edit.md" } }] }),
       { tools: [{ name: "run_shell", arguments: { command: "python3 - <<'PY'\nfrom pathlib import Path\np=Path('edit.md')\np.write_bytes(p.read_bytes().replace(b'[1]', b'[2]', 1))\nPY" } }] },
       () => ({ tools: [{ name: "declare_artifact", arguments: { artifact_id: artifactId, base_version_id: baseVersionId, path: "edit.md" } }] }),
-      { text: "Published version 2; only the first citation changed." },
+      request => {
+        const publishedVersionId = [...request.results.join("\n").matchAll(/"version_id"\s*:\s*"([^"]+)"/g)].at(-1)?.[1] ?? "";
+        if (!publishedVersionId || publishedVersionId === baseVersionId) throw new Error("Missing published version receipt");
+        return { tools: [{ name: "declare_artifact", arguments: { artifact_id: artifactId, base_version_id: publishedVersionId, path: "edit.md" } }] };
+      },
+      { text: "Republished the unchanged report; the newest version was kept." },
     ],
   });
   let fixture: JourneyFixture | undefined;
@@ -66,6 +72,10 @@ test("AR-01 child edits a fixed artifact version without copying its text", {
     expect(versions).toHaveLength(2);
     expect(versions[1].baseVersionId).toBe(baseVersionId);
     expect(versions[1].inputArtifactVersionIds).toContain(baseVersionId);
+    const republishCall = stub.calls.find(c => c.route === "editor" && c.step === 4);
+    const republished = JSON.parse(republishCall?.results.at(-1) ?? "{}") as { version?: number; version_id?: string };
+    expect(republished.version, "an unchanged republish must not create v3").toBe(2);
+    expect(republished.version_id).toBe(versions[1]?.id);
     // read_artifact itself is not used in the model script: inspect persisted bytes via API.
     const { apiBaseUrl, authorizationHeader } = await import("./e2e-auth.js");
     const contents = await Promise.all(versions.map(async v => {

@@ -281,6 +281,9 @@ async function seedArtifacts(
     const content = await cas.put(Buffer.from(artifact.contentBase64, "base64"));
     const written = await store.createArtifactVersion({
       ...(base ? { artifactId: base.artifactId, baseVersionId: base.versionId } : {}),
+      // The sample replays a recorded history, so keep every recorded version
+      // even when two drafts happen to have identical bytes (#1317).
+      ...(base ? { forceNewVersion: true } : {}),
       content,
       ...(artifact.description ? { description: artifact.description } : {}),
       ...(artifact.executionRunIds.length > 0 ? { executionRunIds: artifact.executionRunIds } : {}),

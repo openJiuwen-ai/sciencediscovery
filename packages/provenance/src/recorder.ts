@@ -331,6 +331,8 @@ export class ProvenanceRecorder {
     artifactId?: string;
     baseVersionId?: string;
     publicationId?: string;
+    /** Request a new version even when the bytes match the newest version. */
+    forceNewVersion?: boolean;
     description?: string;
     executionRunIds?: string[];
     inputArtifactVersionIds?: string[];
@@ -349,6 +351,7 @@ export class ProvenanceRecorder {
   }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }> {
     const registered = await this.artifactRegistry.registerWorkspaceArtifact({
       artifactId: options.artifactId, baseVersionId: options.baseVersionId, publicationId: options.publicationId,
+      ...(options.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(options.description ? { description: options.description } : {}),
       executionRunIds: options.executionRunIds,
       inputArtifactVersionIds: options.inputArtifactVersionIds,
@@ -403,6 +406,8 @@ export class ProvenanceRecorder {
     artifactId?: string;
     baseVersionId?: string;
     publicationId?: string;
+    /** Request a new version even when the bytes match the newest version. */
+    forceNewVersion?: boolean;
     description?: string;
     name: string;
     /** When set, this artifact was declared inside a subagent: its upsert
@@ -484,6 +489,7 @@ export class ProvenanceRecorder {
     // the chip references that context's declare_claim calls pushed.
     const { artifact, version } = await this.registerWorkspaceArtifact({
       artifactId: options.artifactId, baseVersionId: options.baseVersionId, publicationId: options.publicationId,
+      ...(options.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(options.description ? { description: options.description } : {}),
       ...(run ? { executionRunIds: [run.id] } : {}),
       inputArtifactVersionIds: inputs.versionIds,

@@ -449,6 +449,7 @@ export interface WorkspaceToolOptions {
   declareArtifact?: (input: {
     artifactId?: string; baseVersionId?: string; toolCallId?: string;
     description?: string;
+    forceNewVersion?: boolean;
     name?: string;
     path: string;
   }) => Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }>;
@@ -1147,6 +1148,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       artifacts: Type.Optional(Type.Unknown({ description: 'Compatibility alias for paths: [{path, name?, description?}]. Only each path is used; prefer path or paths.' })),
       base_version_id: Type.Optional(Type.String({ minLength: 1 })),
       description: Type.Optional(Type.String({ maxLength: 2_000 })),
+      force_new_version: Type.Optional(Type.Boolean({ description: "Set true only to force a new version number when the file bytes are unchanged, for example an annotation-only republish. A normal republish of identical bytes returns the existing newest version." })),
       name: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
       path: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
       paths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), {
@@ -1155,7 +1157,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       })),
     });
     const declareArtifact: AgentTool<typeof parameters> = {
-      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: if declare_claim is available and a markdown/text artifact carries [alias] citation tokens, call declare_artifact(output) AFTER its declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
+      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Republishing unchanged bytes returns the existing newest version instead of adding a duplicate; set force_new_version only when an annotation-only republish really needs a new number. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: if declare_claim is available and a markdown/text artifact carries [alias] citation tokens, call declare_artifact(output) AFTER its declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
       execute: async (_toolCallId, params) => {
         const pathGuidance = 'Use path for one file, paths for an array of file paths, or artifacts: [{path: "relative/file"}] with a nonempty artifacts[].path.';
         let paths = params.paths;
@@ -1206,6 +1208,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await options.declareArtifact!({
           ...(params.artifact_id ? { artifactId: params.artifact_id, baseVersionId: params.base_version_id, toolCallId: _toolCallId } : {}),
           ...(params.description ? { description: params.description } : {}),
+          ...(params.force_new_version ? { forceNewVersion: true } : {}),
           ...(params.name ? { name: params.name } : {}),
           path: params.path,
         });
