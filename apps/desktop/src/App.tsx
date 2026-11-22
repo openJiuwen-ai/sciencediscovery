@@ -76,7 +76,9 @@ import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
   GUIDE_STORAGE_KEY,
   RIGHT_PANEL_STORAGE_KEY,
+  SIDEBAR_STORAGE_KEY,
   readStoredFlag,
+  readStoredFlagOnByDefault,
   writeStoredFlag,
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
@@ -171,7 +173,9 @@ export function App({ initialToken }: Props) {
   // The permission mode new conversations inherit: the reader's last choice, stored so
   // it survives a restart, and never applied to a session that already exists (#1204).
   const [lastApprovalMode, setLastApprovalMode] = useState(inheritedApprovalMode());
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    readStoredFlagOnByDefault(localStorage, SIDEBAR_STORAGE_KEY),
+  );
   const [workspaceOpen, setWorkspaceOpen] = useState(() =>
     readStoredFlag(localStorage, RIGHT_PANEL_STORAGE_KEY),
   );
@@ -467,6 +471,13 @@ export function App({ initialToken }: Props) {
   useEffect(() => {
     writeStoredFlag(localStorage, RIGHT_PANEL_STORAGE_KEY, workspaceOpen);
   }, [workspaceOpen]);
+
+  // The task column's fold is a preference, not a side effect of the panel
+  // taking the column: after a refresh the reader gets back the width they
+  // asked for (#1291).
+  useEffect(() => {
+    writeStoredFlag(localStorage, SIDEBAR_STORAGE_KEY, sidebarOpen);
+  }, [sidebarOpen]);
 
   /** The first-run guide: three cards over the composer, 设置 and the panel. */
   const [guideOpen, setGuideOpen] = useState(false);

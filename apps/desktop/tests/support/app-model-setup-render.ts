@@ -7,12 +7,13 @@ import React from "react";
 import { DEFAULT_REVIEWER_SPECIALIST_LEVEL } from "@sciencediscovery/schema";
 import { act, create, type ReactTestInstance } from "./dom-renderer.js";
 import type { ModelProfile, ModelUsageBucket, Project, Session, SessionUsageSummary } from "../../src/api/types.js";
-import { GUIDE_STORAGE_KEY, LOCALE_STORAGE_KEY } from "../../src/state/storage.js";
+import { GUIDE_STORAGE_KEY, LOCALE_STORAGE_KEY, SIDEBAR_STORAGE_KEY } from "../../src/state/storage.js";
 
 const [language, scenario] = process.argv.slice(2);
 assert.ok(language === "zh-CN" || language === "en");
 assert.ok(scenario);
 const storage = new Map<string, string>([[GUIDE_STORAGE_KEY, "1"], [LOCALE_STORAGE_KEY, language]]);
+if (scenario === "sidebar-collapsed") storage.set(SIDEBAR_STORAGE_KEY, "0");
 const localStorage = {
   getItem: (key: string) => storage.get(key) ?? null,
   setItem: (key: string, value: string) => { storage.set(key, value); },
@@ -133,6 +134,22 @@ function text(node: ReactTestInstance | string): string {
 }
 let renderer: ReturnType<typeof create> | undefined;
 function root() { assert.ok(renderer); return renderer.root; }
+function shellClasses(): string[] {
+  const shells = root().findAllByType("div")
+    .filter(node => String(node.props.className).split(" ").includes("app-shell"));
+  assert.equal(shells.length, 1);
+  const shell = shells[0];
+  assert.ok(shell);
+  return String(shell.props.className).split(" ").filter(Boolean);
+}
+function sidebarToggle(open: boolean) {
+  const found = root().findAllByProps({ className: "icon-btn side-toggle" })
+    .filter(node => node.props["aria-expanded"] === open);
+  assert.equal(found.length, 1);
+  const toggle = found[0];
+  assert.ok(toggle);
+  return toggle;
+}
 function assertSetup() {
   // With no account and no model the entry page offers both ways in; the
   // workspace stays closed until one of them succeeds.
@@ -189,6 +206,21 @@ try {
     assert.ok(calls.includes("POST /api/projects"));
     assert.equal(data.sessions[0]?.projectId, "new-project");
     assertModel();
+  } else if (scenario === "sidebar-collapsed") {
+    assertModel();
+    // The stored fold survives the first render: the column is not there.
+    assert.ok(shellClasses().includes("sidebar-hidden"), "a stored collapse must survive the first render");
+    assert.equal(root().findAllByProps({ className: "side-new" }).length, 0);
+    // The page head asks for the column back, which records the choice.
+    await click(sidebarToggle(false));
+    assert.ok(!shellClasses().includes("sidebar-hidden"));
+    assert.equal(storage.get(SIDEBAR_STORAGE_KEY), "1");
+    // Fold it again and render a fresh App: the refresh the issue reports.
+    await click(sidebarToggle(true));
+    assert.equal(storage.get(SIDEBAR_STORAGE_KEY), "0");
+    await act(async () => { renderer?.unmount(); });
+    await act(async () => { renderer = create(React.createElement(App, { initialToken: randomUUID() })); });
+    assert.ok(shellClasses().includes("sidebar-hidden"), "a reload must not bring the folded column back");
   } else assert.fail(`Unknown scenario: ${scenario}`);
   assert.equal(fakeDocument.documentElement.lang, language);
   assert.deepEqual(unexpected, []);
