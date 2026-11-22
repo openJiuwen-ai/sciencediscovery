@@ -138,10 +138,20 @@ cannot silently deliver an empty result. The two shapes that would otherwise
 look identical are separate classifications as well as separate `hasReasoning`
 values: a reasoning model that spent its whole budget thinking and answered
 nothing is `reasoning_only` (`hasReasoning: true`), and a relay that returned an
-empty `stop` is `empty_completion` (`hasReasoning: false`). Both still fail the
-request; only the recorded class differs. A turn cut at the output limit
-keeps the existing truncation recovery path, but a *terminal* one — the cut
-turn calls no tool, so nothing else will ever produce the answer — fails the
+empty `stop` is `empty_completion` (`hasReasoning: false`). Both are still
+errors rather than final answers; only the recorded class differs. The gateway
+replays a task request that fails with that shape up to
+`MAX_EMPTY_TURN_RETRIES` (2) times before giving up, and a replay commits no
+text and no tool call and does not send the hidden reasoning downstream again;
+the `[model-sse-summary]` line counts those replays in `retryErrors`. When
+that budget is exhausted the request fails with the `502` before a response
+starts, or with the `model_gateway_error` event when reasoning already reached
+the client; that failure keeps the original wire classification, carries the
+readable "no answer for this step after 2 retries" message, and classifies the
+run failure as `server-error` instead of `semantic-error`. Housekeeping and
+compaction calls are not replayed. A turn cut at the output limit keeps the
+existing truncation recovery path, but a *terminal* one — the cut turn calls no
+tool, so nothing else will ever produce the answer — fails the
 run instead of reporting it `completed`: both backends refuse an
 "unrecovered output limit", the native one with the configured `max_tokens`
 in the message so the knob is obvious. The error message preserves the
