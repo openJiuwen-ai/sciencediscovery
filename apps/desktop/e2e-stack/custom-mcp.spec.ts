@@ -146,9 +146,14 @@ test("creates, edits, calls and deletes a custom MCP server in desktop settings"
       await expect(defaults).not.toBeChecked();
       await defaults.click();
       await expect(defaults).toBeChecked();
-      const tools = await api<Array<{ id: string; mcpToolName: string }>>(page, `/api/mcp/sources/${serverId}/tools`);
-      const echo = tools.find((tool) => tool.mcpToolName === "echo");
-      expect(echo).toBeDefined();
+      // Saving now schedules background discovery. Wait for the published
+      // catalog, rather than assuming that an enabled server is already ready.
+      let echo: { id: string } | undefined;
+      await expect.poll(async () => {
+        const tools = await api<Array<{ id: string; mcpToolName: string }>>(page, `/api/mcp/sources/${serverId}/tools`);
+        echo = tools.find((tool) => tool.mcpToolName === "echo");
+        return echo?.id;
+      }, { timeout: 30_000 }).toBeTruthy();
       useEcho.tool = `mcp__${serverId}__${echo!.id}`;
       selectTool.arguments.query = `select:${useEcho.tool}`;
     });
@@ -165,6 +170,8 @@ test("creates, edits, calls and deletes a custom MCP server in desktop settings"
       await expect(card).toContainText("Edited local Echo server");
       const saved = (await getServers()).find((server) => server.id === serverId);
       expect(saved).toMatchObject({ description: "Edited local Echo server", enabled: true });
+      await expect.poll(async () => (await getServers()).find((server) => server.id === serverId)?.tools.length,
+        { timeout: 30_000 }).toBe(2);
     });
     await journey.step("Call Echo from the conversation", "The MCP service returns the uppercase marker, the invocation is recorded, and the saved answer is visible after reload.", async () => {
       await page.keyboard.press("Escape");
