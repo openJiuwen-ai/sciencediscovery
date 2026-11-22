@@ -41,9 +41,10 @@ export const TOKEN_STORAGE_KEY = `${CURRENT_PREFIX}-token`;
  *  change cannot collide with a key `apps/web` already owns. */
 
 export const RIGHT_PANEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:right-panel`;
-/** Whether the task column is folded away. Unlike the panel, which starts
- *  closed, this starts open: folding it is a request for more room, so only an
- *  explicit "0" hides the column on the next start (#1291). */
+/** Whether the task column is open ("1") or folded away ("0"). Unlike the
+ *  panel, which starts closed, this starts open: folding it is a request for
+ *  more room, so only an explicit "0" hides the column on the next start
+ *  (#1291). */
 export const SIDEBAR_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:sidebar`;
 /** The interface language picked in 设置 › 通用. Namespaced rather than shared
  *  with `apps/web`: the two front ends may be read on the same origin, and a
