@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 
 
 import { classifyRunFailure, runFailureMessage } from "./run-failure.js";
+import { ApiStatusError } from "./http/api-status-error.js";
 
 test("run failures classify into stable codes", () => {
   const cases: Array<[Error, string]> = [
@@ -49,6 +50,25 @@ test("classification never discards the provider's own text", () => {
   const error = new Error(detail);
   assert.equal(classifyRunFailure(error), "unauthorized");
   assert.equal(runFailureMessage(error), detail);
+});
+
+test("a model without a saved API key has its own failure class", () => {
+  // The run never reaches the provider, so the generic semantic-error class
+  // cannot explain the cause or the way out (Settings › Models).
+  const error = new ApiStatusError(400, "The selected model does not have a saved API token", "model-credential-missing");
+  assert.equal(classifyRunFailure(error), "model-credential-missing");
+  assert.equal(runFailureMessage(error), "The selected model does not have a saved API token");
+});
+
+test("the credential class comes from the typed code, not the sentence", () => {
+  assert.equal(
+    classifyRunFailure(new Error("The selected model does not have a saved API token")),
+    "semantic-error",
+  );
+  assert.equal(
+    classifyRunFailure(new ApiStatusError(400, "The model rejected the request", "model-credential-missing")),
+    "model-credential-missing",
+  );
 });
 
 test("non-Error failures still yield a message and a code", () => {

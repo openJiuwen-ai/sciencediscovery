@@ -29,6 +29,11 @@ export function classifyRunFailure(error: unknown): RunFailureCode {
   if (error instanceof Error && "code" in error && error.code === "SESSION_MODEL_UNAVAILABLE") {
     return "SESSION_MODEL_UNAVAILABLE";
   }
+  // The selected model has no saved API key, so the run never reached the provider.
+  // Matched by the typed code rather than the sentence, which is user-facing prose.
+  if (error instanceof Error && "code" in error && error.code === "model-credential-missing") {
+    return "model-credential-missing";
+  }
   const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
   // The provider answered; the model's own tool call could not be read. Checked first: the tool
   // names this message lists are arbitrary and may contain words the classes below look for.

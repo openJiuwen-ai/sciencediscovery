@@ -75,6 +75,24 @@ describe("formatRunFailure", () => {
   });
 });
 
+describe("model credential failure", () => {
+  it("names the missing API key and the model settings path in both languages", () => {
+    setLanguage("zh-CN");
+    assert.equal(formatRunFailureTitle("model-credential-missing"), "模型还没有配置 API Key");
+    assert.equal(
+      formatRunFailure("model-credential-missing"),
+      "这个模型在设置里没有保存 API Key，运行无法开始。到 设置 › 模型 补上后重试。",
+    );
+
+    setLanguage("en");
+    assert.equal(formatRunFailureTitle("model-credential-missing"), "Model has no API key");
+    assert.equal(
+      formatRunFailure("model-credential-missing"),
+      "This model has no saved API key, so the run cannot start. Add one in Settings › Models and try again.",
+    );
+  });
+});
+
 describe("failure titles and timeout guidance", () => {
   beforeEach(() => setLanguage("zh-CN"));
 
@@ -86,6 +104,7 @@ describe("failure titles and timeout guidance", () => {
       "transport-error": "模型服务连接失败",
       "server-error": "模型服务异常",
       "invalid-tool-call": "工具调用无效",
+      "model-credential-missing": "模型还没有配置 API Key",
       "semantic-error": "运行异常",
     };
     for (const [code, title] of Object.entries(titles)) assert.equal(formatRunFailureTitle(code), title);
