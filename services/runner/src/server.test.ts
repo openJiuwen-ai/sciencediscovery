@@ -36,7 +36,7 @@ import type {
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
-import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
+import { appendBounded, boundedExecutionTimeoutMs, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { ExecutionManager } from "./execution-manager.js";
 import { RunnerReadiness } from "./readiness.js";
@@ -58,6 +58,19 @@ const protenixPipelineScriptsDir = resolve(
   "antibody-design",
   "scripts",
 );
+
+test("managed execution keeps the stricter of the request and Runner execution limits", () => {
+  // Both sides are upper bounds; 0 means unlimited on either side.
+  assert.equal(boundedExecutionTimeoutMs(undefined, 0), 0);
+  assert.equal(boundedExecutionTimeoutMs(undefined, 60_000), 60_000);
+  assert.equal(boundedExecutionTimeoutMs(5_000, 0), 5_000);
+  assert.equal(boundedExecutionTimeoutMs(0, 60_000), 60_000);
+  assert.equal(boundedExecutionTimeoutMs(0, 0), 0);
+  assert.equal(boundedExecutionTimeoutMs(5_000, 60_000), 5_000);
+  assert.equal(boundedExecutionTimeoutMs(60_000, 5_000), 5_000);
+  assert.throws(() => boundedExecutionTimeoutMs(-1, 0), /non-negative integer/);
+  assert.throws(() => boundedExecutionTimeoutMs(1.5, 0), /non-negative integer/);
+});
 
 test("appendBounded treats remaining room 0 as empty, not unlimited", () => {
   const exhausted = appendBounded("already-full", Buffer.from("more-stderr"), 10, 10);
@@ -806,7 +819,9 @@ test("managed Shell HTTP submission detaches, exposes incremental logs, queues w
     }
   };
   const first = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
-    agentId: "main", executionId: "managed-first", workspaceRoot, permissionEpoch: epoch(), executionTimeoutMs: 1,
+    // 0 leaves only the Runner's 60s bound in effect, so returning the HTTP
+    // response early must not kill the job.
+    agentId: "main", executionId: "managed-first", workspaceRoot, permissionEpoch: epoch(), executionTimeoutMs: 0,
     code: "printf 'training-started\\n'; while :; do sleep 1; done",
   }));
   assert.equal(first.status, 202, await first.text());
@@ -832,6 +847,42 @@ test("managed Shell HTTP submission detaches, exposes incremental logs, queues w
   }));
   assert.equal(replay.status, 409);
   assert.equal((await replay.json() as { code: string }).code, "EXECUTION_ID_CONFLICT");
+});
+
+test("managed Shell HTTP submission enforces the request's Execution timeout when the Runner has none", async (context) => {
+  const { dataDir, workspaceRoot } = await workspaceFixture(context);
+  // Settings > Timeouts > Execution timeout is persisted as runnerExecTimeoutMs
+  // and the API relays it as executionTimeoutMs. The Runner env default is
+  // unlimited, so discarding the request's bound let `sleep 10` run to the end.
+  const server = createRunnerServer({ ...config(dataDir), execTimeoutMs: 0 });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token" };
+  const owner = new URLSearchParams({ sessionId: epoch().sessionId, agentId: "main" });
+  const get = async () => (await fetch(`${origin}/shell-executions/managed-request-timeout?${owner}`, { headers }))
+    .json() as Promise<import("@sciencediscovery/schema").ManagedExecution>;
+
+  const submitted = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-request-timeout", workspaceRoot, permissionEpoch: epoch(),
+    executionTimeoutMs: 5_000, code: "sleep 10; echo finished",
+  }));
+  assert.equal(submitted.status, 202, await submitted.text());
+
+  // Wait past the payload's natural 10s lifetime: before the fix the execution
+  // completes and echoes `finished` instead of failing at the 5s bound.
+  let execution = await get();
+  const deadline = Date.now() + 20_000;
+  while (execution.state !== "failed" && execution.state !== "completed" && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 20));
+    execution = await get();
+  }
+  assert.equal(execution.state, "failed");
+  assert.match(execution.error ?? "", /Shell execution timed out after 5000 ms/);
+  const logs = await (await fetch(`${origin}/shell-executions/managed-request-timeout/logs?${owner}`, { headers }))
+    .json() as import("@sciencediscovery/schema").ExecutionLogPage;
+  assert.equal(logs.chunks.some((chunk: { text: string }) => chunk.text.includes("finished")), false,
+    "the command must be terminated before its final output");
 });
 
 test("an unavailable managed Shell accepts the managed request and records a deterministic pre-admission failure", async (context) => {

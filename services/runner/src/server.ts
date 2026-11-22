@@ -47,6 +47,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import {
+  boundedExecutionTimeoutMs,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
@@ -1019,12 +1020,13 @@ export function createRunnerServer(
         await resolveExecutionWorkspace(config, execution);
         const direct = url.pathname === "/direct-shell-executions";
         if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
-        // A client's waiting deadline is not the process's lifetime, so managed
-        // executions run without one by default. An operator who explicitly set
-        // SCIENCE_AGENT_EXEC_TIMEOUT_MS still gets a lifetime bound; the fixed
-        // close/join watchdogs in runSandboxed handle the cases where the process
-        // ended but the Runner could not observe it.
-        if (!direct) execution.executionTimeoutMs = config.execTimeoutMs > 0 ? config.execTimeoutMs : 0;
+        // The request's limit is the deployment's Execution timeout setting and
+        // the Runner's own SCIENCE_AGENT_EXEC_TIMEOUT_MS is a second bound; both
+        // apply to a managed execution, and 0 means unlimited on either side.
+        // Keep the stricter one instead of replacing the request's value. Direct
+        // (unsandboxed) executions keep their existing request-over-fallback
+        // resolution in the executor.
+        if (!direct) execution.executionTimeoutMs = boundedExecutionTimeoutMs(execution.executionTimeoutMs, config.execTimeoutMs);
         execution.maxOutputBytes ??= config.maxOutputBytes;
         const accepted = managedExecutions.submit(execution, (signal, log, expectedEnvironmentRevisionId) => direct
           ? executeDirectShell(executorConfig, execution, signal, log)
@@ -1320,7 +1322,8 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     + `${sandboxNetwork.available ? ", domain-allowlist and open available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
     + "; no CPU/memory quotas; "
     + `workspace quota: ${workspaceLabel}; output budget: ${outputLabel}; `
-    + `execution timeout: ${config.execTimeoutMs === 0 ? "unlimited" : `${config.execTimeoutMs / 1000}s`}`,
+    + `runner execution timeout bound: ${config.execTimeoutMs === 0 ? "none" : `${config.execTimeoutMs / 1000}s`}`
+    + " (a request's Execution timeout applies too; the stricter one wins)",
   );
   if (config.scientificEnvsEnabled === true) {
     // The probe above runs before this bootstrap, so a first launch reports an
