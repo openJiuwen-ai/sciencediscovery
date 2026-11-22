@@ -189,9 +189,9 @@
    空隙；#565 又去掉了页脚与“关闭设置”按钮。于是只剩两条出路：键盘 Escape，
    或侧栏的「会话」。指针用户如果不知道后者，会觉得被困在设置里。
    `settings-interactions.spec.ts` 与 `settings.spec.ts` 都按 Escape 退出。
-5. **MCP 测试的 toast 打印原始状态值。** `TEXT.settings.system.mcp.tested(status)`
-   直接拼接服务端返回的 `ready`/`error`，中文界面上出现
-   “测试结果：ready”。用例按现状断言并在此记录。
+5. **MCP 测试反馈。** 本次修改用本地化文案及提示颜色区分连接成功、服务端错误与待授权状态；
+   不再将 `ready`/`error` 原始状态拼入提示。待授权的停用服务器也不能报告测试成功。
+   覆盖入口：`settings-interactions.spec.ts` 与 `mcp-servers-create.test.tsx`。
 6. **SessionBar 在时间不可解析时留下一个孤立的圆点。** `stamp()` 对非法时间
    返回空串，但分隔符 `<span className="sep" />` 无条件渲染，于是标题栏出现
    “项目 · ”后面什么都没有。纯视觉问题，`session-bar.test.tsx` 固定了现状。

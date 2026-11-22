@@ -689,10 +689,17 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                           void testMcpServer(client, server.id)
                             .then((next) => {
                               loaded.reload();
-                              const passed = next.status === "ready" || next.status === "disabled";
+                              const authorizationProblem = next.authorization && next.authorization.state !== "authorized"
+                                ? next.authorization.state === "expired"
+                                  ? TEXT.settings.system.mcp.authorizationExpired
+                                  : TEXT.settings.system.mcp.unauthorized
+                                : undefined;
+                              const passed = !next.error && !authorizationProblem
+                                && (next.status === "ready" || next.status === "disabled");
                               onToast(
-                                next.error ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)),
-                                passed && !next.error ? "info" : "error",
+                                next.error ?? authorizationProblem
+                                  ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)),
+                                passed ? "info" : "error",
                               );
                             })
                             .catch((reason: unknown) => {
