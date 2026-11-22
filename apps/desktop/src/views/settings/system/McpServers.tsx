@@ -919,7 +919,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                   <Row hint={TEXT.settings.system.mcp.argsHint} title={TEXT.settings.system.mcp.args}>
                     <textarea
                       aria-label={TEXT.settings.system.mcp.args}
-                      className="field-input"
+                      className="field-textarea is-code"
                       rows={3}
                       onChange={(event) => change({ args: event.target.value })}
                       value={current.args}
