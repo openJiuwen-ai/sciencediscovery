@@ -8,11 +8,11 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
 
   /**
    * E2E-META
-   * Purpose: Complete a small autonomous Idea Tree research using a real model and retrieve its persisted results.
+   * Purpose: Complete a small autonomous Idea Tree research using a real model and retrieve its persisted results through the public API.
    * Steps:
-   *   1. Configure quick water-treatment research and start it from a session.
-   *   2. Wait for completion and inspect a scored candidate and its insight.
-   *   3. Reload the session and retrieve the same research results again.
+   *   1. Configure quick water-treatment research on the Session and start it from the composer.
+   *   2. Wait for a terminal status, then inspect a scored candidate and its insight.
+   *   3. Reload the session and confirm the API still returns that same completed research.
    * Environment: Isolated API/web, Runner and evolve services.
    * Type: real
    * LLM: Live OpenAI-compatible provider configured by E2E_LLM_BASE_URL and E2E_LLM_MODEL.
@@ -21,14 +21,23 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
    * MCP: none requested
    * OtherExternal: configured live LLM endpoint.
    * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN.
-   * CostSideEffects: Billable model calls; temporary project and model are deleted.
+   * CostSideEffects: Billable model calls that do not pass through the metered proxy; temporary project and model are deleted.
    */
-  test("real Idea Tree research completes and survives reload", { tag: "@real" }, async ({ page, journey }, testInfo) => {
+  test("real Idea Tree research completes and its result survives a reload", { tag: "@real" }, async ({ page, journey }, testInfo) => {
+    // Budget: 120s card + 120s new research + 480s terminal poll = 720s of the
+    // 900s case budget, which leaves 180s for the composer command, the reload,
+    // the second read and cleanup. The terminal poll is deliberately smaller
+    // than the case budget so a slow research fails as "status never settled"
+    // and still leaves teardown time.
     test.setTimeout(900_000);
     journey.scenario({ goal: "Explore a small materials research question and retrieve the result after reload", preconditions: ["Isolated stack and live model credentials"] });
     const real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     await requireRealStack(testInfo);
     const headers = authorizationHeader();
+    // The engine settles a research in one of these states; only `completed`
+    // can grow a scored candidate, so the poll must stop on any of them instead
+    // of waiting out its whole budget on a run that will never finish.
+    const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
     const read = async () => {
@@ -36,32 +45,42 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
       expect(response.ok()).toBe(true);
       return (await response.json()).items;
     };
+    const researchById = async () => (await read()).find((entry: any) => entry.research.id === researchId);
     try {
       await journey.step("Start a small research", "Quick research starts from the session", async () => {
         fixture = await createProjectAndSession(page, { model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `Idea Tree real ${Date.now()}` }, projectName: `Idea Tree real ${Date.now()}`, sessionTitle: "Catalyst research" });
+        // Session scope, not the deployment: the override dies with this Session
+        // and no restore step can be skipped by a killed worker.
         const settings = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: "water-treatment-materials/v1", explorationIntensity: "quick" } } });
         expect(settings.ok()).toBe(true);
-        const existingIds = new Set((await read()).map((item: any) => item.research.id));
+        const existingIds = new Set((await read()).map((entry: any) => entry.research.id));
         await openProjectSession(page, fixture);
         await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Skip literature retrieval. Explore low-cost iron catalysts for near-neutral water treatment, considering recovery and leaching.");
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
         await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 120_000 });
-        await expect.poll(async () => (await read()).filter((item: any) => !existingIds.has(item.research.id)).length, { timeout: 120_000 }).toBe(1);
-        researchId = (await read()).find((item: any) => !existingIds.has(item.research.id)).research.id;
+        // The card is shared by every research in the Session, so identify this
+        // run by the id that was not there before the command was sent.
+        await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 120_000 }).toBe(1);
+        researchId = (await read()).find((entry: any) => !existingIds.has(entry.research.id)).research.id;
       });
-      await journey.step("Inspect completed research", "At least one candidate has a score and insight", async () => {
-        await expect.poll(async () => (await read()).find((item: any) => item.research.id === researchId)?.research.status, { timeout: 720_000 }).toBe("completed");
-        const { graph, research } = (await read()).find((item: any) => item.research.id === researchId);
+      await journey.step("Inspect completed research", "A terminal status is reached and at least one candidate has a score and insight", async () => {
+        await expect.poll(async () => {
+          const status = (await researchById())?.research.status;
+          return terminalStatuses.includes(status) ? status : null;
+        }, { timeout: 480_000, message: "the research should settle in a terminal status" }).not.toBeNull();
+        const { graph, research } = (await researchById())!;
+        // A real model can stop short of `completed`; name the persisted reason
+        // so a provider or JSON-parse failure is not reported as a value mismatch.
+        expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
         expect(research.settings).toMatchObject({ templateId: "water-treatment-materials/v1", explorationIntensity: "quick" });
         const candidates = graph.nodes.filter((node: any) => node.kind === "candidate");
         expect(candidates.length).toBeGreaterThan(0);
         expect(candidates.some((node: any) => typeof node.score === "number" && typeof node.insight === "string" && node.insight.trim().length > 0)).toBe(true);
       });
-      await journey.step("Reload the research", "The completed research and scored candidate remain available", async () => {
+      await journey.step("Reload the session", "The API still returns the same completed research after a reload", async () => {
         await page.reload();
         await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible();
-        const items = await read();
-        const saved = items.find((item: any) => item.research.id === researchId);
+        const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
         expect(saved.graph.nodes.some((node: any) => node.kind === "candidate" && typeof node.score === "number" && node.insight?.trim())).toBeTruthy();
       });
