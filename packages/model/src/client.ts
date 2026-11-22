@@ -103,7 +103,8 @@ export type ModelWireErrorClass =
   /**
    * The turn produced hidden reasoning and then nothing: no text and no tool
    * call. It is not the same failure as a relay that sent nothing at all, so the
-   * classification itself names which shape happened. Both still fail the run.
+   * classification itself names which shape happened. Both remain model
+   * failures; the caller decides whether the shape is worth retrying.
    */
   | "reasoning_only"
   | "timeout"

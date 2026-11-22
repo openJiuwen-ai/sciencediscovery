@@ -133,6 +133,34 @@ class GatewayRejection extends Error {
 /** The code `is_image_modality_rejection` recognizes for a non-text request. */
 const UNSUPPORTED_IMAGE_INPUT = "unsupported_image_input";
 
+type ModelStreamRetryCallbacks = NonNullable<Parameters<Streamer>[6]>;
+
+/**
+ * A provider can finish a turn after streaming hidden reasoning and nothing
+ * else. The model client detects that shape and the gateway replays the same
+ * request a small, fixed number of times before giving up. The retry commits
+ * no text or tool call (the detection requires both to be absent), so replaying
+ * cannot duplicate work; it only gives a transient provider hiccup another
+ * chance instead of discarding the whole agent turn.
+ */
+const MAX_EMPTY_TURN_RETRIES = 2;
+const EMPTY_TURN_CLASSES: ReadonlySet<ModelWireErrorClass> = new Set(["reasoning_only", "empty_completion"]);
+
+/**
+ * The bounded retries above were exhausted. It is still an empty terminal turn
+ * for diagnostics (so its wire classification is unchanged), but its message
+ * tells the user what happened and what to do instead of exposing only the
+ * generic `semantic-error` catch-all.
+ */
+class EmptyTurnRecoveryExhaustedError extends EmptyModelTurnError {
+  constructor(error: EmptyModelTurnError, retries: number) {
+    super(error.diagnostics);
+    const attempted = retries === 0 ? "" : ` after ${retries} ${retries === 1 ? "retry" : "retries"}`;
+    this.message = `The model returned no answer for this step${attempted} (empty terminal turn: no text and no tool call). Please retry the run; if it keeps happening, switch models or reduce the context size. ${error.message}`;
+    this.cause = error;
+  }
+}
+
 /** What identifies an assistant turn: the tool calls it made, or else its text. */
 const turnKey = (message: Record<string, unknown>) => {
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls as Array<{ id?: unknown }> : [];
@@ -506,9 +534,10 @@ export async function startModelGateway(
       if (observed) await observe("completion", () => observed.completed(turn, history, call));
     };
     const streamTurn = async (
-      makeCallbacks: (attempt: number) => NonNullable<Parameters<Streamer>[6]>,
+      makeCallbacks: (attempt: number) => ModelStreamRetryCallbacks,
       state: { text: boolean },
     ): Promise<ModelTurn> => {
+      let emptyTurnRetries = 0;
       for (let attempt = 0; ; attempt += 1) {
         try {
           return await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, makeCallbacks(attempt));
@@ -519,6 +548,19 @@ export async function startModelGateway(
           // completion boundary below, so a turn with no visible text has not
           // committed a tool yet and can be replayed safely. Never replay a
           // turn that exposed text, and never retry auxiliary housekeeping.
+          const emptyTerminal = EMPTY_TURN_CLASSES.has(classification) && !auxiliary && !state.text;
+          if (emptyTerminal && emptyTurnRetries < MAX_EMPTY_TURN_RETRIES) {
+            emptyTurnRetries += 1;
+            streamRetryErrors.push(classification);
+            const delayMs = 250 * 2 ** (emptyTurnRetries - 1);
+            console.warn(`[model-gateway] retrying an empty terminal model turn request=${id} classification=${classification} attempt=${emptyTurnRetries}/${MAX_EMPTY_TURN_RETRIES} delayMs=${delayMs}`);
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(resolve, delayMs);
+              controller.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+            });
+            continue;
+          }
+          if (emptyTerminal) throw new EmptyTurnRecoveryExhaustedError(error as EmptyModelTurnError, emptyTurnRetries);
           if (attempt >= MAX_STREAM_RETRIES || auxiliary || !["network", "timeout"].includes(classification) || state.text) throw error;
           streamRetryErrors.push(classification);
           const delayMs = 250 * 2 ** attempt;
@@ -631,10 +673,15 @@ export async function startModelGateway(
     } catch (error) {
       // The request ends here, so the one line it writes names this class even
       // when the transport already reported the wire on its success path.
-      reportWire(classifyModelWireError(error));
+      // The transport's own empty-terminal rejection (including one from an
+      // alternate streamer) becomes the readable exhausted failure; the wire
+      // classification stays whatever the original diagnostics recorded.
+      const failure = error instanceof EmptyModelTurnError && !(error instanceof EmptyTurnRecoveryExhaustedError)
+        ? new EmptyTurnRecoveryExhaustedError(error, 0) : error;
+      reportWire(classifyModelWireError(failure));
       trace(controller.signal.aborted ? "cancelled" : "error", true);
-      const status = error instanceof ModelRequestError && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502;
-      const original = error instanceof Error ? error.message : String(error);
+      const status = failure instanceof ModelRequestError && failure.statusCode >= 400 && failure.statusCode < 600 ? failure.statusCode : 502;
+      const original = failure instanceof Error ? failure.message : String(failure);
       const message = endpoint.apiToken ? original.split(endpoint.apiToken).join("[redacted]") : original;
       if (response.headersSent) {
         // Mid-stream: tell the client the way OpenAI does, then stop.

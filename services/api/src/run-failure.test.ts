@@ -32,6 +32,9 @@ test("run failures classify into stable codes", () => {
     [new Error("Model returned invalid tool arguments (tools: run_shell) after 2 recovery attempts; gateway request chatcmpl-2c3cbc55-d420-4a0e-ab0f-f460883c3061"), "invalid-tool-call"],
     // A tool name is arbitrary; "transport" here must not make this a transport error.
     [new Error("Model returned invalid tool arguments (tools: mcp__lab__transport_status); gateway request chatcmpl-7c1e5d0a"), "invalid-tool-call"],
+    // An empty terminal turn is retried in the gateway; reaching the user means the bounded
+    // retries were exhausted, which is a model-service failure rather than semantic-error.
+    [new Error("The model returned no answer for this step after 2 retries (empty terminal turn: no text and no tool call). Please retry the run; if it keeps happening, switch models or reduce the context size. Model returned an empty terminal turn (no text and no tool call)"), "server-error"],
   ];
   for (const [error, expected] of cases) {
     assert.equal(classifyRunFailure(error), expected, error.message);
