@@ -61,7 +61,8 @@ import { useTopmostEscape } from "./use-dialog-escape.js";
 interface Props {
   client: ApiClient;
   onClose: () => void;
-  /** The way out when memory is off or unreachable: the switch is in 设置. */
+  /** The way out when memory is switched off: the switch is in 设置. A
+   *  transient failure is answered in place, by re-reading the citation. */
   onOpenSettings: () => void;
   /** The citation the reader pressed. */
   reference: ComposerReference;
@@ -71,12 +72,18 @@ interface Props {
 
 type DetailTab = "preview" | "provenance";
 
+/** What an error state can offer. A transient failure is answered by re-reading
+ *  the citation in place; only memory being switched off is answered by the
+ *  switch, because a settings page cannot bring a restarting sidecar back. */
+type ErrorRecovery = "retry" | "settings";
+
 type LoadState =
   | { status: "loading" }
   /** `title` separates "switched off" and "service gone" from a generic read
    *  failure: the reason travels in the same 200 body, so only the copy can
-   *  tell the reader which one they are looking at. */
-  | { message: string; offerSettings: boolean; status: "error"; title: string }
+   *  tell the reader which one they are looking at. `recovery` says which
+   *  action that state gets, so the copy and the button cannot disagree. */
+  | { message: string; recovery: ErrorRecovery; status: "error"; title: string }
   | { status: "missing" }
   | { hit: MemoryGraphHit; status: "ready" };
 
@@ -170,7 +177,7 @@ export function MemoryCardDialog({
         if (result.reason === "memory_graph_disabled") {
           setState({
             message: TEXT.memory.disabledBody,
-            offerSettings: true,
+            recovery: "settings",
             status: "error",
             title: TEXT.memory.disabledTitle,
           });
@@ -180,10 +187,12 @@ export function MemoryCardDialog({
         // failure to answer, not proof that the reference has no node. Report
         // it like an unreachable service instead of falling through to
         // ``missing``, which would tell the reader the reference does not exist.
+        // The same goes for the action: both are worth another read, and the
+        // card's own sentence already asks the reader to try again.
         if (graphTemporarilyUnavailable(result.reason)) {
           setState({
             message: TEXT.memory.unreachableBody,
-            offerSettings: true,
+            recovery: "retry",
             status: "error",
             title: TEXT.memory.unreachableTitle,
           });
@@ -196,7 +205,7 @@ export function MemoryCardDialog({
         if (!alive) return;
         setState({
           message: failure instanceof Error ? failure.message : TEXT.memory.errorTitle,
-          offerSettings: true,
+          recovery: "retry",
           status: "error",
           title: TEXT.memory.errorTitle,
         });
@@ -265,9 +274,11 @@ export function MemoryCardDialog({
             </div>
           ) : state.status === "error" ? (
             <MemoryState
-              action={state.offerSettings ? TEXT.memory.openSettings : TEXT.memory.retry}
+              action={state.recovery === "retry" ? TEXT.memory.retry : TEXT.memory.openSettings}
               body={state.message}
-              onAction={state.offerSettings ? onOpenSettings : () => setAttempt((value) => value + 1)}
+              onAction={state.recovery === "retry"
+                ? () => setAttempt((value) => value + 1)
+                : onOpenSettings}
               title={state.title}
             />
           ) : state.status === "missing" ? (

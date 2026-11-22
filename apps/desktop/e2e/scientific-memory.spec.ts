@@ -643,10 +643,80 @@ test("a disabled memory graph says so in the card instead of an empty story", as
   await expect(dialog.getByText("科学记忆没有开启")).toBeVisible();
   await expect(dialog.locator(".evidence-source-papers")).toHaveCount(0);
 
-  // The way out is the switch, and it is one press away.
+  // The way out is the switch, and it is one press away. The graph is off, not
+  // temporarily gone, so there is nothing a re-read could change.
+  await expect(dialog.getByRole("button", { name: "重试" })).toHaveCount(0);
   await dialog.getByRole("button", { name: "打开科学记忆设置" }).click();
   await expect(page.locator(".config-panel")).toBeVisible();
   await expect(page.locator(".settings-group-detail h3")).toHaveText("科学记忆");
+});
+
+/** Both reasons the graph gives for a temporary refusal mean "could not answer
+ *  now", not "nothing was recorded": the card has to keep the reference it was
+ *  opened for and re-read it where it stands. */
+for (const reason of ["memory_graph_unreachable", "memory_graph_query_limit"]) {
+  test(`the card retries a citation after ${reason} and shows it once the graph answers`, async ({ page }) => {
+    // The fixture reads this object on every request, so clearing `reason`
+    // here is what the graph answering again looks like to the running app.
+    const memory: { hits: JsonRecord[]; reason?: string } = { hits: [EVIDENCE], reason };
+    const mock = await installMockApi(page, {
+      artifactContents: { "version-1": REPORT_BODY },
+      artifactsBySession: { [SESSION]: [REPORT_OUTPUT] },
+      memory,
+      sessions: [makeSession()],
+    });
+    await page.goto("/");
+    const panel = await openReport(page);
+
+    await panel.locator(".graph-chip").nth(0).click();
+    const dialog = page.locator(".memory-dialog");
+    await expect(dialog.getByText("暂时读不到科学记忆")).toBeVisible();
+    await expect(dialog.locator(".evidence-content-text")).toHaveCount(0);
+    // The copy invites another try, and the card offers exactly that. A
+    // settings page cannot bring a restarting sidecar or a spent budget back,
+    // so it is not where a temporary outage sends the reader.
+    await expect(dialog.getByRole("button", { name: "重试" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "打开科学记忆设置" })).toHaveCount(0);
+
+    const firstRead = mock.calls.filter((call) => call.path === "/api/memory/query/by-node-type");
+    expect(firstRead).toHaveLength(1);
+
+    // The service comes back without the card being closed or reopened. The
+    // press re-reads the same reference and the evidence lands in this card.
+    memory.reason = undefined;
+    await dialog.getByRole("button", { name: "重试" }).click();
+    await expect(dialog.locator(".evidence-content-text")).toHaveText("在 350 °C 下，甲烷转化率提升至 92%。");
+
+    const reads = mock.calls.filter((call) => call.path === "/api/memory/query/by-node-type");
+    expect(reads).toHaveLength(2);
+    expect(JSON.parse(reads[1]!.body!)).toEqual(JSON.parse(reads[0]!.body!));
+  });
+}
+
+test("the card retries a citation when the query request itself fails", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    artifactContents: { "version-1": REPORT_BODY },
+    artifactsBySession: { [SESSION]: [REPORT_OUTPUT] },
+    fail: { message: "gateway timed out", method: "POST", path: "/api/memory/query/by-node-type", status: 500 },
+    memory: { hits: [EVIDENCE] },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  const panel = await openReport(page);
+
+  await panel.locator(".graph-chip").nth(0).click();
+  const dialog = page.locator(".memory-dialog");
+  await expect(dialog.getByText("读取失败")).toBeVisible();
+  await expect(dialog.getByText("gateway timed out")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "重试" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "打开科学记忆设置" })).toHaveCount(0);
+
+  // A request failure is retried as a request: the press issues a second read
+  // of the same reference instead of leaving the reader to close the card.
+  await dialog.getByRole("button", { name: "重试" }).click();
+  await expect.poll(() => mock.calls.filter((call) => call.path === "/api/memory/query/by-node-type").length)
+    .toBe(2);
+  await expect(dialog.getByText("gateway timed out")).toBeVisible();
 });
 
 test("a provenance hop that cannot reach the graph is an error, not an empty story", async ({ page }) => {
