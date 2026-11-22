@@ -2972,7 +2972,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   context.after(() => new Promise<void>((resolveClose) => runner.close(() => resolveClose())));
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
-  let gatewayMode: "silent" | "tool-success-timeout-text" | "tool-timeout" = "silent";
+  let gatewayMode: "silent" | "tool-success-timeout-text" | "tool-exec-timeout" | "tool-timeout" = "silent";
   let completionNotifications = 0;
   const openModelResponses: ServerResponse[] = [];
   const gateway = createHttpServer((request, response) => {
@@ -3020,8 +3020,13 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
       } else {
         // Foreground timeout ends only the wait. The detached Shell must finish
         // normally and retain its result, rather than produce runner_exec.
+        // `tool-exec-timeout` is the complement: the lifetime bound of the same
+        // managed execution is short, so the command must be killed and report
+        // the Runner execution timeout instead of running to completion.
         const code = gatewayMode === "tool-timeout"
           ? `from pathlib import Path\nimport time\nrelease = Path(${JSON.stringify(detachedReleasePath)})\ndeadline = time.monotonic() + 60\nwhile not release.exists():\n    if time.monotonic() >= deadline:\n        raise RuntimeError('Detached Shell fixture gate was not released')\n    time.sleep(0.01)`
+          : gatewayMode === "tool-exec-timeout"
+          ? "import time\ntime.sleep(20)\nprint('the Execution timeout did not bound this run')"
           : "print('A paper title says: Python execution timed out after 25 ms')";
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
@@ -3151,8 +3156,12 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   );
 
   gatewayMode = "tool-timeout";
+  // The Execution timeout is the lifetime bound of a managed Shell, so it must
+  // not be shorter than the detached command this phase expects to finish.
+  // The foreground `wait_ms` below is what expires here; the Execution timeout
+  // is only a generous upper bound on the detached run's lifetime.
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
-    body: JSON.stringify({ ...configured.body, gatewayIdleTimeoutMs: 30_000, runnerExecTimeoutMs: 25 }),
+    body: JSON.stringify({ ...configured.body, gatewayIdleTimeoutMs: 30_000, runnerExecTimeoutMs: 30_000 }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "PUT",
   });
@@ -3213,6 +3222,47 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   );
   assert.equal(successfulToolRuns.body.some((candidate) => candidate.automaticWake), false,
     "a result read during the foreground wait must not wake its Session again");
+
+  // Settings > Timeouts > Execution timeout (runnerExecTimeoutMs) is relayed to
+  // the Runner as the managed execution's executionTimeoutMs. A `sleep 20`
+  // submitted under a 500 ms setting must be terminated (Issue #1303), and the
+  // failure must surface as a persisted, explainable runner_exec timeout.
+  gatewayMode = "tool-exec-timeout";
+  await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
+    body: JSON.stringify({ ...configured.body, gatewayIdleTimeoutMs: 30_000, runnerExecTimeoutMs: 500 }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  const execTimeoutSession = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "always_allow", title: "Execution timeout session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const execTimeoutRun = await fetch(`${origin}/api/sessions/${execTimeoutSession.body.id}/messages`, {
+    body: JSON.stringify({ content: "Run a command that outlives the Execution timeout." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  await execTimeoutRun.text();
+  const execTimeoutDetail = await jsonRequest<SessionDetail>(
+    `${origin}/api/sessions/${execTimeoutSession.body.id}`,
+    { headers: authorization },
+  );
+  const execTimeoutNotice = execTimeoutDetail.body.messages.find((message) => message.kind === "timeout_notice");
+  assert.equal(execTimeoutNotice?.timeout?.kind, "runner_exec");
+  assert.equal(execTimeoutNotice?.timeout?.timeoutMs, 500);
+  assert.match(execTimeoutNotice?.content ?? "", /Shell execution timed out after 500 ms/);
+  const execTimeoutRuns = await jsonRequest<ExecutionRun[]>(
+    `${origin}/api/sessions/${execTimeoutSession.body.id}/execution-runs`, { headers: authorization },
+  );
+  // The ledger may hold an `unconfirmed` placeholder before the settled row for
+  // the same Execution ID; readers resolve the latest settled row.
+  const settledExecTimeoutRuns = execTimeoutRuns.body.filter((run) => run.status !== "unconfirmed");
+  assert.equal(settledExecTimeoutRuns.length, 1);
+  assert.equal(settledExecTimeoutRuns[0]?.status, "failed",
+    "the setting is the managed execution's lifetime bound, not just its foreground wait");
+  assert.notEqual(settledExecTimeoutRuns[0]?.exitCode, 0,
+    "a command killed at the Execution timeout never reports a successful exit");
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
