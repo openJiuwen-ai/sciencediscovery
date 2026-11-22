@@ -59,12 +59,21 @@ const SESSION_TITLE = "晶体结构分析";
 function output(
   artifactId: string,
   version: number,
-  over: { name?: string; path?: string; sessionId?: string; sessionTitle?: string; title?: string } = {},
+  over: {
+    name?: string; path?: string; sessionId?: string; sessionTitle?: string; title?: string;
+    /** The Session whose turn wrote this version, when it is not the one the
+     *  Artifact was created in. The picker names it on the row. */
+    versionSessionId?: string;
+  } = {},
 ): JsonRecord {
   const name = over.name ?? `${artifactId}.md`;
   return {
     artifact: {
       createdAt: "2026-10-01T08:00:00.000Z",
+      // The Session that created the Artifact, as the server records it. The
+      // picker falls back to it when the creating Session is not in the
+      // sidebar's listing, so a row still names its producer.
+      createdInSessionId: over.sessionId ?? SESSION,
       // The heading a group falls back to when the Session is not in the
       // sidebar's listing: the server records the title the artifact was
       // written under, which is the Session's — never the artifact's own.
@@ -88,7 +97,7 @@ function output(
       inputArtifactVersionIds: [],
       mediaType: "text/markdown",
       projectId: "project-1",
-      sessionId: over.sessionId ?? SESSION,
+      sessionId: over.versionSessionId ?? over.sessionId ?? SESSION,
       sourcePath: over.path ?? `reports/${name}`,
       version,
     },
@@ -236,16 +245,66 @@ test.describe("版本", () => {
 
     await panel.getByRole("button", { name: "版本" }).click();
     const menu = panel.getByRole("menu", { name: "版本" });
-    await expect(menu.getByRole("menuitemradio")).toHaveText(["v3", "v2", "v1"]);
-    await expect(menu.getByRole("menuitemradio", { name: "v3" })).toHaveAttribute("aria-checked", "true");
+    // A version number alone does not say which conversation wrote it, so each
+    // row carries the producer and the clock time beside it. The time is
+    // asserted as a shape, not a literal: the browser's zone is not the test's.
+    await expect(menu.getByRole("menuitemradio")).toHaveText([
+      /^v3当前会话 · \d{2}:\d{2}$/u,
+      /^v2当前会话 · \d{2}:\d{2}$/u,
+      /^v1当前会话 · \d{2}:\d{2}$/u,
+    ]);
+    // The provenance is its own element, so a later change cannot quietly drop
+    // it back to a bare version number while the row text still matches.
+    await expect(menu.locator(".doc-version-meta")).toHaveText([
+      /^当前会话 · \d{2}:\d{2}$/u,
+      /^当前会话 · \d{2}:\d{2}$/u,
+      /^当前会话 · \d{2}:\d{2}$/u,
+    ]);
+    // The rows are addressed by version, since the accessible name now carries
+    // both the version and its metadata.
+    await expect(menu.getByRole("menuitemradio", { name: /^v3/u })).toHaveAttribute("aria-checked", "true");
 
-    await menu.getByRole("menuitemradio", { name: "v2" }).click();
+    await menu.getByRole("menuitemradio", { name: /^v2/u }).click();
 
     await expect(panel.locator(".doc-body")).toContainText("上一版本的内容");
     await expect(panel.getByRole("button", { name: "版本" })).toHaveText("v2");
     // The version is a property of the open document: still one tab.
     await expect(panel.locator(".doc-tab-label")).toHaveCount(1);
     expect(calls(mock, `/api/sessions/${SESSION}/artifact-versions/artifact-1-v2/content`)).toHaveLength(1);
+  });
+
+  test("a version written in another Session names that Session, not the reader's", async ({ page }) => {
+    // The reader is in 晶体结构分析; the Artifact was created in 轨道分析 and its
+    // v2 was written here. The menu has to say which is which, or v1 reads as
+    // this conversation's own work.
+    await installMockApi(page, {
+      artifactContents: { "artifact-1-v2": "本会话追加的内容" },
+      artifactsBySession: {
+        [OTHER_SESSION]: [
+          output("artifact-1", 1, { sessionId: OTHER_SESSION, sessionTitle: "轨道分析", title: "综述" }),
+          output("artifact-1", 2, {
+            sessionId: OTHER_SESSION,
+            sessionTitle: "轨道分析",
+            title: "综述",
+            versionSessionId: SESSION,
+          }),
+        ],
+      },
+      sessions: [makeSession(), makeSession({ id: OTHER_SESSION, title: "轨道分析" })],
+    });
+    const panel = await openArtifacts(page);
+
+    const other = panel.locator(".panel-output").filter({ hasText: "轨道分析" });
+    await other.locator(".panel-output-head").click();
+    await other.getByRole("button", { name: "综述" }).click();
+    await expect(panel.locator(".doc-body")).toContainText("本会话追加的内容");
+
+    await panel.getByRole("button", { name: "版本" }).click();
+    const menu = panel.getByRole("menu", { name: "版本" });
+    await expect(menu.getByRole("menuitemradio")).toHaveText([
+      /^v2当前会话 · \d{2}:\d{2}$/u,
+      /^v1轨道分析 · \d{2}:\d{2}$/u,
+    ]);
   });
 
   test("Escape closes the picker and hands focus back to its trigger", async ({ page }) => {
