@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@sciencediscovery/schema";
+import type { PermissionAuthorization, PermissionDescription, PermissionEpoch, PermissionRequest } from "@sciencediscovery/schema";
 
 /** Privileged action classes understood by the Agent-facing governance port. */
 export type PrivilegedAction = "sandbox_network" | "direct_code" | "code" | "connector" | "host";
 
 export interface PrivilegeRequest {
   action: PrivilegedAction;
+  /** Structured, client-localizable form of `summary`. Persisted with the
+   *  request so a replay renders in the reader's current language. */
+  description?: PermissionDescription;
   executionId?: string;
   resource: string;
   signal?: AbortSignal;
@@ -43,7 +46,7 @@ export interface AgentPermissionRuntimeBindings {
     action: PrivilegedAction,
     resource: string,
     summary: string,
-    context?: { executionId?: string; toolCallId?: string },
+    context?: { description?: PermissionDescription; executionId?: string; toolCallId?: string },
   ): Promise<PermissionCheck>;
   beginExternalWait?: (executionId?: string) => () => void;
   waitForDecision(request: PermissionRequest, signal?: AbortSignal): Promise<PermissionRequest>;
@@ -60,8 +63,10 @@ export function createAgentPermissionRuntime(
   let epoch = initialEpoch;
   return {
     getEpoch: () => epoch,
-    async requirePrivilege({ action, executionId, resource, signal, summary, toolCallId }) {
-      const check = await bindings.requestPermission(action, resource, summary, { executionId, toolCallId });
+    async requirePrivilege({ action, description, executionId, resource, signal, summary, toolCallId }) {
+      const check = await bindings.requestPermission(action, resource, summary, {
+        ...(description ? { description } : {}), ...(executionId ? { executionId } : {}), ...(toolCallId ? { toolCallId } : {}),
+      });
       if (check.allowed) {
         const currentEpoch = bindings.readEpoch();
         if (currentEpoch) epoch = currentEpoch;

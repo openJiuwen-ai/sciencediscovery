@@ -330,7 +330,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
           const release = this.beginExternalWait();
           let decision: "allow_once" | "allow_matching" | "deny";
           try {
-            decision = await this.options.requestApproval?.({ resource, summary: `Call repaired MCP tool ${sourceId}/${toolId}`, toolCallId }, signal) ?? "deny";
+            decision = await this.options.requestApproval?.({
+              description: { kind: "mcp-tool", recovered: true, sourceId, toolId },
+              resource, summary: `Call repaired MCP tool ${sourceId}/${toolId}`, toolCallId,
+            }, signal) ?? "deny";
           } finally { release(); }
           signal?.throwIfAborted();
           if (decision === "deny") throw new Error(`MCP recovery approval denied: ${sourceId}/${toolId}`);
@@ -551,7 +554,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // A human can take arbitrarily long to answer; that wait must not itself look "stalled".
     const release = this.beginExternalWait();
     const decided = (ask
-      ? ask({ resource, summary: question.summary ?? question.resource ?? "tool call",
+      ? ask({ description: question.toolName ? { kind: "tool-call", toolName: question.toolName } : { kind: "tool-call" },
+        resource, summary: question.summary ?? question.resource ?? "tool call",
         ...(question.toolCallId ? { toolCallId: question.toolCallId } : {}) }, this.controller.signal)
       : Promise.resolve("deny" as const));
     void decided.catch(() => "deny" as const).then(async (decision) => {

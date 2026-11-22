@@ -4167,6 +4167,48 @@ test("a catalog written by an older build is merged into the side tables, not tr
     "and what it did write is imported");
 });
 
+test("a permission request persists its structured description beside the canonical summary", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `permission-description-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "permission-test-token", baseUrl: "https://models.example.test/v1",
+    model: "science-model", name: "Permission test model",
+  });
+  const project = await store.createProject("Permission project", { modelId: model.id, reviewModelId: model.id });
+  const session = await store.createSession(project.id, "Permission Session");
+
+  const description = {
+    account: "user:1000:1000", command: "printf hello", cwd: "", kind: "direct-host" as const,
+    runnerId: "local", target: "machine:instance", workspaceRoot: "/workspace",
+  };
+  const pending = await store.requestPermission(
+    session.id, "direct_code", "direct:scope-a", "DIRECT HOST EXECUTION: Runner local", { description },
+  );
+  if (pending.allowed) throw new Error("Expected a permission request");
+  assert.deepEqual(pending.request.description, description,
+    "the client composes the card from these fields instead of the English summary");
+  assert.equal(pending.request.summary, "DIRECT HOST EXECUTION: Runner local", "the canonical sentence is still stored");
+
+  // A description is replayed from the catalog, so it must survive a restart.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.deepEqual(reloaded.listPermissionRequests(session.id).find((request) => request.id === pending.request.id)?.description,
+    description);
+
+  // Anything a client could send that this build cannot render is dropped
+  // whole: a half-valid card would be worse than the stored summary.
+  const unstructured = await reloaded.requestPermission(
+    session.id, "code", "workspace-code", "Run Python code in the Session workspace",
+    { description: { kind: "from-the-future", text: "hello" } as never },
+  );
+  if (unstructured.allowed) throw new Error("Expected a permission request");
+  assert.equal(unstructured.request.description, undefined);
+  assert.equal(unstructured.request.summary, "Run Python code in the Session workspace");
+});
+
 test("SessionStore gates privileged actions with Session-scoped matching grants and per-action authorizations", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

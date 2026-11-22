@@ -505,6 +505,7 @@ export class WebBroker {
       resource: "web:search",
       signal,
       summary: `Search the public web for “${query.slice(0, 120)}”`,
+      description: { kind: "web", operation: "search", query: query.slice(0, 120) },
       toolCallId: context.toolCallId,
     });
     const settings = this.store.getWebSettings();
@@ -627,6 +628,7 @@ export class WebBroker {
       resource: hostname,
       signal,
       summary: `Fetch public web content from ${hostname}`,
+      description: { hostname, kind: "web", operation: "fetch" },
       toolCallId: context.toolCallId,
     });
     const settings = this.store.getWebSettings();

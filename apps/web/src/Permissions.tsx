@@ -19,6 +19,7 @@ import type { PermissionDecision, PermissionGrant, PermissionRequest } from "@sc
 import { PermissionDecisionActions, permissionMatchingKey } from "./PermissionDecisionActions.js";
 
 import { ChevronRightIcon } from "./icons.js";
+import { formatPermissionRequest } from "./permission-summary.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
@@ -42,7 +43,7 @@ export function PermissionCards({
   onDecision: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   requests: PermissionRequest[];
 }) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const [decidingIds, setDecidingIds] = useState<string[]>([]);
   const [decidingMatchers, setDecidingMatchers] = useState<string[]>([]);
   const pending = requests.filter((request) => request.state === "pending" && request.action !== "remote_job");
@@ -69,7 +70,7 @@ export function PermissionCards({
       return <article className="permission-card" key={request.id}>
         <button aria-expanded={expanded} className="permission-card-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
           <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={request.action === "direct_code" ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : undefined}>{request.summary}</h4></span>
+          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{formatPermissionRequest(request, locale, Object.hasOwn(ACTION_LABELS, request.action) ? t(ACTION_LABELS[request.action]) : undefined)}</h4></span>
         </button>
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>

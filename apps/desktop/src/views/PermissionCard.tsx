@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { PermissionDecision, PermissionRequest } from "../api/types.js";
+import { formatPermissionRequest } from "../permission-summary.js";
 import { TEXT } from "../text.js";
 
 /** The three answers, in the order the server ranks them: least to most.
@@ -55,7 +56,9 @@ export function PermissionCard({
     <article className="permission-card">
       <div className="permission-body">
         <span className="permission-eyebrow">{TEXT.permission.required}</span>
-        <h4>{request.summary}</h4>
+        {/* The sentence comes from the request's structured description, composed
+            in the language in force; a direct-host command keeps its newlines. */}
+        <h4 style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{formatPermissionRequest(request)}</h4>
         <code>{request.resource}</code>
         <details className="permission-details">
           <summary>{TEXT.permission.details}</summary>

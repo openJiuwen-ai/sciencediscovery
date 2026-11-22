@@ -31,7 +31,7 @@ import { VersionStore } from "@sciencediscovery/cas";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import { SessionStore } from "../store.js";
-import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
+import type { AgentPermissionRuntime, PrivilegeRequest } from "@sciencediscovery/governance";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
@@ -1119,12 +1119,18 @@ async function directBindingFixture(t: TestContext, machine = "local", initially
     getSessionRun: async () => ({ status: active ? "running" : "completed" }),
     getPermissionGrant: () => ({ state: revoked ? "revoked" : "active" }),
     workspaceIdentity: () => ({ id: "workspace" }),
+    // A shell run reads these two before it dispatches; neither is what this
+    // fixture measures, so they answer "no cards, no egress proxy".
+    npuDeviceSelection: () => [],
+    resolveSandboxEgressProxy: () => undefined,
     notifications: { markRead() {} },
     shellExecutions: { list: () => unknown ? [{ runnerId: machine, state: "unknown" }] : [],
       start: async (_owner: unknown, identity: Record<string, unknown>, _runner: unknown, record: (id: string) => Promise<unknown>) => {
         submissions++; dispatches.push(identity); await record("execution"); return { id: "execution", state: "running" }; } },
   } as unknown as SessionStore;
-  const permission = { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async (request: { action: string; resource: string }) => {
+  const privilegeRequests: PrivilegeRequest[] = [];
+  const permission = { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async (request: PrivilegeRequest) => {
+    privilegeRequests.push(request);
     if (request.action === "direct_code") {
       resources.push(request.resource);
       if (!allowed) throw new Error("Permission denied");
@@ -1146,7 +1152,7 @@ async function directBindingFixture(t: TestContext, machine = "local", initially
   const consent = async () => binding.directExecution!.request({ ...(initiallyReady ? { runnerId: machine } : { operationId }), command: "printf hello", cwd: "" }) as Promise<{
     authorizationId: string; command: string; cwd: string; target: string; account: string; dispatched: boolean;
   }>;
-  return { binding, make, consent, operationId, resources, dispatches, submissions: () => submissions,
+  return { binding, make, consent, operationId, privilegeRequests, resources, dispatches, submissions: () => submissions,
     capability: (value: Record<string, unknown>) => { capabilityOverride = value; },
     duringProbe: (callback: () => void) => { onProbe = callback; },
     duringConsent: (callback: () => void) => { onConsent = callback; },
@@ -1155,6 +1161,55 @@ async function directBindingFixture(t: TestContext, machine = "local", initially
     remove: () => { selected = false; }, recover: () => { ready = true; }, changeWorkspace: () => { workspaceKey = "other/main"; },
     changeTarget: () => { target = "replacement"; }, changeAccount: () => { account = "other"; } };
 }
+
+test("shell and direct-host approvals carry the structured description a client composes", async t => {
+  const root = await mkdtemp(resolve(tmpdir(), "permission-description-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const requests: PrivilegeRequest[] = [];
+  const permission = {
+    getEpoch: () => ({ id: "epoch" }),
+    requirePrivilege: async (request: PrivilegeRequest) => {
+      requests.push(request);
+      return { action: request.action, id: `authorization-${requests.length}`, outcome: "allowed",
+        permissionGrantId: "grant", resource: request.resource };
+    },
+  } as unknown as AgentPermissionRuntime;
+  const runnerClient = {
+    executionCapability: async () => ({ ready: true }),
+    directExecutionCapability: async (_signal: unknown, scope: { cwd: string }) => ({
+      account: "user:1000:1000", available: true, cwd: scope.cwd, target: "machine:instance", workspaceRoot: root,
+    }),
+  } as unknown as RunnerClient;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main", executionId: "run-1", permission, permissionScopeLabel: "in the Session workspace",
+    provenanceRecorder: {
+      executeShell: async () => ({ createdFiles: [], exitCode: 0, networkDeniedHosts: [], stderr: "", stdout: "" }),
+    } as unknown as ProvenanceRecorder,
+    rootRunId: "run-1", runnerClient, sessionId: "session-1",
+    store: {
+      assertSessionAllowsRunner() {}, assertSessionWritable() {}, getSessionRun: async () => ({ status: "running" }),
+      notifications: { markRead() {} }, npuDeviceSelection: () => [], resolveSandboxEgressProxy: () => undefined,
+      shellExecutions: { list: () => [] },
+    } as unknown as SessionStore,
+    workspaceRoot: root,
+  });
+
+  await bindings.executeShell!("printf hello", "ephemeral");
+  await bindings.directExecution!.request({ command: "printf hello", cwd: "" });
+
+  const shell = requests.find((request) => request.action === "code");
+  assert.equal(shell?.description?.kind, "shell", "a shell approval sends fields, not only an English sentence");
+  assert.equal(shell?.summary, "Run a shell script in the Session workspace", "the canonical English sentence is still sent");
+  const direct = requests.find((request) => request.action === "direct_code");
+  // The direct-host warning is several consequences long; a client that can
+  // only read English prose would show it untranslated. These are the fields
+  // it needs instead: the runner, target, account, workspace, cwd and command.
+  if (direct?.description?.kind !== "direct-host") throw new Error("Expected a direct-host description");
+  assert.deepEqual(direct.description, {
+    account: "user:1000:1000", command: "printf hello", cwd: "", kind: "direct-host",
+    runnerId: "local", target: "machine:instance", workspaceRoot: root,
+  });
+});
 
 for (const machine of ["local", "remote-1"]) {
 test(`${machine}: ready sandbox permits agent-first consent without any failed operation`, async t => {

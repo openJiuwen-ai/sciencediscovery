@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { PermissionDescription } from "./permission-description.js";
 import type { ApprovalMode } from "./plan.js";
 import { NO_SANDBOX_NETWORK_ACCESS, type SandboxNetworkAccess, type SandboxNetworkMode } from "./sandbox-network.js";
 
@@ -73,6 +74,11 @@ export interface PermissionRequest {
   decidedAt?: string;
   decision?: "allowed" | "denied";
   decisionEpochId?: string;
+  /**
+   * The request as fields the client can put into its own language. Absent on
+   * requests recorded before this existed; `summary` is then the description.
+   */
+  description?: PermissionDescription;
   executionId?: string;
   grantId?: string;
   id: string;
@@ -117,6 +123,7 @@ export interface PermissionAuthorization {
 
 export interface CreatePermissionRequest {
   action: PermissionAction;
+  description?: PermissionDescription;
   executionId?: string;
   resource: string;
   summary: string;

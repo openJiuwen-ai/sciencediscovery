@@ -175,6 +175,7 @@ import type {
   CreateSpecialistRequest,
   DecidePermissionRequest,
   DecideRemoteJobRequest,
+  PermissionDescription,
   IdeaTreeSettingsDetails,
   JsonSchema,
   Subagent,
@@ -877,6 +878,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           getEpoch: () => store.getSessionPermissionEpoch(task.sessionId)!,
           requirePrivilege: async (privilege: {
             action: "code" | "connector" | "host";
+            description?: PermissionDescription;
             executionId?: string;
             resource: string;
             signal?: AbortSignal;
@@ -884,6 +886,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             toolCallId?: string;
           }) => {
             const check = await store.requestPermission(task.sessionId, privilege.action, privilege.resource, privilege.summary, {
+              ...(privilege.description ? { description: privilege.description } : {}),
               ...(privilege.executionId ? { executionId: privilege.executionId } : {}),
               ...(privilege.toolCallId ? { toolCallId: privilege.toolCallId } : {}),
             });
@@ -3847,7 +3850,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           body.action,
           body.resource,
           body.summary,
-          { executionId: body.executionId, toolCallId: body.toolCallId },
+          { description: body.description, executionId: body.executionId, toolCallId: body.toolCallId },
         ));
         return;
       }

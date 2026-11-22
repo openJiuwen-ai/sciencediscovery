@@ -49,7 +49,8 @@ export function createSandboxNetworkConsent(options: {
     let authorization;
     try {
       authorization = await options.permission.requirePrivilege({ action: "sandbox_network", executionId: options.executionId,
-        resource, signal, toolCallId, summary: `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.` });
+        resource, signal, toolCallId, summary: `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`,
+        description: { hosts, kind: "network", purpose, runnerId } });
     } catch (error) {
       signal?.throwIfAborted();
       // A denial/dismissal is a visible result, not a successful retrieval.

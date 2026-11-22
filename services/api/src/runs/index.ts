@@ -793,6 +793,7 @@ async function executeAgentRun(
       await permission.requirePrivilege({
         action: "host", executionId, resource: host.id, signal,
         summary: `${input.direction} Runner ${host.id}: ${input.paths.join(", ")}`,
+        description: { direction: input.direction, kind: "workspace-sync", paths: input.paths, runnerId: host.id },
       });
       const result = await syncRemoteWorkspace({
         hostId: host.id, input, runnerClient: remoteCompute.runnerClient(host.id),
@@ -1205,9 +1206,11 @@ async function executeAgentRun(
   const externalWaitByExecution = new Map<string, () => () => void>();
   const approvalsByJiuwenSwarm = Boolean(jiuwenSwarmConfigFromEnv());
   // A call JiuwenSwarm's permission engine stopped, put to the user as one of ours.
-  const requestApproval: NonNullable<WorkspaceAgentOptions["requestApproval"]> = async ({ resource, summary, toolCallId }, signal) => {
+  const requestApproval: NonNullable<WorkspaceAgentOptions["requestApproval"]> = async ({ description, resource, summary, toolCallId }, signal) => {
     // With the run as its execution: an approval given before the run (a preflight) must not answer this question.
-    const check = await store.requestPermission(sessionId, "code", resource, summary, { executionId: runId, ...(toolCallId ? { toolCallId } : {}) });
+    const check = await store.requestPermission(sessionId, "code", resource, summary, {
+      ...(description ? { description } : {}), executionId: runId, ...(toolCallId ? { toolCallId } : {}),
+    });
     if (check.allowed) return "allow_once";
     responseSink.emit({ request: check.request, type: "permission.required" });
     const decided = await waitForPermissionDecision(store, check.request, timeoutSettings.permissionWaitTimeoutMs, signal, { emit, runId, sessionId });
@@ -1476,6 +1479,7 @@ async function executeAgentRun(
         signal,
         summary: `Publish ${input.proposalIds.length} Skill Library proposal(s) in this Session`,
         toolCallId,
+        description: { kind: "skill-publish", proposalCount: input.proposalIds.length },
       });
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
@@ -1971,6 +1975,7 @@ async function executeAgentRun(
               npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
               permission: childExecution.permission,
               permissionScopeLabel: `in subagent ${subagent.id}`,
+              permissionSubagentId: subagent.id,
               artifactPathPrefix: handoff.privateWorkspacePath,
               provenanceRecorder,
               runnerClient,
@@ -2117,6 +2122,7 @@ async function executeAgentRun(
                 signal,
                 summary: `Publish ${input.proposalIds.length} Skill Library proposal(s) from subagent ${childExecution.identity.executionId}`,
                 toolCallId,
+                description: { kind: "skill-publish", proposalCount: input.proposalIds.length, subagentId: subagent.id },
               });
               return await skillLibraryCatalog.publishProposals(input.proposalIds);
             },
@@ -2230,6 +2236,7 @@ async function executeAgentRun(
                   action: "direct_code", executionId: subagent.id, signal: childSignal,
                   resource: `specialist-runtime:${subagent.id}:${subagentWorkspaceRoot}`,
                   summary: `Run ${codexRuntime.kind} directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
+                  description: { kind: "specialist-runtime", runtime: codexRuntime.kind, workspaceRoot: subagentWorkspaceRoot },
                 }); },
                 configure: async runtime => {
                   subagent = { ...subagent, runtimeOptions: runtime, timeoutSeconds: runtime.timeoutSeconds ?? subagent.timeoutSeconds };

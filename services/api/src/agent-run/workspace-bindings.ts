@@ -68,7 +68,13 @@ export interface WorkspaceExecutionBindingOptions {
   maxWorkspaceBytes?: number;
   npuBrokerEnabled?: boolean;
   permission: AgentPermissionRuntime;
+  /** The English suffix a permission summary uses for its scope ("in the
+   *  Session workspace", "in subagent X"). A client localizes the same scope
+   *  from `permissionSubagentId` rather than from this sentence. */
   permissionScopeLabel: string;
+  /** Set only inside a subagent: the approval is scoped to that subagent's
+   *  workspace rather than the Session workspace. */
+  permissionSubagentId?: string;
   provenanceRecorder: ProvenanceRecorder;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
@@ -90,10 +96,20 @@ export function createWorkspaceExecutionBindings(
   options: WorkspaceExecutionBindingOptions,
 ): ExecutionBindings {
   const executionLogger = () => createOperationalLogger({ category: "api", service: "api", dataDir: options.store.dataDir });
-  const requireEnvironmentMutation = async (summary: string, signal?: AbortSignal, runnerId?: string): Promise<void> => {
+  /** Fields every summary shares: which workspace the grant covers. */
+  const permissionScope = (): { subagentId?: string } =>
+    options.permissionSubagentId ? { subagentId: options.permissionSubagentId } : {};
+  const requireEnvironmentMutation = async (
+    summary: string,
+    description: Extract<import("@sciencediscovery/schema").PermissionDescription, { kind: "environment" }>,
+    signal?: AbortSignal,
+    runnerId?: string,
+  ): Promise<void> => {
     options.store.assertSessionWritable(options.sessionId);
+    const namedRunner = runnerId && runnerId !== "local" ? runnerId : undefined;
     await options.permission.requirePrivilege({
       action: "code",
+      description: namedRunner ? { ...description, runnerId: namedRunner } : description,
       executionId: options.executionId,
       resource: "scientific-environments",
       signal,
@@ -295,6 +311,11 @@ export function createWorkspaceExecutionBindings(
         signal,
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+        description: {
+          kind: "shell",
+          ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+          ...permissionScope(),
+        },
       });
       target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code, true);
       const permissionEpoch = await networkConsent.consume(environment?.networkAuthorizationId, target.runnerId, signal);
@@ -395,7 +416,11 @@ export function createWorkspaceExecutionBindings(
           run: options.executionId, agent: options.agentId, session: options.sessionId, command: input.command })).digest("hex");
         const authorization = await options.permission.requirePrivilege({ action: "direct_code", executionId: options.executionId,
           toolCallId, resource, signal,
-          summary: `DIRECT HOST EXECUTION: Runner ${scope.runnerId}, ${scope.target}, account ${scope.account}, workspace ${scope.workspaceRoot}, cwd ${scope.cwd || "."}. No sandbox filesystem, process or network isolation; host credentials may be accessible. Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL. Approval does not execute. Command:\n${input.command}` });
+          summary: `DIRECT HOST EXECUTION: Runner ${scope.runnerId}, ${scope.target}, account ${scope.account}, workspace ${scope.workspaceRoot}, cwd ${scope.cwd || "."}. No sandbox filesystem, process or network isolation; host credentials may be accessible. Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL. Approval does not execute. Command:\n${input.command}`,
+          description: {
+            account: scope.account, command: input.command, cwd: scope.cwd, kind: "direct-host",
+            runnerId: scope.runnerId, target: scope.target, workspaceRoot: scope.workspaceRoot, ...permissionScope(),
+          } });
         signal?.throwIfAborted();
         if (authorization.action !== "direct_code" || authorization.outcome !== "allowed" || authorization.resource !== resource) throw new Error("Direct authorization scope mismatch");
         const current = await directScope(runnerId, input.cwd, signal);
@@ -523,7 +548,8 @@ export function createWorkspaceExecutionBindings(
         resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
         await options.permission.requirePrivilege({ action: "host", executionId: options.executionId,
           resource: `workspace-transfer:${input.sourceWorkspaceId}:${input.targetWorkspaceId}`, signal,
-          summary: `Copy ${input.files.length} selected files between authorized Workspaces` });
+          summary: `Copy ${input.files.length} selected files between authorized Workspaces`,
+          description: { kind: "file-copy", fileCount: input.files.length } });
         signal?.throwIfAborted();
         resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
         return options.store.transfers.start({ sessionId: options.sessionId, agentId: options.agentId }, input, { resolve,
@@ -553,6 +579,7 @@ export function createWorkspaceExecutionBindings(
           resource: `npu-job:${jobId}`,
           signal,
           summary: `Cancel host NPU job ${jobId} ${options.permissionScopeLabel}`,
+          description: { kind: "npu", operation: "cancel", subject: jobId, ...permissionScope() },
         });
         return await options.runnerClient.cancelNpuJob(jobId, options.sessionId);
       },
@@ -574,6 +601,7 @@ export function createWorkspaceExecutionBindings(
           resource: `npu:${input.workloadId}`,
           signal,
           summary: `Run host NPU workload ${input.workloadId} ${options.permissionScopeLabel}`,
+          description: { kind: "npu", operation: "run", subject: input.workloadId, ...permissionScope() },
         });
         resolveExecutionTarget("local");
         const { environmentId: selectedId, ...request } = input;
@@ -621,6 +649,11 @@ export function createWorkspaceExecutionBindings(
         signal,
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run Python code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+        description: {
+          kind: "python",
+          ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+          ...permissionScope(),
+        },
       });
       target = await prepareExecutionTarget(machine, signal, toolCallId, "Run Python: " + code);
       return options.provenanceRecorder.executePython({
@@ -708,7 +741,8 @@ export function createWorkspaceExecutionBindings(
           runnerId?: string,
         ) => {
           resolveExecutionTarget(runnerId);
-          await requireEnvironmentMutation(`Create named ${input.language} environment ${input.name}`, signal, runnerId);
+          await requireEnvironmentMutation(`Create named ${input.language} environment ${input.name}`,
+            { kind: "environment", operation: "create", language: input.language, name: input.name }, signal, runnerId);
           const target = resolveExecutionTarget(runnerId);
           const environment = await target.runnerClient.createEnvironment(input);
           if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
@@ -716,7 +750,8 @@ export function createWorkspaceExecutionBindings(
         },
         delete: async (environmentId: string, signal?: AbortSignal, runnerId?: string) => {
           resolveExecutionTarget(runnerId);
-          await requireEnvironmentMutation(`Delete named environment ${environmentId}`, signal, runnerId);
+          await requireEnvironmentMutation(`Delete named environment ${environmentId}`,
+            { kind: "environment", operation: "delete", environmentId }, signal, runnerId);
           const target = resolveExecutionTarget(runnerId);
           await target.runnerClient.deleteEnvironment(environmentId);
           if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
@@ -729,7 +764,8 @@ export function createWorkspaceExecutionBindings(
         ) => {
           resolveExecutionTarget(runnerId);
           const manager = input.manager ?? "conda";
-          await requireEnvironmentMutation(`Install ${manager} packages in named environment ${environmentId}`, signal, runnerId);
+          await requireEnvironmentMutation(`Install ${manager} packages in named environment ${environmentId}`,
+            { kind: "environment", operation: "install", environmentId, manager }, signal, runnerId);
           const target = resolveExecutionTarget(runnerId);
           const resolved = resolveEnvironmentInstallRequest(input, options.store.getEnvironmentSourceSettings(),
             target.runnerWorkspaceKey ? undefined : options.workspaceRoot);
@@ -748,7 +784,8 @@ export function createWorkspaceExecutionBindings(
         },
         setup: async (retry: boolean, signal?: AbortSignal, runnerId?: string) => {
           resolveExecutionTarget(runnerId);
-          if (retry) await requireEnvironmentMutation("Set up scientific environments on the selected Runner", signal, runnerId);
+          if (retry) await requireEnvironmentMutation("Set up scientific environments on the selected Runner",
+            { kind: "environment", operation: "setup" }, signal, runnerId);
           const target = resolveExecutionTarget(runnerId);
           return retry ? target.runnerClient.setupScientificEnvironments() : target.runnerClient.getEnvironmentSetup();
         },
@@ -759,7 +796,8 @@ export function createWorkspaceExecutionBindings(
           runnerId?: string,
         ) => {
           resolveExecutionTarget(runnerId);
-          await requireEnvironmentMutation(`Uninstall packages from named environment ${environmentId}`, signal, runnerId);
+          await requireEnvironmentMutation(`Uninstall packages from named environment ${environmentId}`,
+            { kind: "environment", operation: "uninstall", environmentId }, signal, runnerId);
           const target = resolveExecutionTarget(runnerId);
           const revision = await target.runnerClient.uninstallEnvironment(environmentId, input);
           if (!target.runnerWorkspaceKey) await refreshEnvironmentCatalog();
@@ -784,6 +822,12 @@ export function createWorkspaceExecutionBindings(
           signal,
           ...(toolCallId ? { toolCallId } : {}),
           summary: `Run ${language} code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+          description: {
+            kind: "language",
+            language,
+            ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+            ...permissionScope(),
+          },
         });
         target = await prepareExecutionTarget(machine, signal, toolCallId, "Run scientific code: " + code);
         return options.provenanceRecorder.executeScientific({
