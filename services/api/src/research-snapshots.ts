@@ -1268,6 +1268,9 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
             const dependencies = version.inputArtifactVersionIds.map((id) => versionIdMap.get(id)).filter((id): id is string => Boolean(id));
             const restored = await store.createArtifactVersion({
               ...(targetArtifactId && baseVersionId ? { artifactId: targetArtifactId, baseVersionId } : {}),
+              // An import reconstructs the exported history exactly; two recorded
+              // versions may carry identical bytes (#1317).
+              ...(targetArtifactId && baseVersionId ? { forceNewVersion: true } : {}),
               content,
               description: artifact.description,
               executionRunIds: version.executionRunIds.map((id) => ids.id(id)),

@@ -16,6 +16,8 @@ export interface ArtifactVersionInput {
   artifactId?: string;
   baseVersionId?: string;
   publicationId?: string;
+  /** Request a new version even when the bytes match the newest version. */
+  forceNewVersion?: boolean;
 
   content: CasObjectRef;
   description?: string;
@@ -48,6 +50,8 @@ export interface RegisterWorkspaceArtifactInput {
   artifactId?: string;
   baseVersionId?: string;
   publicationId?: string;
+  /** Request a new version even when the bytes match the newest version. */
+  forceNewVersion?: boolean;
 
   description?: string;
   executionRunIds?: string[];
@@ -102,6 +106,7 @@ export class ArtifactManager {
     return await this.catalog.createVersion({
       content,
       artifactId: input.artifactId, baseVersionId: input.baseVersionId, publicationId: input.publicationId,
+      ...(input.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(input.description ? { description: input.description } : {}),
       executionRunIds: input.executionRunIds,
       inputArtifactVersionIds: input.inputArtifactVersionIds,

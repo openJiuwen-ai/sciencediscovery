@@ -5803,6 +5803,10 @@ export class SessionStore {
     turnId?: string;
     /** Importers can preserve same-named products as independent Session artifacts. */
     forceNewArtifact?: boolean;
+    /** Caller explicitly wants a new version number even when the bytes match
+     * the newest version (for example an annotation-only republish). Without
+     * it, an explicit publish of an unchanged body is a no-op (#1317). */
+    forceNewVersion?: boolean;
     /** Server restoration only; preallocated identities resolve forward references. */
     restorationIds?: { artifactId: string; versionId: string };
   }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }> {
@@ -5855,6 +5859,24 @@ export class SessionStore {
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
       throw new Error("Server-generated Artifacts accept new versions only from a server-generated writer");
+    }
+    // #1317: an explicit publish of an unchanged body is normal — the model
+    // re-declares a document after a verification pass that changed nothing —
+    // and appending a version makes the picker show two identical numbers while
+    // bumping currentVersion/updatedAt for no content change. Return the newest
+    // version instead; `forceNewVersion` is the caller's explicit opt-out. The
+    // kind and origin guards above still run, and description/title are left
+    // untouched because this is a no-op.
+    if (explicit && !input.forceNewVersion) {
+      const latest = this.catalog.artifactVersions.reduce<ScientificArtifactVersion | undefined>(
+        (newest, candidate) => (candidate.artifactId === explicit.id && candidate.projectId === projectId
+          && (!newest || candidate.version > newest.version)) ? candidate : newest,
+        undefined,
+      );
+      if (latest && latest.content.hash === input.content.hash
+        && latest.content.size === input.content.size && latest.mediaType === input.mediaType) {
+        return { artifact: structuredClone(explicit), version: structuredClone(latest) };
+      }
     }
     if (!artifact) {
       artifact = {
