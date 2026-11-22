@@ -334,6 +334,41 @@ test("complete preview and download avoid aggregate record strings and retain im
   }
 });
 
+test("a package with a repeated or unusable Artifact version number is rejected before anything is created", async (context) => {
+  const { rawRequest, project } = await fixture(context, true);
+  const packageWith = (adjust: (versions: Array<{ version: number }>) => void) => {
+    const source = evidencePackage();
+    const parsed = importResearchPackage(source);
+    const records = structuredClone(parsed.records) as { artifacts: Array<{ versions: Array<{ version: number }> }> };
+    adjust(records.artifacts[0]!.versions);
+    return createResearchPackage({
+      objects: [...parsed.objects].map(([path, value]) => ({ path, bytes: value })),
+      records,
+      source: parsed.manifest.source,
+    }).bytes;
+  };
+  const cases: Array<{ adjust: (versions: Array<{ version: number }>) => void; expected: RegExp; name: string }> = [
+    // #1300: the numbers are restored verbatim, so a repeated one is refused up
+    // front instead of leaving a duplicated version behind a failed import.
+    { adjust: (versions) => { versions[1]!.version = 1; }, expected: /ARTIFACT_VERSION_DUPLICATE/u, name: "repeated" },
+    // An unusable number is skipped by the restore, so that version would keep its
+    // provisional number and collide with the package's number just as badly.
+    { adjust: (versions) => { versions[0]!.version = 0; }, expected: /ARTIFACT_VERSION_INVALID/u, name: "unusable" },
+  ];
+  for (const { adjust, expected, name } of cases) {
+    const target = await project();
+    const response = await rawRequest(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+      body: Buffer.from(packageWith(adjust)),
+      method: "POST",
+    });
+    assert.equal(response.status, 400, `${name} numbers must be refused`);
+    const body = await response.json() as { error: string };
+    assert.match(body.error, expected);
+    const artifacts = await (await rawRequest(`/api/projects/${target.id}/artifacts`)).json() as unknown[];
+    assert.deepEqual(artifacts, [], `a refused ${name} package must not leave an Artifact behind`);
+  }
+});
+
 function evidencePackage(legacy = false, withEvolve = false, withEvolveRuns = false, withEvolveCandidateSource = false, completedRun = false) {
   const first = Buffer.from("value\n1\n");
   const latest = Buffer.from("value\n2\n");
