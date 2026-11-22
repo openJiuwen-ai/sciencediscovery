@@ -245,3 +245,22 @@ test.describe("GitHub star", () => {
     await expect(page.locator(".side-star-count")).toHaveCount(0);
   });
 });
+
+test.describe("sidebar", () => {
+  test("a folded sidebar is still folded after a reload", async ({ page }) => {
+    await installMockApi(page, { sessions: [makeSession()] });
+    await page.goto("/");
+
+    // The column starts folded open, then the reader asks for the width.
+    const shell = page.locator(".app-shell");
+    await expect(shell).not.toHaveClass(/sidebar-hidden/u);
+    await page.getByRole("button", { name: "收起侧栏" }).click();
+    await expect(shell).toHaveClass(/sidebar-hidden/u);
+
+    await page.reload();
+
+    // The width the reader asked for is still theirs, like the panel's state.
+    await expect(shell).toHaveClass(/sidebar-hidden/u);
+    await expect(page.getByRole("button", { name: "显示侧栏" })).toBeVisible();
+  });
+});
