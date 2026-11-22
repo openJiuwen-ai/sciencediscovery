@@ -24,12 +24,17 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
    * CostSideEffects: Billable model calls that do not pass through the metered proxy; temporary project and model are deleted.
    */
   test("real Idea Tree research completes and its result survives a reload", { tag: "@real" }, async ({ page, journey }, testInfo) => {
-    // Budget: 120s card + 120s new research + 480s terminal poll = 720s of the
-    // 900s case budget, which leaves 180s for the composer command, the reload,
-    // the second read and cleanup. The terminal poll is deliberately smaller
-    // than the case budget so a slow research fails as "status never settled"
-    // and still leaves teardown time.
-    test.setTimeout(900_000);
+    // Budget, measured rather than guessed. On an isolated Linux stack with a
+    // live model, the same prompt produced the research in 72s and completed it
+    // at 512s (≈440s from appearance to completion; 4 candidates, 4 assessments
+    // and 2 rounds for 271,367 tokens). The waits below are sized from that:
+    // 180s card + 180s new research + 720s terminal poll = 1080s, inside a
+    // 1500s case budget, leaving ~420s for the composer command, the reload,
+    // the second read and cleanup. The terminal poll stays below the case
+    // budget so a slow research fails as "status never settled" instead of
+    // being killed mid-cleanup, and 720s keeps ~60% headroom over the measured
+    // 440s rather than the 9% headroom a 480s cap gave.
+    test.setTimeout(1_500_000);
     journey.scenario({ goal: "Explore a small materials research question and retrieve the result after reload", preconditions: ["Isolated stack and live model credentials"] });
     const real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     await requireRealStack(testInfo);
@@ -57,17 +62,19 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         await openProjectSession(page, fixture);
         await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Skip literature retrieval. Explore low-cost iron catalysts for near-neutral water treatment, considering recovery and leaching.");
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
-        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 120_000 });
+        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 180_000 });
         // The card is shared by every research in the Session, so identify this
-        // run by the id that was not there before the command was sent.
-        await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 120_000 }).toBe(1);
+        // run by the id that was not there before the command was sent. 180s
+        // covers a cold first call, which took 72s in the measurement above but
+        // missed a 120s window once on a slow start.
+        await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 180_000, message: "the command should start exactly one new research" }).toBe(1);
         researchId = (await read()).find((entry: any) => !existingIds.has(entry.research.id)).research.id;
       });
       await journey.step("Inspect completed research", "A terminal status is reached and at least one candidate has a score and insight", async () => {
         await expect.poll(async () => {
           const status = (await researchById())?.research.status;
           return terminalStatuses.includes(status) ? status : null;
-        }, { timeout: 480_000, message: "the research should settle in a terminal status" }).not.toBeNull();
+        }, { timeout: 720_000, message: "the research should settle in a terminal status" }).not.toBeNull();
         const { graph, research } = (await researchById())!;
         // A real model can stop short of `completed`; name the persisted reason
         // so a provider or JSON-parse failure is not reported as a value mismatch.
