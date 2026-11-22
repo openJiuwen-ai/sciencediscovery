@@ -67,7 +67,11 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   "remote-job": ({ command, hostAlias, mode }) => `在 ${hostAlias} 上运行 ${mode.toUpperCase()} 任务：${command}`,
   web: ({ hostname, operation, query }) =>
     operation === "fetch" ? `获取 ${hostname ?? ""} 的公开网页内容` : `检索公开网络：“${query ?? ""}”`,
-  "tool-call": ({ toolName }) => `在本会话中运行${toolName ? `工具 ${toolName}` : "工具调用"}`,
+  "tool-call": ({ detail, toolName }) => {
+    const call = `在本会话中运行${toolName ? `工具 ${toolName}` : "工具调用"}`;
+    // 被批准调用的参数（命令或 JSON）原样显示，资源本身无法说明它们。
+    return detail ? `${call}\n${detail}` : call;
+  },
 };
 
 /**

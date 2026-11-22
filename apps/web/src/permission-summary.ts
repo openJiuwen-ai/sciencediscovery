@@ -19,7 +19,32 @@ import {
   type PermissionRequest,
 } from "@sciencediscovery/schema";
 
-import type { Locale } from "./i18n/index.js";
+import type { Locale, MessageKey } from "./i18n/index.js";
+
+/**
+ * This surface's name for each permission action. Both approval surfaces read
+ * it from here: the permission panel (Permissions.tsx) and the timeline card
+ * that a running Session actually shows, so the two cannot label an action
+ * differently.
+ */
+export const ACTION_LABELS: Record<PermissionRequest["action"], MessageKey> = {
+  sandbox_network: "permissions.sandboxNetwork",
+  artifact_download: "permissions.download",
+  code: "permissions.code",
+  direct_code: "permissions.directExecution",
+  connector: "permissions.connector",
+  directory: "permissions.directory",
+  host: "permissions.host",
+  remote_job: "permissions.remoteJob",
+};
+
+/** The localized action name for a request whose action this build knows. */
+export function permissionActionLabel(
+  action: PermissionRequest["action"],
+  translate: (key: MessageKey) => string,
+): string | undefined {
+  return Object.hasOwn(ACTION_LABELS, action) ? translate(ACTION_LABELS[action]) : undefined;
+}
 
 /** The workspace an approval covers: the Session workspace, or a subagent's. */
 function scope(subagentId: string | undefined, zh: boolean): string {
@@ -122,9 +147,14 @@ function renderers(zh: boolean): PermissionDescriptionRenderers {
         ? `Fetch public web content from ${hostname ?? ""}`
         : `Search the public web for “${query ?? ""}”`;
     },
-    "tool-call": ({ toolName }) => zh
-      ? `在本会话中运行${toolName ? `工具 ${toolName}` : "工具调用"}`
-      : `Run ${toolName ? `tool ${toolName}` : "a tool call"} in this Session`,
+    "tool-call": ({ detail, toolName }) => {
+      const call = zh
+        ? `在本会话中运行${toolName ? `工具 ${toolName}` : "工具调用"}`
+        : `Run ${toolName ? `tool ${toolName}` : "a tool call"} in this Session`;
+      // The arguments being approved (a shell command, a JSON object) are shown
+      // verbatim after the sentence: the resource alone cannot name them.
+      return detail ? `${call}\n${detail}` : call;
+    },
   };
 }
 

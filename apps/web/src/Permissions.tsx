@@ -19,20 +19,9 @@ import type { PermissionDecision, PermissionGrant, PermissionRequest } from "@sc
 import { PermissionDecisionActions, permissionMatchingKey } from "./PermissionDecisionActions.js";
 
 import { ChevronRightIcon } from "./icons.js";
-import { formatPermissionRequest } from "./permission-summary.js";
+import { ACTION_LABELS, formatPermissionRequest, permissionActionLabel } from "./permission-summary.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
-import { useLocale, type MessageKey } from "./i18n/index.js";
-
-const ACTION_LABELS: Record<PermissionRequest["action"], MessageKey> = {
-  sandbox_network: "permissions.sandboxNetwork",
-  artifact_download: "permissions.download",
-  code: "permissions.code",
-  direct_code: "permissions.directExecution",
-  connector: "permissions.connector",
-  directory: "permissions.directory",
-  host: "permissions.host",
-  remote_job: "permissions.remoteJob",
-};
+import { useLocale } from "./i18n/index.js";
 
 export function PermissionCards({
   expandedCards,
@@ -70,7 +59,7 @@ export function PermissionCards({
       return <article className="permission-card" key={request.id}>
         <button aria-expanded={expanded} className="permission-card-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
           <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{formatPermissionRequest(request, locale, Object.hasOwn(ACTION_LABELS, request.action) ? t(ACTION_LABELS[request.action]) : undefined)}</h4></span>
+          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{formatPermissionRequest(request, locale, permissionActionLabel(request.action, t))}</h4></span>
         </button>
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>

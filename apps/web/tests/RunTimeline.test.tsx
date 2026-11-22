@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ArtifactReviewRun, RunStreamEvent, Subagent } from "@sciencediscovery/schema";
+import type { ArtifactReviewRun, PermissionRequest, RunStreamEvent, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -755,6 +755,67 @@ test("permission cards expose their full request in an expandable details block"
   assert.match(html, /run-1/);
 });
 
+test("the timeline approval card composes the same localized sentence as the permission panel", () => {
+  const render = (request: PermissionRequest, locale: "en" | "zh-CN") => {
+    const entries = apply([{ request, type: "permission.required" }]);
+    return renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, {
+      entries,
+      isRunning: true,
+      onPermissionDecision: async () => undefined,
+      onToggle: () => undefined,
+    })));
+  };
+  const shell: PermissionRequest = {
+    action: "code", createdAt: "2026-01-01T00:00:00.000Z", description: { kind: "shell" }, id: "permission-shell",
+    resource: "workspace-code", sessionId: "session-1", state: "pending",
+    summary: "Run a shell script in the Session workspace",
+  };
+  const chinese = render(shell, "zh-CN");
+  // This card, not the permission panel, is what a running Session shows
+  // (App.tsx excludes timeline requests from PermissionCards), so it has to
+  // compose the sentence instead of printing the API's English `summary`.
+  assert.match(chinese, /在会话工作区中运行 Shell 脚本/);
+  assert.doesNotMatch(chinese, /Run a shell script/);
+  assert.match(render(shell, "en"), /Run a shell script in the Session workspace/);
+
+  const direct: PermissionRequest = {
+    ...shell,
+    action: "direct_code",
+    description: {
+      account: "user", command: "printf a\nprintf b", cwd: "", kind: "direct-host",
+      runnerId: "local", target: "machine", workspaceRoot: "/workspace",
+    },
+    id: "permission-direct",
+    summary: "DIRECT HOST EXECUTION: Runner local",
+  };
+  const directChinese = render(direct, "zh-CN");
+  assert.match(directChinese, /直接在主机上执行/);
+  assert.match(directChinese, /white-space:pre-wrap/);
+  assert.match(directChinese, /命令：\nprintf a\nprintf b/, "the direct-host command keeps its newlines");
+  assert.doesNotMatch(directChinese, /DIRECT HOST EXECUTION/);
+});
+
+test("a tool approval card shows the command or arguments being approved", () => {
+  const render = (locale: "en" | "zh-CN") => {
+    const entries = apply([{
+      request: {
+        action: "code" as const, createdAt: "2026-01-01T00:00:00.000Z",
+        description: { detail: "rm -rf out", kind: "tool-call" as const, toolName: "run_shell" },
+        id: "permission-tool", resource: "workspace-code", sessionId: "session-1", state: "pending" as const,
+        summary: "run_shell: rm -rf out",
+      },
+      type: "permission.required" as const,
+    }]);
+    return renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, {
+      entries, isRunning: true, onPermissionDecision: async () => undefined, onToggle: () => undefined,
+    })));
+  };
+  // run_shell approves the fixed workspace-code resource, so the command exists
+  // nowhere on the request except the description detail.
+  assert.match(render("zh-CN"), /在本会话中运行工具 run_shell\nrm -rf out/);
+  assert.match(render("en"), /Run tool run_shell in this Session\nrm -rf out/);
+});
+
 test("structured tool arguments render as raw input text without a JSON wrapper", () => {
   const entries = apply([
     { trace: { args: { code: "print(6 * 7)" }, id: "tool-1", name: "run_python", status: "running" }, type: "tool.started" },
@@ -1362,6 +1423,8 @@ for (const [locale, label] of [["en", "Sandbox network access"], ["zh-CN", "沙�
     const entries = apply([{ type: "permission.required", request: {
       id: "network-permission", action: "sandbox_network", resource, sessionId: "session-1", state: "pending",
       createdAt: "2026-10-18T10:00:00.000Z",
+      // The API sends the consent as fields; the card composes the sentence from them in the reader's language.
+      description: { hosts: ["eutils.ncbi.nlm.nih.gov:443"], kind: "network", purpose: "Retrieve requested PubMed records.", runnerId: "local" },
       summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records.",
     } }]);
     const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, {

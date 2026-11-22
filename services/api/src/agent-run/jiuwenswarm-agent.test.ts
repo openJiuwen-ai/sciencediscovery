@@ -2329,6 +2329,8 @@ test("an approval question names run_shell's stable resource, so a standing gran
     // the per-call "run_shell: rm -rf out" text, which a standing/session grant would never match.
     assert.equal(asked.resource, "workspace-code");
     assert.equal(asked.summary, "run_shell: rm -rf out");
+    // The approved resource says nothing about the command, so the description carries it.
+    assert.deepEqual(asked.description, { detail: "rm -rf out", kind: "tool-call", toolName: "run_shell" });
   } finally {
     await adapter.close();
   }
@@ -2352,6 +2354,8 @@ test("an approval question for another tool is named by the tool, not by JiuwenS
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(asked.resource, "mcp__custom-1__to_kelvin");
     assert.equal(asked.summary, 'mcp__custom-1__to_kelvin: {"celsius": -40}');
+    // The user approves these arguments, not just the tool: the card shows them verbatim.
+    assert.deepEqual(asked.description, { detail: '{"celsius": -40}', kind: "tool-call", toolName: "mcp__custom-1__to_kelvin" });
   } finally {
     await adapter.close();
   }

@@ -36,6 +36,7 @@ import { MessageTime } from "../MessageTime.js";
 import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
+import { formatPermissionRequest, permissionActionLabel } from "../permission-summary.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
 import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
@@ -954,12 +955,18 @@ export function RunTimeline({
         if (entry.type === "permission") {
           if (entry.request.state !== "pending") return null;
           const pending = entry.request.state === "pending";
+          const actionLabel = permissionActionLabel(entry.request.action, t);
           const status = entry.request.action === "sandbox_network" ? t("permissions.sandboxNetwork") : t("permissions.required");
           return (
             <article className={`permission-card timeline-permission ${entry.request.state}`} key={entry.id}>
               <div>
                 <span className="eyebrow">{status}</span>
-                <h4>{entry.request.summary}</h4>
+                {/* Composed from the request's structured description in the
+                    reader's language, exactly like the permission panel: this
+                    card is the approval surface a running Session shows, so it
+                    must not print the API's English sentence. A direct-host
+                    command keeps its newlines. */}
+                <h4 style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{formatPermissionRequest(entry.request, locale, actionLabel)}</h4>
                 {entry.request.action !== "sandbox_network" ? <code>{entry.request.resource}</code> : null}
                 {!pending && entry.request.decidedAt ? <small>{t("timeline.decided")} {new Date(entry.request.decidedAt).toLocaleString(locale)}</small> : null}
                 <details className="permission-details">

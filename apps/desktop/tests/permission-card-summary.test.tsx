@@ -94,6 +94,21 @@ test("an unstructured request falls back to a localized action, not to English p
   assert.match(card({ ...legacy, action: "unknown" as never }), /Query PubMed for BRCA1/);
 });
 
+test("a tool approval card shows the command or arguments the user is approving", () => {
+  const toolCall = request({ detail: "rm -rf out", kind: "tool-call", toolName: "run_shell" }, "run_shell: rm -rf out");
+  // run_shell approves the fixed workspace-code resource, so the command is
+  // only available as the description's detail.
+  assert.match(card(toolCall), /在本会话中运行工具 run_shell\nrm -rf out/);
+  const withArguments = request(
+    { detail: '{"celsius": -40}', kind: "tool-call", toolName: "mcp__custom-1__to_kelvin" },
+    'mcp__custom-1__to_kelvin: {"celsius": -40}',
+  );
+  assert.match(card(withArguments), /工具 mcp__custom-1__to_kelvin\n\{&quot;celsius&quot;: -40\}/);
+  setLanguage("en");
+  assert.match(card(toolCall), /Run tool run_shell in this Session\nrm -rf out/);
+  assert.match(card(withArguments), /Run tool mcp__custom-1__to_kelvin in this Session\n\{&quot;celsius&quot;: -40\}/);
+});
+
 test("every description kind has Chinese and English wording", () => {
   // A kind added without copy would otherwise render as a blank line; the
   // renderer table is exhaustive by type, so this only has to prove the

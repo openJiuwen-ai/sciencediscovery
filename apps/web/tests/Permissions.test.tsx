@@ -160,6 +160,21 @@ test("a request without a description gets a localized action instead of English
   assert.match(render({ ...legacy, description: { kind: "mcp-tool", sourceId: "pubmed", toolId: "search" } }), /调用 MCP 工具 pubmed\/search/);
 });
 
+test("the permission panel shows the command or arguments a tool approval would run", () => {
+  const request: PermissionRequest = {
+    action: "code", createdAt: "2026-10-18T00:00:00.000Z",
+    description: { detail: '{"celsius": -40}', kind: "tool-call", toolName: "mcp__custom-1__to_kelvin" },
+    id: "request-tool", projectId: "project-1", resource: "workspace-code", sessionId: "session-1",
+    state: "pending", summary: 'mcp__custom-1__to_kelvin: {"celsius": -40}',
+  };
+  const render = (locale: "en" | "zh-CN") => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+    createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    })));
+  assert.match(render("zh-CN"), /在本会话中运行工具 mcp__custom-1__to_kelvin\n\{&quot;celsius&quot;: -40\}/);
+  assert.match(render("en"), /Run tool mcp__custom-1__to_kelvin in this Session\n\{&quot;celsius&quot;: -40\}/);
+});
+
 test("permission cards hide decided requests", () => {
   const request: PermissionRequest = {
     action: "connector",

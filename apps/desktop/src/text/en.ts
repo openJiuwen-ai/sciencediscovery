@@ -76,7 +76,12 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   web: ({ hostname, operation, query }) => operation === "fetch"
     ? `Fetch public web content from ${hostname ?? ""}`
     : `Search the public web for “${query ?? ""}”`,
-  "tool-call": ({ toolName }) => `Run ${toolName ? `tool ${toolName}` : "a tool call"} in this Session`,
+  "tool-call": ({ detail, toolName }) => {
+    const call = `Run ${toolName ? `tool ${toolName}` : "a tool call"} in this Session`;
+    // The arguments being approved are shown verbatim: run_shell's resource is
+    // the fixed workspace-code, so the command appears nowhere else.
+    return detail ? `${call}\n${detail}` : call;
+  },
 };
 
 export const EN: Text = {
