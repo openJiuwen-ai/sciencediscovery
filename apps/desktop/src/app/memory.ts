@@ -182,12 +182,34 @@ export type CitationRead = (
   sessionId?: string,
 ) => Promise<MemoryGraphMatchResponse>;
 
-/** What the graph answered about a citation: the node, nothing recorded, or a
- *  read that could not answer at all (off, budget refusal, unreachable). */
+/** What the graph answered about a citation: the node, nothing recorded, a read
+ *  that could not answer at all (off, budget refusal, unreachable), or an
+ *  answer that does not settle the question. The last one is not a failure: the
+ *  reads came back, but the page they returned was cut short, or the citation
+ *  names no Session and its id is one the graph does not keep unique, so no hit
+ *  can be attributed to this citation. */
 export type CitationResolution =
   | { reason: string; status: "unanswered" }
   | { hit: MemoryGraphHit; status: "ready" }
+  | { status: "unlocated" }
   | { status: "missing" };
+
+/**
+ * The labels whose node id names one node across every Session and project: the
+ * id is the record's own key — an Evidence's `evidence_id`, an Artifact's
+ * `<artifact_id>#v<version>`, a SourceFile's `file_id`.
+ *
+ * DbRecord is deliberately absent: its id is the bare `identifier`, and the
+ * graph keys those nodes by `(session_id, source, identifier)`, so the same id
+ * names several nodes of different Sessions. A hit found without a scope
+ * therefore cannot be attributed to a citation that carries no Session, and an
+ * unscoped read is only worth the query for the labels above.
+ */
+const GLOBALLY_UNIQUE_ID_LABELS: ReadonlySet<MemoryGraphNodeLabel> = new Set([
+  "Artifact",
+  "Evidence",
+  "SourceFile",
+]);
 
 /**
  * The node a report's citation names.
@@ -196,13 +218,16 @@ export type CitationResolution =
  * report's own Session. A persisted alias map carries no Session, however, so a
  * citation of a node created in another Session of the same project is absent
  * from that scope — the normal case for project memory, where a later report
- * cites literature gathered earlier. Node ids are globally unique, so when the
- * citation does not name a Session and the scoped read found nothing, one
- * unscoped read is the honest next question.
+ * cites literature gathered earlier. When the citation names no Session, the
+ * scoped read found nothing, and the label's id is unique across the whole
+ * graph (`GLOBALLY_UNIQUE_ID_LABELS`), one unscoped read is the honest next
+ * question — that id can only name the node the citation already names.
  *
  * A reason is returned untouched and never widened: a disabled service, an
  * exhausted query budget and an unreachable sidecar all mean "cannot answer",
- * not "no such record".
+ * not "no such record". A page the sidecar truncated means the same thing on a
+ * smaller scale: it is a partial list of at most 500 nodes, so neither "no such
+ * record" nor a same-id node from another Session may be concluded from it.
  */
 export async function resolveCitation(
   reference: Pick<ComposerReference, "id" | "kind" | "label" | "sessionId" | "version">,
@@ -218,14 +243,25 @@ export async function resolveCitation(
   const scopedHit = matchReferenceHit(scopedAnswer.hits ?? [], reference);
   if (scopedHit !== undefined) return { hit: scopedHit, status: "ready" };
 
+  // The read answered, but a page the sidecar capped at 500 nodes can only say
+  // that this citation was not among those 500 — not that it does not exist.
+  const scopedPartial = scopedAnswer.truncated === true;
+
   // A citation that names its own Session was answered already; a read that was
   // already unscoped cannot be widened further.
-  if (reference.sessionId !== undefined || scoped === undefined) return { status: "missing" };
+  if (reference.sessionId !== undefined || scoped === undefined) {
+    return scopedPartial ? { status: "unlocated" } : { status: "missing" };
+  }
+
+  // Widening an id that several Sessions can share would accept a foreign node
+  // as the cited one, so a DbRecord citation without a Session stops here.
+  if (!GLOBALLY_UNIQUE_ID_LABELS.has(label)) return { status: "unlocated" };
 
   const unscopedAnswer = await read(label, undefined);
   if (unscopedAnswer.reason !== undefined) return { reason: unscopedAnswer.reason, status: "unanswered" };
   const unscopedHit = matchReferenceHit(unscopedAnswer.hits ?? [], reference);
-  return unscopedHit === undefined ? { status: "missing" } : { hit: unscopedHit, status: "ready" };
+  if (unscopedHit !== undefined) return { hit: unscopedHit, status: "ready" };
+  return unscopedAnswer.truncated === true ? { status: "unlocated" } : { status: "missing" };
 }
 
 /** Deduplicate by node id while keeping first-seen order: a chain result

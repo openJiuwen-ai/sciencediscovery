@@ -584,6 +584,8 @@ export const ZH = {
     openSettings: "打开科学记忆设置",
     notFoundTitle: "没有找到这条记忆",
     notFoundBody: "科学记忆里没有任何记录对应这条引用。",
+    unlocatedTitle: "暂时无法定位这条记忆",
+    unlocatedBody: "科学记忆无法确认这条引用指向哪条记录，因此既不显示内容，也不判定它不存在。",
     disabledTitle: "科学记忆没有开启",
     disabledBody: "在「设置 → 科学记忆」里开启后，报告的引用就能展开成证据与产物。",
     unreachableTitle: "暂时读不到科学记忆",

@@ -559,6 +559,8 @@ export const EN: Text = {
     openSettings: "Open scientific memory settings",
     notFoundTitle: "This memory was not found",
     notFoundBody: "No record in memory matches this citation.",
+    unlocatedTitle: "This memory cannot be located yet",
+    unlocatedBody: "The memory service could not confirm which record this citation names, so the card neither shows it nor reports it missing.",
     disabledTitle: "Scientific memory is off",
     disabledBody: "Turn it on in Settings → Scientific memory and a report's citations expand into their evidence and artifacts.",
     unreachableTitle: "Scientific memory is unavailable",

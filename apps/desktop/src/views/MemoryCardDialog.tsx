@@ -85,6 +85,9 @@ type LoadState =
    *  action that state gets, so the copy and the button cannot disagree. */
   | { message: string; recovery: ErrorRecovery; status: "error"; title: string }
   | { status: "missing" }
+  /** The reads answered, but not the question: a page cut short, or a citation
+   *  of a shared id that names no Session. Neither proves the node absent. */
+  | { status: "unlocated" }
   | { hit: MemoryGraphHit; status: "ready" };
 
 /** The old web UI's classification of an Evidence node's `extra`: content
@@ -200,7 +203,7 @@ export function MemoryCardContent({
           setState({ hit: answer.hit, status: "ready" });
           return;
         }
-        setState({ status: "missing" });
+        setState(answer.status === "unlocated" ? { status: "unlocated" } : { status: "missing" });
       },
       (failure: unknown) => {
         if (!alive) return;
@@ -282,6 +285,8 @@ export function MemoryCardContent({
                 : onOpenSettings}
               title={state.title}
             />
+          ) : state.status === "unlocated" ? (
+            <MemoryState body={TEXT.memory.unlocatedBody} title={TEXT.memory.unlocatedTitle} />
           ) : state.status === "missing" ? (
             <MemoryState body={TEXT.memory.notFoundBody} title={TEXT.memory.notFoundTitle} />
           ) : state.hit.label === "Evidence" && currentTab === "provenance" ? (

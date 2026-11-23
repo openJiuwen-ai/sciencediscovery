@@ -240,3 +240,94 @@ describe("a graph that could not answer", () => {
     });
   });
 });
+
+describe("a read that answered with a truncated page", () => {
+  const reference: ComposerReference = {
+    id: CROSS_SESSION_EVIDENCE.id,
+    kind: "evidence",
+    label: "evidence1",
+  };
+  // The sidecar caps a node-type read at 500 nodes and flags the cut. What the
+  // page does not hold is not thereby absent from memory.
+  const anotherEvidence = {
+    ...CROSS_SESSION_EVIDENCE,
+    excerpt: "A different claim on the same page",
+    extra: { content: "A different claim on the same page" },
+    id: "3b1c0a6e-2f1f-4e5a-9d3c-6f2c8a7b5d10",
+  };
+
+  it("is not reported as not found, on the scoped read or the widened one", async () => {
+    const { calls, client } = fakeClient({
+      scoped: { hits: [], total: 0, truncated: true },
+      unscoped: { hits: [], total: 0, truncated: true },
+    });
+    await withCard(client, reference, (renderer) => {
+      const text = markup(renderer);
+
+      assert.ok(!text.includes(TEXT.memory.notFoundTitle), "a cut page is not proof that nothing exists");
+      assert.ok(text.includes(TEXT.memory.unlocatedTitle), "the card says it cannot locate the citation");
+      assert.equal(calls.filter((call) => call.path === "/api/memory/query/by-node-type").length, 2,
+        "the widened read is still worth asking");
+    });
+  });
+
+  it("does not render not-found when the truncated page holds no matching hit", async () => {
+    const { client } = fakeClient({
+      scoped: { hits: [anotherEvidence], total: 1, truncated: true },
+      unscoped: { hits: [anotherEvidence], total: 1, truncated: true },
+    });
+    await withCard(client, reference, (renderer) => {
+      const text = markup(renderer);
+
+      assert.ok(!text.includes(anotherEvidence.extra.content), "a different node is not shown as the cited one");
+      assert.ok(!text.includes(TEXT.memory.notFoundTitle), "the cited node may be past the 500-node cut");
+      assert.ok(text.includes(TEXT.memory.unlocatedTitle));
+    });
+  });
+
+  it("still opens the cited node when it is on the page", async () => {
+    const { client } = fakeClient({
+      scoped: { hits: [anotherEvidence], total: 1, truncated: true },
+      unscoped: { hits: [anotherEvidence, CROSS_SESSION_EVIDENCE], total: 2, truncated: true },
+    });
+    await withCard(client, reference, (renderer) => {
+      assert.ok(markup(renderer).includes(CROSS_SESSION_EVIDENCE.extra.content));
+    });
+  });
+});
+
+describe("a DbRecord citation that names no Session", () => {
+  const record = {
+    createdAt: "2026-11-20T10:00:00.000Z",
+    excerpt: "A record from another Session",
+    extra: { identifier: "10.1021/jacs.6b00001", title: "A record from another Session" },
+    id: "10.1021/jacs.6b00001",
+    label: "DbRecord" as const,
+    sessionId: OTHER_SESSION,
+  };
+
+  it("does not accept a same-id record that belongs to another Session", async () => {
+    const { calls, client } = fakeClient({
+      scoped: EMPTY,
+      unscoped: { hits: [record], total: 1, truncated: false },
+    });
+    await withCard(client, { id: record.id, kind: "dbrecord", label: "record1" }, (renderer) => {
+      const text = markup(renderer);
+
+      assert.ok(!text.includes(record.extra.title), "a foreign record is not rendered as the cited one");
+      assert.ok(!text.includes(TEXT.memory.notFoundTitle), "the citation is not proven absent either");
+      assert.ok(text.includes(TEXT.memory.unlocatedTitle));
+      assert.equal(calls.filter((call) => call.path === "/api/memory/query/by-node-type").length, 1,
+        "an id several Sessions share is not widened");
+    });
+  });
+
+  it("still opens a DbRecord citation that names its owning Session", async () => {
+    const { client } = fakeClient({ scoped: { hits: [record], total: 1, truncated: false }, unscoped: EMPTY });
+    await withCard(client, { id: record.id, kind: "dbrecord", label: "record1", sessionId: OTHER_SESSION }, (renderer) => {
+      const text = markup(renderer);
+      assert.ok(text.includes(record.extra.title));
+      assert.ok(!text.includes(TEXT.memory.unlocatedTitle));
+    });
+  });
+});
