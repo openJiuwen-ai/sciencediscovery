@@ -20,6 +20,7 @@ import type { ToolDetail } from "../app/tool-io.js";
 import { RunFailureCard } from "./RunFailureCard.js";
 import { TEXT } from "../text.js";
 import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../run-stream/model.js";
+import { isTerminalRunStatus } from "../run-stream/model.js";
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
 import { subagentTask } from "../run-stream/subagent.js";
 import type {
@@ -567,6 +568,8 @@ export const AssistantTurns = memo(function AssistantTurns({
   // same answer, and where both survive, the streamed one is the longer.
   const showFinal = finalBody !== undefined && answer === undefined;
   const live = !run.terminal;
+  // A disconnected stream is sealed too; a known active status still wins.
+  const artifactsSettled = run.terminal && (run.status === undefined || isTerminalRunStatus(run.status));
   // While the run is going, only the turn being written counts as its answer.
   // The model opens the next turn with its thinking, and the turn before it may
   // still be holding the sentence that introduced a tool call — printing that as
@@ -615,7 +618,7 @@ export const AssistantTurns = memo(function AssistantTurns({
       <>
         <RunStatusLine run={run} artifactFallback={Boolean(artifacts?.visible.length)} />
         {!live && usage ? <div className="answer-tools">{usage}</div> : null}
-        {run.terminal ? (
+        {artifactsSettled ? (
           <TurnArtifactStrip
             key={`${sessionId}:${run.runId}`}
             artifacts={artifacts}
@@ -697,7 +700,7 @@ export const AssistantTurns = memo(function AssistantTurns({
       </div>
       <RunStatusLine run={run} />
       {!live && shown === undefined && !showFinal && usage ? <div className="answer-tools">{usage}</div> : null}
-      {run.terminal ? (
+      {artifactsSettled ? (
         <TurnArtifactStrip
           key={`${sessionId}:${run.runId}`}
           artifacts={artifacts}

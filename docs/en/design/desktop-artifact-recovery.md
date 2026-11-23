@@ -24,7 +24,8 @@ proposal retained in PR #1228's previous commits.
   answer; otherwise use its stored assistant message. If neither answer survives,
   put the existing strip under the run's status after its starting message. Runs
   without eligible outputs gain no synthetic turn. Active/blocked runs gain no
-  artifact strip. Preserve cancellation, failure and per-turn usage presentation.
+  artifact strip, even if their event connection has ended. Preserve cancellation,
+  failure and per-turn usage presentation.
 - **AR-4 — inline expansion.** Keep #1257's ordering and initial important-kind
   selection, with at most five file cards. The overflow card expands the remaining
   files in the same strip, including intermediate kinds, and offers collapse. The

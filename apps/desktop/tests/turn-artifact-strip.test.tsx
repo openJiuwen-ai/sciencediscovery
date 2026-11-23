@@ -108,6 +108,13 @@ describe("the strip under a turn (#1252)", () => {
     assert.ok(done.includes("report.md"));
   });
 
+  it("keeps outputs hidden when a disconnected stream still names an active run", () => {
+    for (const status of ["running", "queued", "blocked"] as const) {
+      const html = turns({ terminal: true, status }, [output()]);
+      assert.equal(html.includes("class=\"turn-artifacts\""), false, status);
+    }
+  });
+
   it("previews the version the card shows, not the newest one", async () => {
     const older = output({ artifactId: "figure", kind: "figure", name: "plot.png", turnId: "run-1", version: 3, baseVersionId: "figure-v2" });
     // A later run wrote v4; the card of run-1 still points at v3.
