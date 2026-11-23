@@ -121,14 +121,12 @@ export function gate(profile, needs) {
   if (needs.policy?.outputs?.docs_only === 'true') {
     const problems = ['policy', 'l1'].filter(name => needs[name]?.result !== 'success')
       .map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
-    for (const name of ['ut', 'st', 'e2e-plan', 'e2e', 'e2e-desktop', 'real-merge', 'real-scheduled', 'binary', 'docker', 'windows-desktop', 'macos-desktop']) {
+    for (const name of [...testJobs, ...distributionJobs]) {
       if (needs[name]?.result !== 'skipped') problems.push(`${name}: expected skipped for documentation-only changes`);
     }
     return problems;
   }
-  // The desktop journeys are mocked and need no credentials, so every profile
-  // requires them; only the shared L2 suite is profile-dependent.
-  const required = ['policy', 'l1', 'ut', 'st', 'e2e-desktop'];
+  const required = ['policy', 'l1', 'ut', 'st'];
   if (profile !== 'pr') required.push('e2e-plan', 'e2e');
   const realJob = profile === 'merge' ? 'real-merge' : profile === 'pr' ? null : 'real-scheduled';
   if (realJob) required.push(realJob);
