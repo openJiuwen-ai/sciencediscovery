@@ -2388,3 +2388,80 @@
   line-height: 18px;
   white-space: nowrap;
 }
+
+/* ── a design that stopped before its search ─────────────────────────────── */
+
+/* A stop with no card to carry it: the checkpoint arrived as prose, its fence
+   did not parse, or the turn called create_evolve_run and no search exists.
+   Nothing below it in the transcript moves, so it is drawn at the foot of the
+   conversation — amber, because nothing failed, the design is simply waiting
+   on a person — with the sentence that continues it written out and ready to
+   send. The button is that sentence, not a different action. */
+.evolve-stall {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  /* The last message already ends with its own bottom margin; the run card
+     below gives that margin back with a negative top one, so this block owns
+     the row step and hands it back the same way. */
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-m);
+  background: var(--warning-soft);
+}
+
+.evolve-stall-title {
+  grid-column: 1;
+  margin: 0;
+  color: var(--warning-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.evolve-stall-detail,
+.evolve-stall-send {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.evolve-stall-send {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.evolve-stall-send code {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.evolve-stall-action {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid #000;
+  border-radius: 999px;
+  background: #000;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.evolve-stall-action:hover:not(:disabled) { background: #222; }
+.evolve-stall-action:disabled { cursor: default; opacity: .45; }

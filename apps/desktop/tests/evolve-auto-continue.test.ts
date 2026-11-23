@@ -61,16 +61,29 @@ test("a stream with no completion falls back to its last non-empty response", ()
 });
 
 function Harness(props: AutoContinueInput) {
-  const { refusedStep } = useAutoContinue(props);
-  // The transcript reads the refusal off the hook's return value; rendering
-  // it here is what makes that value observable to the test.
-  return createElement("span", { "data-refused": refusedStep === undefined ? "" : String(refusedStep) });
+  const { notice, refusedStep } = useAutoContinue(props);
+  // The transcript reads the refusal and the cardless stop off the hook's
+  // return value; rendering them here is what makes those values observable
+  // to the test.
+  return createElement("span", {
+    "data-notice": notice?.reason ?? "",
+    "data-refused": refusedStep === undefined ? "" : String(refusedStep),
+  });
+}
+
+function state(renderer: ReturnType<typeof create>): Record<string, string> {
+  const node = renderer.toJSON() as { props?: Record<string, string> } | null;
+  return node?.props ?? {};
 }
 
 function refused(renderer: ReturnType<typeof create>): number | undefined {
-  const node = renderer.toJSON() as { props?: Record<string, string> } | null;
-  const value = node?.props?.["data-refused"];
+  const value = state(renderer)["data-refused"];
   return value === undefined || value === "" ? undefined : Number(value);
+}
+
+function notice(renderer: ReturnType<typeof create>): string | undefined {
+  const value = state(renderer)["data-notice"];
+  return value === undefined || value === "" ? undefined : value;
 }
 
 function card(title: string, step = 1): string {
@@ -452,5 +465,221 @@ test("a turn that called create_evolve_run is not pushed", async () => {
     checkpointMode: "auto", design: "design-1", running: false, run: called, searchStarted: false, send, sessionId: "s",
   });
   assert.equal(sent.length, 0);
+  // It is still an ending the client will not move: the design is idle with no
+  // search, so the conversation has to say so even though the answer holds the
+  // refusal. Nothing on screen said it before #1328.
+  assert.equal(notice(renderer!), "unstarted");
+  renderer!.unmount();
+});
+
+test("a cardless ending is carried while the transcript is still catching up", async () => {
+  // The push that carries step 1 bumps `sendEpoch`, so the settle for the turn
+  // before it is dropped instead of written (`use-workspace.ts`). The turn
+  // that follows then ends with an empty transcript and no pending command:
+  // the design's pace reads as unknown, which used to silence the cardless
+  // continuation for a design this client was itself carrying — the exact
+  // shape of the 2/4 stall in #1328. The pace this Session was last seen to
+  // have is still known, and is what keeps the design moving.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (checkpointMode: "auto" | "confirm" | undefined, running: boolean, run = emptyRunStream(), design?: string) => ({
+    checkpointMode, design, running, run, searchStarted: false, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props("auto", false, emptyRunStream(), "design-1")));
+  });
+
+  // Turn 1 ends on an auto card; the command is still the pending message, so
+  // the pace is known and is remembered against this Session.
+  await mount(renderer!, props("auto", true, emptyRunStream(), "design-1"));
+  await mount(renderer!, props("auto", false, ended(card("度量", 1)), "design-1"));
+  assert.equal(sent.length, 1);
+
+  // Turn 2 ends with the checkpoint as prose and with the transcript not yet
+  // written: neither the command nor the design anchor is readable.
+  await mount(renderer!, props(undefined, true, emptyRunStream(), undefined));
+  await mount(renderer!, props(undefined, false, ended("检查点 2/4 到达。\n\n(a) 度量用压缩比？(b) 冻结哪些库？"), undefined));
+  assert.equal(sent.length, 2);
+  assert.match(sent[1]!, /create_evolve_run/);
+  renderer!.unmount();
+});
+
+test("a stream that lost its deltas is still a design that ended", async () => {
+  // `finalContent` is the persisted answer and arrives with `run.completed`;
+  // `turns` is assembled from deltas that a dropped frame can leave empty.
+  // Treating no turns as no evidence left the design stalled with the answer
+  // in hand and nothing said.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const dropped = {
+    ...emptyRunStream(),
+    finalContent: "检查点 2/4 到达。\n\n下一步本该启动搜索。",
+    status: "completed" as const,
+    turns: [],
+  };
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, {
+      checkpointMode: "auto", design: "design-1", running: false, run: emptyRunStream(), searchStarted: false, send, sessionId: "s",
+    }));
+  });
+  await mount(renderer!, {
+    checkpointMode: "auto", design: "design-1", running: true, run: emptyRunStream(), searchStarted: false, send, sessionId: "s",
+  });
+  await mount(renderer!, {
+    checkpointMode: "auto", design: "design-1", running: false, run: dropped, searchStarted: false, send, sessionId: "s",
+  });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /create_evolve_run/);
+  renderer!.unmount();
+});
+
+test("a cardless stall that comes back says the search has not started", async () => {
+  // The second ending is not pushed again — that would be another paid turn
+  // answering a step already carried. But a prose checkpoint has no card to
+  // carry 「已停止自动续跑」, so the stop is a notice the transcript draws:
+  // the search has not started, and the sentence that continues is written
+  // out. Before this, the block was simply absent and the session sat idle.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (running: boolean, run = emptyRunStream()) => ({
+    checkpointMode: "auto" as const, design: "design-1", running, run, searchStarted: false, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props(false)));
+  });
+
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled()));
+  assert.equal(sent.length, 1);
+  assert.equal(notice(renderer!), undefined);
+
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled("再核对一遍。")));
+  assert.equal(sent.length, 1);
+  assert.equal(notice(renderer!), "stopped");
+  renderer!.unmount();
+});
+
+test("a started design with pauses gets neither a push nor a notice", async () => {
+  // A design the user asked to pause at every checkpoint is waiting for a
+  // person by construction. Saying the search has not started there would
+  // describe a state the design is deliberately in.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (running: boolean, run = emptyRunStream()) => ({
+    checkpointMode: "confirm" as const, design: "design-1", running, run, searchStarted: false, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props(false)));
+  });
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled()));
+  assert.equal(sent.length, 0);
+  assert.equal(notice(renderer!), undefined);
+  renderer!.unmount();
+});
+
+test("a search that appears takes the stop notice away", async () => {
+  // The notice describes a design with no search. Once the design's search
+  // exists there is nothing stalled, and a block that still said "the search
+  // has not started" would be a lie the reader cannot dismiss.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (running: boolean, run = emptyRunStream(), searchStarted = false) => ({
+    checkpointMode: "auto" as const, design: "design-1", running, run, searchStarted, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props(false)));
+  });
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled()));
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled("又一遍。")));
+  assert.equal(notice(renderer!), "stopped");
+
+  // The next ending belongs to a design that has its search; the design moved
+  // on, so the stop is no longer true.
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled("搜索已经跑起来了。"), true));
+  assert.equal(notice(renderer!), undefined);
+  renderer!.unmount();
+});
+
+test("a search learned after the turn ended clears the stop", async () => {
+  // The search is created by the turn after the stall, and its settle clears
+  // the live run: by the time the run list is re-read there is no ending left
+  // to decide on. A notice that only cleared while looking at an ending would
+  // keep claiming the search had not started while it was already running.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (running: boolean, run = emptyRunStream(), searchStarted = false) => ({
+    checkpointMode: "auto" as const, design: "design-1", running, run, searchStarted, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props(false)));
+  });
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled()));
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled("再一遍。")));
+  assert.equal(notice(renderer!), "stopped");
+
+  // The list says this design has a search now, and the run that said so is
+  // already in the transcript rather than the live run.
+  await mount(renderer!, props(false, emptyRunStream(), true));
+  assert.equal(notice(renderer!), undefined);
+  renderer!.unmount();
+});
+
+test("a stop written before the transcript names the design is not lost", async () => {
+  // The anchor arrives with the settle that lands after the turn ended, so a
+  // notice written at the ending has no design yet. Binding it to the design
+  // when it appears keeps it on screen; a *different* design still clears it.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (
+    running: boolean,
+    run = emptyRunStream(),
+    checkpointMode?: "auto",
+    design?: string,
+  ) => ({ checkpointMode, design, running, run, searchStarted: false, send, sessionId: "s" });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props(false)));
+  });
+
+  // A card ending is carried with the pace and the design both readable.
+  await mount(renderer!, props(true, emptyRunStream(), "auto", "design-1"));
+  await mount(renderer!, props(false, ended(card("度量", 1)), "auto", "design-1"));
+  assert.equal(sent.length, 1);
+
+  // The next ending is the cardless shape with the transcript still empty:
+  // neither the pace nor the anchor is readable, so the push is keyed with an
+  // unknown design and the notice (if any) has no design to belong to.
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled(), undefined, undefined));
+  assert.equal(sent.length, 2);
+
+  // The same stall a second time stops the client; the stop is written before
+  // the settle names the design.
+  await mount(renderer!, props(true));
+  await mount(renderer!, props(false, stalled("再一遍。"), undefined, undefined));
+  assert.equal(sent.length, 2);
+  assert.equal(notice(renderer!), "stopped");
+
+  // The settle lands and the transcript names the design: the stop belongs to
+  // it and must stay on screen rather than being read as another design's.
+  await mount(renderer!, props(false, emptyRunStream(), undefined, "design-1"));
+  assert.equal(notice(renderer!), "stopped");
+
+  // Another design in the same Session is a clean slate.
+  await mount(renderer!, props(false, emptyRunStream(), undefined, "design-2"));
+  assert.equal(notice(renderer!), undefined);
   renderer!.unmount();
 });
