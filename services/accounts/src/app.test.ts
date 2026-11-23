@@ -307,7 +307,11 @@ class MemoryStore implements AccountsStore {
     hold.settledAmount = charged;
     credit.frozen -= hold.holdAmount;
     credit.balance += hold.holdAmount;
-    this.pushLedger(input.userId, -charged, "LLM_USAGE", input.requestId, `${input.model} 调用`);
+    // Same rule as PostgresStore: the row continues the ledger's running total
+    // rather than snapshotting a balance another in-flight hold has already
+    // dipped into.
+    const lastRow = [...this.ledger].reverse().find((row) => row.userId === input.userId);
+    this.pushLedger(input.userId, -charged, "LLM_USAGE", input.requestId, `${input.model} 调用`, (lastRow?.balanceAfter ?? 0) - charged);
     return { status: "settled", balance: credit.balance, frozen: credit.frozen, holdAmount: hold.holdAmount, charged };
   }
 
@@ -359,12 +363,12 @@ class MemoryStore implements AccountsStore {
     return this.audits.filter((row) => row.targetId === String(userId)).slice(0, limit);
   }
 
-  private pushLedger(userId: number, delta: number, bizType: string, bizId: string, remark: string): LedgerRow {
+  private pushLedger(userId: number, delta: number, bizType: string, bizId: string, remark: string, balanceAfter?: number): LedgerRow {
     const credit = this.credits.get(userId)!;
     credit.balance += delta;
     if (delta > 0) credit.totalEarned += delta;
     else credit.totalSpent += -delta;
-    const row: LedgerRow = { id: this.nextLedgerId++, userId, delta, balanceAfter: credit.balance, bizType, bizId, remark, createdAt: NOW.toISOString() };
+    const row: LedgerRow = { id: this.nextLedgerId++, userId, delta, balanceAfter: balanceAfter ?? credit.balance, bizType, bizId, remark, createdAt: NOW.toISOString() };
     this.ledger.push(row);
     return row;
   }
@@ -771,6 +775,45 @@ test("a hold freezes credits and settle refunds the part the call did not use", 
   assert.equal(payload(ledger).items[0].bizType, "LLM_USAGE");
   assert.equal(payload(ledger).items[0].bizId, requestId);
   assert.equal(payload(ledger).items[0].delta, -41);
+});
+
+test("two calls in flight keep the ledger's running balance", async () => {
+  const store = new MemoryStore();
+  const app = createApp({ config: config(), store, now: () => NOW, fetchImpl: fakeHuawei("openid-1") });
+  const { accessToken } = await signInUser(app);
+  const first = randomUUID();
+  const second = randomUUID();
+
+  // Both holds are taken before either settles, so the first settle sees a
+  // balance the second hold has already dipped into. The row must still
+  // continue the ledger, or the account page's additive check breaks.
+  assert.equal((await serviceCall(app, "/internal/billing/hold", holdBody(first))).status, 200);
+  assert.equal((await serviceCall(app, "/internal/billing/hold", holdBody(second))).status, 200);
+  for (const requestId of [second, first]) {
+    const settled = await serviceCall(app, "/internal/billing/settle", {
+      userId: 1, requestId, model: "deepseek-v4-flash", inputTokens: 800, cachedTokens: 200, outputTokens: 500,
+    });
+    assert.equal(settled.status, 200);
+  }
+
+  const rows = store.ledger.filter((row) => row.userId === 1);
+  const history = await call(app, "GET", "/v1/credits/ledger", { headers: { authorization: `Bearer ${accessToken}` } });
+  assert.equal(payload(history).items.length, rows.length);
+  for (let index = 1; index < rows.length; index += 1) {
+    assert.equal(rows[index - 1]!.balanceAfter + rows[index]!.delta, rows[index]!.balanceAfter,
+      `row ${index} does not continue row ${index - 1}`);
+  }
+});
+
+test("a saved nickname survives the next sign-in", async () => {
+  const store = new MemoryStore();
+  const app = createApp({ config: config(), store, now: () => NOW, fetchImpl: fakeHuawei("openid-1") });
+  const first = await signInUser(app);
+  assert.equal((await call(app, "PATCH", "/v1/me", { headers: { authorization: `Bearer ${first.accessToken}` }, body: { displayName: "研究者" } })).status, 200);
+
+  const second = await signInUser(app);
+  const me = await call(app, "GET", "/v1/me", { headers: { authorization: `Bearer ${second.accessToken}` } });
+  assert.equal(payload(me).user.displayName, "研究者");
 });
 
 test("a request id holds and settles once, so a retried callback cannot double charge", async () => {

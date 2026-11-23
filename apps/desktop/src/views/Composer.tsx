@@ -147,6 +147,9 @@ interface Props {
    *  composer — 设置 was just closed. See the palette's read below. */
   skillsEpoch?: number;
   unavailableModel?: boolean;
+  /** Why the selection is unusable, when the shell knows better than the
+   *  default "the model was deleted" copy — a signed-out credits model, say. */
+  unavailableModelText?: string;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
   /** The category the welcome page attached to this turn. */
@@ -718,6 +721,7 @@ export function Composer({
   selectedModelId,
   skillsEpoch = 0,
   unavailableModel = false,
+  unavailableModelText,
   selectedSpecialistId,
   tag,
   uploading,
@@ -1160,7 +1164,7 @@ export function Composer({
             type="button"
           >
             <span className="model-name" title={selectedName}>
-              {selectedName ?? (unavailableModel ? TEXT.errors.modelUnavailable : TEXT.errors.modelRequired)}
+              {selectedName ?? (unavailableModel ? unavailableModelText ?? TEXT.errors.modelUnavailable : TEXT.errors.modelRequired)}
             </span>
             <Chevron down={menu !== "model"} />
           </button>

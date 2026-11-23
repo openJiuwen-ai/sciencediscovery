@@ -26,7 +26,7 @@ import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, ty
 import { ApiClient } from "./api/client.js";
 import { TOKEN_STORAGE_KEY } from "./state/storage.js";
 import { AccountApiError, revokeAccountSession } from "./auth/account.js";
-import { ensureCreditsModel } from "./auth/credits-model.js";
+import { CREDITS_PROVIDER_NAME, ensureCreditsModel } from "./auth/credits-model.js";
 import { requiresLocalToken } from "./auth/gate.js";
 import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type UserSession } from "./auth/session.js";
 import { ensureFreshAccountSession } from "./auth/session-refresh.js";
@@ -1322,6 +1322,20 @@ export function App({ initialToken }: Props) {
 
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
+  // Signing out revokes the credits provider's token, so leaving it in the
+  // picker would offer a model whose every run fails with 401. The provider
+  // stays in the catalog — signing back in needs no setup — it just is not
+  // offered until there is an account again.
+  const creditsProviderIds = new Set(
+    state.providers
+      .filter((provider) => provider.name === CREDITS_PROVIDER_NAME)
+      .map((provider) => provider.id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const isCreditsModel = (model: { providerId?: string }) => model.providerId !== undefined && creditsProviderIds.has(model.providerId);
+  const offeredModels = accountSession ? state.models : state.models.filter((model) => !isCreditsModel(model));
+  const creditsModelSignedOut = !accountSession
+    && state.models.some((model) => model.id === state.selectedModelId && isCreditsModel(model));
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
     activeProjectId: state.activeProjectId,
     // The session's own mode, else the reader's last choice, else the project/global
@@ -1332,7 +1346,7 @@ export function App({ initialToken }: Props) {
     attachments: state.attachments,
     client,
     jwBlocked: jwReady ? undefined : TEXT.composer.jwBlocked,
-    models: state.models,
+    models: offeredModels,
     onApprovalMode: (mode) => {
     // The choice is remembered before it is applied: a new conversation started
     // from this instance inherits it, and the selector on the landing page has
@@ -1377,7 +1391,9 @@ export function App({ initialToken }: Props) {
     seededCommand,
     selectedModelId: state.selectedModelId,
     skillsEpoch,
-    unavailableModel: Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
+    unavailableModel: creditsModelSignedOut
+      || Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
+    unavailableModelText: creditsModelSignedOut ? TEXT.errors.modelSignInRequired : undefined,
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
   };
@@ -1564,7 +1580,7 @@ export function App({ initialToken }: Props) {
         // After signing out the account surface shows a grey avatar and the
         // single way back in; the workspace behind it stays usable with a
         // custom model.
-        <SignedOutAccount pending={settlingAuth} />
+        <SignedOutAccount onClose={() => setAccountOpen(false)} pending={settlingAuth} />
       ) : null}
 
       {settingsOpen ? (
