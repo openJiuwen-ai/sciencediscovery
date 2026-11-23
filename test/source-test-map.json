@@ -1859,6 +1859,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/EvolveStallNotice.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/evolve-stall-notice.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/ExportHistoryList.tsx",
       "risk": "P1",
       "owner": "desktop",
