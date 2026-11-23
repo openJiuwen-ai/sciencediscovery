@@ -45,6 +45,7 @@ import {
 } from "../../evolve/model.js";
 import { evolveFailureLabel } from "../../evolve/status.js";
 import { getLanguage, TEXT } from "../../text.js";
+import { claimsEscape, enterDialog, isTopDialog, leaveDialog } from "../dialog-escape.js";
 import { CandidateInspector } from "./CandidateInspector.js";
 import { EvolveNodeList } from "./EvolveNodeList.js";
 import { EvolveTree } from "./EvolveTree.js";
@@ -71,6 +72,11 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   const [view, setView] = useState<EvolveRunView>(() => ({ ...emptyRunView(), status: run.status }));
   const [selectedIndex, setSelectedIndex] = useState<number>();
   const [stopping, setStopping] = useState(false);
+  /** The task column at the whole window, so a long search tree and its goal
+   *  have the room the web panel's full screen gives them. It is a state of
+   *  the same panel, not a second surface: Esc returns to the column and every
+   *  reading keeps its place. */
+  const [fullscreen, setFullscreen] = useState(false);
   /** Re-render once a second while the run is live, for the elapsed clock. */
   const [, setClock] = useState(0);
   // The subscription must not resubscribe because a parent re-rendered with a
@@ -153,6 +159,24 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
     return () => window.clearInterval(timer);
   }, [active]);
 
+  // Esc is the second way out of full screen, next to the toggle. The token is
+  // taken only while the view is open so a candidate's source modal — which
+  // enters the stack when it opens — keeps the key to itself.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const token = enterDialog();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isTopDialog(token) || !claimsEscape(event)) return;
+      event.preventDefault();
+      setFullscreen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      leaveDialog(token);
+    };
+  }, [fullscreen]);
+
   const budget = run.goal.budget;
   const headline = headlineScore(view);
   const best = bestCandidate(view);
@@ -173,6 +197,7 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   // untranslated line in a Chinese panel.
   const failure = evolveFailureLabel(run);
   const failureDetail = run.status === "failed" ? run.failure?.message ?? run.error : undefined;
+  const truncated = title !== run.goal.statement.trim();
   const algorithm = view.algorithm ?? run.algorithm;
   const valid = view.candidates.filter((candidate) => candidate.valid).length;
   const total = view.candidates.length;
@@ -201,19 +226,40 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
       });
   };
 
-  return <div className="evolve-detail">
+  return <div className={`evolve-detail${fullscreen ? " is-fullscreen" : ""}`}>
     <header className="evolve-task-head">
-      <h2 id="evolve-panel-title" title={run.goal.statement}>{title}</h2>
-      {active ? <button
-        aria-busy={stopping || undefined}
-        className="evolve-task-stop"
-        disabled={stopping}
-        onClick={stop}
-        title={TEXT.evolve.panel.stopHint}
-        type="button"
-      >
-        {stopping ? TEXT.evolve.panel.stopping : TEXT.evolve.panel.stop}
-      </button> : null}
+      <div className="evolve-task-heading">
+        <span className="evolve-task-eyebrow">{TEXT.evolve.panel.eyebrow}</span>
+        <h2 id="evolve-panel-title" title={run.goal.statement}>{title}</h2>
+        {/* The one-line title is what the column can show; the task itself is
+            still the user's, so it opens here rather than living only in the
+            composer they started it from. */}
+        {truncated ? <details className="evolve-task-goal">
+          <summary>{TEXT.evolve.panel.fullTask}</summary>
+          <p>{run.goal.statement}</p>
+        </details> : null}
+      </div>
+      <div className="evolve-task-actions">
+        {active ? <button
+          aria-busy={stopping || undefined}
+          className="evolve-task-stop"
+          disabled={stopping}
+          onClick={stop}
+          title={TEXT.evolve.panel.stopHint}
+          type="button"
+        >
+          {stopping ? TEXT.evolve.panel.stopping : TEXT.evolve.panel.stop}
+        </button> : null}
+        <button
+          aria-pressed={fullscreen}
+          className="evolve-task-fullscreen"
+          onClick={() => setFullscreen((open) => !open)}
+          title={fullscreen ? TEXT.evolve.panel.exitFullscreen : TEXT.evolve.panel.fullscreen}
+          type="button"
+        >
+          {fullscreen ? TEXT.evolve.panel.exitFullscreen : TEXT.evolve.panel.fullscreen}
+        </button>
+      </div>
     </header>
 
     {/* The line lives between the fixed header and the scrolling body, so it
