@@ -155,40 +155,51 @@ export function SessionManagementSettings({
 
   /**
    * Reads the archived set of the Projects in scope, the inbox included. A
-   * Project whose listing fails is left out rather than failing the page: one
-   * unreachable Project must not hide the archived Sessions of the others.
+   * Project whose listing fails is left out rather than failing the page — one
+   * unreachable Project must not hide the others — but the failure is reported,
+   * because "nothing is archived" and "nothing could be read" are different
+   * answers and the empty state must not stand for both.
    */
-  const read = useCallback(async (): Promise<ArchivedRow[]> => {
+  const read = useCallback(async (): Promise<{ failed: boolean; rows: ArchivedRow[] }> => {
     const { inbox: currentInbox, projects: currentProjects } = latest.current;
     const all = currentInbox ? [...currentProjects, currentInbox] : currentProjects;
     const scoped = project === "all" ? all : all.filter((entry) => entry.id === project);
+    let failed = false;
     const lists = await Promise.all(
       scoped.map(async (entry) => {
         try {
           const sessions = await listSessions(client, entry.id, "archived");
           return sessions.map((session) => ({ project: entry, session }));
         } catch {
+          failed = true;
           return [];
         }
       }),
     );
     // Newest archive first: the Session put away a minute ago is the one a
     // user most often comes here to bring back.
-    return lists.flat().sort((left, right) => (right.session.archivedAt ?? "").localeCompare(left.session.archivedAt ?? ""));
+    const rows = lists.flat().sort((left, right) => (right.session.archivedAt ?? "").localeCompare(left.session.archivedAt ?? ""));
+    return { failed, rows };
   }, [client, project, scopeKey]);
 
   const [reloads, setReloads] = useState(0);
-  /** Whether a listing has been read once. Only the first read replaces the rows
-   *  with 读取中: a refresh after a restore redraws what is already on screen. */
-  const readOnce = useRef(false);
+  const [failed, setFailed] = useState(false);
+  /** The scope the rows on screen belong to. Only the first read of a scope
+   *  blanks them with 读取中: another Project's archived Sessions must never be
+   *  drawn under this one's heading while its read is in flight. */
+  const loadedScope = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let live = true;
-    if (!readOnce.current) setLoading(true);
+    if (loadedScope.current !== scopeKey) {
+      setLoading(true);
+      setRows([]);
+    }
     void read().then((next) => {
       if (!live) return;
-      readOnce.current = true;
-      setRows(next);
+      loadedScope.current = scopeKey;
+      setRows(next.rows);
+      setFailed(next.failed);
       setLoading(false);
     });
     return () => {
@@ -222,10 +233,21 @@ export function SessionManagementSettings({
 
   const body = (() => {
     if (loading) return <p className="settings-hint">{t.loading}</p>;
+    const unreachable = failed ? <p className="settings-hint is-warning" role="status">{t.unreachable}</p> : null;
     if (visible.length === 0) {
-      return <p className="settings-hint">{rows.length === 0 ? t.empty : t.noMatch}</p>;
+      return (
+        <>
+          {unreachable}
+          <p className="settings-hint">{rows.length === 0 ? t.empty : t.noMatch}</p>
+        </>
+      );
     }
-    return <ArchivedSessionList onOpen={(s) => void open(s)} onRemove={remove} onRestore={(s) => void restore(s)} rows={visible} />;
+    return (
+      <>
+        {unreachable}
+        <ArchivedSessionList onOpen={(s) => void open(s)} onRemove={remove} onRestore={(s) => void restore(s)} rows={visible} />
+      </>
+    );
   })();
 
   return (

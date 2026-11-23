@@ -133,6 +133,7 @@ export const EN: Text = {
     empty: "No Session is archived.",
     noMatch: "No Session matches the current filter.",
     loading: "Reading the archived Sessions…",
+    unreachable: "A project could not be read, so this list may be incomplete.",
     searchPlaceholder: "Search sessions",
     allProjects: "All projects",
     archivedAt: (when: string) => `Archived ${when}`,

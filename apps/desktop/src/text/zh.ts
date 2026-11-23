@@ -129,6 +129,7 @@ export const ZH = {
     empty: "没有已归档的会话。",
     noMatch: "没有符合筛选条件的会话。",
     loading: "正在读取已归档的会话…",
+    unreachable: "有项目读取失败，这里的列表可能不完整。",
     searchPlaceholder: "搜索会话",
     allProjects: "全部项目",
     archivedAt: (when: string) => `归档于 ${when}`,
