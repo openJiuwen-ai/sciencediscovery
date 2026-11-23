@@ -64,24 +64,27 @@ test("a run keeps the archive entry, but inert and with its reason", () => {
   assert.equal(running.note, TEXT.errors.archiveBlockedByRun, "and it must say why");
 });
 
-test("归档 says the kernel consequence before the click, and 恢复 says nothing", () => {
+test("归档 carries the kernel consequence as a hint, not a permanent line", () => {
   // The confirmation dialog was removed on purpose: archiving is reversible. What
   // 恢复 does not give back is the Session's running kernels and the memory that
-  // was not written to disk, so the menu says it under the entry.
+  // was not written to disk. That is a hint on the entry — on screen while the
+  // pointer is on 归档 — rather than a line the menu always carries.
   const idle = archiveActionFor({}, false);
   assert.equal(idle.disabled, false);
-  assert.equal(idle.note, TEXT.errors.archiveTearsDownKernel, "the consequence is on screen before the click");
+  assert.equal(idle.hint, TEXT.errors.archiveTearsDownKernel, "the consequence belongs to the entry");
+  assert.equal(idle.note, undefined, "and it is not the menu's standing note");
 
-  // 恢复 destroys nothing, so it carries no sentence — and it must not inherit
-  // the archive one, which would be a claim about an action it does not perform.
+  // 恢复 destroys nothing, so it carries nothing — and it must not inherit the
+  // archive sentence, which would be a claim about an action it does not perform.
   const archived = archiveActionFor({ archivedAt: "2026-01-02T00:00:00.000Z" }, false);
+  assert.equal(archived.hint, undefined);
   assert.equal(archived.note, undefined);
 
-  // A run in progress replaces it: the command is inert, and the reason for that
-  // is the sentence worth reading.
+  // A run in progress is the other kind of sentence: the entry is inert, and the
+  // reason has to be readable without hovering anything.
   const running = archiveActionFor({}, true);
   assert.equal(running.note, TEXT.errors.archiveBlockedByRun);
-  assert.notEqual(running.note, TEXT.errors.archiveTearsDownKernel);
+  assert.equal(running.hint, undefined, "hovering is not needed to explain an inert entry");
 });
 
 test("an archived Session offers 恢复 and an active one offers 归档", () => {
