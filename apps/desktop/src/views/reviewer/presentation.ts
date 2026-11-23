@@ -154,6 +154,12 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.stale === true) return "warn";
   if (review.completeness?.status === "incomplete") return "fail";
   if (review.findings.length > 0) return "fail";
+  // A source verdict is a result about the claim even when no finding was
+  // raised: a contradiction, or a passage that only partly supports what the
+  // report says, must not sit under a header that says everything passed.
+  const sourceVerdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
+  if (sourceVerdicts.includes("CONTRADICTED")) return "fail";
+  if (sourceVerdicts.includes("PARTIALLY_SUPPORTED")) return "warn";
   if (unverifiedDelivery(review)) return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
   // is an absence of a verdict, not a warning about the artifact.
@@ -168,6 +174,10 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     if (review.completeness?.status === "incomplete") return TEXT.reviewer.summaryIncomplete;
     const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code)).length;
     if (raised > 0) return TEXT.reviewer.summaryFindings(raised);
+    // The header uses the row's own word for a source verdict.
+    const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
+    if (verdicts.includes("CONTRADICTED")) return TEXT.reviewer.summaryContradicted;
+    if (verdicts.includes("PARTIALLY_SUPPORTED")) return TEXT.reviewer.summaryPartlySupported;
     if (unverifiedDelivery(review)) return TEXT.reviewer.summaryUnverified;
     if (declaredGap(review)) return TEXT.reviewer.summaryPartial(review.notChecked?.length ?? 0);
     return TEXT.reviewer.summaryPass;

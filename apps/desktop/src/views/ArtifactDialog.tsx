@@ -589,7 +589,7 @@ export function ArtifactDialog({
                         key={review.id}
                         // Hidden only while this card's own request is in
                         // flight; a second click would queue the same work twice.
-                        onRerun={() => void rerunReview()}
+                        onRerun={reviewQueued === undefined ? () => void rerunReview() : undefined}
                         review={review}
                         showName={false}
                       />
