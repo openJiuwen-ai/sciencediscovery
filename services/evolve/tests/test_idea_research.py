@@ -627,6 +627,18 @@ def test_a_fenced_json_answer_is_read_as_json():
         parse_json('Here it is: {"a": 1}')
 
 
+def test_a_raw_control_character_inside_a_string_does_not_end_the_stage():
+    """A live model writes an unescaped newline into a multi-line field. A stage gets
+    one correction, so rejecting that character ends a research that already spent
+    its budget on three rounds; the character is read as text instead."""
+    assert parse_json('{"text": "line one\nline two"}') == {'text': 'line one\nline two'}
+    assert parse_json('{"text": "a\tb"}') == {'text': 'a\tb'}
+    assert parse_json('```json\n{"text": "x\r\ny"}\n```') == {'text': 'x\r\ny'}
+    # A genuinely broken answer still raises so the stage can correct it.
+    with pytest.raises(ValueError):
+        parse_json('{"text": ')
+
+
 def test_every_stage_follows_the_models_own_thinking_level(monkeypatch):
     """No stage asks for an effort: the request leaves `reasoning_effort` out so the
     model profile's own thinking level applies, and a settings payload written before
