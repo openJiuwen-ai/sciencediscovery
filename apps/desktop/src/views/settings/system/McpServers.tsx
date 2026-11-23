@@ -1140,10 +1140,10 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
           onClose={() => { if (!busy) setImportOpen(false); }}
           wide
         >
-          <section className="settings-card is-form">
+          <section className="settings-card is-form mcp-import-card">
             <div className="settings-card-form">
               {importFileName ? <p className="settings-note">{TEXT.settings.system.mcp.importFileLoaded(importFileName)}</p> : null}
-              <Row hint={TEXT.settings.system.mcp.importHint} title={TEXT.settings.system.mcp.importJson}>
+              <Row hint={TEXT.settings.system.mcp.importHint} title={TEXT.settings.system.mcp.importJson} tone="stack">
                 <textarea
                   aria-label={TEXT.settings.system.mcp.importJson}
                   className="field-textarea is-code"
