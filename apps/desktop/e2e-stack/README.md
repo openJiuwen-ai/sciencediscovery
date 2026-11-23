@@ -4,8 +4,8 @@ This browser journey drives the desktop UI against a running, isolated API and
 Runner. It starts its own deterministic local model stub and uses the SDK STDIO
 Echo fixture on the API host. API responses and MCP tool calls use the product.
 
-The journey covers opening the add form, saving its default disabled
-configuration, discovering two tools, enabling and selecting the source,
+The journey covers checking the add form defaults, uploading JSON and confirming
+its import (the server remains disabled), discovering two tools, enabling and selecting the source,
 editing the description and reloading, calling Echo from chat and checking
 the successful invocation and model-visible tool result, and cancelling then
 confirming deletion. It verifies that deletion persists and removes the

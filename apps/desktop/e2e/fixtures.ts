@@ -680,6 +680,20 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         return json(route, 201, server);
       }
 
+      if (path === "/api/mcp/servers/import" && method === "POST") {
+        const spec = JSON.parse(body ?? "{}") as { mcpServers: Record<string, JsonRecord> };
+        const imported = Object.entries(spec.mcpServers).map(([name, input], index) => ({
+          args: [], authMode: "headers", command: "", cwd: "", description: "",
+          env: {}, headers: {}, timeoutSeconds: 60, url: "",
+          ...input,
+          transport: input.transport ?? input.type ?? (input.url ? "http" : "stdio"),
+          id: `mcp-${state.mcpServers.length + index + 1}`, sourceId: `custom-${state.mcpServers.length + index + 1}`,
+          name, enabled: false, status: "disabled", tools: [],
+        }));
+        state.mcpServers.push(...imported);
+        return json(route, 200, imported);
+      }
+
       const testMcp = /^\/api\/mcp\/servers\/([^/]+)\/test$/.exec(path);
       if (testMcp && method === "POST") {
         const server = state.mcpServers.find((entry) => entry.id === testMcp[1]);

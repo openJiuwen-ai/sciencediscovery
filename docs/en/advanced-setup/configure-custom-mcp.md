@@ -32,7 +32,7 @@ Testing a disabled server does not enable it, but STDIO testing does start the c
 
 ### Import JSON
 
-Choose **Import JSON** and provide a `mcpServers` object, for example:
+On desktop, choose **Import → Paste JSON** for the existing text dialog, or **Import → Upload JSON file** to read a UTF-8 `.json` file (maximum 1.5 MB). Upload fills the JSON and generates the preview automatically; inspect it and choose **Import servers** to save. Selecting a file does not save a server. The Web UI retains **Import JSON**. Provide a `mcpServers` object, for example:
 
 ```json
 {
@@ -46,7 +46,7 @@ Choose **Import JSON** and provide a `mcpServers` object, for example:
 }
 ```
 
-Replace the placeholder URL with the actual endpoint. The whole batch is validated before saving, and imported entries are disabled until you enable them. Duplicate names are rejected; at most 50 custom servers can be saved. Never include real credentials in public issues, screenshots or shared configurations.
+Replace the placeholder URL with the actual endpoint. Desktop imports each server separately and shows each outcome, retaining successful entries; a single Web/API batch request validates its whole batch before saving. Imported entries are disabled until you enable them. Duplicate names are rejected; at most 50 custom servers can be saved. Invalid or unreadable files show an error; edit the text or select the file again. Never include real credentials in public issues, screenshots or shared configurations.
 
 ## Secret request headers and environment variables
 

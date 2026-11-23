@@ -44,6 +44,7 @@ type Call = { body?: unknown; method: string; path: string };
 function fakeClient(options: {
   createError?: string;
   importError?: string;
+  importWait?: Promise<void>;
   servers?: unknown[];
   testServer?: Record<string, unknown>;
 } = {}) {
@@ -65,6 +66,7 @@ function fakeClient(options: {
       if (path.endsWith("/test")) return server({ tools: [{ annotations: {}, description: "Read a file", inputSchema: {}, name: "read_file", schemaHash: "h" }], ...options.testServer });
       if (path === "/api/mcp/servers/import") {
         imported += 1;
+        await options.importWait;
         if (options.importError !== undefined && imported > 1) throw new Error(options.importError);
         return [];
       }
@@ -90,7 +92,7 @@ async function mount(client: ApiClient, onToast: React.ComponentProps<typeof Mcp
 }
 
 function text(node: ReactTestInstance | string): string {
-  return typeof node === "string" ? node : node.children.map((child) => text(child)).join("");
+  return typeof node === "string" ? node : node.props["aria-hidden"] ? "" : node.children.map((child) => text(child)).join("");
 }
 
 function button(root: ReactTestInstance, label: string): ReactTestInstance {
@@ -100,7 +102,21 @@ function button(root: ReactTestInstance, label: string): ReactTestInstance {
 }
 
 function textInputs(root: ReactTestInstance): ReactTestInstance[] {
-  return root.findAll((node) => node.type === "input" && node.props.type !== "checkbox" && node.props.type !== "password");
+  return root.findAll((node) => node.type === "input" && !["checkbox", "password", "file"].includes(node.props.type));
+}
+
+async function openImport(renderer: ReactTestRenderer) {
+  await act(async () => { button(renderer.root, t.importServers).props.onClick(); });
+  await act(async () => { button(renderer.root, t.importPaste).props.onClick(); });
+}
+
+async function uploadJson(renderer: ReactTestRenderer, file: Pick<File, "name" | "size" | "text">) {
+  const target = { files: [file], value: file.name };
+  await act(async () => {
+    renderer.root.findByProps({ type: "file" }).props.onChange({ currentTarget: target });
+    await flush();
+  });
+  assert.equal(target.value, "", "the same file can be selected again");
 }
 
 test("添加服务器 opens an empty form and posts without an id, then names the tools it found", async () => {
@@ -143,7 +159,7 @@ test("a refused create keeps the form open with the reason", async () => {
 test("import writes one server per request and reports each outcome", async () => {
   const api = fakeClient({ importError: "A server named taken already exists" });
   const renderer = await mount(api);
-  await act(async () => { button(renderer.root, t.importServers).props.onClick(); });
+  await openImport(renderer);
   await act(async () => { await flush(); });
   const area = renderer.root.findAll((node) => node.type === "textarea")[0]!;
   const spec = JSON.stringify({ mcpServers: { fresh: { command: "node", args: ["s.js"] }, taken: { url: "https://mcp.test" } } });
@@ -321,7 +337,7 @@ test("授权 detaches the popup from this window, and a blocked popup still leav
 test("the import preview reads the transport the way the route does", async () => {
   const api = fakeClient();
   const renderer = await mount(api);
-  await act(async () => { button(renderer.root, t.importServers).props.onClick(); });
+  await openImport(renderer);
   await act(async () => { await flush(); });
   const area = renderer.root.findAll((node) => node.type === "textarea")[0]!;
   const spec = JSON.stringify({
@@ -339,6 +355,71 @@ test("the import preview reads the transport the way the route does", async () =
   assert.ok(rows.some((row) => row.includes("both") && row.includes("http · https://mcp.test/b")), "url wins over command, as the route decides");
   assert.ok(rows.some((row) => row.includes("sse") && row.includes("sse · https://mcp.test/c")), JSON.stringify(rows));
   renderer.unmount();
+});
+
+test("a JSON file fills and previews the import card without writing before confirmation", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  const config = { mcpServers: {
+    Echo: { command: "node", args: ["/srv/my MCP/echo.mjs", ""], env: { LABEL: "a b" } },
+    Search: { type: "sse", url: "https://mcp.test/sse", headers: { "X-Test": "fixture" } },
+  } };
+  const json = JSON.stringify(config);
+  await uploadJson(renderer, { name: "servers.json", size: json.length, text: async () => `\uFEFF${json}` });
+  assert.equal(renderer.root.findByProps({ "aria-label": t.importJson }).props.value, json);
+  assert.match(JSON.stringify(renderer.toJSON()), /Echo/);
+  assert.match(JSON.stringify(renderer.toJSON()), /Search/);
+  assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
+  await act(async () => { button(renderer.root, TEXT.settings.cancel).props.onClick(); });
+  await openImport(renderer);
+  assert.equal(renderer.root.findByProps({ "aria-label": t.importJson }).props.value, "");
+  await uploadJson(renderer, { name: "servers.json", size: json.length, text: async () => json });
+  await act(async () => { button(renderer.root, t.importRun).props.onClick(); await flush(); });
+  const imports = api.calls.filter((call) => call.path === "/api/mcp/servers/import");
+  assert.deepEqual(imports.map((call) => call.body), [
+    { mcpServers: { Echo: config.mcpServers.Echo } },
+    { mcpServers: { Search: config.mcpServers.Search } },
+  ]);
+  await act(async () => renderer.unmount());
+});
+
+test("invalid, oversized and unreadable JSON files report errors without importing", async () => {
+  const api = fakeClient();
+  const renderer = await mount(api);
+  let oversizedRead = false;
+  const files = [
+    { name: "bad.json", size: 1, text: async () => "{", error: t.importInvalidJson },
+    { name: "empty.json", size: 2, text: async () => "{}", error: t.importNoServers },
+    { name: "too-many.json", size: 1000, text: async () => JSON.stringify({ mcpServers: Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`server-${index}`, { command: "node" }])) }), error: t.importTooMany },
+    { name: "large.json", size: 1_500_001, text: async () => { oversizedRead = true; return "{}"; }, error: t.importFileTooLarge },
+    { name: "unreadable.json", size: 10, text: async () => { throw new Error("unreadable"); }, error: t.importFileReadFailed },
+  ];
+  for (const file of files) {
+    await uploadJson(renderer, file);
+    assert.equal(text(renderer.root.findByProps({ role: "alert" })), file.error);
+    assert.equal(button(renderer.root, t.importRun).props.disabled, true);
+    await act(async () => { button(renderer.root, TEXT.settings.cancel).props.onClick(); });
+  }
+  assert.equal(oversizedRead, false);
+  assert.equal(api.calls.filter((call) => call.method === "POST").length, 0);
+  await act(async () => renderer.unmount());
+});
+
+test("the import card cannot be dismissed or submitted twice while importing", async () => {
+  let finish!: () => void;
+  const importWait = new Promise<void>((resolve) => { finish = resolve; });
+  const api = fakeClient({ importWait });
+  const renderer = await mount(api);
+  const json = JSON.stringify({ mcpServers: { Echo: { command: "node" } } });
+  await uploadJson(renderer, { name: "servers.json", size: json.length, text: async () => json });
+  await act(async () => { button(renderer.root, t.importRun).props.onClick(); await flush(); });
+  assert.equal(button(renderer.root, TEXT.settings.cancel).props.disabled, true);
+  assert.equal(renderer.root.findByProps({ "aria-label": TEXT.settings.close }).props.disabled, true);
+  await act(async () => { button(renderer.root, t.importRun).props.onClick(); await flush(); });
+  assert.equal(api.calls.filter((call) => call.path === "/api/mcp/servers/import").length, 1);
+  await act(async () => { finish(); await flush(); });
+  assert.equal(button(renderer.root, TEXT.settings.cancel).props.disabled, false);
+  await act(async () => renderer.unmount());
 });
 
 test("testing a disabled OAuth server awaiting consent does not report success", async () => {
