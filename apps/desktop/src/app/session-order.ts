@@ -108,18 +108,24 @@ export function reusableDraft<T extends { archivedAt?: string; title: string; up
  * in the sidebar either — opening it on boot would show a page whose row the
  * reader cannot find, where an empty draft says the same thing more plainly.
  *
+ * An archived Session is not resumed either, for the same reason: it is not in
+ * the list. The listing is read unfiltered, so archived Sessions reach this
+ * function, and archiving one stamps `updatedAt` — the Session the reader just
+ * put away is the newest, and resuming it would open the one thing they
+ * explicitly set aside.
+ *
  * The whole Session is returned rather than its id because the listing spans
  * every Project. Resuming the newest Session without also adopting the Project
  * it belongs to would leave the app pointing at one Project while showing a
  * conversation from another, and the next 新增会话 or upload would be filed
  * under the wrong one.
  */
-export function resumeSession<T extends { id: string; title: string; updatedAt: string }>(
+export function resumeSession<T extends { archivedAt?: string; id: string; title: string; updatedAt: string }>(
   open: string | undefined,
   sessions: readonly T[],
 ): T | undefined {
   if (open !== undefined) return undefined;
-  return byRecency(sessions).find((session) => !untitled(session.title));
+  return byRecency(sessions).find((session) => session.archivedAt === undefined && !untitled(session.title));
 }
 
 /**

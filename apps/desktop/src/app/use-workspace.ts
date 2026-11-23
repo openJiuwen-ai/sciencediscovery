@@ -810,9 +810,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     [publishArtifacts],
   );
 
-  /** Re-read the sidebar's list. Returns every Session it now holds, so the
-   *  caller can act on the same snapshot the list was built from — `undefined`
-   *  when the listing failed, which is not the same as an empty workspace.
+  /** Re-read the sidebar's list. Returns the Sessions the sidebar now draws —
+   *  its active subset, not the unfiltered read behind it — so a caller acts on
+   *  what the reader can see; `undefined` when the listing failed, which is not
+   *  the same as an empty workspace.
    *
    * The inbox is read alongside the user's Projects even though the server
    * leaves it out of `GET /api/projects`: this map is replaced whole on every
@@ -843,6 +844,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       // Archived Sessions are read for membership, not for the list.
+      const drawn = sessions.filter((session) => session.archivedAt === undefined);
       setSessionsByProject(Object.fromEntries(
         entries.map(([id, list]) => [id, list.filter((session) => session.archivedAt === undefined)]),
       ));
@@ -856,7 +858,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (membership.snapshot !== undefined) membershipRef.current = membership.snapshot;
       if (membership.pruneAgainst !== undefined) pruneArtifacts(membership.pruneAgainst);
       for (const session of sessions) readSessionArtifacts(session.id);
-      return sessions;
+      // What the sidebar draws, not what the read returned: a caller that picks
+      // a Session to open — the boot resume, a reused draft — must not land on
+      // one the reader cannot see.
+      return drawn;
     } catch (reason) {
       report(reason);
       return undefined;

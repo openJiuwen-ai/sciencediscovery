@@ -107,6 +107,25 @@ test("boot does not open a Session that is only a draft", () => {
   );
 });
 
+test("boot does not open a Session that was archived", () => {
+  // The listing is read unfiltered, so an archived Session reaches this function
+  // — and archiving one stamps `updatedAt`, which makes the Session the reader
+  // just put away the newest of all. Resuming it would reopen the one thing they
+  // explicitly set aside, and read-only at that.
+  const archived = {
+    archivedAt: "2026-01-04T09:00:00.000Z",
+    id: "archived",
+    projectId: "p1",
+    title: "Put away",
+    updatedAt: "2026-01-04T09:00:00.000Z",
+  };
+  assert.equal(resumeSession(undefined, [older, archived])?.id, "older", "the newest active one");
+  assert.equal(resumeSession(undefined, [archived]), undefined, "nothing active to open");
+  // The draft rule still holds beside it.
+  const blank = draft("blank", "2026-01-05T09:00:00.000Z");
+  assert.equal(resumeSession(undefined, [archived, blank]), undefined);
+});
+
 test("boot opens the resumed Session in the Project it belongs to", () => {
   // The listing is every Project's Sessions. Opening one without adopting its
   // Project would leave 新增会话 and uploads pointing at whichever Project the
