@@ -94,6 +94,7 @@ import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
 import { IdeaTreeOverrideDialog } from "./views/idea/IdeaTreeOverrideDialog.js";
 import { defersIdeaSend } from "./idea/send-gate.js";
 import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
+import { EvolveStallNotice } from "./views/EvolveStallNotice.js";
 import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
@@ -1643,14 +1644,25 @@ export function App({ initialToken }: Props) {
                       {idea.unavailable ? TEXT.ideaTree.unavailable : idea.error ?? legacy.error}
                     </p>
                   ) : null}
-                  // A search keeps running after the turn that started it, so its
-                  // card is the last thing the conversation produced. It draws
-                  // nothing at all for a session that has no searches.
-                  evolve={<EvolveRuns
-                    onOpen={showEvolveRun}
-                    onRetry={evolveRetryAllowed ? retryEvolve : undefined}
-                    runs={evolve.runs}
-                  />}
+                  // A design the client will not carry any further says why
+                  // above the searches: a stall with no card to carry the badge
+                  // has nothing else on screen to say the search never started.
+                  // Hidden while a turn runs, like the card's own stop badge.
+                  evolve={<>
+                    <EvolveStallNotice
+                      busy={state.running}
+                      notice={state.running ? undefined : autoContinue.notice}
+                      onSend={(text) => latestSend.current(text)}
+                    />
+                    {/* A search keeps running after the turn that started it, so
+                        its card is the last thing the conversation produced. It
+                        draws nothing for a session that has no searches. */}
+                    <EvolveRuns
+                      onOpen={showEvolveRun}
+                      onRetry={evolveRetryAllowed ? retryEvolve : undefined}
+                      runs={evolve.runs}
+                    />
+                  </>}
                   loading={state.loadingSession}
                   onDecidePermission={decidePermission}
                   onOpenArtifactPanel={openArtifactPanel}

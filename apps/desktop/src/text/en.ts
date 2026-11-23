@@ -2026,6 +2026,20 @@ export const EN: Text = {
       busy: "This reply is still running; wait for it to finish.",
     },
 
+    /* A stall with no card to carry "Auto-continue stopped": the checkpoint
+       arrived as prose, its fence did not parse, or the turn called
+       create_evolve_run and no search was created. The conversation stops
+       there with nothing to press, so it says the search has not started and
+       writes out the sentence that continues it. The button sends exactly the
+       sentence the client sends when it can carry the design itself. */
+    stall: {
+      title: "The search has not started",
+      stopped: "Auto-continue stopped on this step: it was already carried once, so the client will not push it again.",
+      unstarted: "This turn called create_evolve_run, but no search was created.",
+      send: "Send this sentence to continue:",
+      action: "Send this sentence",
+    },
+
     create: {
       title: "New evolution run",
       algorithmLabel: "Choose a search algorithm",
