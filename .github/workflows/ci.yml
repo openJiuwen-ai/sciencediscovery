@@ -622,7 +622,7 @@ jobs:
   e2e-desktop:
     name: Desktop E2E (mocked)
     needs: [policy, l1]
-    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
