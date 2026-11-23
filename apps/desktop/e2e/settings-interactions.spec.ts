@@ -143,7 +143,9 @@ test.describe("专家", () => {
     await test.step("1. Open Add specialist from an empty catalog and discard a draft", async () => {
       const dialog = await openSettings(browser, "Specialists", "Settings");
       const add = dialog.getByRole("button", { name: "Add specialist" });
-      await expect(dialog.getByText("No specialists yet.")).toBeVisible();
+      // The built-in Review expert is always listed; the empty catalogue has
+      // no "No specialists yet." line any more.
+      await expect(dialog.getByTestId("built-in-reviewer")).toContainText("Review");
       await add.click();
       await form.getByRole("textbox", { name: "Name" }).fill("Discard this draft");
       await form.getByRole("combobox", { name: "Runtime" }).selectOption("codex");
@@ -885,12 +887,13 @@ test.describe("技能", () => {
     const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
 
     await card.locator(".settings-card-main").click();
-    // The source is the card's badge; the detail line carries the package's
-    // own SKILL.md and the count, which is its resources plus SKILL.md itself.
-    await expect(card.locator(".skill-source-badge")).toContainText("内置");
-    await expect(card.locator(".settings-detail")).toContainText("v1.0.0 · 4 个文件");
-    // Opened means the package file was read, not just that loading stopped.
-    await expect(card.locator(".settings-detail-body")).toContainText("画分子图");
+    // The card opens the Skill's own page: the source sits beside its name,
+    // and the package's instructions are the page, not a folded box.
+    const detail = dialog.locator(".skill-detail");
+    await expect(detail).toBeVisible();
+    await expect(detail.locator(".skill-source-badge")).toContainText("内置");
+    await expect(detail).toContainText("画分子图");
+    await expect(detail.locator(".skill-detail-file")).toContainText("画分子图");
   });
 
   test("switching back paints the remembered list before the refresh answers", async ({ page }) => {

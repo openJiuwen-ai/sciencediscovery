@@ -180,9 +180,9 @@ test("session menu exports research with two scope cards", async ({ page }, info
     const dialog = page.getByRole("dialog", { name: "导出会话" });
     await expect(dialog.getByRole("button", { name: /^必要导出/ })).toContainText("2.0 KB");
     await expect(dialog.getByRole("button", { name: /^完整导出/ })).toContainText("8.0 KB");
-    // The scope sentence is the help icon's accessible name now; the dialog
-    // itself says what the package is for.
-    await expect(dialog.locator(".research-scope-help")).toHaveAttribute("aria-label", "导出整个会话及其研究材料，不只是页面上的聊天文字。");
+    // The dialog says what a package is for; the per-artifact scope is the
+    // two cards themselves.
+    await expect(dialog).toContainText("证据包用于检查和继续研究");
     await dialog.getByRole("button", { name: /^完整导出/ }).click();
     await expect(dialog.getByText("工作区文件（1）")).toBeVisible();
     const downloaded = page.waitForEvent("download");

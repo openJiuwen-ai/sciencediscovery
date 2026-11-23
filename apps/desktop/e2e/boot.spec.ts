@@ -36,23 +36,32 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("entering the workspace", () => {
-  test("with no credential asks for one, then opens the shell", async ({ page }) => {
+  test("with no credential lands on the sign-in page, and a handed token opens the shell", async ({ page }) => {
+    // Clear the token on the first load only: the reload below must see the
+    // one this test hands over.
     await page.addInitScript(
-      ([key]) => localStorage.removeItem(key),
+      ([key]) => {
+        if (sessionStorage.getItem("token-cleared") === "1") return;
+        localStorage.removeItem(key);
+        sessionStorage.setItem("token-cleared", "1");
+      },
       [TOKEN_STORAGE_KEY] as const,
     );
     await installMockApi(page, { sessions: [makeSession()] });
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "需要访问凭据" })).toBeVisible();
-    const submit = page.getByRole("button", { name: "进入" });
-    await expect(submit).toBeDisabled();
+    // The local token is the hard credential: a browser without one can only
+    // reach the HUAWEI sign-in page, and the shell does not exist behind it.
+    await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "使用华为账号登录" })).toBeVisible();
+    await expect(page.locator(".app-shell")).toHaveCount(0);
 
-    await page.getByLabel("访问凭据").fill(TOKEN);
-    await expect(submit).toBeEnabled();
-    await submit.click();
-
+    await page.evaluate(
+      ([key, value]) => localStorage.setItem(key, value),
+      [TOKEN_STORAGE_KEY, TOKEN] as const,
+    );
+    await page.reload();
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".side-session-name", { hasText: "晶体结构分析" })).toBeVisible();
   });
@@ -109,12 +118,12 @@ test.describe("when boot cannot finish", () => {
     await expect(page.locator(".app-shell")).toHaveCount(0);
   });
 
-  test("a refused credential forgets it and asks again", async ({ page }) => {
+  test("a refused credential is forgotten and the sign-in page returns", async ({ page }) => {
     await installMockApi(page, { modelsStatus: 401 });
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "凭据未被接受" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
     // The rejected token must not be retried on the next reload.
     await expect
       .poll(() => page.evaluate((key) => localStorage.getItem(key), TOKEN_STORAGE_KEY))
