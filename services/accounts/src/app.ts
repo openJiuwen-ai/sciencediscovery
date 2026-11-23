@@ -522,9 +522,13 @@ export function createApp(deps: AppDeps): (request: HttpRequest) => Promise<Http
     const context = await requireUser(request);
     const credit = await store.getCredit(context.user.id);
     const sessions = await store.listSessions(context.user.id, 50);
+    const checkins = await store.countCheckins(context.user.id);
     return json(200, {
       user: userView(context.user),
       credit: creditView(credit),
+      // The whole check-in history, so the seven-day strip does not have to
+      // count only the newest ledger page and lose today's row under usage.
+      checkins,
       onlineSessions: sessions.filter((item) => !item.revokedAt && new Date(item.lastSeenAt).getTime() >= onlineSince().getTime()).length,
       activeSessions: sessions.filter((item) => !item.revokedAt).length,
       currentSessionId: context.session.id,

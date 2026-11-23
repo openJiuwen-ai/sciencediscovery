@@ -32,6 +32,7 @@ import { createApp } from "./app.js";
 import type { AccountsConfig } from "./config.js";
 import { hashPassword } from "./crypto.js";
 import type { HttpRequest, HttpResponse } from "./http.js";
+import { ledgerAfter } from "./ledger.js";
 import type { ModelPrice } from "./pricing.js";
 import type {
   AccountsStore, AdminRow, AdminSessionRow, AuditRow, AuthFlowRow, CreditRow, HoldInput, HoldResult, LedgerRow, OverviewRow,
@@ -108,6 +109,12 @@ class MemoryStore implements AccountsStore {
 
   async listLedger(userId: number, beforeId: number | undefined, limit: number): Promise<LedgerRow[]> {
     return this.ledger.filter((row) => row.userId === userId && (beforeId === undefined || row.id < beforeId)).sort((a, b) => b.id - a.id).slice(0, limit);
+  }
+
+  async countCheckins(userId: number): Promise<{ total: number; lastDate: string | null }> {
+    const rows = this.ledger.filter((row) => row.userId === userId && row.bizType === "CHECKIN");
+    const lastDate = rows.map((row) => row.bizId.split(":")[1] ?? "").sort().at(-1) ?? null;
+    return { total: rows.length, lastDate };
   }
 
   async createTicket(jti: string, openid: string, expiresAt: Date): Promise<void> {
@@ -310,8 +317,7 @@ class MemoryStore implements AccountsStore {
     // Same rule as PostgresStore: the row continues the ledger's running total
     // rather than snapshotting a balance another in-flight hold has already
     // dipped into.
-    const lastRow = [...this.ledger].reverse().find((row) => row.userId === input.userId);
-    this.pushLedger(input.userId, -charged, "LLM_USAGE", input.requestId, `${input.model} 调用`, (lastRow?.balanceAfter ?? 0) - charged);
+    this.pushLedger(input.userId, -charged, "LLM_USAGE", input.requestId, `${input.model} 调用`);
     return { status: "settled", balance: credit.balance, frozen: credit.frozen, holdAmount: hold.holdAmount, charged };
   }
 
@@ -368,7 +374,15 @@ class MemoryStore implements AccountsStore {
     credit.balance += delta;
     if (delta > 0) credit.totalEarned += delta;
     else credit.totalSpent += -delta;
-    const row: LedgerRow = { id: this.nextLedgerId++, userId, delta, balanceAfter: balanceAfter ?? credit.balance, bizType, bizId, remark, createdAt: NOW.toISOString() };
+    // Same rule as `appendLedger` in the SQL store: a row continues the
+    // ledger's running total, never the spendable balance (which has open
+    // holds subtracted from it).
+    const previous = [...this.ledger].reverse().find((row) => row.userId === userId);
+    const row: LedgerRow = {
+      id: this.nextLedgerId++, userId, delta,
+      balanceAfter: balanceAfter ?? ledgerAfter(previous?.balanceAfter, delta),
+      bizType, bizId, remark, createdAt: NOW.toISOString(),
+    };
     this.ledger.push(row);
     return row;
   }
@@ -803,6 +817,31 @@ test("two calls in flight keep the ledger's running balance", async () => {
     assert.equal(rows[index - 1]!.balanceAfter + rows[index]!.delta, rows[index]!.balanceAfter,
       `row ${index} does not continue row ${index - 1}`);
   }
+});
+
+test("a grant made while a hold is open keeps the ledger additive", async () => {
+  const store = new MemoryStore();
+  const app = createApp({ config: config(), store, now: () => NOW, fetchImpl: fakeHuawei("openid-1") });
+  await signInUser(app);
+  const requestId = randomUUID();
+
+  assert.equal((await serviceCall(app, "/internal/billing/hold", holdBody(requestId))).status, 200);
+  // The hold has already dipped into the spendable balance; the grant's row
+  // must still continue the ledger, or the pair below stops adding up.
+  const adjusted = await store.adjustCredits({ userId: 1, deltaMilli: 100_000, remark: "补偿", adminId: 1 });
+  assert.equal(adjusted?.ledger.balanceAfter, 600_000, "the grant continues the ledger, not the spendable balance");
+
+  assert.equal((await serviceCall(app, "/internal/billing/settle", {
+    userId: 1, requestId, model: "deepseek-v4-flash", inputTokens: 800, cachedTokens: 200, outputTokens: 500,
+  })).status, 200);
+
+  const rows = store.ledger.filter((row) => row.userId === 1);
+  for (let index = 1; index < rows.length; index += 1) {
+    assert.equal(rows[index - 1]!.balanceAfter + rows[index]!.delta, rows[index]!.balanceAfter,
+      `row ${index} does not continue row ${index - 1}`);
+  }
+  assert.equal(rows.at(-1)!.balanceAfter, store.credits.get(1)!.balance,
+    "once no hold is open the ledger and the spendable balance agree");
 });
 
 test("a saved nickname survives the next sign-in", async () => {

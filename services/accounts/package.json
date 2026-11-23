@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/crypto.test.ts src/http.test.ts src/huawei.test.ts src/pricing.test.ts src/app.test.ts",
+    "test": "node --import tsx --test src/crypto.test.ts src/http.test.ts src/huawei.test.ts src/pricing.test.ts src/ledger.test.ts src/app.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "schema": "tsx src/cli/schema.ts",
     "schema:sql": "tsx src/cli/schema.ts --print",

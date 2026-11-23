@@ -131,6 +131,9 @@ export function AccountPage({
   const [sessions, setSessions] = useState<AccountSessionRow[]>([]);
   const [records, setRecords] = useState<AccountUsageRecord[]>([]);
   const [totalEarned, setTotalEarned] = useState(0);
+  /** The service's own count of daily check-ins. Counting the loaded ledger page
+   *  instead loses today's row once enough newer usage rows fill it. */
+  const [checkinSummary, setCheckinSummary] = useState<{ total: number; lastDate: string | null }>();
   const [filter, setFilter] = useState<Filter>("all");
   const [openRecord, setOpenRecord] = useState<number>();
   const [editingName, setEditingName] = useState(false);
@@ -221,6 +224,7 @@ export function AccountPage({
       setSessions(sessionPage.items);
       setRecords(usage.records);
       setTotalEarned(Math.floor(me.credit.totalEarnedCredits));
+      setCheckinSummary(me.checkins);
     } catch (reason) {
       if (reason instanceof AccountApiError && reason.denied) onSignOut();
       else setError(reason instanceof Error ? reason.message : TEXT.account.loadFailed);
@@ -236,10 +240,15 @@ export function AccountPage({
   const balance = account.balanceCredits;
   const tokenEstimate = balance * 40_000;
   const today = chinaDay();
-  const checkedInToday = ledger.some((row) => row.bizType === "CHECKIN" && chinaDate(row.createdAt) === today);
+  const checkedInToday = checkinSummary
+    ? checkinSummary.lastDate === today
+    : ledger.some((row) => row.bizType === "CHECKIN" && chinaDate(row.createdAt) === today);
   // Seven slots name the reward each accumulated day pays. Day one is the
   // registration grant plus the first daily reward; the seventh adds 50.
-  const checkins = ledger.filter((row) => row.bizType === "CHECKIN").length;
+  // The count comes from the service when it offers one (older services do not),
+  // because the loaded ledger page is capped and a busy account pushes today's
+  // CHECKIN out of it.
+  const checkins = checkinSummary?.total ?? ledger.filter((row) => row.bizType === "CHECKIN").length;
   const { doneDays, todaySlot, remaining } = rewardProgress(checkins, checkedInToday);
 
   const filteredAll = useMemo(
