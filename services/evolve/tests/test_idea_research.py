@@ -328,6 +328,34 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected_parent['id'], '1')
         self.assertEqual(path, ['Mechanism follow-up'])
 
+    def test_a_proposal_past_the_ceiling_is_trimmed_not_rejected(self):
+        """maxDepth is a ceiling, not a target: a model that adds one refinement too
+        many keeps the steps that fit. Raising instead cost the whole research — a
+        stage gets one correction, so a run at round 3 with 585K tokens spent settled
+        as `interrupted` on `ideate: Proposal exceeds maxDepth`."""
+        self.state['settings']['maxDepth'] = 3
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 1)
+        parent.update(status='done', score=5)
+        self.state['nodes'][0]['childrenIds'].append('1')
+        self.state['nodes'].append(parent)
+        selected_parent, path = engine.proposal_path(dict(parentId='1', direction='Mechanism follow-up',
+                                                          refinements=['step two', 'step three'], hypothesis='Child hypothesis'))
+        self.assertEqual(selected_parent['id'], '1')
+        # depth 1 + [direction] + one refinement = 3, so only the direction fits.
+        self.assertEqual(path, ['Mechanism follow-up'])
+
+    def test_a_proposal_that_fits_the_ceiling_keeps_every_step(self):
+        self.state['settings']['maxDepth'] = 5
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 1)
+        parent.update(status='done', score=5)
+        self.state['nodes'][0]['childrenIds'].append('1')
+        self.state['nodes'].append(parent)
+        _, path = engine.proposal_path(dict(parentId='1', direction='Mechanism follow-up',
+                                            refinements=['step two'], hypothesis='Child hypothesis'))
+        self.assertEqual(path, ['Mechanism follow-up', 'step two'])
+
     async def test_selector_prunes_weak_direction_and_proposals_record_lineage(self):
         root = self.state['nodes'][0]
         weak = node('1', 'ROOT', 'Weak direction', 'direction', 1)

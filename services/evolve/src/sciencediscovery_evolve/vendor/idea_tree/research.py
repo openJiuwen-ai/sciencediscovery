@@ -498,9 +498,12 @@ class IdeaTreeEngine:
         if parent['id'] == 'ROOT' and depth > 1 and not proposal.get('direction'):
             raise ValueError('ROOT proposals need a research direction')
         path = ([] if (parent_id and parent['kind'] == 'direction') or (parent['id'] == 'ROOT' and depth == 1) else [proposal['direction']]) + proposal.get('refinements', [])
-        if parent['depth'] + len(path) + 1 > depth:
-            raise ValueError('Proposal exceeds maxDepth')
-        return parent, path
+        # maxDepth is a ceiling, not a target. A proposal that walks a refinement past
+        # it keeps the steps that fit and loses the rest; rejecting it instead ended
+        # the whole research, because a stage gets one correction and a research that
+        # had already spent its budget reaches ideation three rounds deep.
+        allowance = depth - parent['depth'] - 1
+        return parent, path[:max(0, allowance)]
 
     def is_descendant_of(self, node_id, ancestor_id):
         current = self.find(node_id)
