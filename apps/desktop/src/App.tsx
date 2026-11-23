@@ -937,6 +937,11 @@ export function App({ initialToken }: Props) {
    *  `return` is still in its temporal dead zone when that effect commits. */
   const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput, ideaConfirmed = false): boolean => {
     if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return true; }
+    // An archived Session is read-only on the server, and the composer alone is
+    // not enough: a Session with no transcript opens on the welcome page, whose
+    // composer had no reason to show. The refusal belongs at the send, where it
+    // is one rule for both surfaces.
+    if (state.detail?.archivedAt !== undefined) { actions.toast(TEXT.errors.archivedComposer, "error"); return true; }
     // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
     // question about the sentence only, so the detour below — which is for
@@ -1383,6 +1388,11 @@ export function App({ initialToken }: Props) {
     client,
     jwBlocked: jwReady ? undefined : TEXT.composer.jwBlocked,
     models: offeredModels,
+    // Part of the props, not of one call site: the composer is drawn under the
+    // transcript *and* in the middle of the welcome page, and an archived
+    // Session with an empty transcript takes the second path. Passing the reason
+    // only where the transcript is non-empty left that Session looking writable.
+    readOnlyReason: state.detail?.archivedAt !== undefined ? TEXT.errors.archivedComposer : undefined,
     onApprovalMode: (mode) => {
     // The choice is remembered before it is applied: a new conversation started
     // from this instance inherits it, and the selector on the landing page has
@@ -1569,10 +1579,7 @@ export function App({ initialToken }: Props) {
             <p className="session-archived-banner" role="status">{TEXT.errors.archivedBanner}</p>
           ) : null}
           {isEvidenceSessionReadOnly(state.detail) ? null : (
-            <Composer
-              {...composerProps}
-              {...(state.detail?.archivedAt !== undefined ? { readOnlyReason: TEXT.errors.archivedComposer } : {})}
-            />
+            <Composer {...composerProps} />
           )}
             </>
           )}
