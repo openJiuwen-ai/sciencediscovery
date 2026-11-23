@@ -109,7 +109,7 @@ export function replayRun(run: SessionRun, state: RunStreamState): RunReplay | u
   return {
     messageId: hasVisibleAnswer(state) ? run.assistantMessageId : undefined,
     runId: run.id,
-    state,
+    state: state.runId ? state : { ...state, runId: run.id },
     userMessageId: run.userMessageId,
   };
 }

@@ -411,6 +411,8 @@ export const ZH = {
     updated: "已更新",
     more: (count: number) => `还有 ${count} 个`,
     openPanel: "打开产物面板",
+    expand: "展开全部文件",
+    collapse: "收起",
     version: (value: number) => `v${value}`,
     kinds: {
       dataset: "数据集", figure: "图表", html: "网页", json: "JSON", latex: "LaTeX",

@@ -82,6 +82,8 @@ export interface TurnArtifacts {
   visible: TurnArtifact[];
   /** Everything the strip does not show: folded kinds plus the cap overflow. */
   hidden: number;
+  /** All rows in the same order, when the caller supports inline expansion. */
+  all?: TurnArtifact[];
 }
 
 /**
@@ -175,7 +177,7 @@ export function turnArtifacts(
   );
 }
 
-function select(outputs: readonly SessionArtifactOutput[], limit: number): TurnArtifacts {
+function select(outputs: readonly SessionArtifactOutput[], limit: number, expandable = false): TurnArtifacts {
   const byArtifact = new Map<string, TurnArtifact>();
   for (const { artifact, version } of outputs) {
     const existing = byArtifact.get(artifact.id);
@@ -194,7 +196,7 @@ function select(outputs: readonly SessionArtifactOutput[], limit: number): TurnA
   const pool = important.length > 0 ? important : folded;
   const visible = limit > 0 ? pool.slice(0, limit) : pool;
 
-  return { visible, hidden: rows.length - visible.length };
+  return { visible, hidden: rows.length - visible.length, ...(expandable ? { all: rows } : {}) };
 }
 
 /**
@@ -209,6 +211,7 @@ export function turnArtifactsByRun(
   outputs: readonly SessionArtifactOutput[],
   lineage: TurnLineage = EMPTY_LINEAGE,
   limit: number = TURN_ARTIFACT_LIMIT,
+  expandable = false,
 ): Map<string, TurnArtifacts> {
   const perRun = new Map<string, SessionArtifactOutput[]>();
   for (const output of outputs) {
@@ -220,6 +223,6 @@ export function turnArtifactsByRun(
   }
 
   const summary = new Map<string, TurnArtifacts>();
-  for (const [runId, subset] of perRun) summary.set(runId, select(subset, limit));
+  for (const [runId, subset] of perRun) summary.set(runId, select(subset, limit, expandable));
   return summary;
 }

@@ -359,7 +359,7 @@ function StopDivider({ reason, word }: { reason?: string; word: string }) {
  *  that stopped without failing gets the divider (cancelled, interrupted), and
  *  anything that went wrong or is worth investigating — an error, dropped
  *  events, a stream that ended without saying — keeps the marked notice row. */
-function RunStatusLine({ run }: { run: RunStreamState }) {
+function RunStatusLine({ run, artifactFallback = false }: { run: RunStreamState; artifactFallback?: boolean }) {
   const lines: ReactNode[] = [];
   if (run.droppedEvents > 0) lines.push(<div className="status-strip" key="dropped">{TEXT.conversation.droppedEvents(run.droppedEvents)}</div>);
   if (run.unknownEvents > 0) lines.push(<div className="status-strip" key="unknown">{TEXT.conversation.unknownEvents(run.unknownEvents)}</div>);
@@ -373,6 +373,8 @@ function RunStatusLine({ run }: { run: RunStreamState }) {
     stop = { word: TEXT.conversation.interrupted };
   } else if (!run.error && run.terminal && run.status === undefined) {
     lines.push(<div className="status-strip" key="ended">{TEXT.conversation.streamEnded}</div>);
+  } else if (!run.error && run.terminal && artifactFallback && run.status !== undefined) {
+    stop = { word: statusLabel(run.status) };
   }
   return (
     <>
@@ -611,10 +613,11 @@ export const AssistantTurns = memo(function AssistantTurns({
   if (!fold && shown === undefined && !showFinal) {
     return (
       <>
-        <RunStatusLine run={run} />
+        <RunStatusLine run={run} artifactFallback={Boolean(artifacts?.visible.length)} />
         {!live && usage ? <div className="answer-tools">{usage}</div> : null}
         {run.terminal ? (
           <TurnArtifactStrip
+            key={`${sessionId}:${run.runId}`}
             artifacts={artifacts}
             onPreviewArtifact={onPreviewArtifact}
             onOpenArtifactPanel={onOpenArtifactPanel}
@@ -696,6 +699,7 @@ export const AssistantTurns = memo(function AssistantTurns({
       {!live && shown === undefined && !showFinal && usage ? <div className="answer-tools">{usage}</div> : null}
       {run.terminal ? (
         <TurnArtifactStrip
+          key={`${sessionId}:${run.runId}`}
           artifacts={artifacts}
           onPreviewArtifact={onPreviewArtifact}
           onOpenArtifactPanel={onOpenArtifactPanel}

@@ -36,7 +36,7 @@
  * grows and reshuffles under the reader while the run is still writing is worse
  * than no list.
  */
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import type { ScientificArtifactKind } from "@sciencediscovery/schema";
 
@@ -137,24 +137,27 @@ export const TurnArtifactStrip = memo(function TurnArtifactStrip({
   onPreviewArtifact,
   onOpenArtifactPanel,
 }: TurnArtifactStripProps) {
+  const [expanded, setExpanded] = useState(false);
   if (!artifacts || artifacts.visible.length === 0) return null;
   const t = TEXT.turnArtifacts;
+  const rows = expanded && artifacts.all ? artifacts.all : artifacts.visible;
   return (
     <section aria-label={t.title} className="turn-artifacts">
       <p className="turn-artifacts-title">{t.title}</p>
       <ul className="turn-artifacts-list">
-        {artifacts.visible.map((row) => (
+        {rows.map((row) => (
           <li key={row.artifact.id}>
             <Card onPreviewArtifact={onPreviewArtifact} row={row} />
           </li>
         ))}
-        {artifacts.hidden > 0 ? (
+        {artifacts.hidden > 0 && !expanded ? (
           <li>
             <button
               className="turn-artifact turn-artifact-rest"
-              disabled={!onOpenArtifactPanel}
-              onClick={onOpenArtifactPanel}
-              title={t.openPanel}
+              aria-expanded={artifacts.all ? false : undefined}
+              disabled={!artifacts.all && !onOpenArtifactPanel}
+              onClick={artifacts.all ? () => setExpanded(true) : onOpenArtifactPanel}
+              title={artifacts.all ? t.expand : t.openPanel}
               type="button"
             >
               <span aria-hidden="true" className="turn-artifact-icon is-rest">
@@ -166,12 +169,18 @@ export const TurnArtifactStrip = memo(function TurnArtifactStrip({
               </span>
               <span className="turn-artifact-text">
                 <span className="turn-artifact-name">{t.more(artifacts.hidden)}</span>
-                <span className="turn-artifact-meta">{t.openPanel}</span>
+                <span className="turn-artifact-meta">{artifacts.all ? t.expand : t.openPanel}</span>
               </span>
             </button>
           </li>
         ) : null}
       </ul>
+      {expanded && artifacts.all ? (
+        <div className="turn-artifact-actions">
+          <button aria-expanded="true" onClick={() => setExpanded(false)} type="button">{t.collapse}</button>
+          {onOpenArtifactPanel ? <button onClick={onOpenArtifactPanel} type="button">{t.openPanel}</button> : null}
+        </div>
+      ) : null}
     </section>
   );
 });

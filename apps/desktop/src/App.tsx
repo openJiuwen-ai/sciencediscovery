@@ -1506,6 +1506,7 @@ export function App({ initialToken }: Props) {
                   outputs={state.outputs}
                   pending={state.pendingMessage}
                   replays={state.replays}
+                  terminalRuns={state.terminalRuns}
                   run={state.run}
                   workspaceFiles={state.panelFiles}
                 />

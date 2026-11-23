@@ -401,6 +401,8 @@ export const EN: Text = {
     updated: "Updated",
     more: (count: number) => `${count} more`,
     openPanel: "Open artifact panel",
+    expand: "Show all files",
+    collapse: "Show fewer",
     version: (value: number) => `v${value}`,
     kinds: {
       dataset: "Dataset", figure: "Figure", html: "Page", json: "JSON", latex: "LaTeX",

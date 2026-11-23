@@ -34,11 +34,11 @@ import type {
   PermissionRequest,
   SessionArtifactOutput,
   SessionDetail,
+  SessionRun,
   WorkspaceFile,
 } from "../api/types.js";
 import type { RunStreamState } from "../run-stream/model.js";
 import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
-import { allSubagents } from "../run-stream/model.js";
 import { TEXT } from "../text.js";
 import { coalesceTimeoutNotices } from "../run-failure.js";
 import { RunFailureCard } from "./RunFailureCard.js";
@@ -47,7 +47,10 @@ import { UploadCards } from "./UploadCards.js";
 import { useTurnUsage } from "../app/use-turn-usage.js";
 import { TurnUsage } from "./TurnUsage.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
-import { turnArtifactsByRun, turnLineage, type TurnArtifact } from "../app/turn-artifacts.js";
+import type { TurnArtifact, TurnArtifacts } from "../app/turn-artifacts.js";
+import { useTurnArtifacts } from "../app/use-turn-artifacts.js";
+import { artifactAnchors } from "../app/artifact-anchors.js";
+import { TurnArtifactStrip, type TurnArtifactStripProps } from "./TurnArtifactStrip.js";
 
 import { desktopConfigurationPresentation } from "../app/configuration-presentation.js";
 import type { SettingsGroup } from "./SystemSettingsDialog.js";
@@ -86,6 +89,7 @@ interface Props {
   /** Every finished run of this session, each to be rendered in the place of
    *  the answer it wrote. */
   replays: readonly RunReplay[];
+  terminalRuns?: readonly SessionRun[];
   /** The run streaming right now, which has no persisted answer to take. */
   run: RunStreamState;
   /** The session's Idea Tree researches, drawn after the last turn rather than
@@ -101,6 +105,7 @@ interface Props {
 }
 
 const NO_OUTPUTS: readonly SessionArtifactOutput[] = [];
+const NO_RUNS: readonly SessionRun[] = [];
 
 const EMPTY_CONFIGURATION: ReturnType<typeof useConfigurationRequests> = {
   requests: [], legacyRequests: [], loading: false, error: false,
@@ -175,13 +180,16 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
 }
 
 function MessageRow({
+  artifacts,
+  onPreviewArtifact,
+  onOpenArtifactPanel,
   usage,
   answered,
   message,
   onBranch,
   onReferenceClick,
   uploads,
-}: {
+}: TurnArtifactStripProps & {
   usage?: ReactNode;
   answered?: boolean;
   message: ChatMessage;
@@ -227,6 +235,7 @@ function MessageRow({
           onReferenceClick={onReferenceClick}
           references={message.references}
         />
+        <TurnArtifactStrip artifacts={artifacts} onPreviewArtifact={onPreviewArtifact} onOpenArtifactPanel={onOpenArtifactPanel} />
       </div>
     </div>
   );
@@ -285,6 +294,7 @@ export function Conversation({
   outputs,
   pending,
   replays,
+  terminalRuns = NO_RUNS,
   run,
   ideaCards,
   ideaLegacy,
@@ -366,33 +376,11 @@ export function Conversation({
 
   const messages = detail?.messages ?? [];
   const failures = coalesceTimeoutNotices(messages, replays, run);
-  const { following, replacing, trailing } = placeReplays(failures.replays, messages);
   const visibleRun = failures.run;
-  /** A chip opens the card for this session; the transcript is the session's
-   *  own, so the id is not a per-row value. Stable so the memoised turns under
-   *  it are not re-rendered — and their Markdown re-parsed — by a press that
-   *  merely opens the dialog. */
-  /** Which Run a version belongs to: the transcript's own runs, and the children
-   *  whose versions name them instead. A version with neither is left out rather
-   *  than guessed at by timestamp. */
-  const lineage = useMemo(
-    () => turnLineage(
-      [
-        ...(run.runId === undefined ? [] : [run.runId]),
-        ...replays.map((replay) => replay.runId),
-      ],
-      [...allSubagents(run), ...replays.flatMap((replay) => allSubagents(replay.state))],
-    ),
-    [run, replays],
-  );
-  /** One selection per run, made once per `outputs`/`lineage` pair: the
-   *  conversation draws a strip under every turn, and walking the whole output
-   *  list in each of them would make typing in the composer cost
-   *  O(turns × outputs). */
-  const artifactsByRun = useMemo(
-    () => turnArtifactsByRun(outputs ?? NO_OUTPUTS, lineage),
-    [lineage, outputs],
-  );
+  const artifactsByRun = useTurnArtifacts(client, detail?.id, outputs ?? NO_OUTPUTS, terminalRuns, replays, run);
+  const anchors = artifactAnchors(detail?.id, terminalRuns, failures.replays, messages, artifactsByRun, visibleRun);
+  const { following, replacing, trailing } = placeReplays(anchors.replays, messages);
+  const replayArtifacts = (id: string): TurnArtifacts | undefined => anchors.storedRuns.has(id) ? undefined : artifactsByRun.get(id);
   const referenceClick = useMemo(
     () => onReferenceClick === undefined
       ? undefined
@@ -426,7 +414,8 @@ export function Conversation({
    *  has said anything. So the placeholder is drawn a beat late, and anything
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
-  const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
+  const liveRun = (reconstructed || placeholder) && !anchors.replays.some(replay => replay.runId === visibleRun.runId)
+    && !anchors.storedRuns.has(visibleRun.runId ?? "");
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -487,6 +476,9 @@ export function Conversation({
               {configurationAtNotice ? renderConfiguration(configurationAtNotice) : legacyAtNotice ? renderLegacyConfiguration(legacyAtNotice) : replacement === undefined ? (
                 <MessageRow
                   usage={usageFor(undefined, message.id)}
+                  artifacts={artifactsByRun.get(anchors.stored.get(message.id) ?? "")}
+                  onPreviewArtifact={onPreviewArtifact}
+                  onOpenArtifactPanel={onOpenArtifactPanel}
                   answered={answeredAfter[index]}
                   message={message}
                   onBranch={onBranch && message.role === "assistant" ? () => onBranch(message.id) : undefined}
@@ -519,9 +511,9 @@ export function Conversation({
                   conversation it did not come last in. */}
               {(following.get(message.id) ?? []).map((replay) => (
                 <AssistantTurns
-                  usage={usageFor(replay.runId)}
+                  usage={anchors.storedRuns.has(replay.runId) ? undefined : usageFor(replay.runId)}
                   answered={answeredAfter[index]}
-                  artifacts={artifactsByRun.get(replay.runId)}
+                  artifacts={replayArtifacts(replay.runId)}
                   client={client}
                   key={replay.runId}
                   onDecide={onDecidePermission}
@@ -539,9 +531,9 @@ export function Conversation({
         })}
         {trailing.map((replay) => (
           <AssistantTurns
-            usage={usageFor(replay.runId)}
+            usage={anchors.storedRuns.has(replay.runId) ? undefined : usageFor(replay.runId)}
             answered={pending !== undefined}
-            artifacts={artifactsByRun.get(replay.runId)}
+            artifacts={replayArtifacts(replay.runId)}
             client={client}
             key={replay.runId}
             onDecide={onDecidePermission}
