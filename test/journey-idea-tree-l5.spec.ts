@@ -4,6 +4,7 @@ import { expect } from "@playwright/test";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { RunPollRecovery } from "./helpers/run-poll-recovery.ts";
 
 const cases = [
   { id: "iteration", title: "Multi-round water treatment research", template: "water-treatment-materials/v1", prompt: "Explore low-cost iron and manganese catalysts for near-neutral water treatment. Consider activity, recovery and leaching. Do not retrieve literature; distinguish hypotheses from evidence.", pause: false },
@@ -27,17 +28,21 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 // prompt spent more than 300s preparing its inputs — the agent was still on
 // turn 5, one turn carrying 142K input tokens — before it could call
 // `create_idea_research`, while a second run of the same prompt completed the
-// whole research in 23.4m. The step also stops waiting the moment the run
-// settles without a research, so a run that will never create one fails at that
-// point instead of burning the budget.
+// whole research in 23.4m.
 const createBudget = 600_000;
 const runningBudget = 120_000;
 const pausedBudget = 480_000;
 const resumedBudget = 300_000;
 const terminalBudget = 4_800_000;
 
-// A session run reports one of these once it can no longer produce a research.
-const settledRunStatuses = ["blocked", "cancelled", "completed", "failed", "interrupted"];
+// A run reports one of these when it can no longer produce a research on its
+// own. `blocked` is deliberately absent: it is a wait for a person, and
+// `runs/index.ts` resumes the same run once the card is decided, so treating it
+// as terminal would fail a run that was about to continue.
+const settledRunStatuses = ["cancelled", "completed", "failed", "interrupted"];
+
+// `configuration_requests_v2` states that still wait for a person.
+const pendingConfigurationStates = ["collecting_input", "awaiting_confirmation", "needs_fix", "validating", "applying", "failed"];
 
 for (const scenario of cases) {
   /**
@@ -66,39 +71,48 @@ for (const scenario of cases) {
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
     const researchUrl = () => `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
-    const read = async () => {
-      const response = await page.request.get(researchUrl(), { headers, timeout: 15_000, maxRetries: 2 });
-      expect(response.ok()).toBe(true);
-      return (await response.json()).items;
+    // Reads inside these polls cover 20-30 minutes of a paid run, so a single
+    // 502 from a restarting evolve or API must not end the case: every read goes
+    // through `RunPollRecovery`, which tolerates three transient failures and
+    // rethrows anything else. Writes (create, pause, continue) are never retried.
+    const recovery = new RunPollRecovery();
+    const unavailable = (label: string, error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const failures = recovery.failed(error);
+      console.warn(`[l5-poll] ${label} transient failure ${failures}/3: ${message}`);
+      return "poll_unavailable";
     };
-    const researchById = async () => (await read()).find((item: any) => item.research.id === researchId);
+    const readJson = async (url: string) => {
+      const response = await page.request.get(url, { headers, timeout: 15_000, maxRetries: 2 });
+      if (!response.ok()) throw new Error(`GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 200)}`);
+      return await response.json();
+    };
+    const read = async () => (await readJson(researchUrl())).items as Array<{ research: { id: string; status: string; reason?: string } }>;
+    const researchById = async () => (await read()).find((item) => item.research.id === researchId);
     const status = async () => (await researchById())?.research.status;
-    const readRuns = async () => {
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, { headers, timeout: 15_000, maxRetries: 2 });
-      expect(response.ok()).toBe(true);
-      return (await response.json()) as Array<{ id: string; status: string; error?: string }>;
-    };
-    // A `blocked` run is waiting for a person: `permissions/index.ts` reports
+    const readRuns = async () => (await readJson(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`)) as Array<{ id: string; status: string; error?: string }>;
+    // A run waits for a person in two shapes: `permissions/index.ts` reports
     // "Waiting for permission decision" and `runs/index.ts` reports "Waiting for
-    // configuration decision" with the same run status. Reading both lists turns
-    // that into a named card instead of a bare status.
-    const pendingPermissions = async () => {
-      const response = await page.request.get(`${apiBaseUrl()}/api/permission-requests?sessionId=${fixture!.session.id}`, { headers, timeout: 15_000, maxRetries: 2 });
-      if (!response.ok()) return [];
-      return ((await response.json()) as Array<{ state: string; summary?: string }>).filter((item) => item.state === "pending");
-    };
-    const pendingConfigurations = async () => {
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/configuration-requests`, { headers, timeout: 15_000, maxRetries: 2 });
-      if (!response.ok()) return [];
-      return ((await response.json()).items ?? []) as Array<{ capabilityId?: string; state?: string }>;
+    // configuration decision", both with run status `blocked`. Reading both
+    // lists turns that into a named card instead of a bare status, and a read
+    // failure is reported rather than silently dropped as "no card".
+    const pendingCards = async () => {
+      const permissions = (await readJson(`${apiBaseUrl()}/api/permission-requests?sessionId=${fixture!.session.id}`)) as Array<{ state: string; summary?: string }>;
+      const configurations = ((await readJson(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/configuration-requests`)).items ?? []) as Array<{ capabilityId?: string; state?: string }>;
+      const open = permissions.filter((item) => item.state === "pending");
+      const waitingConfigurations = configurations.filter((item) => pendingConfigurationStates.includes(item.state ?? ""));
+      return [
+        open.length ? `permission requests: ${open.map((item) => item.summary ?? "pending").join(" | ")}` : "",
+        waitingConfigurations.length ? `configuration requests: ${waitingConfigurations.map((item) => `${item.capabilityId ?? "?"}:${item.state ?? "?"}`).join(", ")}` : "",
+      ].filter(Boolean).join("; ");
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
         // A three-round standard research prepares inputs with governed tools, and
         // the default approval mode parks the run as `blocked` on the first one
-        // with nobody to answer the card — measured: two runs settled as `blocked`
-        // after ~10 min without ever creating a research. Approval surfaces have
-        // their own journeys (`journey-governed-download-approval`,
+        // with nobody to answer the card — measured: two runs sat blocked for
+        // ~10 min without ever creating a research. Approval surfaces have their
+        // own journeys (`journey-governed-download-approval`,
         // `journey-sandbox-network-consent`); this case exists to check research
         // results, so the Session allows the tools it needs.
         fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
@@ -107,53 +121,111 @@ for (const scenario of cases) {
         // keeps its own Idea Tree settings.
         const override = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
         expect(override.ok()).toBe(true);
-        const existingIds = new Set((await read()).map((item: any) => item.research.id));
+        const existingIds = new Set((await read()).map((item) => item.research.id));
         await openProjectSession(page, fixture);
         await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
         // Identify this run by the id that was not there before the command was
         // sent: the list is shared by every research in the Session. A run that
-        // settles without creating one cannot recover, so it fails here with its
-        // own status instead of waiting out the creation budget — `expect.poll`
-        // retries any other value, so the settled case has to throw.
+        // reports a terminal status without a research cannot recover, so it
+        // fails here with that status — `expect.poll` retries any other value, so
+        // the terminal case has to throw. `blocked` keeps waiting unless a card
+        // actually needs a person.
         await expect.poll(async () => {
-          if ((await read()).some((item: any) => !existingIds.has(item.research.id))) return "created";
-          const runs = await readRuns();
-          const newest = runs[runs.length - 1];
-          if (newest && settledRunStatuses.includes(newest.status)) {
-            const permissions = await pendingPermissions();
-            const configurations = await pendingConfigurations();
-            const cards = [
-              permissions.length ? `permission requests: ${permissions.map((item) => item.summary ?? "pending").join(" | ")}` : "",
-              configurations.length ? `configuration requests: ${configurations.map((item) => `${item.capabilityId ?? "?"}:${item.state ?? "?"}`).join(", ")}` : "",
-            ].filter(Boolean).join("; ");
-            throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research${cards ? ` (${cards})` : " (no pending card)"}`);
+          let items: Array<{ research: { id: string } }>;
+          try {
+            items = await read();
+            recovery.succeeded();
+          } catch (error) {
+            return unavailable("creation research list", error);
+          }
+          if (items.some((item) => !existingIds.has(item.research.id))) return "created";
+          let newest: { status: string; error?: string } | undefined;
+          try {
+            const runs = await readRuns();
+            recovery.succeeded();
+            newest = runs[runs.length - 1];
+          } catch (error) {
+            return unavailable("creation run list", error);
+          }
+          if (!newest) return "waiting";
+          if (newest.status === "blocked") {
+            let cards: string;
+            try {
+              cards = await pendingCards();
+            } catch (error) {
+              throw new Error(`the /idea-tree run is blocked and the pending cards could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            // No card yet means the engine is still preparing; a card means a
+            // person has to act, and nobody will in a journey.
+            if (cards) throw new Error(`the /idea-tree run is blocked on ${cards} and cannot continue until it is answered`);
+            return "waiting";
+          }
+          if (settledRunStatuses.includes(newest.status)) {
+            let cards: string;
+            try {
+              cards = await pendingCards();
+            } catch (error) {
+              cards = `cards unavailable: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research (${cards || "no pending card"})`);
           }
           return "waiting";
         }, { timeout: createBudget, message: "the /idea-tree command should create one research before its run settles" }).toBe("created");
-        researchId = (await read()).find((item: any) => !existingIds.has(item.research.id)).research.id;
+        researchId = (await read()).find((item) => !existingIds.has(item.research.id))!.research.id;
       });
       if (scenario.pause) {
         await journey.step("Pause and resume", "Research reaches paused state and can continue without losing its identity", async () => {
           const endpoint = researchUrl();
           // The pause is only meaningful while the engine is running; sending it
-          // blind would either race a research that just completed or wait out the
+          // blind would either race a research that just settled or wait out the
           // whole paused budget on a run that can no longer pause.
-          await expect.poll(status, { timeout: runningBudget, message: "the research should be running before it is paused" }).toBe("running");
+          await expect.poll(async () => {
+            try {
+              const current = await status();
+              recovery.succeeded();
+              return current;
+            } catch (error) {
+              return unavailable("running status", error);
+            }
+          }, { timeout: runningBudget, message: "the research should be running before it is paused" }).toBe("running");
           const pause = await page.request.post(endpoint, { headers, data: { operation: "pause", researchId } });
           expect(pause.ok()).toBe(true);
-          await expect.poll(status, { timeout: pausedBudget, message: "the pause operation should settle the research as paused" }).toBe("paused");
+          await expect.poll(async () => {
+            try {
+              const current = await status();
+              recovery.succeeded();
+              return current;
+            } catch (error) {
+              return unavailable("paused status", error);
+            }
+          }, { timeout: pausedBudget, message: "the pause operation should settle the research as paused" }).toBe("paused");
           const resume = await page.request.post(endpoint, { headers, data: { operation: "continue", researchId } });
           expect(resume.ok()).toBe(true);
-          await expect.poll(async () => (await status()) === "paused" ? "paused" : "resumed", { timeout: resumedBudget, message: "the continued research should leave the paused state" }).toBe("resumed");
+          await expect.poll(async () => {
+            try {
+              const current = await status();
+              recovery.succeeded();
+              return current === "paused" ? "paused" : "resumed";
+            } catch (error) {
+              return unavailable("resumed status", error);
+            }
+          }, { timeout: resumedBudget, message: "the continued research should leave the paused state" }).toBe("resumed");
         });
       }
       await journey.step("Inspect completed research", "Multiple rounds complete with scored candidates, assessments and root insight", async () => {
         await expect.poll(async () => {
-          const current = await status();
-          return terminalStatuses.includes(current) ? current : null;
-        }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).not.toBeNull();
-        const { research, graph } = (await researchById())!;
+          try {
+            const current = await status();
+            recovery.succeeded();
+            return terminalStatuses.includes(current) ? current : "waiting";
+          } catch (error) {
+            return unavailable("terminal status", error);
+          }
+        }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).toMatch(/^(completed|interrupted|paused|ended)$/);
+        const stored = await researchById();
+        expect(stored).toBeDefined();
+        const { research, graph } = stored!;
         expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
         expect(research.settings).toMatchObject({ templateId: scenario.template, explorationIntensity: "standard" });
         expect(research.round).toBeGreaterThanOrEqual(2);
@@ -169,6 +241,9 @@ for (const scenario of cases) {
       });
       await journey.step("Reopen results", "The completed research and root insight remain available after reload", async () => {
         await page.reload();
+        // The API answering is not the same claim as the page still showing the
+        // research: check the user-visible control region first, then the API.
+        await expect(page.getByRole("region", { name: /Idea Tree/ })).toBeVisible({ timeout: 60_000 });
         const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
         expect(saved?.graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
