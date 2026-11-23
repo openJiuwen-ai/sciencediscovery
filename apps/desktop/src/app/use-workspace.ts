@@ -227,10 +227,12 @@ export interface WorkspaceActions {
   decidePermission: (requestId: string, decision: PermissionDecision) => Promise<void>;
   /** Reversible: moves the Session to 设置 → 会话管理 and makes it read-only
    *  there, so it does not ask first. */
-  archiveSession: (session: Session) => void;
-  deleteSession: (session: Session) => void;
+  archiveSession: (session: Session) => Promise<void>;
+  /** `onSettled` runs after the delete and the list refresh it causes, so a
+   *  pane that opened its own listing can redraw without guessing when. */
+  deleteSession: (session: Session, onSettled?: () => void) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
-  restoreSession: (session: Session) => void;
+  restoreSession: (session: Session) => Promise<void>;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
   deleteProject: (project: Project) => void;
@@ -2167,7 +2169,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   }, [publishArtifacts]);
 
   const mutate = useCallback(
-    async (options: { dropIfCurrent?: boolean; forgetArtifacts?: boolean; id: string; operation: () => Promise<unknown> }) => {
+    async (options: { after?: () => void; dropIfCurrent?: boolean; forgetArtifacts?: boolean; id: string; operation: () => Promise<unknown> }) => {
       try {
         await options.operation();
       } catch (reason) {
@@ -2180,6 +2182,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       }
       if (options.dropIfCurrent && sessionRef.current === options.id) startDraft();
       await refreshSessionLists();
+      // After the refresh, never before: the settings page redraws the listing
+      // it loaded itself, and it has to see the server's answer, not the one
+      // that was in flight.
+      options.after?.();
     },
     [forgetSessionArtifacts, refreshSessionLists, report, startDraft],
   );
@@ -2516,7 +2522,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           id: session.id,
           operation: async () => adoptSessionReply(await restoreSessionRequest(client, session.id)),
         }),
-      deleteSession: (session) =>
+      deleteSession: (session, onSettled) =>
         confirmAction({
           accept: TEXT.menu.delete,
           // The name the user is looking at, not the one the service stored:
@@ -2525,7 +2531,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           body: TEXT.errors.deleteWarning(sessionTitle(session.title)),
           eyebrow: TEXT.menu.delete,
           onAccept: () =>
-            mutate({ dropIfCurrent: true, forgetArtifacts: true, id: session.id, operation: () => deleteSession(client, session.id) }),
+            mutate({
+              dropIfCurrent: true,
+              forgetArtifacts: true,
+              id: session.id,
+              operation: () => deleteSession(client, session.id),
+              ...(onSettled ? { after: onSettled } : {}),
+            }),
           title: sessionTitle(session.title),
         }),
       decidePermission,

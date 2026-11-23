@@ -1,0 +1,96 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ * Licensed under the Apache License, Version 2.0 (the "License"); */
+
+/* 设置 › 会话管理: one row per archived Session, in the shape 导出记录 uses —
+ * the shared list card, the title over a meta line, the actions on the right.
+ * Only the tokens that card already defines are used, so the two pages read as
+ * the same kind of list. */
+
+.session-management {
+  background: var(--surface);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.18));
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.session-management-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-soft, rgba(127, 127, 127, 0.14));
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+}
+.session-management-row:last-child { border-bottom: 0; }
+
+.session-management-glyph {
+  color: var(--ink-2, #6b7280);
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+}
+
+.session-management-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* A Session title is user-set and unbounded: it ellipses instead of widening
+ * the pane past the dialog. */
+.session-management-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-management-meta {
+  color: var(--ink-2, #6b7280);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.session-management-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-management-hint {
+  color: var(--ink-2, #6b7280);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-management-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.session-management-button {
+  background: transparent;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.28));
+  border-radius: var(--radius, 8px);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.session-management-button:hover { background: rgba(127, 127, 127, 0.12); }
+.session-management-button:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 1px; }
+/* The one action here that cannot be undone reads as the ⋯ menu's delete. */
+.session-management-button.is-destructive { color: var(--danger-ink, #b91c1c); }
