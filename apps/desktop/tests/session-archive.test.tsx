@@ -49,19 +49,11 @@ function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
 test("the sidebar no longer offers a state filter", () => {
   // The list is the active set; archived Sessions moved to 设置 → 会话管理, so a
   // three-way switch here would only duplicate that page and hide live rows.
+  // Asserted on the control itself: the copy that named the three states went
+  // with it, so there is no string left to search for, and the storage path that
+  // remembered the choice is gone from `session-filter.ts` too.
   const markup = render();
-  for (const gone of [TEXT.sidebar.filterActive, TEXT.sidebar.filterArchived, TEXT.sidebar.filterAll]) {
-    assert.ok(!markup.includes(gone), `the removed filter still renders ${gone}`);
-  }
-  assert.ok(!markup.includes('aria-label="' + TEXT.sidebar.filterLabel + '"'), "the filter group is gone");
-});
-
-test("a stored three-way choice is ignored rather than honoured", () => {
-  // An earlier build remembered 活跃/已归档/全部. Migrating it would be wrong:
-  // a stored `archived` would open the page with no active row on screen.
-  const store = new Map<string, string>([["sciencediscovery-desktop:session-filter", "archived"]]);
-  const markup = render();
-  assert.ok(!markup.includes(TEXT.sidebar.filterArchived), "the stored value cannot bring the filter back");
+  assert.ok(!markup.includes("side-filter-item"), "no three-state button renders");
 });
 
 
