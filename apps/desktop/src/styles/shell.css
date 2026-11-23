@@ -483,17 +483,29 @@ body.is-resizing * {
   font-size: 11px;
   line-height: 1.5;
 }
-/* What one entry does, under it while the pointer is on it. Same indentation as
- * the label, so it reads as that entry's own line and not as a note about the
- * whole menu (`.ctx-note` is that). Capped, or its sentence would stretch the
- * whole menu to the width of one line of text. */
+/* What one entry does, shown over the page beside the menu while the pointer is
+ * on that entry. Absolutely positioned on purpose: the menu is measured and
+ * clamped when it opens, so a hint that grew its box would hang off the window
+ * and slide the entries below it out from under the pointer. */
 .ctx-hint {
-  max-width: 186px;
-  padding: 3px 9px 6px 31px;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  width: max-content;
+  max-width: 240px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.5;
+  pointer-events: none;
 }
+.ctx-hint.is-above { top: auto; bottom: 100%; margin: 0 0 4px; }
+.ctx-hint.is-leftward { left: auto; right: 0; }
 
 
 /* 4006:4014 */
