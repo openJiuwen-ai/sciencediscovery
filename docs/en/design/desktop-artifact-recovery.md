@@ -29,7 +29,9 @@ proposal retained in PR #1228's previous commits.
 - **AR-4 — inline expansion.** Keep #1257's ordering and initial important-kind
   selection, with at most five file cards. The overflow card expands the remaining
   files in the same strip, including intermediate kinds, and offers collapse. The
-  artifact panel remains reachable. Every card still opens the exact saved version.
+  artifact panel remains reachable. Both disclosure controls identify the list
+  with `aria-controls`, expose `aria-expanded`, and transfer keyboard focus to
+  their counterpart when toggled. Every card still opens the exact saved version.
 - **AR-5 — evidence.** Use the retained card UI in English and zh-CN. Cover pruned
   and failed event reads, no-answer completed/failed/cancelled runs, catalog failure
   followed by same-child recovery, live-to-replay deduplication, Session switching,

@@ -138,9 +138,20 @@ test("each completed reply keeps its artifact version through live replay and re
   await expect(lists).toHaveCount(1);
   const firstList = reply(firstAnswer).getByRole("region", { name: "本轮产物" });
   await expect(firstList.getByRole("listitem")).toHaveCount(6);
-  await firstList.getByRole("button", { name: /还有 1 个/ }).click();
+  const expand = firstList.getByRole("button", { name: /还有 1 个/ });
+  await expand.focus();
+  const controlledList = await expand.getAttribute("aria-controls");
+  expect(controlledList).toBeTruthy();
+  await expect(firstList.locator("ul")).toHaveAttribute("id", controlledList!);
+  await expand.press("Enter");
   await expect(firstList.getByRole("listitem")).toHaveCount(6);
-  await firstList.getByRole("button", { name: "收起", exact: true }).click();
+  const collapse = firstList.getByRole("button", { name: "收起", exact: true });
+  await expect(collapse).toBeFocused();
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await expect(collapse).toHaveAttribute("aria-controls", controlledList!);
+  await collapse.press("Enter");
+  await expect(expand).toBeFocused();
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
   await expect(reply("很高兴能帮到你。").getByRole("region", { name: "本轮产物" })).toHaveCount(0);
   });
 

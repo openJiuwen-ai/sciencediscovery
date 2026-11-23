@@ -36,7 +36,7 @@
  * grows and reshuffles under the reader while the run is still writing is worse
  * than no list.
  */
-import { memo, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 
 import type { ScientificArtifactKind } from "@sciencediscovery/schema";
 
@@ -138,13 +138,26 @@ export const TurnArtifactStrip = memo(function TurnArtifactStrip({
   onOpenArtifactPanel,
 }: TurnArtifactStripProps) {
   const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const expandControl = useRef<HTMLButtonElement>(null);
+  const collapseControl = useRef<HTMLButtonElement>(null);
+  const restoreToggleFocus = useRef(false);
+  useEffect(() => {
+    if (!restoreToggleFocus.current) return;
+    restoreToggleFocus.current = false;
+    (expanded ? collapseControl : expandControl).current?.focus();
+  }, [expanded]);
+  const toggle = () => {
+    restoreToggleFocus.current = true;
+    setExpanded(value => !value);
+  };
   if (!artifacts || artifacts.visible.length === 0) return null;
   const t = TEXT.turnArtifacts;
   const rows = expanded && artifacts.all ? artifacts.all : artifacts.visible;
   return (
     <section aria-label={t.title} className="turn-artifacts">
       <p className="turn-artifacts-title">{t.title}</p>
-      <ul className="turn-artifacts-list">
+      <ul className="turn-artifacts-list" id={listId}>
         {rows.map((row) => (
           <li key={row.artifact.id}>
             <Card onPreviewArtifact={onPreviewArtifact} row={row} />
@@ -155,8 +168,10 @@ export const TurnArtifactStrip = memo(function TurnArtifactStrip({
             <button
               className="turn-artifact turn-artifact-rest"
               aria-expanded={artifacts.all ? false : undefined}
+              aria-controls={artifacts.all ? listId : undefined}
               disabled={!artifacts.all && !onOpenArtifactPanel}
-              onClick={artifacts.all ? () => setExpanded(true) : onOpenArtifactPanel}
+              onClick={artifacts.all ? toggle : onOpenArtifactPanel}
+              ref={expandControl}
               title={artifacts.all ? t.expand : t.openPanel}
               type="button"
             >
@@ -177,7 +192,7 @@ export const TurnArtifactStrip = memo(function TurnArtifactStrip({
       </ul>
       {expanded && artifacts.all ? (
         <div className="turn-artifact-actions">
-          <button aria-expanded="true" onClick={() => setExpanded(false)} type="button">{t.collapse}</button>
+          <button aria-controls={listId} aria-expanded="true" onClick={toggle} ref={collapseControl} type="button">{t.collapse}</button>
           {onOpenArtifactPanel ? <button onClick={onOpenArtifactPanel} type="button">{t.openPanel}</button> : null}
         </div>
       ) : null}
