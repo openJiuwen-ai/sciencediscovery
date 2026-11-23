@@ -29,7 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
-import { forgetProject, membershipAfterRead, readSessionFilter, writeSessionFilter } from "./session-filter.js";
+import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -201,8 +201,6 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
-  /** Which Sessions the sidebar asked for; the filter renders from this. */
-  sessionFilter: SessionListState;
   /** Every Project's Sessions, keyed by Project id and including the inbox.
    *  The sidebar reads a Project's list from here; `recent` is the inbox's
    *  slice of it. */
@@ -227,15 +225,12 @@ export interface WorkspaceActions {
   clearAttachments: () => void;
   /** Answer one authorization request raised by the running turn. */
   decidePermission: (requestId: string, decision: PermissionDecision) => Promise<void>;
-  /** Opens the confirmation dialog; the deletion itself happens on accept. */
-  /** Reversible: asks first, because it makes the Session read-only and tears
-   *  down a scientific-environment kernel it is using. */
+  /** Reversible: moves the Session to 设置 → 会话管理 and makes it read-only
+   *  there, so it does not ask first. */
   archiveSession: (session: Session) => void;
   deleteSession: (session: Session) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => void;
-  /** The sidebar's 活跃 / 已归档 / 全部 choice. */
-  setSessionFilter: (state: SessionListState) => void;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
   deleteProject: (project: Project) => void;
@@ -384,20 +379,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [projects, setProjects] = useState<Project[]>([]);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
-  // Which Sessions the sidebar asks the server for. `active` is the route's own
-  // default, so an archived Session is invisible until the user asks for it —
-  // and a Session archived in the web client is exactly the case this client
-  // has to be able to reach. The choice is remembered across reloads.
-  const [sessionFilter, setSessionFilterState] = useState<SessionListState>(() =>
-    readSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage));
-  const sessionFilterRef = useRef<SessionListState>(sessionFilter);
+  // The sidebar lists the active set only — archived Sessions live in 设置 →
+  // 会话管理 — so the listing is fixed to `active` rather than filtered. A
+  // stored three-way value from an earlier build is deliberately ignored
+  // instead of migrated: it could hold `archived`, and then the page would open
+  // with no active Session in sight.
+  const sessionFilterRef = useRef<SessionListState>("active");
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
   /** Every Session an unfiltered read has seen. Pruning runs against this, or
    *  not at all: a filtered listing is a subset, and treating its complement as
    *  "gone" would drop artifacts of Sessions that still exist. */
   const membershipRef = useRef<Set<string> | undefined>(undefined);
-  sessionFilterRef.current = sessionFilter;
+  sessionFilterRef.current = "active";
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
   // to tell one draft from the next — see `landingKey`.
@@ -867,15 +861,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       return undefined;
     }
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
-
-  /** Keep the sidebar's choice and re-read the lists with it. Persisted, because
-   *  a reload must not silently return the reader to 活跃. */
-  const setSessionFilter = useCallback((next: SessionListState) => {
-    setSessionFilterState(next);
-    sessionFilterRef.current = next;
-    writeSessionFilter(typeof localStorage === "undefined" ? undefined : localStorage, next);
-    void refreshSessionLists();
-  }, [refreshSessionLists]);
 
 
   /**
@@ -2476,7 +2461,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
-      setSessionFilter,
       createProject: createProjectAndOpen,
       deleteProject: (project) =>
         confirmAction({
@@ -2511,32 +2495,21 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           },
           title: project.name,
         }),
+      // No confirmation dialog: archiving is not destruction. The Session moves
+      // to 设置 → 会话管理, is read-only there, and comes back with 恢复, so a
+      // dialog would only slow down an action two clicks can undo. A run still
+      // going is the server's 409, reported verbatim by `mutate`.
       archiveSession: (session) =>
-        confirmAction({
-          accept: TEXT.menu.archive,
-          // The consequences are the server's, and the reader has to know them
-          // before the call: read-only, and a scientific-environment kernel torn
-          // down with whatever persistent memory was not on disk.
-          body: TEXT.errors.archiveWarning(sessionTitle(session.title)),
-          eyebrow: TEXT.menu.archive,
-          onAccept: async () => {
-            let updated: Session;
-            try {
-              updated = await archiveSessionRequest(client, session.id);
-            } catch (reason) {
-              // A run still going is the 409, and its own sentence is what the
-              // reader needs; nothing is rewritten here.
-              report(reason);
-              return;
-            }
+        mutate({
+          id: session.id,
+          operation: async () => {
+            const updated = await archiveSessionRequest(client, session.id);
             adoptSessionReply(updated);
-            // The row stays visible under 全部/已归档, so only 活跃 is about to
-            // lose it; closing the conversation there is the archive's doing, not
-            // a filter's.
-            if (sessionFilterRef.current === "active" && sessionRef.current === updated.id) startDraft();
-            await refreshSessionLists();
+            // The sidebar holds active Sessions only, so archiving the open one
+            // closes the conversation. The archive did that, not a filter.
+            if (sessionRef.current === updated.id) startDraft();
+            return updated;
           },
-          title: TEXT.errors.archiveTitle(sessionTitle(session.title)),
         }),
       restoreSession: (session) =>
         mutate({
@@ -2687,7 +2660,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
-    sessionFilter,
     sessionId,
     sessionsByProject: listedByProject,
     tabs,

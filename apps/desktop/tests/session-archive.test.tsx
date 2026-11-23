@@ -18,10 +18,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
-import {
-  forgetProject, SESSION_FILTER_STORAGE_KEY, isSessionListState, membershipAfterRead,
-  readSessionFilter, sessionsOfProject, writeSessionFilter,
-} from "../src/app/session-filter.js";
+import { forgetProject, membershipAfterRead, sessionsOfProject } from "../src/app/session-filter.js";
 import { TEXT } from "../src/text.js";
 import { Sidebar, archiveActionFor } from "../src/views/Sidebar.js";
 
@@ -31,7 +28,6 @@ const actions = {
   newSession: () => {},
   openSession: async () => {},
   restoreSession: () => {},
-  setSessionFilter: () => {},
 } as unknown as WorkspaceActions;
 
 function session(id: string, title: string, over: Record<string, unknown> = {}) {
@@ -44,41 +40,30 @@ function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
       actions={actions}
       projects={[]}
       recent={[]}
-      sessionFilter="active"
       sessionsByProject={{}}
       {...over}
     />,
   );
 }
 
-test("the sidebar offers the three Session sets and marks the one in force", () => {
-  for (const [state, label] of [["active", TEXT.sidebar.filterActive],
-                                ["archived", TEXT.sidebar.filterArchived],
-                                ["all", TEXT.sidebar.filterAll]] as const) {
-    const markup = render({ sessionFilter: state });
-    assert.ok(markup.includes(label), `${state} label missing`);
-    // Exactly one segment is pressed, and it is the one the workspace asked for.
-    const pressed = [...markup.matchAll(/aria-pressed="true"[^>]*>([^<]*)</g)].map((match) => match[1]);
-    assert.deepEqual(pressed, [label], `pressed set for ${state}`);
+test("the sidebar no longer offers a state filter", () => {
+  // The list is the active set; archived Sessions moved to 设置 → 会话管理, so a
+  // three-way switch here would only duplicate that page and hide live rows.
+  const markup = render();
+  for (const gone of [TEXT.sidebar.filterActive, TEXT.sidebar.filterArchived, TEXT.sidebar.filterAll]) {
+    assert.ok(!markup.includes(gone), `the removed filter still renders ${gone}`);
   }
+  assert.ok(!markup.includes('aria-label="' + TEXT.sidebar.filterLabel + '"'), "the filter group is gone");
 });
 
-test("the filter keeps its value, and an unusable stored value falls back to 活跃", () => {
-  const store = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
-  writeSessionFilter(storage, "archived");
-  assert.equal(store.get(SESSION_FILTER_STORAGE_KEY), "archived");
-  assert.equal(readSessionFilter(storage), "archived", "the choice survives a reload");
-
-  store.set(SESSION_FILTER_STORAGE_KEY, "nonsense");
-  assert.equal(readSessionFilter(storage), "active", "an unknown value cannot hide archived rows");
-  assert.equal(readSessionFilter(undefined), "active", "and no storage at all means the default");
-  assert.equal(isSessionListState("all"), true);
-  assert.equal(isSessionListState("archived "), false);
+test("a stored three-way choice is ignored rather than honoured", () => {
+  // An earlier build remembered 活跃/已归档/全部. Migrating it would be wrong:
+  // a stored `archived` would open the page with no active row on screen.
+  const store = new Map<string, string>([["sciencediscovery-desktop:session-filter", "archived"]]);
+  const markup = render();
+  assert.ok(!markup.includes(TEXT.sidebar.filterArchived), "the stored value cannot bring the filter back");
 });
+
 
 test("a run keeps the archive entry, but inert and with its reason", () => {
   const running = archiveActionFor({}, true);
@@ -99,15 +84,7 @@ test("an archived Session offers 恢复 and an active one offers 归档", () => 
   assert.notEqual(TEXT.menu.archive, TEXT.menu.restore);
 });
 
-test("the archive confirmation names the read-only state and the kernel teardown", () => {
-  // Both consequences are the server's, and the dialog repeats them: a reader who
-  // only sees "归档" would not expect either.
-  const zh = TEXT.errors.archiveWarning("会话");
-  for (const phrase of ["只读", "内核", "持久内存"]) {
-    assert.ok(zh.includes(phrase), `zh warning is missing ${phrase}`);
-  }
-  assert.ok(zh.includes("恢复") && zh.includes("删除"), "and it keeps reversible/irreversible apart");
-});
+
 
 test("a filtered refresh never prunes the artifact catalog of the Sessions it hides", () => {
   const whole = ["a", "b"];
