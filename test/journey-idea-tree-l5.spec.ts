@@ -1,9 +1,10 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
+import type { IdeaResearchView } from "@sciencediscovery/schema";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
-import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { cleanupJourney, createProjectAndSession, openProjectSession, type JourneyRun } from "./helpers/journeys.ts";
 import { RunPollRecovery } from "./helpers/run-poll-recovery.ts";
 
 const cases = [
@@ -70,35 +71,39 @@ for (const scenario of cases) {
     const headers = authorizationHeader();
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
-    const researchUrl = () => `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
-    // Reads inside these polls cover 20-30 minutes of a paid run, so a single
-    // 502 from a restarting evolve or API must not end the case: every read goes
-    // through `RunPollRecovery`, which tolerates three transient failures and
-    // rethrows anything else. Writes (create, pause, continue) are never retried.
+    const base = () => apiBaseUrl();
+    const researchUrl = () => `${base()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
+    // Every read in this case goes through this helper, which retries three
+    // transient failures before giving up: the waits below cover 20-30 minutes
+    // of a paid run, so one 502 from a restarting evolve or API must not end it.
+    // Writes (create, pause, continue) are never replayed.
     const recovery = new RunPollRecovery();
-    const unavailable = (label: string, error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      const failures = recovery.failed(error);
-      console.warn(`[l5-poll] ${label} transient failure ${failures}/3: ${message}`);
-      return "poll_unavailable";
-    };
     const readJson = async (url: string) => {
-      const response = await page.request.get(url, { headers, timeout: 15_000, maxRetries: 2 });
-      if (!response.ok()) throw new Error(`GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 200)}`);
-      return await response.json();
+      for (;;) {
+        try {
+          const response = await page.request.get(url, { headers, timeout: 15_000, maxRetries: 2 });
+          if (!response.ok()) throw new Error(`GET ${url} -> ${response.status()}: ${(await response.text()).slice(0, 200)}`);
+          recovery.succeeded();
+          return await response.json();
+        } catch (error) {
+          // `failed` rethrows anything that is not a recognised transient
+          // failure, and rethrows once the three-failure budget is spent.
+          const failures = recovery.failed(error);
+          console.warn(`[l5-read] transient failure ${failures}/3 for ${url}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     };
-    const read = async () => (await readJson(researchUrl())).items as Array<{ research: { id: string; status: string; reason?: string } }>;
+    const read = async () => ((await readJson(researchUrl())) as { items: IdeaResearchView[] }).items;
     const researchById = async () => (await read()).find((item) => item.research.id === researchId);
-    const status = async () => (await researchById())?.research.status;
-    const readRuns = async () => (await readJson(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`)) as Array<{ id: string; status: string; error?: string }>;
+    const status = async () => (await researchById())?.research.status ?? "";
+    const readRuns = async () => (await readJson(`${base()}/api/sessions/${fixture!.session.id}/runs`)) as JourneyRun[];
     // A run waits for a person in two shapes: `permissions/index.ts` reports
     // "Waiting for permission decision" and `runs/index.ts` reports "Waiting for
     // configuration decision", both with run status `blocked`. Reading both
-    // lists turns that into a named card instead of a bare status, and a read
-    // failure is reported rather than silently dropped as "no card".
+    // lists turns that into a named card instead of a bare status.
     const pendingCards = async () => {
-      const permissions = (await readJson(`${apiBaseUrl()}/api/permission-requests?sessionId=${fixture!.session.id}`)) as Array<{ state: string; summary?: string }>;
-      const configurations = ((await readJson(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/configuration-requests`)).items ?? []) as Array<{ capabilityId?: string; state?: string }>;
+      const permissions = (await readJson(`${base()}/api/permission-requests?sessionId=${fixture!.session.id}`)) as Array<{ state: string; summary?: string }>;
+      const configurations = ((await readJson(`${base()}/api/sessions/${fixture!.session.id}/configuration-requests`)).items ?? []) as Array<{ capabilityId?: string; state?: string }>;
       const open = permissions.filter((item) => item.state === "pending");
       const waitingConfigurations = configurations.filter((item) => pendingConfigurationStates.includes(item.state ?? ""));
       return [
@@ -119,7 +124,7 @@ for (const scenario of cases) {
         // Session scope, not the deployment: the override dies with this Session,
         // so no restore step can be skipped by a killed worker and a shared stack
         // keeps its own Idea Tree settings.
-        const override = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
+        const override = await page.request.patch(`${base()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
         expect(override.ok()).toBe(true);
         const existingIds = new Set((await read()).map((item) => item.research.id));
         await openProjectSession(page, fixture);
@@ -132,42 +137,19 @@ for (const scenario of cases) {
         // the terminal case has to throw. `blocked` keeps waiting unless a card
         // actually needs a person.
         await expect.poll(async () => {
-          let items: Array<{ research: { id: string } }>;
-          try {
-            items = await read();
-            recovery.succeeded();
-          } catch (error) {
-            return unavailable("creation research list", error);
-          }
-          if (items.some((item) => !existingIds.has(item.research.id))) return "created";
-          let newest: { status: string; error?: string } | undefined;
-          try {
-            const runs = await readRuns();
-            recovery.succeeded();
-            newest = runs[runs.length - 1];
-          } catch (error) {
-            return unavailable("creation run list", error);
-          }
+          if ((await read()).some((item) => !existingIds.has(item.research.id))) return "created";
+          const runs = await readRuns();
+          const newest = runs[runs.length - 1];
           if (!newest) return "waiting";
           if (newest.status === "blocked") {
-            let cards: string;
-            try {
-              cards = await pendingCards();
-            } catch (error) {
-              throw new Error(`the /idea-tree run is blocked and the pending cards could not be read: ${error instanceof Error ? error.message : String(error)}`);
-            }
             // No card yet means the engine is still preparing; a card means a
             // person has to act, and nobody will in a journey.
-            if (cards) throw new Error(`the /idea-tree run is blocked on ${cards} and cannot continue until it is answered`);
+            const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
+            if (cards && !cards.startsWith("cards unavailable")) throw new Error(`the /idea-tree run is blocked on ${cards} and cannot continue until it is answered`);
             return "waiting";
           }
           if (settledRunStatuses.includes(newest.status)) {
-            let cards: string;
-            try {
-              cards = await pendingCards();
-            } catch (error) {
-              cards = `cards unavailable: ${error instanceof Error ? error.message : String(error)}`;
-            }
+            const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
             throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research (${cards || "no pending card"})`);
           }
           return "waiting";
@@ -180,56 +162,27 @@ for (const scenario of cases) {
           // The pause is only meaningful while the engine is running; sending it
           // blind would either race a research that just settled or wait out the
           // whole paused budget on a run that can no longer pause.
-          await expect.poll(async () => {
-            try {
-              const current = await status();
-              recovery.succeeded();
-              return current;
-            } catch (error) {
-              return unavailable("running status", error);
-            }
-          }, { timeout: runningBudget, message: "the research should be running before it is paused" }).toBe("running");
+          await expect.poll(status, { timeout: runningBudget, message: "the research should be running before it is paused" }).toBe("running");
           const pause = await page.request.post(endpoint, { headers, data: { operation: "pause", researchId } });
           expect(pause.ok()).toBe(true);
-          await expect.poll(async () => {
-            try {
-              const current = await status();
-              recovery.succeeded();
-              return current;
-            } catch (error) {
-              return unavailable("paused status", error);
-            }
-          }, { timeout: pausedBudget, message: "the pause operation should settle the research as paused" }).toBe("paused");
+          await expect.poll(status, { timeout: pausedBudget, message: "the pause operation should settle the research as paused" }).toBe("paused");
           const resume = await page.request.post(endpoint, { headers, data: { operation: "continue", researchId } });
           expect(resume.ok()).toBe(true);
-          await expect.poll(async () => {
-            try {
-              const current = await status();
-              recovery.succeeded();
-              return current === "paused" ? "paused" : "resumed";
-            } catch (error) {
-              return unavailable("resumed status", error);
-            }
-          }, { timeout: resumedBudget, message: "the continued research should leave the paused state" }).toBe("resumed");
+          await expect.poll(async () => (await status()) === "paused" ? "paused" : "resumed", { timeout: resumedBudget, message: "the continued research should leave the paused state" }).toBe("resumed");
         });
       }
       await journey.step("Inspect completed research", "Multiple rounds complete with scored candidates, assessments and root insight", async () => {
         await expect.poll(async () => {
-          try {
-            const current = await status();
-            recovery.succeeded();
-            return terminalStatuses.includes(current) ? current : "waiting";
-          } catch (error) {
-            return unavailable("terminal status", error);
-          }
+          const current = await status();
+          return terminalStatuses.includes(current) ? current : "waiting";
         }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).toMatch(/^(completed|interrupted|paused|ended)$/);
         const stored = await researchById();
-        expect(stored).toBeDefined();
+        expect(stored, `research ${researchId} should still be readable`).toBeDefined();
         const { research, graph } = stored!;
         expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
         expect(research.settings).toMatchObject({ templateId: scenario.template, explorationIntensity: "standard" });
         expect(research.round).toBeGreaterThanOrEqual(2);
-        const candidates = graph.nodes.filter((node: any) => node.kind === "candidate" && node.status === "done");
+        const candidates = graph.nodes.filter((node) => node.kind === "candidate" && node.status === "done");
         expect(candidates.length).toBeGreaterThan(0);
         const assessors = scenario.id === "iteration" ? ["activity", "stability", "sustainability"] : ["scientificValidity", "evidenceReadiness", "feasibility"];
         for (const candidate of candidates) {
@@ -237,7 +190,7 @@ for (const scenario of cases) {
           expect(candidate.insight?.trim()).toBeTruthy();
           for (const role of assessors) expect(typeof candidate.stages?.[role]?.score, `candidate ${candidate.id} should carry the ${role} assessment`).toBe("number");
         }
-        expect(graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
+        expect(graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
       await journey.step("Reopen results", "The completed research and root insight remain available after reload", async () => {
         await page.reload();
@@ -246,7 +199,7 @@ for (const scenario of cases) {
         await expect(page.getByRole("region", { name: /Idea Tree/ })).toBeVisible({ timeout: 60_000 });
         const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
-        expect(saved?.graph.nodes.find((node: any) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
+        expect(saved?.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
     } finally {
       if (fixture) await cleanupJourney(page, fixture);
