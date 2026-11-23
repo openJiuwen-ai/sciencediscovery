@@ -1088,6 +1088,34 @@ body.is-resizing {
   font-size: inherit;
 }
 
+/* The live line carries a stage name and a clock. It is a row rather than a
+ *  shrink-to-fit sentence so a long tool name or subagent task can be cut at
+ *  the column's edge: the title truncates, the time beside it never does, and
+ *  the summary cannot grow past the transcript column at any width. */
+.msg-collapse.run-fold > summary {
+  display: flex;
+  max-width: 100%;
+}
+
+.msg-collapse.run-fold .collapse-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Old figures in a changing number still have to hold their column, or the
+ *  spinner and chevron beside them jump once a second as the digits roll. */
+.msg-collapse.run-fold .collapse-elapsed {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-collapse.run-fold > summary > .collapse-icon,
+.msg-collapse.run-fold > summary > .collapse-chev {
+  flex: none;
+}
+
 /* The hint is still in the markup for the language switch, but the handoff's
  *  line says it with the chevron instead of printing 展开 beside it. */
 .msg-collapse .collapse-meta {

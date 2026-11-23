@@ -463,18 +463,68 @@ function hasMiddleContent(run: RunStreamState, answer: ShownAnswer | undefined):
       && !(answer !== undefined && answer.turn === turn.turn && answer.response === index)));
 }
 
+/**
+ * What the run is doing at this instant, read off the events already in hand:
+ * the newest child or tool the stream has not reported finished. A real long
+ * run spends its minutes inside one of these, so naming it is what tells the
+ * reader the wait has a shape — the folded line otherwise says the same
+ * sentence for all 77 of them.
+ *
+ * The newest recorded position wins: tools and subagents each remember the
+ * response index they followed, which is the only ordering the run state keeps.
+ * A child is preferred to a call that followed the same response, because the
+ * delegation is the activity the transcript is watching.
+ */
+function runningActivity(run: RunStreamState): string | undefined {
+  for (let turnIndex = run.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = run.turns[turnIndex]!;
+    let latest: { after: number; label: string } | undefined;
+    for (const tool of turn.tools) {
+      if (tool.trace.status !== "running") continue;
+      if (latest === undefined || tool.after >= latest.after) {
+        latest = { after: tool.after, label: TEXT.conversation.workingTool(tool.trace.name) };
+      }
+    }
+    for (const entry of turn.subagents) {
+      if (entry.subagent.status !== "running") continue;
+      const task = subagentTask(entry.subagent);
+      if (task === "") continue;
+      if (latest === undefined || entry.after >= latest.after) {
+        latest = { after: entry.after, label: TEXT.conversation.workingSubagent(task) };
+      }
+    }
+    if (latest !== undefined) return latest.label;
+  }
+  return undefined;
+}
+
 /** The one line that stands in for everything a run did. `working` marks the
  *  lines whose icon is a turning ring rather than a still glyph: a live run
- *  that is thinking, not one that is waiting. */
-function foldLabel(run: RunStreamState): { icon: string; title: string; working: boolean } {
+ *  that is thinking, not one that is waiting. `elapsed` is the live clock,
+ *  drawn apart from the title so a long stage name can be cut short while the
+ *  time stays readable. `now` is passed in rather than read here so the line is
+ *  a pure function of the run and the clock. */
+function foldLabel(
+  run: RunStreamState,
+  now: number,
+): { elapsed?: string; icon: string; title: string; working: boolean } {
   if (!run.terminal) {
     // Waiting and thinking are different things to the person watching: one
-    // means the run is working, the other means it is waiting on them.
+    // means the run is working, the other means it is waiting on them. A
+    // waiting run has no progress to measure — the clock would count the row,
+    // not the model.
     const waiting = run.status === "queued" || run.status === "blocked"
       ? statusLabel(run.status)
       : undefined;
     if (waiting !== undefined) return { icon: "💭", title: waiting, working: false };
-    return { icon: "💭", title: TEXT.conversation.thinkingNow, working: true };
+    return {
+      elapsed: run.startedAt === undefined
+        ? undefined
+        : TEXT.conversation.elapsedNow(Math.max(0, now - run.startedAt)),
+      icon: "💭",
+      title: runningActivity(run) ?? TEXT.conversation.thinkingNow,
+      working: true,
+    };
   }
   if (run.startedAt !== undefined && run.finishedAt !== undefined) {
     return { icon: "⏱", title: TEXT.conversation.elapsed(run.finishedAt - run.startedAt), working: false };
@@ -487,14 +537,58 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
   };
 }
 
+/** Re-render once a second while a run is live, for the clock on its line. A
+ *  finished run's span never changes, so it freezes there and costs nothing. */
+function useRunClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+/**
+ * The folded line's own contents, split out from the run so the once-a-second
+ * clock re-renders this sentence instead of every Markdown body under it. The
+ * title carries its full text as a tooltip: a narrow column truncates a stage
+ * name, and the time beside it has to stay readable either way.
+ */
+function RunFoldSummary({ run }: { run: RunStreamState }) {
+  const label = foldLabel(run, useRunClock(!run.terminal));
+  return (
+    <>
+      {/* The sentence starts the line, at the column's left edge, where the
+          name above it and the composer below it start. The ring that turns
+          while the model works follows the words rather than leading them: a
+          leading ring would push the sentence in by its own width, which is
+          what made the line look indented against everything else. */}
+      <span className="collapse-title" title={label.title}>{label.title}</span>
+      {label.elapsed === undefined
+        ? null
+        : <span className="collapse-elapsed">{label.elapsed}</span>}
+      <span className="collapse-icon">
+        {label.working
+          ? <span aria-hidden="true" className="spinner run-spinner" />
+          : label.icon}
+      </span>
+      <span className="collapse-meta" {...collapseHint()} />
+      <span aria-hidden="true" className="collapse-chev">›</span>
+    </>
+  );
+}
+
 /**
  * The reconstructed run, rendered in place of the persisted assistant message.
  *
  * Everything the run did between the question and its answer — the reasoning,
  * the tool calls, the prose the model produced on the way — is folded into a
- * single line: "正在规划下一步" while it works, "用时 12 分 3 秒" once it is done.
- * Only the answer stays out, which is the point of the shape: a hundred-turn
- * run costs one line of transcript instead of a hundred.
+ * single line: "正在运行 execute  已用 12 分 3 秒" while it works, "用时 12 分 3
+ * 秒" once it is done. Only the answer stays out, which is the point of the
+ * shape: a hundred-turn run costs one line of transcript instead of a hundred.
+ * The live line keeps counting and names the step it is on, because an
+ * unchanging sentence is what makes a long run look stuck (#1315).
  *
  * `finalContent` is the run's own completion payload. It is shown only when no
  * streamed body survives: a replayed run whose early deltas were dropped still
@@ -624,7 +718,6 @@ export const AssistantTurns = memo(function AssistantTurns({
       </>
     );
   }
-  const label = foldLabel(run);
   return (
     <>
       <div className="message assistant">
@@ -638,20 +731,7 @@ export const AssistantTurns = memo(function AssistantTurns({
           {fold ? (
             <details className="msg-collapse run-fold">
               <summary>
-                {/* The sentence starts the line, at the column's left edge,
-                    where the name above it and the composer below it start.
-                    The ring that turns while the model works follows the
-                    words rather than leading them: a leading ring would push
-                    the sentence in by its own width, which is what made the
-                    line look indented against everything else. */}
-                <span className="collapse-title">{label.title}</span>
-                <span className="collapse-icon">
-                  {label.working
-                    ? <span aria-hidden="true" className="spinner run-spinner" />
-                    : label.icon}
-                </span>
-                <span className="collapse-meta" {...collapseHint()} />
-                <span aria-hidden="true" className="collapse-chev">›</span>
+                <RunFoldSummary run={run} />
               </summary>
               <div className="collapse-body">
                 {run.turns.map((turn) => (

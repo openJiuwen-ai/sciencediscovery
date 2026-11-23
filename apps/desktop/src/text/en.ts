@@ -84,6 +84,20 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   },
 };
 
+/**
+ * The same units as the Chinese dictionary: a wait is felt in seconds, then
+ * minutes, and an hour is where the smaller units stop being readable. The
+ * finished span and the live clock share it so they only differ in their
+ * opening word.
+ */
+function runSpan(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export const EN: Text = {
   configurationLegacy: {
     title: "Enable connector", awaiting: "Awaiting confirmation", change: "Change", scope: "Scope", session: "This session only",
@@ -577,13 +591,10 @@ export const EN: Text = {
     thinking: "Reasoning",
     thinkingSteps: (count: number) => `${count} ${count === 1 ? "step" : "steps"}`,
     thinkingNow: "Planning the next step",
-    elapsed: (ms: number) => {
-      const seconds = Math.max(1, Math.round(ms / 1000));
-      if (seconds < 60) return `Worked for ${seconds}s`;
-      const minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return `Worked for ${minutes}m ${seconds % 60}s`;
-      return `Worked for ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-    },
+    workingTool: (name: string) => `Running ${name}`,
+    workingSubagent: (task: string) => `Subagent working: ${task}`,
+    elapsed: (ms: number) => `Worked for ${runSpan(ms)}`,
+    elapsedNow: (ms: number) => `Elapsed ${runSpan(ms)}`,
     expand: "▸ Expand",
     collapse: "▼ Collapse",
     running: "Generating",
