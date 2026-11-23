@@ -196,7 +196,7 @@ function SlidersGlyph() {
   );
 }
 
-type SettingsPanel = "experts" | "permission" | "reviewer";
+type SettingsPanel = "experts" | "reviewer";
 
 /** The page-with-check that marks 自动审阅. */
 function ReviewGlyph() {
@@ -408,11 +408,8 @@ export function SessionSettingsMenu({
   automaticReviewEnabled?: boolean;
   /** Absent while the system-wide switch has not been read. */
   reviewerEnabled?: boolean;
-<<<<<<< HEAD
   onApprovalMode?: (mode: ApprovalMode) => void;
-=======
   reviewerRunning?: boolean;
->>>>>>> 6f591ba3 (feat(desktop): let the Review card say what it did not check, and run one on demand)
   onAutomaticReview?: (enabled: boolean) => void;
   onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
   onRunReview?: () => void;
@@ -483,30 +480,6 @@ export function SessionSettingsMenu({
               <div className="session-menu-divider" />
             </>
           )}
-          <button
-            aria-expanded={panel === "permission"}
-            aria-haspopup="true"
-            className={`session-menu-row${panel === "permission" ? " is-open" : ""}`}
-            disabled={running}
-            onClick={() => toggle("permission")}
-            title={running ? TEXT.composer.permissionLocked : undefined}
-            type="button"
-          >
-            <span className="session-menu-icon">
-              <ShieldGlyph />
-            </span>
-            <span className="session-menu-label">{TEXT.composer.permissionMode}</span>
-            <span className="session-menu-value">
-              <span className="session-menu-value-icon">
-                <ShieldGlyph />
-              </span>
-              <span className="session-menu-value-text">
-                {fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permissionAskShort}
-              </span>
-              <ChevronRightGlyph />
-            </span>
-          </button>
-          <div className="session-menu-divider" />
           {/* The reviewer rows belong to a Session: with none open there is
               nothing to review, and the handlers would return early. */}
           {onRunReview === undefined ? null : (<>
@@ -604,10 +577,6 @@ export function SessionSettingsMenu({
           </button>
           <span className="sr-only" id="session-experts-hint">{TEXT.composer.expertsHint}</span>
         </div>
-
-        {panel === "permission" ? (
-          <PermissionFlyout mode={approvalMode} onApprovalMode={onApprovalMode} onClose={onClose} />
-        ) : null}
 
         {panel === "reviewer" ? (
           <div className="session-menu-flyout">
@@ -1304,13 +1273,9 @@ export function Composer({
               approvalMode={approvalMode}
               automaticReviewEnabled={automaticReviewEnabled}
               reviewerEnabled={reviewerEnabled}
-<<<<<<< HEAD
+              reviewerRunning={reviewerRunning}
               experts={experts.value?.filter((expert) => expert.enabled !== false) ?? []}
               expertsLoading={experts.loading}
-=======
-              reviewerRunning={reviewerRunning}
-              experts={experts}
->>>>>>> 6f591ba3 (feat(desktop): let the Review card say what it did not check, and run one on demand)
               onAutomaticReview={onAutomaticReview}
               onReviewLevel={onReviewLevel}
               onRunReview={onRunReview}

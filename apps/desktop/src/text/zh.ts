@@ -291,6 +291,7 @@ export const ZH = {
     savedGlobal: "已写入全局设置",
     unchanged: "没有需要写入全局的改动。",
     noSession: "打开一个会话后，才能只给本次会话改参数。",
+  },
   /** Reviewer Specialist：会话设置里的开关，和产物审查在对话里的那张卡。 */
   reviewer: {
     title: "审查",
