@@ -1423,6 +1423,7 @@ export function App({ initialToken }: Props) {
         {taskSidebar ? (
           <Sidebar
             actions={actions}
+            client={client}
             onExportSession={session => {
               if (!canExportSession(session, state.projects, state.inboxProject?.id)) { actions.toast(TEXT.researchPackage.sourceUnavailable, "error"); return; }
               setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId });
@@ -1430,6 +1431,7 @@ export function App({ initialToken }: Props) {
             onImportSession={() => setPackageRequest({ kind: "import", projectId: state.inboxProject?.id })}
             activeProjectId={state.activeProjectId}
             activeSessionId={state.sessionId}
+            inboxProjectId={state.inboxProject?.id}
             onToggleSidebar={() => setSidebarOpen(false)}
             projects={state.projects}
             recent={state.recent}

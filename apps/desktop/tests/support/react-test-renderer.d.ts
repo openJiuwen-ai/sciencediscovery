@@ -22,11 +22,14 @@ declare module "react-test-renderer" {
 
   export interface ReactTestInstance {
     children: Array<ReactTestInstance | string>;
+    findAll(predicate: (node: ReactTestInstance) => boolean): ReactTestInstance[];
     findAllByType(type: string): ReactTestInstance[];
     findAllByProps(props: Record<string, unknown>): ReactTestInstance[];
     findByType(type: unknown): ReactTestInstance;
     findByProps(props: Record<string, unknown>): ReactTestInstance;
-    props: Record<string, unknown>;
+    // `any` because a host element's props are read as handlers and values in
+    // the tests that drive them; `unknown` would force a cast at every call.
+    props: Record<string, any>;
     type: string;
   }
 
@@ -35,6 +38,7 @@ declare module "react-test-renderer" {
     toJSON(): unknown;
     update(element: ReactElement): void;
     unmount(): void;
+    update(element: ReactElement): void;
   }
 
   export function act(body: () => void | Promise<void>): Promise<void>;

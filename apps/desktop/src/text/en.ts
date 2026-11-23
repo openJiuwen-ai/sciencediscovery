@@ -270,6 +270,64 @@ export const EN: Text = {
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",
+    /** The marker on an archived Session in search results; the read-only view
+     *  itself belongs to #1250. */
+    archived: "Archived",
+  },
+
+  /** The sidebar's search field and result list, and the session-list filters. */
+  search: {
+    label: "Search sessions, projects and artifacts",
+    /** One word: the field says what it is, the label carries the scope and the
+     *  `kbd` chip in the field already shows the shortcut. */
+    placeholder: "Search",
+    clear: "Clear search",
+    loading: "Searching…",
+    count: (count: number) => `${count} results`,
+    /** The live announcement when the answer is empty; the block itself
+     *  carries the full sentence at heading weight. */
+    noResults: "No results",
+    emptyTitle: "No matching session, project or artifact",
+    emptyBody: "Search matches names and titles only, not message text. Try another name or title.",
+    failed: (reason: string) => `Search failed: ${reason}`,
+    /** Used when the reason is a transport failure rather than the server's
+     *  own sentence; "Something went wrong" appended to "Search failed" would
+     *  only repeat it. */
+    fallbackReason: "Please try again.",
+    retry: "Retry",
+    groups: {
+      project: "Projects",
+      session: "Sessions",
+      artifact: "Artifacts",
+    },
+    deletedSession: "Original session deleted",
+    /** The inbox read failed in whole or in part; the panel still shows the
+     *  rows it could read and says the answer may be incomplete. */
+    inboxIncomplete: "Some session or artifact search data could not be read; results may be incomplete.",
+    /** A result whose creating Session is gone has no Session to read its
+     *  output through, so it is shown but cannot be opened. */
+    artifactUnavailable: "Original session deleted; cannot open",
+    more: (shown: number, total: number) =>
+      `Showing the first ${shown} of ${total}; narrow the search.`,
+    filters: {
+      label: "Filter",
+      onlyCurrentProject: "Current project",
+      onlyRunning: "Running",
+      hasArtifacts: "Has artifacts",
+      timeWindow: "Time range",
+      timeAll: "All time",
+      timeToday: "Today",
+      timeWeek: "Last 7 days",
+      pending: "Reading each session's runs and artifacts…",
+      pendingRows: "Reading…",
+      failed: "Run or artifact data could not be read; the filter may be incomplete.",
+      retry: "Retry",
+      empty: "No session matches the current filters",
+      /** Shown in place of the empty sentence when the facts could not be
+       *  read: unknown is not the same answer as "none". */
+      unavailable: "Could not read the filter data; cannot tell which sessions match",
+      reset: "Clear filters",
+    },
   },
 
   sessionBar: {

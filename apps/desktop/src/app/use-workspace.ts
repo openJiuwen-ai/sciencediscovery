@@ -29,6 +29,7 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
+import { isActiveRunStatus } from "./run-status.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -77,7 +78,6 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionRun,
-  SessionRunStatus,
   WorkspaceFile,
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
@@ -88,10 +88,7 @@ import { pendingPermissions, reconcilePermissions } from "../run-stream/permissi
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
 import { inheritForSession, newSessionRequest } from "./approval-mode-preference.js";
-
-/** A run in one of these states has not finished. `blocked` counts: the model
- *  is waiting on a permission decision, so the turn is still open. */
-const ACTIVE_RUN_STATUSES: readonly SessionRunStatus[] = ["blocked", "queued", "running"];
+import { openArtifactResultAction } from "./open-artifact-result.js";
 
 export type BootState = "auth" | "loading" | "offline" | "ready" | "setup";
 export type Connection = "degraded" | "offline" | "online";
@@ -215,6 +212,11 @@ export interface WorkspaceActions {
    *  is created by the first message, as it would be from an untouched draft. */
   selectProject: (projectId?: string) => void;
   openArtifact: (output: SessionArtifactOutput) => Promise<void>;
+  /** Open an artifact named by a workbench search result: the result carries
+   *  `artifact:<artifactId>` and the Session that wrote it, while a preview tab
+   *  is keyed by the artifact's id. Resolving the output through that Session
+   *  is the same read `ArtifactDialog` makes, so both land on one document. */
+  openArtifactResult: (artifactId: string, sessionId: string) => Promise<void>;
   openFile: (file: WorkspaceFile) => Promise<void>;
   /** Put another version of the artifact an open tab is showing on screen. The
    *  tab itself stays where it is — see `selectArtifactVersion`. */
@@ -271,10 +273,6 @@ export interface WorkspaceHandle {
   actions: WorkspaceActions;
   boot: BootState;
   state: WorkspaceState;
-}
-
-function isActiveRun(status: SessionRunStatus): boolean {
-  return ACTIVE_RUN_STATUSES.includes(status);
 }
 
 function errorMessage(reason: unknown): string {
@@ -1262,7 +1260,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         setDetail(fresh);
         commitReplays(target, batch);
         resetRun();
-        const live = runs.filter(entry => isActiveRun(entry.status)).at(-1);
+        const live = runs.filter(entry => isActiveRunStatus(entry.status)).at(-1);
         if (live && !followedConfigurationRuns.current.has(live.id)) {
           followedConfigurationRuns.current.add(live.id);
           void follow(target, live.id, true, retry).then(outcome => {
@@ -1555,7 +1553,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // back for as long as that run takes. A session may be left mid-run —
         // the run keeps going on the server, and coming back to it resumes the
         // follow below.
-        const live = runs.filter((entry) => isActiveRun(entry.status)).at(-1);
+        const live = runs.filter((entry) => isActiveRunStatus(entry.status)).at(-1);
         const rebuilt = buildReplays(id, runs).then((batch) => commitReplays(id, batch));
         if (live !== undefined) await follow(id, live.id, true);
         await rebuilt;
@@ -1868,6 +1866,29 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   );
 
   /**
+   * Open an artifact a search result names.
+   *
+   * The result's `path` is the artifact's *name*, not a key (`services/api/src/
+   * workbench/index.ts`), so the id comes from the `artifact:` prefix and the
+   * Session id places the read. `listArtifactOutputs` is what `ArtifactDialog`
+   * itself resolves through, so this hands the dialog the exact
+   * `SessionArtifactOutput` it would have found. A vanished artifact or Session
+   * is reported rather than silently doing nothing.
+   */
+  const openArtifactResult = useCallback(
+    (artifactId: string, sessionId: string) =>
+      openArtifactResultAction({
+        artifactId,
+        client,
+        describeError: errorMessage,
+        onOpen: openArtifact,
+        sessionId,
+        toast,
+      }),
+    [client, openArtifact, toast],
+  );
+
+  /**
    * Show another version of the artifact a tab already holds.
    *
    * The tab keeps its id and its place in the strip: a version is a property of
@@ -2115,6 +2136,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       finishSetup,
       newSession,
       openArtifact,
+      openArtifactResult,
       openFile,
       openSession,
       renameProject: async (project, name) => {
@@ -2178,6 +2200,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       mutate,
       newSession,
       openArtifact,
+      openArtifactResult,
       openFile,
       openSession,
       refreshCatalog,
