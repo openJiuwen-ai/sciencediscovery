@@ -115,8 +115,6 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
     }
   };
 
-  const open = editing !== undefined;
-
   return (
     <LoadGate loaded={loaded}>
       {(page) => (
