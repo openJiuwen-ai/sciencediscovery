@@ -48,7 +48,7 @@ async function upload(page: Page, name = "data.csv"): Promise<void> {
 async function saveNetworkPolicy(page: Page): Promise<void> {
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "设置" });
-  await dialog.getByRole("button", { name: "网络", exact: true }).click();
+  await dialog.getByRole("button", { name: "沙箱网络", exact: true }).click();
   await dialog.getByRole("button", { name: "无网络", exact: true }).click();
 }
 
@@ -187,6 +187,7 @@ test.describe("确认框", () => {
         capabilities: { platform: "Linux" },
         connectionKind: "ssh",
         createdAt: "2026-10-01T08:00:00.000Z",
+        hasPrivateKey: true,
         id: "runner-1",
         runnerCommand: "sciencediscovery-runner",
         runnerStatus: { hostId: "runner-1", state: "disconnected" },
@@ -197,8 +198,10 @@ test.describe("确认框", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "设置" });
-    await settings.getByRole("button", { name: "远程", exact: true }).click();
-    await settings.getByRole("button", { name: "删除" }).click();
+    await settings.getByRole("button", { name: "运行环境", exact: true }).click();
+    // The machine's own page holds its controls: the list row selects it.
+    await settings.getByRole("button", { name: /gpu-01/u }).first().click();
+    await settings.getByRole("button", { name: "删除", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "删除机器「gpu-01」？" })).toBeVisible();
 
     await page.keyboard.press("Escape");
