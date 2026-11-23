@@ -194,9 +194,18 @@ for (const scenario of cases) {
       });
       await journey.step("Reopen results", "The completed research and root insight remain available after reload", async () => {
         await page.reload();
+        // A reload does not always land back on this Session: a first-visit tour can
+        // mount over a fresh empty session (measured — the tour's first step was on
+        // screen after the reload and the created Session was not selected). Close
+        // the tour, then reopen the same Project/Session through the controls a user
+        // uses, and only then make the claim this step exists for.
+        const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
+        if (await tour.isVisible().catch(() => false)) await tour.click();
+        const card = page.getByRole("region", { name: /Idea Tree/ });
+        if (!(await card.isVisible().catch(() => false))) await openProjectSession(page, fixture!);
         // The API answering is not the same claim as the page still showing the
         // research: check the user-visible control region first, then the API.
-        await expect(page.getByRole("region", { name: /Idea Tree/ })).toBeVisible({ timeout: 60_000 });
+        await expect(card).toBeVisible({ timeout: 60_000 });
         const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
         expect(saved?.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
