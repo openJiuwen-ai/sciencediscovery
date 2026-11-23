@@ -79,6 +79,9 @@ class Storage:
     def get(self, key: str) -> bytes:
         raise NotImplementedError
 
+    def put_stream(self, key: str, fileobj, size: int, content_type: str) -> None:
+        raise NotImplementedError
+
     def download_url(self, key: str, filename: str, expires_in: int) -> str:
         raise NotImplementedError
 
@@ -118,6 +121,19 @@ class LocalStorage(Storage):
         if not path.is_file():
             raise StorageError(f"missing object: {key}")
         return path.read_bytes()
+
+    def put_stream(self, key: str, fileobj, size: int, content_type: str) -> None:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".part")
+        fileobj.seek(0)
+        with tmp.open("wb") as handle:
+            while True:
+                chunk = fileobj.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+        tmp.replace(path)
 
     def download_url(self, key: str, filename: str, expires_in: int) -> str:
         # The API forwards the bytes; dev only. The URL carries a short-lived
@@ -198,6 +214,16 @@ class S3Storage(Storage):
     def get(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)
         return response["Body"].read()
+
+    def put_stream(self, key: str, fileobj, size: int, content_type: str) -> None:
+        fileobj.seek(0)
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=fileobj,
+            ContentLength=size,
+            ContentType=content_type,
+        )
 
     def download_url(self, key: str, filename: str, expires_in: int) -> str:
         return self.client.generate_presigned_url(

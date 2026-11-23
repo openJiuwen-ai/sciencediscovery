@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import tempfile
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -20,7 +23,7 @@ from ..models import Asset, AssetVersion, AuditLog, User, utcnow
 from ..schemas import CreateAssetRequest, UpdateAssetRequest
 from ..serializers import asset_payload, ok, version_payload
 from ..storage import Storage, package_key
-from ..validation import PackageError, read_member, validate_package
+from ..validation import PackageError, read_member, validate_package_file
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -339,63 +342,69 @@ async def upload_version(
     if not _owned(asset, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not the owner")
 
-    # Read in bounded chunks. `UploadFile.read()` without a size would buffer
-    # whatever the client sends before the limit is ever consulted; a declared
-    # size is only advisory, so the running total is what enforces the cap.
+    # Stream to a spooled temporary file while hashing and counting: a 50 MiB
+    # package never needs 50 MiB of resident memory, and the cap is enforced
+    # on the bytes rather than on a declared length.
     if file.size is not None and file.size > settings.max_package_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"package is larger than {settings.max_package_bytes} bytes",
         )
-    buffer = bytearray()
-    while True:
-        chunk = await file.read(1024 * 1024)
-        if not chunk:
-            break
-        buffer.extend(chunk)
-        if len(buffer) > settings.max_package_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"package is larger than {settings.max_package_bytes} bytes",
+    digest = hashlib.sha256()
+    with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as spool:
+        received = 0
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > settings.max_package_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"package is larger than {settings.max_package_bytes} bytes",
+                )
+            digest.update(chunk)
+            spool.write(chunk)
+        if received == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the uploaded file is empty")
+        try:
+            info = validate_package_file(
+                spool,
+                max_bytes=settings.max_package_bytes,
+                max_uncompressed=settings.max_uncompressed_bytes,
             )
-    data = bytes(buffer)
-    try:
-        info = validate_package(
-            data,
-            max_bytes=settings.max_package_bytes,
-            max_uncompressed=settings.max_uncompressed_bytes,
-        )
-    except PackageError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        except PackageError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        sha256 = digest.hexdigest()
 
-    duplicate = db.scalar(
-        select(AssetVersion).where(
-            AssetVersion.asset_id == asset_id, AssetVersion.version == version
+        duplicate = db.scalar(
+            select(AssetVersion).where(
+                AssetVersion.asset_id == asset_id, AssetVersion.version == version
+            )
         )
-    )
-    if duplicate is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="that version already exists"
-        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="that version already exists"
+            )
 
-    try:
-        key = package_key(
-            kind=asset.kind,
-            publisher_id=asset.publisher_id,
-            asset_id=asset.id,
-            version=version,
-            filename=file.filename or "package.zip",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        try:
+            key = package_key(
+                kind=asset.kind,
+                publisher_id=asset.publisher_id,
+                asset_id=asset.id,
+                version=version,
+                filename=file.filename or "package.zip",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    storage.put(key, data, content_type="application/octet-stream")
+        storage.put_stream(key, spool, info.size, content_type="application/octet-stream")
     row = AssetVersion(
         asset_id=asset.id,
         version=version,
         filename=file.filename or "package.zip",
         storage_key=key,
-        sha256=info.sha256,
+        sha256=sha256,
         size=info.size,
         manifest=info.manifest,
         changelog=changelog,

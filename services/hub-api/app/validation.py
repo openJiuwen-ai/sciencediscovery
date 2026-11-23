@@ -95,6 +95,88 @@ def _entries(data: bytes):
                 yield entry.filename, entry.file_size, handle
 
 
+def _iter_tar(archive):
+    count = 0
+    try:
+        for member in archive:
+            count += 1
+            if count > MAX_ENTRIES:
+                raise PackageError(f"the package has more than {MAX_ENTRIES} entries")
+            _safe_member(member.name)
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise PackageError(f"non-regular entry: {member.name!r}")
+            handle = archive.extractfile(member)
+            if handle is None:
+                raise PackageError(f"unreadable entry: {member.name!r}")
+            yield member.name, member.size, handle
+    except (tarfile.TarError, EOFError) as exc:
+        raise PackageError("the archive is not readable") from exc
+
+
+def _iter_zip(archive):
+    for entry in archive.infolist():
+        _safe_member(entry.filename)
+        if entry.is_dir():
+            continue
+        if entry.flag_bits & 0x1:
+            raise PackageError(f"encrypted entry: {entry.filename}")
+        with archive.open(entry) as handle:
+            yield entry.filename, entry.file_size, handle
+
+
+def _manifest(entries, *, max_uncompressed: int) -> list[dict]:
+    total = 0
+    manifest: list[dict] = []
+    seen: set[str] = set()
+    for name, size, handle in entries:
+        if name in seen:
+            raise PackageError(f"duplicate entry: {name}")
+        seen.add(name)
+        total += size
+        if total > max_uncompressed:
+            raise PackageError(f"package expands to more than {max_uncompressed} bytes")
+        digest = hashlib.sha256()
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        manifest.append({"path": name, "size": size, "sha256": digest.hexdigest()})
+    manifest.sort(key=lambda item: item["path"])
+    return manifest
+
+
+def validate_package_file(fileobj, *, max_bytes: int, max_uncompressed: int) -> PackageInfo:
+    """Validate a package from a seekable file, without loading it into memory.
+
+    The caller streams the upload to this file and hashes it on the way; the
+    size comes from that count. The archive is read twice (headers and entry
+    payloads), so a spilled temporary file is the intended input.
+    """
+    fileobj.seek(0)
+    head = fileobj.read(2)
+    fileobj.seek(0)
+    size = fileobj.seek(0, io.SEEK_END)
+    fileobj.seek(0)
+    if size > max_bytes:
+        raise PackageError(f"package is {size} bytes; the limit is {max_bytes} bytes")
+    if head == b"PK":
+        with zipfile.ZipFile(fileobj) as archive:
+            manifest = _manifest(_iter_zip(archive), max_uncompressed=max_uncompressed)
+    else:
+        try:
+            archive = tarfile.open(fileobj=fileobj, mode="r:*")
+        except (tarfile.TarError, EOFError) as exc:
+            raise PackageError("the uploaded file is not a zip or tar archive") from exc
+        with archive:
+            manifest = _manifest(_iter_tar(archive), max_uncompressed=max_uncompressed)
+    if not manifest:
+        raise PackageError("the package has no files")
+    return PackageInfo(sha256="", size=size, manifest=manifest)
+
+
 def validate_package(data: bytes, *, max_bytes: int, max_uncompressed: int) -> PackageInfo:
     if not data:
         raise PackageError("the uploaded file is empty")
