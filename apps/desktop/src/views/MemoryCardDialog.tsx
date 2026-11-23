@@ -55,10 +55,10 @@ import type {
 } from "../api/types.js";
 import {
   evidenceSources,
-  matchReferenceHit,
   memoryNodeDetail,
   memoryNodeLink,
   memoryNodeTitle,
+  resolveCitation,
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
 import { paperAbstractParagraphs, paperPlainText } from "../app/paper-abstract.js";
@@ -93,6 +93,9 @@ type LoadState =
    *  action that state gets, so the copy and the button cannot disagree. */
   | { message: string; recovery: ErrorRecovery; status: "error"; title: string }
   | { status: "missing" }
+  /** The reads answered, but not the question: a page cut short, or a citation
+   *  of a shared id that names no Session. Neither proves the node absent. */
+  | { status: "unlocated" }
   | { hit: MemoryGraphHit; status: "ready" };
 
 /** The old web UI's classification of an Evidence node's `extra`: content
@@ -178,7 +181,12 @@ export function memoryCardFailure(reason: string | undefined): {
   return undefined;
 }
 
-export function MemoryCardDialog({
+/**
+ * The card itself: header, tabs and body. Kept apart from the portal so it can
+ * be rendered — and therefore tested — without a DOM; the dialog below adds
+ * only the portal and the Escape registration that need one.
+ */
+export function MemoryCardContent({
   client,
   onClose,
   onOpenSettings,
@@ -192,13 +200,6 @@ export function MemoryCardDialog({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
   const nodeLabel = referenceNodeLabel(reference.kind);
-  const targetSession = reference.sessionId ?? sessionId;
-
-  // Escape closes the card, but only when nothing above it has claimed the
-  // key first (a nested confirmation, for instance) — and, in the other
-  // direction, the dialog the card was opened in stays open, because the card
-  // is the one that was opened last.
-  useTopmostEscape(onClose);
 
   useEffect(() => {
     let alive = true;
@@ -208,21 +209,29 @@ export function MemoryCardDialog({
     }
     setState({ status: "loading" });
     setDeleteError(undefined);
-    listMemoryNodes(client, [nodeLabel], targetSession).then(
-      (result) => {
+    resolveCitation(reference, sessionId, (label, scope) => listMemoryNodes(client, [label], scope)).then(
+      (answer) => {
         if (!alive) return;
-        // A reason is the service saying it could not answer this read — only
-        // the copy can tell the reader which kind of non-answer it was. A
-        // credentials rejection must not read as a timeout, and a budget
-        // refusal (HTTP 503 memory_graph_query_limit) must not read as "this
-        // reference does not exist".
-        const failure = memoryCardFailure(result.reason);
-        if (failure) {
+        if (answer.status === "unanswered") {
+          // A reason is the service saying it could not answer this read — only
+          // the copy can tell the reader which kind of non-answer it was. A
+          // credentials rejection must not read as a timeout, and a budget
+          // refusal (HTTP 503 memory_graph_query_limit) must not read as "this
+          // reference does not exist". An unclassified reason is still a
+          // non-answer, so it gets the retry copy rather than ``missing``.
+          const failure = memoryCardFailure(answer.reason) ?? {
+            message: TEXT.memory.unreachableBody,
+            recovery: "retry" as const,
+            title: TEXT.memory.unreachableTitle,
+          };
           setState({ ...failure, status: "error" });
           return;
         }
-        const hit = matchReferenceHit(result.hits ?? [], reference);
-        setState(hit === undefined ? { status: "missing" } : { hit, status: "ready" });
+        if (answer.status === "ready") {
+          setState({ hit: answer.hit, status: "ready" });
+          return;
+        }
+        setState(answer.status === "unlocated" ? { status: "unlocated" } : { status: "missing" });
       },
       (failure: unknown) => {
         if (!alive) return;
@@ -237,7 +246,7 @@ export function MemoryCardDialog({
     return () => {
       alive = false;
     };
-  }, [attempt, client, nodeLabel, reference, targetSession]);
+  }, [attempt, client, nodeLabel, reference, sessionId]);
 
   const kind = reference.kind;
   const provenanceReady = state.status === "ready" && state.hit.label === "Evidence";
@@ -254,7 +263,7 @@ export function MemoryCardDialog({
     setDeleting(true);
     setDeleteError(undefined);
     try {
-      await deleteMemoryNode(client, state.hit.id, state.hit.sessionId ?? targetSession);
+      await deleteMemoryNode(client, state.hit.id, state.hit.sessionId ?? sessionId);
       onClose();
     } catch (failure) {
       // A failed delete is not a missing record: the card stays on the real
@@ -334,6 +343,8 @@ export function MemoryCardDialog({
                 : onOpenSettings}
               title={state.title}
             />
+          ) : state.status === "unlocated" ? (
+            <MemoryState body={TEXT.memory.unlocatedBody} title={TEXT.memory.unlocatedTitle} />
           ) : state.status === "missing" ? (
             <MemoryState body={TEXT.memory.notFoundBody} title={TEXT.memory.notFoundTitle} />
           ) : state.hit.label === "Evidence" && currentTab === "provenance" ? (
@@ -341,7 +352,7 @@ export function MemoryCardDialog({
               client={client}
               hit={state.hit}
               onOpenSettings={onOpenSettings}
-              sessionId={targetSession}
+              sessionId={sessionId}
             />
           ) : state.hit.label === "Evidence" ? (
             <EvidencePreview hit={state.hit} />
@@ -385,14 +396,25 @@ export function MemoryCardDialog({
     />
   ) : null;
 
-  // Portals need a real body. The cards' unit tests mount without a DOM, so a
-  // missing `document.body` falls back to inline markup instead of throwing.
-  const content = (
+  return (
     <>
       {dialog}
       {confirmation}
     </>
   );
+}
+
+/** The card behind a report's citation chip, as a portal over the current
+ *  dialog. Escape closes this card first when it is the one opened last (a
+ *  nested confirmation, for instance, claims the key before it). */
+export function MemoryCardDialog(props: Props) {
+  // Escape closes the card, but only when nothing above it has claimed the
+  // key first — and, in the other direction, the dialog the card was opened in
+  // stays open, because the card is the one that was opened last.
+  useTopmostEscape(props.onClose);
+  const content = <MemoryCardContent {...props} />;
+  // Portals need a real body. The card's unit tests mount without a DOM, so a
+  // missing `document.body` falls back to inline markup instead of throwing.
   return typeof document === "undefined" || document.body === undefined
     ? content
     : createPortal(content, document.body);
