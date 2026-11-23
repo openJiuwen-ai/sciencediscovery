@@ -37,13 +37,20 @@ def text(value: Any, name: str, limit: int = 24000) -> str:
 
 
 def parse_json(raw: str) -> Any:
-    """The model's JSON, also when it is wrapped in one Markdown code fence as many models do."""
+    """The model's JSON, also when it is wrapped in one Markdown code fence as many models do.
+
+    `strict=False` accepts a raw control character inside a string — the newline a
+    model writes into a multi-line field instead of escaping it as \\n. That is the
+    one deviation a stage cannot recover from: it gets a single correction, and a
+    research that spent its whole budget reaches `propagate` with the longest text.
+    Truncated or non-JSON answers still raise.
+    """
     body = raw.strip() if isinstance(raw, str) else raw
     if isinstance(body, str) and body.startswith('```'):
         first, _, rest = body.partition('\n')
         if rest.rstrip().endswith('```') and first.strip('`').strip().lower() in ('', 'json'):
             body = rest.rstrip()[:-3].strip()
-    return json.loads(body)
+    return json.loads(body, strict=False)
 
 
 def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
