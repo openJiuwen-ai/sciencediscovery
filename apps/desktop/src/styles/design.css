@@ -5505,7 +5505,10 @@ body.is-resizing {
   font-size: 12px;
   line-height: 18px;
 }
-.side-search-results { max-height: 46vh; overflow-y: auto; padding: 0 0 8px; }
+/* The results are a block of their own between the field and the widening
+ * chips: without `flex: none` the column shrinks this box to whatever is left
+ * after the list, and everything past the first hit is clipped. */
+.side-search-results { flex: none; max-height: 46vh; overflow-y: auto; padding: 0 0 8px; }
 .side-search-group + .side-search-group { margin-top: 8px; }
 .side-search-heading {
   display: block;
