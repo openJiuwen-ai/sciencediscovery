@@ -92,7 +92,6 @@ import type {
   Session,
   SessionArtifactOutput,
   SessionDetail,
-  SessionListState,
   SessionRun,
   SessionRunStatus,
   SessionReviewerSpecialistSettings,
@@ -381,19 +380,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [projects, setProjects] = useState<Project[]>([]);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
-  // The sidebar lists the active set only — archived Sessions live in 设置 →
-  // 会话管理 — so the listing is fixed to `active` rather than filtered. A
-  // stored three-way value from an earlier build is deliberately ignored
-  // instead of migrated: it could hold `archived`, and then the page would open
-  // with no active Session in sight.
-  const sessionFilterRef = useRef<SessionListState>("active");
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
-  /** Every Session an unfiltered read has seen. Pruning runs against this, or
-   *  not at all: a filtered listing is a subset, and treating its complement as
-   *  "gone" would drop artifacts of Sessions that still exist. */
+  /** Every Session a read has seen, archived ones included. Pruning runs against
+   *  this: the sidebar shows the active set, but a Session that was archived —
+   *  or deleted elsewhere — has to be judged on whether the server still has it,
+   *  not on whether the sidebar draws it. */
   const membershipRef = useRef<Set<string> | undefined>(undefined);
-  sessionFilterRef.current = "active";
   const [sessionId, setSessionId] = useState<string>();
   // A draft has no Session to be named by, and the welcome page has to be able
   // to tell one draft from the next — see `landingKey`.
@@ -839,18 +832,24 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       const known = await listProjects(client);
       const entries = await Promise.all(
         [...known, inbox].map(async (project) =>
-          [project.id, await listSessions(client, project.id, sessionFilterRef.current)] as const),
+          // Every Session the Project holds, archived included. The sidebar draws
+          // the active set only, but membership — what the artifact catalog is
+          // pruned against — is every Session that still exists: reading the
+          // active set alone would keep a Session deleted from another client in
+          // the snapshot forever, and its 产物 group would survive it.
+          [project.id, await listSessions(client, project.id, "all")] as const),
       );
       if (ticket !== refreshTicket.current) return undefined;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
-      setSessionsByProject(Object.fromEntries(entries));
+      // Archived Sessions are read for membership, not for the list.
+      setSessionsByProject(Object.fromEntries(
+        entries.map(([id, list]) => [id, list.filter((session) => session.archivedAt === undefined)]),
+      ));
       // The artifact list spans Sessions, so it can only be pruned against whole
-      // membership. An unfiltered read supplies that; a filtered one is a subset
-      // and must not be mistaken for "the rest are gone" — that would empty 产物
-      // of every Session the filter hides, on every refresh, not just the first.
+      // membership — which is exactly what the read above is.
       const membership = membershipAfterRead(
-        sessionFilterRef.current,
+        "all",
         sessions.map((session) => session.id),
         membershipRef.current,
       );

@@ -38,7 +38,10 @@ test("model polling retries quietly, recovers, and still reports explicit refres
     if (path === "/api/providers") return { providers: [], presets: [] };
     if (path === "/api/settings" || path === "/api/projects/inbox/settings") return { overrides: { modelId: "m" }, effective: { modelId: "m" } };
     if (path === "/api/inbox") return { id: "inbox" };
-    if (path === "/api/projects" || path === "/api/projects/inbox/sessions?state=active") return [];
+    // The listing is read unfiltered: the sidebar draws the active set, but
+    // membership — what the artifact catalog is pruned against — is every
+    // Session the Project still holds.
+    if (path === "/api/projects" || path === "/api/projects/inbox/sessions?state=all") return [];
     assert.fail(`Unexpected request: ${path}`);
   } } as unknown as ApiClient;
   let handle: ReturnType<typeof useWorkspace> | undefined;
