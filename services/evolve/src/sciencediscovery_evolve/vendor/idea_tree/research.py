@@ -53,17 +53,6 @@ def parse_json(raw: str) -> Any:
     return json.loads(body, strict=False)
 
 
-def dropped_direction(proposal: dict, path: list) -> str | None:
-    """The direction a proposal had to supply but the ceiling left no room for.
-
-    A candidate parent at `maxDepth - 1` leaves `allowance == 0`, so the candidate
-    attaches directly under it. Dropping the direction silently would lose what the
-    model named; the caller records it on the candidate instead.
-    """
-    direction = proposal.get('direction')
-    return direction if direction and direction not in path else None
-
-
 def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
@@ -508,13 +497,39 @@ class IdeaTreeEngine:
             raise ValueError('A completed candidate needs a direction for a deeper branch')
         if parent['id'] == 'ROOT' and depth > 1 and not proposal.get('direction'):
             raise ValueError('ROOT proposals need a research direction')
-        path = ([] if (parent_id and parent['kind'] == 'direction') or (parent['id'] == 'ROOT' and depth == 1) else [proposal['direction']]) + proposal.get('refinements', [])
+        intended = self.proposal_head(proposal, parent, depth) + proposal.get('refinements', [])
         # maxDepth is a ceiling, not a target. A proposal that walks a refinement past
         # it keeps the steps that fit and loses the rest; rejecting it instead ended
         # the whole research, because a stage gets one correction and a research that
         # had already spent its budget reaches ideation three rounds deep.
-        allowance = depth - parent['depth'] - 1
-        return parent, path[:max(0, allowance)]
+        return parent, intended[:self.proposal_allowance(parent, depth)]
+
+    def proposal_head(self, proposal, parent, depth):
+        """The direction step a proposal contributes, empty when the parent already is one."""
+        if (proposal.get('parentId') and parent['kind'] == 'direction') or (parent['id'] == 'ROOT' and depth == 1):
+            return []
+        return [proposal['direction']]
+
+    def proposal_allowance(self, parent, depth=None):
+        depth = self.state['settings']['maxDepth'] if depth is None else depth
+        return max(0, depth - parent['depth'] - 1)
+
+    def trimmed_direction(self, proposal):
+        """The direction the ceiling removed, or None when every step fit.
+
+        Only a direction the trim actually cut is reported: a direction parent and a
+        ROOT proposal carrying a direction never contribute one to the path, so their
+        value is not "dropped" and must not be recorded.
+        """
+        parent_id = proposal.get('parentId')
+        parent = self.find(parent_id) if parent_id else self.find('ROOT')
+        if parent is None:
+            return None
+        depth = self.state['settings']['maxDepth']
+        intended = self.proposal_head(proposal, parent, depth) + proposal.get('refinements', [])
+        dropped = intended[self.proposal_allowance(parent, depth):]
+        direction = proposal.get('direction')
+        return direction if direction and direction in dropped else None
 
     def is_descendant_of(self, node_id, ancestor_id):
         current = self.find(node_id)
@@ -603,7 +618,7 @@ class IdeaTreeEngine:
                             # A parent at the last expandable depth leaves no room for a
                             # direction node, so the candidate attaches directly under it.
                             # Keep the direction the model named rather than discarding it.
-                            trimmed = dropped_direction(proposal, path)
+                            trimmed = self.trimmed_direction(proposal)
                             if trimmed:
                                 candidate['trimmedDirection'] = trimmed
                             batch.append(candidate['id'])

@@ -381,28 +381,29 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                                             refinements=['step two'], hypothesis='Child hypothesis'))
         self.assertEqual(path, ['Mechanism follow-up', 'step two'])
 
-    def test_a_parent_at_the_last_expandable_depth_keeps_its_direction_on_the_candidate(self):
-        """A candidate parent at `maxDepth - 1` leaves `allowance == 0`: the candidate
-        attaches directly under it, and the direction the model had to supply is
-        recorded on the candidate instead of being dropped."""
-        from sciencediscovery_evolve.vendor.idea_tree.research import dropped_direction
+    def test_a_trimmed_direction_is_reported_and_an_echoed_one_is_not(self):
+        """Only a direction the ceiling actually removed is reported. A direction
+        parent and an explicit ROOT parent never contribute their `direction` to the
+        path, so a model that fills the field there must not be recorded as trimmed."""
         self.state['settings']['maxDepth'] = 3
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
-        parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 2)
-        parent.update(status='done', score=5)
-        self.state['nodes'][0]['childrenIds'].append('1')
-        self.state['nodes'].append(parent)
-        proposal = dict(parentId='1', direction='Mechanism follow-up',
-                        refinements=['step two'], hypothesis='Child hypothesis')
-        selected_parent, path = engine.proposal_path(proposal)
-        self.assertEqual(selected_parent['id'], '1')
-        self.assertEqual(path, [])
-        self.assertEqual(dropped_direction(proposal, path), 'Mechanism follow-up')
-        # A proposal that fits keeps its direction in the path, so nothing is recorded.
+        deep = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 2)
+        deep.update(status='done', score=5)
+        direction_parent = node('2', 'ROOT', 'A direction', 'direction', 1)
+        self.state['nodes'][0]['childrenIds'] = ['1', '2']
+        self.state['nodes'].extend([deep, direction_parent])
+        # Candidate parent at maxDepth - 1: allowance 0, so the direction is removed.
+        self.assertEqual(engine.trimmed_direction(dict(parentId='1', direction='Mechanism follow-up',
+                                                       refinements=['step two'])), 'Mechanism follow-up')
+        # Direction parent echoing a direction: nothing is removed.
+        self.assertIsNone(engine.trimmed_direction(dict(parentId='2', direction='Echoed direction',
+                                                        refinements=['step two'])))
+        # ROOT proposal carrying a direction: the parent is ROOT, so nothing is removed.
+        self.assertIsNone(engine.trimmed_direction(dict(parentId='ROOT', direction='New direction')))
+        # A candidate parent with room keeps the direction, so nothing is removed.
         self.state['settings']['maxDepth'] = 5
-        _, fitting = engine.proposal_path(proposal)
-        self.assertEqual(fitting, ['Mechanism follow-up', 'step two'])
-        self.assertIsNone(dropped_direction(proposal, fitting))
+        self.assertIsNone(engine.trimmed_direction(dict(parentId='1', direction='Mechanism follow-up',
+                                                        refinements=['step two'])))
 
     async def test_selector_prunes_weak_direction_and_proposals_record_lineage(self):
         root = self.state['nodes'][0]
