@@ -216,6 +216,31 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.state['usageKnown'])
         self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
 
+    async def test_a_branch_at_the_ceiling_records_the_direction_it_could_not_place(self):
+        """F8: a candidate parent at maxDepth - 1 leaves allowance 0, so the candidate
+        attaches directly under it. The direction the model had to supply must be kept
+        on the candidate rather than silently dropped."""
+        self.state['settings'].update(maxDepth=3, maxRounds=1, candidatesPerRound=1,
+                                      maxSearchRounds=3, maxActiveDirections=3)
+        root = self.state['nodes'][0]
+        deep = node('1', root['id'], 'Deep candidate', 'candidate', 2)
+        deep.update(status='done', score=6)
+        sibling = node('2', root['id'], 'Sibling direction', 'direction', 1)
+        sibling['insight'] = 'sibling insight'
+        root['childrenIds'] = ['1', '2']
+        self.state['nodes'].extend([deep, sibling])
+        async def model(role, payload):
+            if role == 'ideate':
+                return json.dumps(dict(candidates=[dict(parentId='1', direction='Mechanism follow-up',
+                                                         refinements=['step two'], hypothesis='Child under the ceiling')],
+                                       reason='the ceiling leaves no room for a direction node')), 50
+            return await self.model(role, payload)
+        await IdeaTreeEngine(self.state, self.store, {}, model).run()
+        child = next((n for n in self.state['nodes'] if n['hypothesis'] == 'Child under the ceiling'), None)
+        self.assertIsNotNone(child)
+        self.assertEqual(child['depth'], 3)
+        self.assertEqual(child.get('trimmedDirection'), 'Mechanism follow-up')
+
     async def test_candidates_execute_before_max_depth_and_can_branch(self):
         self.state['settings']['maxDepth'] = 6
         async def model(role, payload):
@@ -355,6 +380,29 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         _, path = engine.proposal_path(dict(parentId='1', direction='Mechanism follow-up',
                                             refinements=['step two'], hypothesis='Child hypothesis'))
         self.assertEqual(path, ['Mechanism follow-up', 'step two'])
+
+    def test_a_parent_at_the_last_expandable_depth_keeps_its_direction_on_the_candidate(self):
+        """A candidate parent at `maxDepth - 1` leaves `allowance == 0`: the candidate
+        attaches directly under it, and the direction the model had to supply is
+        recorded on the candidate instead of being dropped."""
+        from sciencediscovery_evolve.vendor.idea_tree.research import dropped_direction
+        self.state['settings']['maxDepth'] = 3
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 2)
+        parent.update(status='done', score=5)
+        self.state['nodes'][0]['childrenIds'].append('1')
+        self.state['nodes'].append(parent)
+        proposal = dict(parentId='1', direction='Mechanism follow-up',
+                        refinements=['step two'], hypothesis='Child hypothesis')
+        selected_parent, path = engine.proposal_path(proposal)
+        self.assertEqual(selected_parent['id'], '1')
+        self.assertEqual(path, [])
+        self.assertEqual(dropped_direction(proposal, path), 'Mechanism follow-up')
+        # A proposal that fits keeps its direction in the path, so nothing is recorded.
+        self.state['settings']['maxDepth'] = 5
+        _, fitting = engine.proposal_path(proposal)
+        self.assertEqual(fitting, ['Mechanism follow-up', 'step two'])
+        self.assertIsNone(dropped_direction(proposal, fitting))
 
     async def test_selector_prunes_weak_direction_and_proposals_record_lineage(self):
         root = self.state['nodes'][0]
