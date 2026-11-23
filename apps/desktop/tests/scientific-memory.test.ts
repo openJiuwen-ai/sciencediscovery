@@ -25,6 +25,7 @@ import {
   matchReferenceHit,
   memoryNodeLink,
   memoryNodeTitle,
+  resolveCitation,
 } from "../src/app/memory.js";
 import type { ComposerReference, MemoryGraphHit, MemoryGraphNode } from "../src/api/types.js";
 
@@ -152,5 +153,64 @@ describe("an Evidence's provenance", () => {
 
   it("reports no sources rather than inventing one", () => {
     assert.deepEqual(evidenceSources("evidence-1", [evidence]), []);
+  });
+});
+
+describe("how a citation is read from the graph", () => {
+  const reads: Array<string | undefined> = [];
+  const answering = (answers: MemoryGraphHit[][]): ((label: string, sessionId?: string) => Promise<{ hits: MemoryGraphHit[]; total: number; truncated: boolean }>) =>
+    async (_label, sessionId) => {
+      reads.push(sessionId);
+      return { hits: answers.shift() ?? [], total: 0, truncated: false };
+    };
+
+  const evidence: ComposerReference = { id: "e1", kind: "evidence", label: "evidence1" };
+  const own = hit({ label: "Evidence", id: "e1", sessionId: "session-own" });
+
+  it("answers from the report's Session without widening", async () => {
+    reads.length = 0;
+    const result = await resolveCitation(evidence, "session-report", answering([[own]]));
+    assert.deepEqual(result, { hit: own, status: "ready" });
+    assert.deepEqual(reads, ["session-report"], "a hit in scope is the answer");
+  });
+
+  it("widens once, unscoped, when the citation names no Session and the scope is empty", async () => {
+    reads.length = 0;
+    const elsewhere = hit({ label: "Evidence", id: "e1", sessionId: "session-other" });
+    const result = await resolveCitation(evidence, "session-report", answering([[], [elsewhere]]));
+    assert.deepEqual(result, { hit: elsewhere, status: "ready" });
+    assert.deepEqual(reads, ["session-report", undefined]);
+  });
+
+  it("pins an Artifact citation to its version in the widened read too", async () => {
+    reads.length = 0;
+    const v1 = hit({ label: "Artifact", id: "a1#v1", sessionId: "session-other", extra: { artifact_id: "a1", version: 1 } });
+    const v2 = hit({ label: "Artifact", id: "a1#v2", sessionId: "session-other", extra: { artifact_id: "a1", version: 2 } });
+    const result = await resolveCitation(
+      { id: "a1", kind: "artifact", label: "artifact1", version: 1 },
+      "session-report",
+      answering([[], [v2, v1]]),
+    );
+    assert.deepEqual(result, { hit: v1, status: "ready" });
+  });
+
+  it("stays missing after both reads found nothing", async () => {
+    reads.length = 0;
+    const result = await resolveCitation(evidence, "session-report", answering([[], []]));
+    assert.deepEqual(result, { status: "missing" });
+    assert.deepEqual(reads, ["session-report", undefined]);
+  });
+
+  it("does not widen an already unscoped read", async () => {
+    reads.length = 0;
+    const result = await resolveCitation(evidence, undefined, answering([[]]));
+    assert.deepEqual(result, { status: "missing" });
+    assert.deepEqual(reads, [undefined]);
+  });
+
+  it("carries a refusal through instead of calling it missing", async () => {
+    const refused = async () => ({ hits: [], reason: "memory_graph_query_limit", total: 0, truncated: false });
+    const result = await resolveCitation(evidence, "session-report", refused);
+    assert.deepEqual(result, { reason: "memory_graph_query_limit", status: "unanswered" });
   });
 });

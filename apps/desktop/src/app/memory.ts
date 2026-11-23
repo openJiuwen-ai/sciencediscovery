@@ -26,7 +26,9 @@
 import type {
   ComposerReference,
   MemoryGraphHit,
+  MemoryGraphMatchResponse,
   MemoryGraphNode,
+  MemoryGraphNodeLabel,
 } from "../api/types.js";
 import { referenceNodeLabel } from "./memory-chips.js";
 
@@ -171,6 +173,59 @@ export function matchReferenceHit(
     });
   }
   return candidates.find((hit) => hit.id === reference.id);
+}
+
+/** One node-type read for a citation. Injected so the order of the reads can
+ *  be tested without a client or a graph service. */
+export type CitationRead = (
+  label: MemoryGraphNodeLabel,
+  sessionId?: string,
+) => Promise<MemoryGraphMatchResponse>;
+
+/** What the graph answered about a citation: the node, nothing recorded, or a
+ *  read that could not answer at all (off, budget refusal, unreachable). */
+export type CitationResolution =
+  | { reason: string; status: "unanswered" }
+  | { hit: MemoryGraphHit; status: "ready" }
+  | { status: "missing" };
+
+/**
+ * The node a report's citation names.
+ *
+ * The scoped read is the fast path: a citation normally points at a node of the
+ * report's own Session. A persisted alias map carries no Session, however, so a
+ * citation of a node created in another Session of the same project is absent
+ * from that scope — the normal case for project memory, where a later report
+ * cites literature gathered earlier. Node ids are globally unique, so when the
+ * citation does not name a Session and the scoped read found nothing, one
+ * unscoped read is the honest next question.
+ *
+ * A reason is returned untouched and never widened: a disabled service, an
+ * exhausted query budget and an unreachable sidecar all mean "cannot answer",
+ * not "no such record".
+ */
+export async function resolveCitation(
+  reference: Pick<ComposerReference, "id" | "kind" | "label" | "sessionId" | "version">,
+  sessionId: string | undefined,
+  read: CitationRead,
+): Promise<CitationResolution> {
+  const label = referenceNodeLabel(reference.kind);
+  if (label === undefined) return { status: "missing" };
+
+  const scoped = reference.sessionId ?? sessionId;
+  const scopedAnswer = await read(label, scoped);
+  if (scopedAnswer.reason !== undefined) return { reason: scopedAnswer.reason, status: "unanswered" };
+  const scopedHit = matchReferenceHit(scopedAnswer.hits ?? [], reference);
+  if (scopedHit !== undefined) return { hit: scopedHit, status: "ready" };
+
+  // A citation that names its own Session was answered already; a read that was
+  // already unscoped cannot be widened further.
+  if (reference.sessionId !== undefined || scoped === undefined) return { status: "missing" };
+
+  const unscopedAnswer = await read(label, undefined);
+  if (unscopedAnswer.reason !== undefined) return { reason: unscopedAnswer.reason, status: "unanswered" };
+  const unscopedHit = matchReferenceHit(unscopedAnswer.hits ?? [], reference);
+  return unscopedHit === undefined ? { status: "missing" } : { hit: unscopedHit, status: "ready" };
 }
 
 /** Deduplicate by node id while keeping first-seen order: a chain result

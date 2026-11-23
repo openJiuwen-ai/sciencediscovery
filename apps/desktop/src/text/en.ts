@@ -558,7 +558,7 @@ export const EN: Text = {
     openChip: "See this citation's details and provenance",
     openSettings: "Open scientific memory settings",
     notFoundTitle: "This memory was not found",
-    notFoundBody: "Nothing in memory matches this record. It may have been deleted, or the memory service may be unavailable right now.",
+    notFoundBody: "No record in memory matches this citation.",
     disabledTitle: "Scientific memory is off",
     disabledBody: "Turn it on in Settings → Scientific memory and a report's citations expand into their evidence and artifacts.",
     unreachableTitle: "Scientific memory is unavailable",

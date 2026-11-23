@@ -173,6 +173,10 @@ export interface ComposerReference {
   origin?: ArtifactOrigin;
   path?: string;
   projectId?: string;
+  /** For evidence/sourcefile/dbrecord memory chips, the Session that owns the
+   *  cited node. A report may cite a node created in another Session of the
+   *  same project; the citation card reads it from this Session instead of the
+   *  report's. Absent on chip references persisted before it was recorded. */
   sessionId?: string;
   /** For artifact chips, pins the exact version cited by the claim. */
   version?: number;

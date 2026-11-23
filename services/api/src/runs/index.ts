@@ -70,6 +70,7 @@ import type {
   CancelRunResult,
   ChatMessage,
   ComposerReference,
+  DeclareChipEntry,
   MemoryGraphEdgeType,
   MemoryGraphNodeLabel,
   MemoryGraphTraceResult,
@@ -1088,6 +1089,16 @@ async function executeAgentRun(
   const claimIds: Array<{ turnId: string; claimId: string }> = [];
   const referenceKey = (reference: ComposerReference): string =>
     `${reference.id}#${reference.version ?? ""}#${reference.label}`;
+  /** A chip_map entry as the report version stores it. The owning Session
+   *  travels with it so the citation card reads a node created in another
+   *  Session where it actually lives. */
+  const chipReference = (alias: string, entry: DeclareChipEntry): ComposerReference => ({
+    id: entry.id,
+    kind: entry.kind,
+    label: alias,
+    ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }),
+    ...(entry.version === undefined ? {} : { version: entry.version }),
+  });
   const pushChipReference = (turnId: string, reference: ComposerReference): void => {
     // Dedup within the buffer: the same alias→node from multiple declare_claim
     // calls in one context should land once on the report, not N times.
@@ -1564,12 +1575,7 @@ async function executeAgentRun(
         // Tagged with this run's id so the report this leader declares drains
         // only the leader's claims, not a subagent's.
         for (const [alias, entry] of Object.entries(result.chipMap)) {
-          pushChipReference(
-            runId,
-            entry.version != null
-              ? { id: entry.id, kind: entry.kind, label: alias, version: entry.version }
-              : { id: entry.id, kind: entry.kind, label: alias },
-          );
+          pushChipReference(runId, chipReference(alias, entry));
         }
         pushClaimId(runId, result.claimId);
       }
@@ -2084,12 +2090,7 @@ async function executeAgentRun(
                   );
                   if (result.status === "ok") {
                     for (const [alias, entry] of Object.entries(result.chipMap)) {
-                      pushChipReference(
-                        childExecution.identity.executionId,
-                        entry.version != null
-                          ? { id: entry.id, kind: entry.kind, label: alias, version: entry.version }
-                          : { id: entry.id, kind: entry.kind, label: alias },
-                      );
+                      pushChipReference(childExecution.identity.executionId, chipReference(alias, entry));
                     }
                     pushClaimId(childExecution.identity.executionId, result.claimId);
                   }

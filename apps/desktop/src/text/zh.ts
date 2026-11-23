@@ -583,7 +583,7 @@ export const ZH = {
     openChip: "查看这条引用的详情与溯源",
     openSettings: "打开科学记忆设置",
     notFoundTitle: "没有找到这条记忆",
-    notFoundBody: "记忆里没有这条记录。它可能已被删除，或记忆服务当前不可用。",
+    notFoundBody: "科学记忆里没有任何记录对应这条引用。",
     disabledTitle: "科学记忆没有开启",
     disabledBody: "在「设置 → 科学记忆」里开启后，报告的引用就能展开成证据与产物。",
     unreachableTitle: "暂时读不到科学记忆",

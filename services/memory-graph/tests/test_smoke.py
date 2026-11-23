@@ -4100,3 +4100,53 @@ def test_execution_input_source_file_builds_input_edge(live_client: TestClient) 
     assert len(inputs) == 1
     assert inputs[0]["source"] == fid
     assert inputs[0]["target"] == "exec-sf-read"
+
+
+def test_persist_claim_chip_carries_the_cited_nodes_own_session(local_client: TestClient) -> None:
+    """Issue #1334: a report cites evidence gathered in an earlier Session.
+
+    The chip_map entry must carry the *Evidence's* Session, not the declaring
+    report's Session, so the citation card reads the node where it exists
+    instead of in the report's Session, where it is absent.
+    """
+    from sciencediscovery_memory_graph.backend import handle
+
+    headers = {"authorization": "Bearer test-token"}
+    with handle().session() as graph:
+        graph.run(
+            "CREATE (:Evidence {evidence_id: 'ev-cross', "
+            "session_id: 'sess-gathered', content: 'gathered earlier'})"
+        ).consume()
+    response = local_client.post("/persist/claim", json={
+        "content": "The cited measurement supports the claim",
+        "claim_type": "STATISTICAL",
+        "confidence": "HIGH",
+        "locator": "abstract",
+        "cites_evidence_aliases": {"evidence1": "ev-cross"},
+        "session_id": "sess-report",
+    }, headers=headers)
+    assert response.status_code == 200, response.text
+    chip = response.json()["chip_map"]["evidence1"]
+    assert chip["kind"] == "evidence"
+    assert chip["id"] == "ev-cross"
+    assert chip["session_id"] == "sess-gathered", \
+        "the chip names the Session that owns the node, not the report's"
+
+
+def test_chip_map_does_not_pin_an_artifact_to_its_producer_session() -> None:
+    """An ``[artifactN]`` chip opens the artifact dialog, which resolves the
+    project-scoped Artifact through the Session it is handed. Pinning the
+    producer's Session there would make the artifact unreadable once that
+    Session is deleted, so only the version travels with an artifact chip."""
+    from sciencediscovery_memory_graph.server import _build_chip_map
+
+    chip_map = _build_chip_map(
+        cited_targets=[{"artifact_id": "art-1", "session_id": "sess-producer", "version": 2}],
+        evidence_alias_map={},
+        artifact_alias_map={"artifact1": "art-1"},
+        source_file_alias_map={},
+        dbrecord_alias_map={},
+    )
+    assert chip_map["artifact1"] == {
+        "kind": "artifact", "id": "art-1", "label": "artifact1", "version": 2,
+    }

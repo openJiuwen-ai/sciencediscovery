@@ -48,10 +48,10 @@ import type {
 } from "../api/types.js";
 import {
   evidenceSources,
-  matchReferenceHit,
   memoryNodeDetail,
   memoryNodeLink,
   memoryNodeTitle,
+  resolveCitation,
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
 import { paperAbstractParagraphs, paperPlainText } from "../app/paper-abstract.js";
@@ -145,7 +145,12 @@ function fileNameOf(node: MemoryGraphNode): string {
   return node.id.includes(":") ? node.id.slice(node.id.lastIndexOf(":") + 1) : node.id;
 }
 
-export function MemoryCardDialog({
+/**
+ * The card itself: header, tabs and body. Kept apart from the portal so it can
+ * be rendered — and therefore tested — without a DOM; the dialog below adds
+ * only the portal and the Escape registration that need one.
+ */
+export function MemoryCardContent({
   client,
   onClose,
   onOpenSettings,
@@ -156,13 +161,6 @@ export function MemoryCardDialog({
   const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState<DetailTab>("preview");
   const nodeLabel = referenceNodeLabel(reference.kind);
-  const targetSession = reference.sessionId ?? sessionId;
-
-  // Escape closes the card, but only when nothing above it has claimed the
-  // key first (a nested confirmation, for instance) — and, in the other
-  // direction, the dialog the card was opened in stays open, because the card
-  // is the one that was opened last.
-  useTopmostEscape(onClose);
 
   useEffect(() => {
     let alive = true;
@@ -171,25 +169,25 @@ export function MemoryCardDialog({
       return;
     }
     setState({ status: "loading" });
-    listMemoryNodes(client, [nodeLabel], targetSession).then(
-      (result) => {
+    resolveCitation(reference, sessionId, (label, scope) => listMemoryNodes(client, [label], scope)).then(
+      (answer) => {
         if (!alive) return;
-        if (result.reason === "memory_graph_disabled") {
-          setState({
-            message: TEXT.memory.disabledBody,
-            recovery: "settings",
-            status: "error",
-            title: TEXT.memory.disabledTitle,
-          });
-          return;
-        }
-        // A budget refusal (HTTP 503 memory_graph_query_limit) is a temporary
-        // failure to answer, not proof that the reference has no node. Report
-        // it like an unreachable service instead of falling through to
-        // ``missing``, which would tell the reader the reference does not exist.
-        // The same goes for the action: both are worth another read, and the
-        // card's own sentence already asks the reader to try again.
-        if (graphTemporarilyUnavailable(result.reason)) {
+        if (answer.status === "unanswered") {
+          if (answer.reason === "memory_graph_disabled") {
+            setState({
+              message: TEXT.memory.disabledBody,
+              recovery: "settings",
+              status: "error",
+              title: TEXT.memory.disabledTitle,
+            });
+            return;
+          }
+          // A budget refusal (HTTP 503 memory_graph_query_limit) is a temporary
+          // failure to answer, not proof that the reference has no node. Report
+          // it like an unreachable service instead of falling through to
+          // ``missing``, which would tell the reader the reference does not
+          // exist. The same goes for the action: both are worth another read,
+          // and the card's own sentence already asks the reader to try again.
           setState({
             message: TEXT.memory.unreachableBody,
             recovery: "retry",
@@ -198,8 +196,11 @@ export function MemoryCardDialog({
           });
           return;
         }
-        const hit = matchReferenceHit(result.hits ?? [], reference);
-        setState(hit === undefined ? { status: "missing" } : { hit, status: "ready" });
+        if (answer.status === "ready") {
+          setState({ hit: answer.hit, status: "ready" });
+          return;
+        }
+        setState({ status: "missing" });
       },
       (failure: unknown) => {
         if (!alive) return;
@@ -214,7 +215,7 @@ export function MemoryCardDialog({
     return () => {
       alive = false;
     };
-  }, [attempt, client, nodeLabel, reference, targetSession]);
+  }, [attempt, client, nodeLabel, reference, sessionId]);
 
   const kind = reference.kind;
   const provenanceReady = state.status === "ready" && state.hit.label === "Evidence";
@@ -287,7 +288,7 @@ export function MemoryCardDialog({
             <MemoryProvenance
               client={client}
               hit={state.hit}
-              sessionId={targetSession}
+              sessionId={sessionId}
             />
           ) : state.hit.label === "Evidence" ? (
             <EvidencePreview hit={state.hit} />
@@ -299,7 +300,19 @@ export function MemoryCardDialog({
     </div>
   );
 
-  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
+  return dialog;
+}
+
+/** The card behind a report's citation chip, as a portal over the current
+ *  dialog. Escape closes this card first when it is the one opened last (a
+ *  nested confirmation, for instance, claims the key before it). */
+export function MemoryCardDialog(props: Props) {
+  // Escape closes the card, but only when nothing above it has claimed the
+  // key first — and, in the other direction, the dialog the card was opened in
+  // stays open, because the card is the one that was opened last.
+  useTopmostEscape(props.onClose);
+  const content = <MemoryCardContent {...props} />;
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 function MemoryState({ action, body, onAction, title }: {

@@ -1842,8 +1842,12 @@ def declare_claim(
     Artifact exists.
 
     Returns the cited targets ``[{evidence_id?, artifact_id?, version?,
-    file_id?, source?, identifier?, labels?}]`` so the caller can assemble the
-    chip_map (alias → node) returned to the LLM. The chip_map itself is not
+    file_id?, source?, identifier?, session_id?, labels?}]`` so the caller can
+    assemble the chip_map (alias → node) returned to the LLM. ``session_id``
+    is each cited node's own Session, which can differ from the declaring
+    session when a later report cites evidence gathered earlier in the
+    project; the chip carries it so the citation card reads the node where it
+    exists. The chip_map itself is not
     persisted here — it lives on the report Artifact version's ``references``
     (Node side). Empty list when skipped.
     """
@@ -1949,6 +1953,7 @@ def declare_claim(
                          file_id: cited.file_id,
                          source: cited.source,
                          identifier: cited.identifier,
+                         session_id: cited.session_id,
                          labels: labels(cited)
                        }) AS cited_targets
                 """,

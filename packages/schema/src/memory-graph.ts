@@ -295,11 +295,15 @@ export interface DeclareClaimInput {
 
 /** One cited node surfaced back for chip rendering. Artifact chips carry the
  * cited version so opening them does not drift to the latest version.
- * SourceFile chips carry no version (SourceFile has no version concept). */
+ * SourceFile chips carry no version (SourceFile has no version concept). The
+ * owning Session is carried too: a report may cite a node created in another
+ * Session of the same project, and the card reads it from there. */
 export interface DeclareChipEntry {
   kind: ComposerReferenceKind;
   id: string;
   label: string;
+  /** The Session that owns the cited node, when the graph reported one. */
+  sessionId?: string;
   version?: number;
 }
 

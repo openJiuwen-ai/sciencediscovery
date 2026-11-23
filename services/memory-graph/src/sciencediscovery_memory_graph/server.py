@@ -1109,6 +1109,81 @@ class DeclareClaimRequest(BaseModel):
     session_id: str
 
 
+def _build_chip_map(
+    *,
+    cited_targets: list[dict[str, Any]],
+    evidence_alias_map: dict[str, str],
+    artifact_alias_map: dict[str, str],
+    source_file_alias_map: dict[str, str],
+    dbrecord_alias_map: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Assemble the chip_map: alias → {kind, id, label} so the frontend can turn
+    the LLM's prose aliases ([ev1] / [a1]) into clickable chips.
+
+    Each entry also carries the cited node's own ``session_id``. A report may
+    cite a node created in another Session of the same project (gather once,
+    cite in a later Session); the citation card reads the node from the Session
+    that owns it, so the owning Session — not the declaring one — travels with
+    the chip. Artifact chips are the exception: ``[artifactN]`` opens the
+    artifact dialog, which resolves a project-scoped Artifact through the
+    Session it is handed, so pinning an owning Session there would only make the
+    artifact unreadable once that Session is deleted.
+
+    There is NO fallback to a node id when an alias is missing: an
+    evidence/artifact not placed in the alias maps is not cited and renders no
+    chip (the 422s in the request path catch the common caller bugs; a missing
+    alias is a prompt/schema concern, not a runtime one).
+    """
+    chip_map: dict[str, dict[str, Any]] = {}
+
+    def entry(kind: str, node_id: str, alias: str, target: dict[str, Any],
+              version: int | None = None, owning_session: bool = True) -> dict[str, Any]:
+        chip: dict[str, Any] = {"kind": kind, "id": node_id, "label": alias}
+        if owning_session and target.get("session_id"):
+            chip["session_id"] = target["session_id"]
+        if version is not None:
+            chip["version"] = version
+        return chip
+
+    evidence_by_id = {t.get("evidence_id"): t for t in cited_targets if t.get("evidence_id")}
+    for alias, eid in evidence_alias_map.items():
+        if eid in evidence_by_id:
+            chip_map[alias] = entry("evidence", eid, alias, evidence_by_id[eid])
+    # artifact chip: id stays the bare artifact_id (the frontend's
+    # handleChipClick still resolves logicalName from it via listArtifacts),
+    # but ``version`` is carried alongside so opening the chip selects the
+    # exact version the claim cited (not the latest, which would drift).
+    artifact_by_id = {t.get("artifact_id"): t for t in cited_targets if t.get("artifact_id")}
+    for alias, aid in artifact_alias_map.items():
+        target = artifact_by_id.get(aid)
+        if target:
+            chip_map[alias] = entry("artifact", aid, alias, target, target.get("version"),
+                                    owning_session=False)
+    # sourcefile chip: id is the SourceFile's file_id (the SourceFile node's
+    # identity in the frontend is its file_id — _node_identity keys SourceFile
+    # on file_id — so a chip click matches node.id === reference.id directly,
+    # like the Evidence path). SourceFile has no version, so unlike the
+    # artifact chip nothing is carried alongside.
+    file_by_id = {t.get("file_id"): t for t in cited_targets if t.get("file_id")}
+    for alias, fid in source_file_alias_map.items():
+        if fid in file_by_id:
+            chip_map[alias] = entry("sourcefile", fid, alias, file_by_id[fid])
+    # dbrecord chip: id is the bare identifier (DbRecord's node identity in
+    # the frontend is its identifier — _ID_FIELDS["DbRecord"] — so a chip click
+    # matches node.id === reference.id directly, like the Evidence/SourceFile
+    # paths). DbRecord has no version, so unlike the artifact chip nothing is
+    # carried alongside. Evidence/Artifact/SourceFile targets carry no
+    # ``identifier`` field, so the identifier-only index never collides.
+    dbrecord_by_identifier = {t.get("identifier"): t for t in cited_targets
+                              if t.get("identifier")}
+    for alias, value in dbrecord_alias_map.items():
+        identifier = value.split(":", 1)[1] if ":" in value else value
+        if identifier in dbrecord_by_identifier:
+            chip_map[alias] = entry("dbrecord", identifier, alias,
+                                    dbrecord_by_identifier[identifier])
+    return chip_map
+
+
 @app.post("/persist/claim", dependencies=[Depends(require_internal_token)])
 def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
     driver = handle()
@@ -1317,51 +1392,13 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
         log.exception("persist/claim failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"declare_claim failed: {exc}")
 
-    # Assemble the chip_map: alias → {kind, id, label} so the frontend can turn
-    # the LLM's prose aliases ([ev1] / [a1]) into clickable chips. Evidence and
-    # Artifact aliases come from the request. There is NO fallback to a node id
-    # when an alias is missing — an evidence/artifact not placed in the alias
-    # maps is not cited and renders no chip (the 422s above catch the common
-    # caller bugs; a missing alias is a prompt/schema concern, not a runtime
-    # one).
-    chip_map: dict[str, dict[str, Any]] = {}
-    evidence_by_id = {t.get("evidence_id"): t for t in cited_targets if t.get("evidence_id")}
-    for alias, eid in evidence_alias_map.items():
-        if eid in evidence_by_id:
-            chip_map[alias] = {"kind": "evidence", "id": eid, "label": alias}
-    # artifact chip: id stays the bare artifact_id (the frontend's
-    # handleChipClick still resolves logicalName from it via listArtifacts),
-    # but ``version`` is carried alongside so opening the chip selects the
-    # exact version the claim cited (not the latest, which would drift).
-    artifact_by_id = {t.get("artifact_id"): t for t in cited_targets if t.get("artifact_id")}
-    for alias, aid in artifact_alias_map.items():
-        target = artifact_by_id.get(aid)
-        if target:
-            entry: dict[str, Any] = {"kind": "artifact", "id": aid, "label": alias}
-            if target.get("version") is not None:
-                entry["version"] = target["version"]
-            chip_map[alias] = entry
-    # sourcefile chip: id is the SourceFile's file_id (the SourceFile node's
-    # identity in the frontend is its file_id — _node_identity keys SourceFile
-    # on file_id — so a chip click matches node.id === reference.id directly,
-    # like the Evidence path). SourceFile has no version, so unlike the
-    # artifact chip nothing is carried alongside.
-    file_by_id = {t.get("file_id"): t for t in cited_targets if t.get("file_id")}
-    for alias, fid in source_file_alias_map.items():
-        if fid in file_by_id:
-            chip_map[alias] = {"kind": "sourcefile", "id": fid, "label": alias}
-    # dbrecord chip: id is the bare identifier (DbRecord's node identity in
-    # the frontend is its identifier — _ID_FIELDS["DbRecord"] — so a chip click
-    # matches node.id === reference.id directly, like the Evidence/SourceFile
-    # paths). DbRecord has no version, so unlike the artifact chip nothing is
-    # carried alongside. Evidence/Artifact/SourceFile targets carry no
-    # ``identifier`` field, so the identifier-only index never collides.
-    dbrecord_by_identifier = {t.get("identifier"): t for t in cited_targets
-                              if t.get("identifier")}
-    for alias, value in dbrecord_alias_map.items():
-        identifier = value.split(":", 1)[1] if ":" in value else value
-        if identifier in dbrecord_by_identifier:
-            chip_map[alias] = {"kind": "dbrecord", "id": identifier, "label": alias}
+    chip_map = _build_chip_map(
+        cited_targets=cited_targets,
+        evidence_alias_map=evidence_alias_map,
+        artifact_alias_map=artifact_alias_map,
+        source_file_alias_map=source_file_alias_map,
+        dbrecord_alias_map=dbrecord_alias_map,
+    )
     log.info("persist/claim done: claim=%s session=%s chip_map=%d cited=%d",
              claim_id, req.session_id, len(chip_map), len(cited_targets))
     return {"status": "ok", "claim_id": claim_id, "chip_map": chip_map,
