@@ -58,15 +58,26 @@ function formatArchivedAt(stamp: string, locale: string): string {
 }
 
 /**
+ * A Project's name as this page prints it. The inbox is the one Project whose
+ * stored name is not the reader's language — the sidebar calls it 会话 too — so
+ * it is named here rather than copied off the record.
+ */
+export function projectLabel(project: Project, inbox: Project | undefined): string {
+  return project.id === inbox?.id ? TEXT.sidebar.recent : project.name;
+}
+
+/**
  * The rows themselves, without the reading: the settings page owns the load and
  * the mutations, and this part is what a render test can drive.
  */
 export function ArchivedSessionList({
+  inbox,
   onOpen,
   onRemove,
   onRestore,
   rows,
 }: {
+  inbox?: Project;
   onOpen: (session: Session) => void;
   onRemove: (session: Session) => void;
   onRestore: (session: Session) => void;
@@ -90,7 +101,7 @@ export function ArchivedSessionList({
               {sessionTitle(row.session.title)}
             </span>
             <span className="session-management-meta">
-              <span className="session-management-project" title={row.project.name}>{row.project.name}</span>
+              <span className="session-management-project" title={projectLabel(row.project, inbox)}>{projectLabel(row.project, inbox)}</span>
               {row.session.archivedAt ? (
                 <>
                   <span aria-hidden="true">·</span>
@@ -213,7 +224,7 @@ export function SessionManagementSettings({
   const visible = rows.filter((row) => {
     if (!needle) return true;
     return sessionTitle(row.session.title).toLowerCase().includes(needle)
-      || row.project.name.toLowerCase().includes(needle);
+      || projectLabel(row.project, inbox).toLowerCase().includes(needle);
   });
 
   const restore = async (session: Session) => {
@@ -245,7 +256,7 @@ export function SessionManagementSettings({
     return (
       <>
         {unreachable}
-        <ArchivedSessionList onOpen={(s) => void open(s)} onRemove={remove} onRestore={(s) => void restore(s)} rows={visible} />
+        <ArchivedSessionList inbox={inbox} onOpen={(s) => void open(s)} onRemove={remove} onRestore={(s) => void restore(s)} rows={visible} />
       </>
     );
   })();
@@ -261,7 +272,7 @@ export function SessionManagementSettings({
           {/* The inbox is a Project here too: it is where a first conversation
               lands, and its archived Sessions have to be scoped like any other. */}
           {(inbox ? [...projects, inbox] : projects).map((entry) => (
-            <option key={entry.id} value={entry.id}>{entry.name}</option>
+            <option key={entry.id} value={entry.id}>{projectLabel(entry, inbox)}</option>
           ))}
         </select>
         <input
