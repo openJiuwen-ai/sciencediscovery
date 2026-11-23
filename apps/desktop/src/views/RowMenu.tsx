@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export interface MenuItem {
@@ -90,15 +90,32 @@ export function leavesMenu(
  */
 export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  /** The entry whose `hint` is on screen. Kept as an index and drawn *inside*
-   *  the menu, under the entry itself: a floating box over the page behind it
-   *  reads as a stray note, and this one only exists while the pointer is on the
-   *  entry (or the keyboard is), so it never sits in the menu as a line of its
-   *  own. */
+  const hintRef = useRef<HTMLDivElement>(null);
+  const hintIdBase = useId();
+  /** The entry whose `hint` is on screen. Only while the pointer is on it (or
+   *  the keyboard is): the menu must open bare, or the consequence becomes the
+   *  standing line this was meant to replace. */
   const [hinted, setHinted] = useState<number | undefined>(undefined);
+  /** Where the hint goes when it would otherwise leave the window. Measured
+   *  rather than assumed: it is drawn over the page, not in the menu's flow. */
+  const [hintPlacement, setHintPlacement] = useState<{ above: boolean; leftward: boolean }>({
+    above: false,
+    leftward: false,
+  });
+
+  // A closed menu leaves no mouseleave behind — pressing an item unmounts it —
+  // so the index would survive into the next menu and draw that session's hint
+  // before the pointer ever arrived.
+  useEffect(() => {
+    setHinted(undefined);
+    setHintPlacement({ above: false, leftward: false });
+  }, [menu]);
 
   useEffect(() => {
     if (!menu) return;
+    // Nothing to listen to where there is no document — the same case the portal
+    // below already branches on.
+    if (typeof document === "undefined") return;
     const dismiss = (event: Event) => {
       if (leavesMenu(event.target, ref.current, menu.anchor)) onClose();
     };
@@ -125,12 +142,32 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
   useLayoutEffect(() => {
     const node = ref.current;
     if (!menu || !node) return;
+    node.style.left = `${menu.x}px`;
+    node.style.top = `${menu.y}px`;
     const box = node.getBoundingClientRect();
     const overflowX = menu.x + box.width - (window.innerWidth - 8);
     const overflowY = menu.y + box.height - (window.innerHeight - 8);
     if (overflowX > 0) node.style.left = `${Math.max(8, menu.x - box.width)}px`;
     if (overflowY > 0) node.style.top = `${Math.max(8, menu.y - box.height)}px`;
-  }, [menu]);
+    // `hinted` is in the dependencies so the reset above runs again when the
+    // menu's own box has not moved: the hint is drawn over the page, and this
+    // keeps a re-clamp from stacking on a previous one.
+  }, [menu, hinted]);
+
+  // The hint is absolutely positioned, so showing it cannot resize the menu —
+  // and cannot slide 导出会话 or 删除 under a pointer already travelling toward
+  // them. What it can do is hang off the window, which is measured here.
+  useLayoutEffect(() => {
+    const menuNode = ref.current;
+    const hintNode = hintRef.current;
+    if (!menuNode || !hintNode) return;
+    const menuBox = menuNode.getBoundingClientRect();
+    const hintBox = hintNode.getBoundingClientRect();
+    setHintPlacement({
+      above: menuBox.bottom + hintBox.height + 8 > window.innerHeight,
+      leftward: menuBox.left + hintBox.width + 8 > window.innerWidth,
+    });
+  }, [hinted]);
 
   if (!menu) return null;
   const list = (
@@ -142,6 +179,7 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
           {item.separatorBefore ? <div className="ctx-divider" /> : null}
           <button
             aria-current={item.checked ? "true" : undefined}
+            aria-describedby={hinted === index && item.hint !== undefined ? `${hintIdBase}-${index}` : undefined}
             aria-disabled={item.disabled ? "true" : undefined}
             className="ctx-item"
             disabled={item.disabled}
@@ -160,10 +198,19 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
             <span className="ctx-item-label">{item.label}</span>
             {item.checked ? <span aria-hidden="true" className="ctx-item-check">✓</span> : null}
           </button>
-          {/* Under the entry, and only while it is the one under the pointer:
-              the menu is unchanged otherwise, which is the point. */}
+          {/* Over the page, not in the menu's flow: showing it must not resize a
+              box that has already been clamped, nor move the entries below it.
+              `aria-describedby` on the button is what makes it readable, since a
+              tooltip role on its own announces nothing. */}
           {hinted === index && item.hint !== undefined ? (
-            <div className="ctx-hint" role="tooltip">{item.hint}</div>
+            <div
+              className={`ctx-hint${hintPlacement.above ? " is-above" : ""}${hintPlacement.leftward ? " is-leftward" : ""}`}
+              id={`${hintIdBase}-${index}`}
+              ref={hintRef}
+              role="tooltip"
+            >
+              {item.hint}
+            </div>
           ) : null}
         </Fragment>
       ))}
