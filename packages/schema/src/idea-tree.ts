@@ -125,6 +125,8 @@ export interface IdeaTreeNode {
   score: number | null;
   searchStatus: IdeaTreeSearchStatus;
   status: IdeaTreeNodeStatus;
+  /** The direction a `maxDepth` trim removed; absent when every step fit. */
+  trimmedDirection?: string;
   updatedAt: string;
 }
 
