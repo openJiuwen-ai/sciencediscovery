@@ -447,6 +447,8 @@
 .mcp-import-popover button:focus-visible { background: var(--surface-hover); }
 
 /* What an import spec will add, and what each write did. */
+.mcp-import-card .settings-row.is-stack .row-control { width: 100%; }
+
 .mcp-import-list {
   display: grid;
   gap: 6px;

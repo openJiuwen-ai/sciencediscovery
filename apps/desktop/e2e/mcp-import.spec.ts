@@ -109,6 +109,9 @@ test.describe("MCP 服务器 JSON 导入", () => {
     await journey.step("Choose a JSON file", "Its content and both server previews are filled automatically; no server is saved yet.", async () => {
       form = await upload(page, `\uFEFF${json}`);
       await expect(form.getByRole("textbox", { name: "JSON", exact: true })).toHaveValue(json);
+      const editorBounds = await form.getByRole("textbox", { name: "JSON", exact: true }).boundingBox();
+      const formBounds = await form.boundingBox();
+      expect(editorBounds?.width).toBeGreaterThan((formBounds?.width ?? Infinity) * 0.8);
       await expect(form.getByRole("list", { name: "预览", exact: true })).toContainText("File Echo");
       await expect(form.getByRole("list", { name: "预览", exact: true })).toContainText("Refused");
       await expect(form).toContainText("mcp-servers.json");
