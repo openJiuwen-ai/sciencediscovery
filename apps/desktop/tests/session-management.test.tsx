@@ -19,7 +19,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Project, Session } from "../src/api/types.js";
 import { TEXT } from "../src/text.js";
-import { ArchivedSessionList } from "../src/views/settings/system/Sessions.js";
+import { ArchivedSessionList, projectLabel } from "../src/views/settings/system/Sessions.js";
 
 const t = TEXT.sessionManagement;
 
@@ -79,10 +79,23 @@ test("the delete action is the only one drawn as destructive", () => {
   assert.equal(destructive.length, 1, "exactly one row action is destructive");
 });
 
-test("the settings directory offers 会话管理 as a page of its own", () => {
+test("the directory offers 会话管理 as a page of its own", () => {
   // The sidebar holds active Sessions, so the page has to be reachable from the
   // directory: a group that is not listed there is a page nobody can open.
   const group = TEXT.settings.system.groups["session-management"];
   assert.ok(group, "the group exists in the text the directory reads");
   assert.equal(group.label, t.title, "the directory and the page call it the same thing");
+});
+
+test("the inbox is named in the interface language, not by its stored name", () => {
+  // The inbox's record carries an English sentinel, the same way an unnamed
+  // Session's title does. The sidebar calls it 会话; this page has to agree.
+  const box = project("inbox-id", "Recent sessions");
+  assert.equal(projectLabel(box, box), TEXT.sidebar.recent);
+  assert.notEqual(projectLabel(box, box), "Recent sessions");
+  // A Project the user named is printed as they named it.
+  const named = project("p1", "催化剂筛选");
+  assert.equal(projectLabel(named, box), "催化剂筛选");
+  // Without the inbox in hand nothing is rewritten by guesswork.
+  assert.equal(projectLabel(box, undefined), "Recent sessions");
 });
