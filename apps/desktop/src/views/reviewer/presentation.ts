@@ -129,9 +129,11 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
 
 /** The verdict's colour, in one order of precedence.
  *
- *  Red means the artifact has a problem: any finding, or a delivery verdict of
- *  `incomplete`. Amber means the verdict itself cannot be taken at face value:
- *  the review failed, or the version it answered for is no longer current.
+ *  Red means the artifact has a problem: any finding, a source assessment that
+ *  contradicts the claim, or a delivery verdict of `incomplete`. Amber means
+ *  the verdict itself cannot be taken at face value: the review failed, a
+ *  source assessment supported only part of the claim, or the version it
+ *  answered for is no longer current.
  *  Grey means nothing was found wrong and nothing was claimed either: the
  *  checkpoint was skipped, or the review ran but never verified delivery or
  *  declared a check it did not perform. Green means this level ran its checks,
@@ -142,7 +144,7 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
  *  not paint the card amber: the rows below say what was not checked, in the
  *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
  *  N 项未检查). Amber stays for "this verdict is about something else" — a
- *  failure, or history.
+ *  failure, a partly supported claim, or history.
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged
