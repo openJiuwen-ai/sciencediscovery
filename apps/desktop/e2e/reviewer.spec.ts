@@ -527,6 +527,9 @@ test("the artifact dialog's 审查 tab shows the version's verdict and can queue
   await artifact.getByRole("button", { name: "重新审查" }).click();
 
   await expect(dialog.locator(".review-dialog .doc-note")).toHaveText("已加入审查队列。");
+  // The action is gone while its own request is in flight: a second click
+  // would mint another checkpoint and queue the same work twice.
+  await expect(artifact.getByRole("button", { name: "重新审查" })).toHaveCount(0);
   const queued = mock.calls.find(
     (call) => call.method === "POST" && call.path === `/api/sessions/${SESSION}/reviewer-specialist/review`,
   );

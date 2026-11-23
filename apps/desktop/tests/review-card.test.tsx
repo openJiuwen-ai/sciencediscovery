@@ -151,6 +151,31 @@ describe("a review's verdict", () => {
     assert.equal(reviewTone(review()), "pass");
   });
 
+  it("lets a source verdict decide the header even when no finding was raised", () => {
+    const assessment = (verdict: string): ArtifactReviewRun["sourceAssessments"] => [{
+      assessment: { assessment: verdict as never, claimId: "claim-1", locatorIds: [], policyVersion: "1", rationale: "Only part." },
+      claim: {
+        artifactVersionId: "version-2",
+        citationKeys: [],
+        id: "claim-1",
+        kind: "citation",
+        requiredEvidenceLevel: "E3",
+        text: "Claim",
+      },
+      locators: [],
+      snapshots: [],
+    }];
+    const partial = review({ sourceAssessments: assessment("PARTIALLY_SUPPORTED") });
+    // No findings, complete delivery, no gap: the only result is the source
+    // verdict, and a green header over its row would contradict the card.
+    assert.equal(reviewTone(partial), "warn");
+    assert.equal(reviewSummary(partial), TEXT.reviewer.summaryPartlySupported);
+
+    const contradicted = review({ sourceAssessments: assessment("CONTRADICTED") });
+    assert.equal(reviewTone(contradicted), "fail");
+    assert.equal(reviewSummary(contradicted), TEXT.reviewer.summaryContradicted);
+  });
+
   it("keeps a failed review amber: an error is not a verdict on the artifact", () => {
     const broken = review({ status: "failed" });
     assert.equal(reviewTone(broken), "warn");

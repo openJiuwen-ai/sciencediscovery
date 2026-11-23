@@ -315,6 +315,8 @@ export const EN: Text = {
     } as Record<string, string>,
     summaryPass: "No issues found",
     summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+    summaryContradicted: "Contradicted",
+    summaryPartlySupported: "Partly supported",
     summaryIncomplete: "Delivery incomplete",
     summaryUnverified: "Delivery unverified",
     summaryFailed: "Review failed",

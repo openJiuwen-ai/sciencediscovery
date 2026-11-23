@@ -313,6 +313,8 @@ export const ZH = {
     } as Record<string, string>,
     summaryPass: "未发现问题",
     summaryFindings: (count: number) => `${count} 个问题`,
+    summaryContradicted: "矛盾",
+    summaryPartlySupported: "部分支持",
     summaryIncomplete: "交付不完整",
     summaryUnverified: "未验证交付",
     summaryFailed: "审查失败",
