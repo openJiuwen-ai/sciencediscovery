@@ -41,7 +41,18 @@ test("a workspace with no model opens the gate, and the shell waits for a tested
   await expect(page.getByText("✓ 基础检查通过", { exact: false })).toBeVisible();
   await expect(enter).toBeVisible();
   expect(mock.state.models.map((entry) => entry.model)).toEqual(["demo-model"]);
+  const connectivityTests = () => mock.calls.filter(
+    (call) => call.method === "POST" && /\/api\/models\/[^/]+\/test$/u.test(call.path),
+  );
+  expect(connectivityTests()).toHaveLength(1);
 
   await enter.click();
   await expect(page.locator(".app-shell")).toBeVisible();
+  // The profile became the default, so the composer names it; the workspace is
+  // the shell with its session list, not an empty page behind a spinner.
+  expect(connectivityTests()).toHaveLength(1);
+  await expect(page.getByText("科研会话", { exact: true })).toBeVisible();
+  await expect(page.getByText("ScienceDiscovery", { exact: true })).toBeVisible();
+  await expect(page.getByText("自定义网关", { exact: true })).toBeVisible();
+  expect(mock.state.overrides.modelId).toBe("model-1");
 });
