@@ -527,3 +527,19 @@ test("Export preview pending responses stay out of the cache, recover, and prese
     globalThis.fetch = previousFetch;
   }
 });
+
+test("research package downloads retry transient gateway failures before returning the stream", async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls += 1;
+    assert.ok(init?.signal, "large exports must have an abort budget");
+    if (calls < 3) return Response.json({ error: "legacy_unavailable" }, { status: 502 });
+    return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+  };
+  try {
+    const response = await new ApiClient("test-token").exportResearchPackage("project", "session", "complete", undefined, false, false);
+    assert.equal(calls, 3);
+    assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [1, 2, 3]);
+  } finally { globalThis.fetch = previousFetch; }
+});

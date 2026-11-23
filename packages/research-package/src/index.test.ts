@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
 import { Writable } from "node:stream";
-import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, sha256, type ResearchPackageExportProfile } from "./index.js";
+import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, RESEARCH_PACKAGE_MAX_ENTRIES, sha256, type ResearchPackageExportProfile } from "./index.js";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
 
@@ -61,15 +61,17 @@ test("rejects tampered package bytes and unsafe objects", () => {
   assert.throws(() => createResearchPackage({ source: { projectId: "p", title: "x" }, records: {}, objects: [{ path: "objects/not-a-hash", bytes: object }] }), /SHA-256/);
 });
 
-test("rejects exports that the importer would reject for too many entries", () => {
-  const objects = Array.from({ length: 9_998 }, (_, index) => {
+test("round trips evidence packages with more than ten thousand entries", () => {
+  const objects = Array.from({ length: 10_001 }, (_, index) => {
     const bytes = new TextEncoder().encode(`object-${index}`);
     return { path: sha256(bytes), bytes };
   });
-  assert.throws(
-    () => createResearchPackage({ source: { projectId: "p", title: "Too many entries" }, records: {}, objects }),
-    /entry limit/,
-  );
+  assert.ok(10_001 < RESEARCH_PACKAGE_MAX_ENTRIES);
+  const exported = createResearchPackage({ source: { projectId: "p", title: "Long research history" }, records: {}, objects });
+  const inspected = inspectResearchPackage(exported.bytes);
+  assert.equal(inspected.valid, true);
+  assert.equal(inspected.objectCount, objects.length);
+  assert.equal(importResearchPackage(exported.bytes).objects.size, objects.length);
 });
 
 test("exposes the provider through the trusted plugin host", async () => {

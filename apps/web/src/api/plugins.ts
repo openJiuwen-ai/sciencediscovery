@@ -5,6 +5,30 @@ import type { ResearchContinuationOperation, RuntimeSettingsDetails } from "@sci
 import { ApiRequestError, AuthApiClient } from "./auth.js";
 import { translateActive } from "../i18n/index.js";
 
+const RESEARCH_PACKAGE_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
+const RESEARCH_PACKAGE_STATUS_TIMEOUT_MS = 15 * 1000;
+const RESEARCH_PACKAGE_RETRY_DELAYS_MS = [500, 1_500] as const;
+const RESEARCH_PACKAGE_TASK_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const RESEARCH_PACKAGE_TASK_POLL_INTERVAL_MS = 1_000;
+const RESEARCH_PACKAGE_TASK_FAILURE_LIMIT = 5;
+
+function isAbortError(reason: unknown): boolean {
+  return typeof reason === "object" && reason !== null && (reason as { name?: unknown }).name === "AbortError";
+}
+
+function isRetryableResearchPackageFailure(reason: unknown): boolean {
+  if (reason instanceof ApiRequestError) return reason.status === 502 || reason.status === 503 || reason.status === 504;
+  // A fetch TypeError is the browser's usual signal for a connection reset or
+  // a response that disappeared before headers. The timeout AbortError is
+  // deliberately excluded so a large export does not restart after spending
+  // the whole request budget.
+  return reason instanceof TypeError && !isAbortError(reason);
+}
+
+function waitForRetry(delayMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
 export interface PluginComposition {
   revision: string; settings: RuntimeSettingsDetails; plugins: PluginManifest[];
   status: PluginStatus[]; applies: "nextRun" | "restart";
@@ -70,7 +94,20 @@ export class PluginApiClient extends AuthApiClient {
    * Returns the live response instead of a Blob: a 5 GiB archive must reach the
    * disk through `body`, not through a buffer that has to hold the whole thing.
    */
-  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false, allowOverCap = false): Promise<Response> {
+  async exportResearchPackage(projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = false, allowOverCap = false, revision?: string): Promise<Response> {
+    if (revision && sessionId) {
+      const task = await this.startResearchPackageExport(projectId, {
+        sessionId,
+        level,
+        filePaths,
+        includeFullTrajectory,
+        includeFullMemoryGraph,
+        revision,
+        allowOverCap,
+      });
+      const completed = await this.waitForResearchPackageExport(projectId, task.id);
+      return this.openResearchPackageResponse(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports/${encodeURIComponent(completed.id)}/download`);
+    }
     const params = new URLSearchParams({ level });
     if (allowOverCap) params.set("allowOverCap", "1");
     if (sessionId) params.set("sessionId", sessionId);
@@ -78,17 +115,7 @@ export class PluginApiClient extends AuthApiClient {
     params.set("includeFullMemoryGraph", includeFullMemoryGraph ? "1" : "0");
     if (filePaths) { params.set("customFiles", "1"); for (const path of filePaths) params.append("filePath", path); }
     const query = `?${params.toString()}`;
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/research-package${query}`, {
-      headers: { authorization: `Bearer ${this.token}` },
-    });
-    this.reportAuthStatus(response.status);
-    if (!response.ok) {
-      // The refusal carries a stable code; without it the dialog can only show the
-      // generic English string and the localized over-cap copy is unreachable.
-      const payload = await response.json().catch(() => undefined) as { code?: string } | undefined;
-      throw new ApiRequestError("Research package export failed", response.status, payload?.code);
-    }
-    return response;
+    return this.openResearchPackageResponse(`/api/projects/${encodeURIComponent(projectId)}/research-package${query}`);
   }
 
   startResearchPackageExport(projectId: string, options: {
@@ -100,17 +127,57 @@ export class PluginApiClient extends AuthApiClient {
     });
   }
 
-  getResearchPackageExport(projectId: string, taskId: string): Promise<ResearchPackageExportTaskView> {
-    return this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports/${encodeURIComponent(taskId)}`);
+  getResearchPackageExport(projectId: string, taskId: string, signal?: AbortSignal): Promise<ResearchPackageExportTaskView> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports/${encodeURIComponent(taskId)}`, { signal });
   }
 
-  async downloadResearchPackageExport(projectId: string, taskId: string): Promise<Blob> {
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports/${encodeURIComponent(taskId)}/download`, {
-      headers: { authorization: `Bearer ${this.token}` },
-    });
-    this.reportAuthStatus(response.status);
-    if (!response.ok) throw new ApiRequestError("Research package export download failed", response.status);
+  async downloadResearchPackageExport(projectId: string, taskId: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await this.openResearchPackageResponse(`/api/projects/${encodeURIComponent(projectId)}/research-package/exports/${encodeURIComponent(taskId)}/download`, signal);
     return response.blob();
+  }
+
+  private async waitForResearchPackageExport(projectId: string, taskId: string): Promise<ResearchPackageExportTaskView> {
+    const deadline = Date.now() + RESEARCH_PACKAGE_TASK_TIMEOUT_MS;
+    let failures = 0;
+    for (;;) {
+      if (Date.now() >= deadline) throw new Error("Research package export timed out");
+      try {
+        const status = await this.getResearchPackageExport(projectId, taskId, AbortSignal.timeout(RESEARCH_PACKAGE_STATUS_TIMEOUT_MS));
+        failures = 0;
+        if (status.status === "completed") return status;
+        if (status.status === "failed") throw new ApiRequestError(status.error ?? "Research package export failed", 500, "RESEARCH_PACKAGE_EXPORT_FAILED");
+        if (status.status === "canceled") throw new ApiRequestError("Research package export was canceled", 409, "RESEARCH_PACKAGE_EXPORT_CANCELED");
+      } catch (reason) {
+        if (!isRetryableResearchPackageFailure(reason) || ++failures >= RESEARCH_PACKAGE_TASK_FAILURE_LIMIT) throw reason;
+      }
+      await waitForRetry(RESEARCH_PACKAGE_TASK_POLL_INTERVAL_MS);
+    }
+  }
+
+  private async openResearchPackageResponse(path: string, signal?: AbortSignal): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RESEARCH_PACKAGE_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const timeout = AbortSignal.timeout(RESEARCH_PACKAGE_REQUEST_TIMEOUT_MS);
+        const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+        const response = await fetch(path, {
+          headers: { authorization: `Bearer ${this.token}` },
+          signal: requestSignal,
+        });
+        this.reportAuthStatus(response.status);
+        if (response.ok) return response;
+        // The refusal carries a stable code so the over-cap dialog can retain
+        // its localized explanation. Retry only transient gateway failures.
+        const payload = await response.json().catch(() => undefined) as { code?: string } | undefined;
+        lastError = new ApiRequestError("Research package export failed", response.status, payload?.code);
+        if (!isRetryableResearchPackageFailure(lastError) || attempt === RESEARCH_PACKAGE_RETRY_DELAYS_MS.length) throw lastError;
+      } catch (reason) {
+        lastError = reason;
+        if (!isRetryableResearchPackageFailure(reason) || attempt === RESEARCH_PACKAGE_RETRY_DELAYS_MS.length) throw reason;
+      }
+      await waitForRetry(RESEARCH_PACKAGE_RETRY_DELAYS_MS[attempt]!);
+    }
+    throw lastError instanceof Error ? lastError : new Error("Research package export failed");
   }
 
   async exportConversation(sessionId: string, format: "markdown" | "pdf", messageIds?: string[]): Promise<Blob> {

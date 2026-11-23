@@ -14,7 +14,12 @@ export { jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes } from "./json.js
 export const RESEARCH_PACKAGE_FORMAT = "sciencediscovery-research-package" as const;
 export const RESEARCH_PACKAGE_EXTENSION = ".sdresearch" as const;
 export const RESEARCH_PACKAGE_SCHEMA_VERSION = 1 as const;
-const MAX_ENTRIES = 10_000;
+/**
+ * Keep the entry guard high enough for long-running research histories. The
+ * archive byte ceiling remains the primary package bound, while this separate
+ * guard limits metadata overhead in both buffered and streamed import paths.
+ */
+export const RESEARCH_PACKAGE_MAX_ENTRIES = 100_000;
 const MAX_FILE_BYTES = 32 * 1024 * 1024 * 1024;
 const MIB = 1024 * 1024;
 const TAR_BLOCK = 512;
@@ -263,7 +268,7 @@ function readArchive(bytes: Uint8Array): Map<string, Uint8Array> {
     // Keep views into the decompressed archive instead of copying every large
     // object. The archive buffer remains alive through the returned map.
     files.set(path, new Uint8Array(raw.buffer, raw.byteOffset + offset, size)); total += size;
-    if (total > RESEARCH_PACKAGE_MAX_MAX_BYTES || files.size > MAX_ENTRIES) throw new Error("Research package exceeds its limits");
+    if (total > RESEARCH_PACKAGE_MAX_MAX_BYTES || files.size > RESEARCH_PACKAGE_MAX_ENTRIES) throw new Error("Research package exceeds its limits");
     offset += Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
   }
   if (!files.has("manifest.json") || !files.has("records.json")) throw new Error("Research package is missing its manifest or records");
@@ -340,7 +345,7 @@ function prepareResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_
   const readme = text(input.readme ?? DEFAULT_README);
   manifest.inventory.push({ path: "README.md", sizeBytes: readme.byteLength, checksum: sha256(readme), kind: "readme" });
   const entries: TarEntry[] = [{ path: "manifest.json", bytes: json(manifest) }, { path: "records.json", bytes: records }, { path: "README.md", bytes: readme }, ...objectEntries];
-  if (entries.length > MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
+  if (entries.length > RESEARCH_PACKAGE_MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
   const archiveBytes = archiveTotalBytes(entries.map((entry) => entry.bytes.byteLength));
   if (archiveBytes > maxBytes) throw researchPackageTooLargeError();
   return { entries, packageKind, totalBytes, omissions: [...manifest.omissions], createdAt,
@@ -500,7 +505,7 @@ export async function writeResearchPackage(
     { path: "README.md", size: readme.byteLength, open: async function* () { yield readme; } },
     ...objectEntries,
   ];
-  if (entries.length > MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
+  if (entries.length > RESEARCH_PACKAGE_MAX_ENTRIES) throw new Error("Research package exceeds the entry limit");
   const archiveBytes = archiveTotalBytes(entries.map((entry) => entry.size));
   if (archiveBytes > maxBytes) throw researchPackageTooLargeError();
 
@@ -729,7 +734,7 @@ export async function importResearchPackageStreamed(
         error.unpackedBytes = total;
         throw error;
       }
-      if (total > maxBytes || files.size + objectPaths.length >= MAX_ENTRIES) throw new Error("Research package exceeds its limits");
+      if (total > maxBytes || files.size + objectPaths.length >= RESEARCH_PACKAGE_MAX_ENTRIES) throw new Error("Research package exceeds its limits");
       if (path.startsWith("objects/")) {
         const digest = path.slice("objects/".length);
         if (!isHash(digest)) throw new Error("Invalid research package object entry");

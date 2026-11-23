@@ -219,7 +219,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     setBusy(true); setMessage(undefined); setError(undefined);
     try {
       const safeTitle = sessionTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || t("researchPackage.scientificSession");
-      const outcome = await savePackageResponse(() => client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged), `${safeTitle}.sdresearch`);
+      const outcome = await savePackageResponse(() => client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged, preview?.revision), `${safeTitle}.sdresearch`);
       if (outcome === "saved") onClose();
     }
     catch (reason) { setError(errorText(reason)); } finally { setBusy(false); }
