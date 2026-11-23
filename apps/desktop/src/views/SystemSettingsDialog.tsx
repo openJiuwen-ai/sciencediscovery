@@ -200,6 +200,7 @@ export function SystemSettingsDialog({
           <SessionManagementSettings
             actions={actions}
             client={client}
+            inbox={state.inboxProject}
             onClose={onClose}
             projects={state.projects}
           />

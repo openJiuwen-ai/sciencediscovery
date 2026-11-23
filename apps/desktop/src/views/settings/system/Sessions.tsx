@@ -27,7 +27,7 @@
  * which refresh the sidebar's own lists, and then reloads this one.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ApiClient } from "../../../api/client.js";
 import { listSessions } from "../../../api/sessions.js";
@@ -124,11 +124,16 @@ export function ArchivedSessionList({
 export function SessionManagementSettings({
   actions,
   client,
+  inbox,
   onClose,
   projects,
 }: {
   actions: WorkspaceActions;
   client: ApiClient;
+  /** The Session outside every Project. It is the one a first conversation lands
+   *  in, and the server leaves it out of `GET /api/projects`, so the page has to
+   *  be handed it or a Session archived from 会话 would have no row here. */
+  inbox?: Project;
   /** Opening a row leaves settings: the conversation is behind this surface. */
   onClose: () => void;
   projects: Project[];
@@ -139,13 +144,20 @@ export function SessionManagementSettings({
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("all");
 
+  // The workspace hands over a fresh `projects` array after every listing read,
+  // so an effect keyed on that identity re-read every Project on every refresh
+  // and blanked the rows while it did. This key changes only when the set of
+  // Projects does.
+  const scopeKey = `${projects.map((entry) => entry.id).join(",")}|${inbox?.id ?? ""}|${project}`;
+
   /**
-   * Reads the archived set of the Projects in scope. A Project whose listing
-   * fails is left out rather than failing the page: one unreachable Project
-   * must not hide the archived Sessions of the others.
+   * Reads the archived set of the Projects in scope, the inbox included. A
+   * Project whose listing fails is left out rather than failing the page: one
+   * unreachable Project must not hide the archived Sessions of the others.
    */
   const read = useCallback(async (): Promise<ArchivedRow[]> => {
-    const scoped = project === "all" ? projects : projects.filter((entry) => entry.id === project);
+    const all = inbox ? [...projects, inbox] : projects;
+    const scoped = project === "all" ? all : all.filter((entry) => entry.id === project);
     const lists = await Promise.all(
       scoped.map(async (entry) => {
         try {
@@ -159,15 +171,21 @@ export function SessionManagementSettings({
     // Newest archive first: the Session put away a minute ago is the one a
     // user most often comes here to bring back.
     return lists.flat().sort((left, right) => (right.session.archivedAt ?? "").localeCompare(left.session.archivedAt ?? ""));
-  }, [client, project, projects]);
+    // `scopeKey` is the dependency that matters; the arrays themselves are new
+    // objects on every workspace refresh.
+  }, [client, inbox, projects, project, scopeKey]);
 
   const [reloads, setReloads] = useState(0);
+  /** Whether a listing has been read once. Only the first read replaces the rows
+   *  with 读取中: a refresh after a restore redraws what is already on screen. */
+  const readOnce = useRef(false);
 
   useEffect(() => {
     let live = true;
-    setLoading(true);
+    if (!readOnce.current) setLoading(true);
     void read().then((next) => {
       if (!live) return;
+      readOnce.current = true;
       setRows(next);
       setLoading(false);
     });
@@ -216,7 +234,9 @@ export function SessionManagementSettings({
       <div className="export-history-filters">
         <select aria-label={t.allProjects} onChange={(event) => setProject(event.target.value)} value={project}>
           <option value="all">{t.allProjects}</option>
-          {projects.map((entry) => (
+          {/* The inbox is a Project here too: it is where a first conversation
+              lands, and its archived Sessions have to be scoped like any other. */}
+          {(inbox ? [...projects, inbox] : projects).map((entry) => (
             <option key={entry.id} value={entry.id}>{entry.name}</option>
           ))}
         </select>
