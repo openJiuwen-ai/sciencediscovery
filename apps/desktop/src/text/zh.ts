@@ -597,9 +597,14 @@ export const ZH = {
     notices: {
       timeout_notice: "超时",
       configuration_notice: "配置更新",
+      wake_notice: "中断恢复",
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",
+    /** Explains an automatic wake that follows an interrupted run, so the
+     *  second run in the transcript is not a silent duplicate. */
+    interruptedResume: (attempt: number) => `上一轮未到达完成状态，已自动继续会话（第 ${attempt} 次尝试）。本轮只报告中断与后台通知，不会重跑上一轮的任务；中断原因见运行记录，如需继续请明确告知。`,
+    interruptedRun: (runId: string) => `被中断的运行：${runId}（仍标记为已中断）`,
     thinking: "思考过程",
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */

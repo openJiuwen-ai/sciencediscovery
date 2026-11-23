@@ -586,8 +586,13 @@ export const EN: Text = {
     notices: {
       timeout_notice: "Timeout",
       configuration_notice: "Configuration update",
+      wake_notice: "Interruption recovery",
     },
     cancelledReason: "The run was cancelled",
+    /** Explains an automatic wake that follows an interrupted run, so the
+     *  second run in the transcript is not a silent duplicate. */
+    interruptedResume: (attempt: number) => `The previous run did not reach a completed state; this automatic wake is attempt ${attempt}. It only reports the interruption and background notifications and does not redo the interrupted task. See the run record for why it stopped.`,
+    interruptedRun: (runId: string) => `Interrupted run: ${runId} (still marked as interrupted)`,
     thinking: "Reasoning",
     thinkingSteps: (count: number) => `${count} ${count === 1 ? "step" : "steps"}`,
     thinkingNow: "Planning the next step",

@@ -597,3 +597,34 @@ test("a session with no Idea Tree surfaces draws no empty foot-of-transcript blo
   const markup = render({ detail: detail([message("q", "user", "QUESTION-TOP")]) });
   assert.doesNotMatch(markup, /idea-tree-slot/);
 });
+
+test("a wake after an interrupted run says why the second run exists and keeps the link", () => {
+  // The reported transcript showed `已中断` and then a second run card with no
+  // explanation. The wake message stays the anchor for that run, but now its
+  // card names the interruption, the attempt and the interrupted run.
+  const resumed: ChatMessage = {
+    content: "",
+    createdAt: "2026-01-01T00:05:00.000Z",
+    id: "wake-resume",
+    kind: "wake_notice",
+    role: "user",
+    runtimeNotice: {
+      executions: 1,
+      prompt: "[Execution notifications]\nThese are retained status/reminder records.",
+      wakeAfterRunId: "run-a",
+      wakeAttempt: 2,
+      timers: 0,
+    },
+  };
+  const markup = render({ detail: detail([
+    message("question", "user", "QUESTION"),
+    resumed,
+    message("answer", "assistant", "AFTER-WAKE"),
+  ]) });
+  assert.match(markup, /中断恢复/);
+  assert.match(markup, /第 2 次尝试/);
+  assert.match(markup, /被中断的运行：run-a（仍标记为已中断）/);
+  assert.match(markup, /不会重跑上一轮的任务/);
+  // The model-facing prompt stays out of the transcript.
+  assert.doesNotMatch(markup, /Execution notifications/);
+});

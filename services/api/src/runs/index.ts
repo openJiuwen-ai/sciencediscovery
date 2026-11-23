@@ -3628,6 +3628,26 @@ export async function createSkillEvolutionRun(
   }, ideaTreeRepository);
 }
 
+/** The reason recovery writes when the API process itself ended a run. It is
+ * the run-data marker that separates a restart interruption from the other
+ * paths that also persist `interrupted`. */
+export const RECOVERY_INTERRUPTION_REASON = "API process exited before this run reached a terminal state";
+
+/** `interrupted` is not restart-only: a turn that answered and waits for a
+ * configuration decision is persisted that way, and so is a run cut short by a
+ * storage failure. Only recovery's restart interruption continues the wake
+ * chain, and only when the turn reported neither an answer nor a pending
+ * configuration request. */
+function interruptionResume(store: SessionStore, sessionId: string, latest: SessionRun | undefined) {
+  if (latest?.status !== "interrupted" || latest.error !== RECOVERY_INTERRUPTION_REASON
+    || latest.assistantMessageId) return undefined;
+  const waitingForConfiguration = latest.configurationWait === true
+    || listConfigurationInteractions(store, sessionId).some((request) =>
+      request.runId === latest.id && CONFIGURATION_PENDING_STATES.has(request.state));
+  if (waitingForConfiguration) return undefined;
+  return { attempt: (latest.wakeAttempt ?? 1) + 1, runId: latest.id };
+}
+
 export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun | undefined> {
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
   let settingsSnapshot: EffectiveRuntimeSettings;
@@ -3641,8 +3661,15 @@ export async function createNotificationRun(store: SessionStore, skillLibraryCat
   }
   const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
-  return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),
-    settingsSnapshot, skillLibraryRefs, notificationDelivery: batch, automaticWake: true });
+  // The notification inbox only wakes an idle Session. When the last turn was
+  // genuinely interrupted before reporting anything, this wake follows it: link
+  // the two runs so the transcript can explain the second run, and narrow the
+  // turn to reporting the interruption instead of replaying the unfinished task.
+  const latest = batch.agentId === "main" ? (await store.listSessionRuns(batch.sessionId)).at(-1) : undefined;
+  const resume = interruptionResume(store, batch.sessionId, latest);
+  return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch, resume),
+    settingsSnapshot, skillLibraryRefs, notificationDelivery: batch, automaticWake: true,
+    ...(resume ? { wakeAttempt: resume.attempt, wakeAfterRunId: resume.runId } : {}) });
 }
 
 export function scheduleSessionRuns(
@@ -3767,6 +3794,9 @@ export function scheduleSessionRuns(
           }
           // Context was persisted with the queued run; Stop can still abort the active controller.
           if (delivery) store.notifications.acknowledge(delivery);
+          const resume = next.automaticWake && next.wakeAfterRunId && next.wakeAttempt
+            ? { attempt: next.wakeAttempt, runId: next.wakeAfterRunId }
+            : undefined;
           status = await executeAgentRun(
             store,
             runnerClient,
@@ -3801,7 +3831,7 @@ export function scheduleSessionRuns(
             memoryGraphClient,
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
-            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery))
+            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery), resume)
               : next.configurationResume ? {
                 executions: 0, timers: 0,
                 prompt: nativeConfigurationDecisionPrompt(store, sessionId, next),
@@ -3983,7 +4013,7 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
         // A crash before committing the checkpoint must not expose an old
         // proposal as an actionable legacy continuation after interruption.
         store.invalidateConnectorConfigurationRequestsForStop(session.id, run.id);
-        const reason = "API process exited before this run reached a terminal state";
+        const reason = RECOVERY_INTERRUPTION_REASON;
         const interrupted = await store.updateSessionRunStatus(session.id, run.id, "interrupted", {
           error: reason,
           finishedAt: new Date().toISOString(),

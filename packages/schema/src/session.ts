@@ -201,6 +201,12 @@ export interface RuntimeNotice {
   executions: number;
   prompt: string;
   records?: RuntimeNoticeRecord[];
+  /** Set when this wake follows a genuinely interrupted run: that run's id.
+   *  Deliberately distinct from EvolveRun.resumedFromRunId, which means an
+   *  evolve run continuing another evolve run. */
+  wakeAfterRunId?: string;
+  /** 1-based attempt number in the wake chain; the interrupted run is attempt 1. */
+  wakeAttempt?: number;
   timers: number;
 }
 
@@ -433,6 +439,10 @@ export interface SessionRun {
     notifications: Array<{ id: string; sessionId: string; agentId: string; kind: "execution" | "timer"; sourceId: string; message: string; createdAt: number; readAt?: number }>;
   };
   automaticWake?: boolean;
+  /** The interrupted run this automatic wake follows. Absent for every other run. */
+  wakeAfterRunId?: string;
+  /** 1-based attempt number in a wake chain; the interrupted run is attempt 1. */
+  wakeAttempt?: number;
   /** Server-created continuation after a conversational configuration request. */
   configurationContinuation?: { requestId: string; sourceRunId: string; connectorName: string };
   /** Durable model/tool boundary for resuming this same run after a configuration decision. */

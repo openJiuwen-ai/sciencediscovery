@@ -122,3 +122,30 @@ test("resuming one child after Session Stop admits Main and other unstopped chil
   await dispatcher.tick();
   assert.deepEqual(admitted.sort(), owners.map((owner) => owner.agentId).sort());
 });
+
+test("an interruption resume narrows the wake prompt and rides in the transcript record", (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const notifications = new AgentNotifications(db, () => false);
+  const owner = { sessionId: "session", agentId: "main" };
+  notifications.complete(owner, "job", "execution done");
+  const batch = notifications.prepareDelivery(owner)!;
+  const plain = notificationPrompt(batch);
+  const resume = { attempt: 2, runId: "5a925b47-run" };
+  const narrowed = notificationPrompt(batch, resume);
+  // The delivery itself is unchanged; the interruption frame is appended to it.
+  assert.ok(narrowed.startsWith(plain));
+  assert.match(narrowed, /5a925b47-run/);
+  assert.match(narrowed, /automatic wake attempt 2/);
+  assert.match(narrowed, /Do not continue, restart or redo the interrupted task/);
+  assert.match(narrowed, /ask whether they want to continue/);
+  assert.equal(notificationPrompt(batch), plain, "a normal delivery is byte-identical to before");
+
+  const notice = runtimeNotice(batch, [], resume);
+  assert.equal(notice.wakeAfterRunId, resume.runId);
+  assert.equal(notice.wakeAttempt, resume.attempt);
+  assert.equal(notice.prompt, narrowed);
+  const ordinary = runtimeNotice(batch);
+  assert.equal(ordinary.wakeAfterRunId, undefined);
+  assert.equal(ordinary.wakeAttempt, undefined);
+  assert.equal(ordinary.prompt, plain);
+});
