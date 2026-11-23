@@ -53,6 +53,17 @@ def parse_json(raw: str) -> Any:
     return json.loads(body, strict=False)
 
 
+def dropped_direction(proposal: dict, path: list) -> str | None:
+    """The direction a proposal had to supply but the ceiling left no room for.
+
+    A candidate parent at `maxDepth - 1` leaves `allowance == 0`, so the candidate
+    attaches directly under it. Dropping the direction silently would lose what the
+    model named; the caller records it on the candidate instead.
+    """
+    direction = proposal.get('direction')
+    return direction if direction and direction not in path else None
+
+
 def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
@@ -589,6 +600,12 @@ class IdeaTreeEngine:
                         candidate = self.add(parent, proposal['hypothesis'], 'candidate')
                         if candidate:
                             candidate.update(derivedFromCandidateIds=proposal.get('basedOnCandidateIds', []), addressesInsightIds=proposal.get('addressesInsightIds', []), targetedWeakness=proposal.get('targetedWeakness'), explorationType=proposal.get('explorationType', 'explore'))
+                            # A parent at the last expandable depth leaves no room for a
+                            # direction node, so the candidate attaches directly under it.
+                            # Keep the direction the model named rather than discarding it.
+                            trimmed = dropped_direction(proposal, path)
+                            if trimmed:
+                                candidate['trimmedDirection'] = trimmed
                             batch.append(candidate['id'])
                             existing.add(candidate['hypothesis'].strip().casefold())
                     if not batch:
