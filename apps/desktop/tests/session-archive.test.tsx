@@ -61,11 +61,27 @@ test("a run keeps the archive entry, but inert and with its reason", () => {
   const running = archiveActionFor({}, true);
   assert.equal(running.disabled, true, "a running Session must not offer the command");
   assert.equal(running.label, TEXT.menu.archive);
-  assert.equal(running.reason, TEXT.errors.archiveBlockedByRun, "and it must say why");
+  assert.equal(running.note, TEXT.errors.archiveBlockedByRun, "and it must say why");
+});
 
+test("归档 says the kernel consequence before the click, and 恢复 says nothing", () => {
+  // The confirmation dialog was removed on purpose: archiving is reversible. What
+  // 恢复 does not give back is the Session's running kernels and the memory that
+  // was not written to disk, so the menu says it under the entry.
   const idle = archiveActionFor({}, false);
   assert.equal(idle.disabled, false);
-  assert.equal(idle.reason, undefined, "no reason is carried when the command is usable");
+  assert.equal(idle.note, TEXT.errors.archiveTearsDownKernel, "the consequence is on screen before the click");
+
+  // 恢复 destroys nothing, so it carries no sentence — and it must not inherit
+  // the archive one, which would be a claim about an action it does not perform.
+  const archived = archiveActionFor({ archivedAt: "2026-01-02T00:00:00.000Z" }, false);
+  assert.equal(archived.note, undefined);
+
+  // A run in progress replaces it: the command is inert, and the reason for that
+  // is the sentence worth reading.
+  const running = archiveActionFor({}, true);
+  assert.equal(running.note, TEXT.errors.archiveBlockedByRun);
+  assert.notEqual(running.note, TEXT.errors.archiveTearsDownKernel);
 });
 
 test("an archived Session offers 恢复 and an active one offers 归档", () => {

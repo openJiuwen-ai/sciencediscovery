@@ -2312,6 +2312,7 @@ export const EN: Text = {
     archivedBanner: "This session is archived and read-only. Restore it to send messages and run again.",
     archivedComposer: "An archived session cannot send messages. Restore it to continue.",
     archiveBlockedByRun: "This session is running. Wait for it to finish before archiving or restoring.",
+    archiveTearsDownKernel: "Archiving stops the scientific kernels it is running, and memory not yet on disk does not come back with it.",
     deleteProjectWarning: (name: string) =>
       `Deleting the project "${name}" also removes its sessions, their workspaces and their artifacts, and cannot be undone.`,
   },
