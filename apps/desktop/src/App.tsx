@@ -1486,7 +1486,6 @@ export function App({ initialToken }: Props) {
             projects={state.projects}
             recent={state.recent}
             running={state.running}
-            sessionFilter={state.sessionFilter}
             sessionsByProject={state.sessionsByProject}
           />
         ) : null}
