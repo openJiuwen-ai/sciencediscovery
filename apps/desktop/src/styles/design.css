@@ -5408,9 +5408,6 @@ body.is-resizing {
   border-top: 1px solid #ececec;
 }
 
-/* 活跃 / 已归档 / 全部 — the list defaults to 活跃, so this control is how an
-   archived Session is reachable at all. */
-
-/* An archived Session says so where the reader is about to type, not only in a
-   sidebar filter they may have left on 全部. */
+/* An archived Session says so where the reader is about to type, not only on the
+   会话管理 page they may have left. */
 .session-archived-banner { margin:0; padding:8px 16px; border-top:1px solid var(--border); background:rgba(127,127,127,0.08); color:var(--muted); font-size:12px; line-height:18px; }

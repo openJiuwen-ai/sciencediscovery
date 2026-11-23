@@ -249,7 +249,12 @@ export function SessionManagementSettings({
       return (
         <>
           {unreachable}
-          <p className="settings-hint">{rows.length === 0 ? t.empty : t.noMatch}</p>
+          {/* Only a read that succeeded can say the set is empty; when every
+              read failed, 没有已归档的会话 would be a claim about a listing that
+              never arrived. */}
+          {failed && rows.length === 0 ? null : (
+            <p className="settings-hint">{rows.length === 0 ? t.empty : t.noMatch}</p>
+          )}
         </>
       );
     }
