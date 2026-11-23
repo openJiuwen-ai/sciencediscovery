@@ -409,6 +409,132 @@ test("the task panel names the search and offers a stop while it is live", () =>
   assert.equal(html.includes("evolve-task-status"), false);
 });
 
+test("a long goal reads back in full from the panel that truncates its title", () => {
+  const goal = "写一对标准库 Python 函数 pack(text: str) -> bytes 与 unpack(blob: bytes) -> str，两者都必须无损往返，并拒绝损坏的输入";
+  const html = renderToStaticMarkup(
+    <EvolveDetail
+      client={client}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={run({ goal: { ...run().goal, statement: goal } })}
+    />,
+  );
+  // The panel says what it is, and not only which group of the column it is in.
+  assert.match(html, /evolve-task-eyebrow[^>]*>程序演进</);
+  // The title is the one-line reading; the goal itself is one disclosure away.
+  assert.match(html, /<summary>查看完整目标<\/summary>/);
+  assert.ok(
+    html.replaceAll("&gt;", ">").includes(`<p>${goal}</p>`),
+    "the full goal is in the panel",
+  );
+  assert.match(html, /evolve-task-fullscreen/);
+  assert.match(html, />全屏</);
+});
+
+test("a short goal is not copied into a second reading", () => {
+  const html = renderToStaticMarkup(
+    <EvolveDetail
+      client={client}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={run()}
+    />,
+  );
+  assert.equal(html.includes("查看完整目标"), false);
+  // Full screen is about the panel, not about a goal that happens to be long.
+  assert.match(html, /evolve-task-fullscreen/);
+});
+
+test("the task panel's new controls speak the interface language", () => {
+  const previous = getLanguage();
+  const goal = "Write standard-library Python functions pack(text: str) -> bytes and unpack(blob: bytes) -> str that round-trip losslessly and reject corrupted input";
+  try {
+    setLanguage("en");
+    const html = renderToStaticMarkup(
+      <EvolveDetail
+        client={client}
+        onError={() => {}}
+        onRunChanged={() => {}}
+        run={run({ goal: { ...run().goal, statement: goal } })}
+      />,
+    );
+    assert.match(html, /evolve-task-eyebrow[^>]*>Program evolution</);
+    assert.match(html, /<summary>Show the full goal<\/summary>/);
+    assert.match(html, />Full screen</);
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("full screen fills the window, and Escape returns to the column with the run intact", async () => {
+  // A React effect needs the document the app actually has in the browser;
+  // this file has no DOM, so the listeners are recorded and pressed here.
+  type KeyEvent = { defaultPrevented: boolean; key: string; preventDefault: () => void };
+  const listeners = new Set<(event: KeyEvent) => void>();
+  const scope = globalThis as { document?: unknown };
+  const originalDocument = scope.document;
+  scope.document = {
+    addEventListener: (type: string, listener: (event: KeyEvent) => void) => {
+      if (type === "keydown") listeners.add(listener);
+    },
+    removeEventListener: (type: string, listener: (event: KeyEvent) => void) => {
+      if (type === "keydown") listeners.delete(listener);
+    },
+  };
+  const mounted: Array<ReturnType<typeof create>> = [];
+  try {
+    await act(async () => {
+      mounted.push(create(<EvolveDetail
+        client={client}
+        onError={() => {}}
+        onRunChanged={() => {}}
+        run={run()}
+      />));
+    });
+    const view = mounted[0];
+    assert.ok(view, "the task panel mounted");
+    const button = () => {
+      const [toggle] = view.root.findAllByProps({ className: "evolve-task-fullscreen" });
+      assert.ok(toggle, "the full-screen toggle is drawn");
+      return toggle;
+    };
+    assert.equal(button().props["aria-pressed"], false);
+    assert.deepEqual(button().children, ["全屏"]);
+
+    await act(async () => { button().props.onClick?.(); });
+    assert.equal(view.root.findAllByProps({ className: "evolve-detail is-fullscreen" }).length, 1);
+    assert.equal(button().props["aria-pressed"], true);
+    assert.deepEqual(button().children, ["退出全屏"]);
+    assert.equal(listeners.size, 1, "full screen owns Escape while it is open");
+
+    const escape: KeyEvent = {
+      defaultPrevented: false,
+      key: "Escape",
+      preventDefault: () => { escape.defaultPrevented = true; },
+    };
+    await act(async () => { for (const listener of [...listeners]) listener(escape); });
+
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(listeners.size, 0, "the listener leaves with the mode");
+    assert.equal(view.root.findAllByProps({ className: "evolve-detail" }).length, 1);
+    assert.equal(button().props["aria-pressed"], false);
+    assert.deepEqual(button().children, ["全屏"]);
+    // Leaving full screen is not a new panel: the same reading is still there.
+    assert.equal(view.root.findAllByProps({ className: "evolve-overview" }).length, 1);
+    const title = view.root.findAllByProps({ id: "evolve-panel-title" })[0];
+    assert.ok(title, "the task title is drawn");
+    assert.deepEqual(title.children, ["让压缩比更高"]);
+    assert.equal(view.root.findAll((node) => node.props.className === "evolve-task-stop").length, 1);
+  } finally {
+    const view = mounted[0];
+    if (view) await act(async () => { view.unmount(); });
+    // The file's own window stub is shared with the other mounted cases, so
+    // only the document this case replaced is put back.
+    if (originalDocument === undefined) delete scope.document;
+    else scope.document = originalDocument;
+  }
+});
+
 test("the task panel leads with the totals, the chart, the tree and the budget", () => {
   const html = renderToStaticMarkup(
     <EvolveDetail

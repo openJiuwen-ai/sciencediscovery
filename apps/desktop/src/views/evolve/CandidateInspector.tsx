@@ -36,7 +36,7 @@ import type { EvolveCandidateView } from "../../evolve/model.js";
 import { formatScore } from "../../evolve/model.js";
 import { collapseContext, diffLines } from "../../evolve/text-diff.js";
 import { TEXT } from "../../text.js";
-import { claimsEscape } from "../dialog-escape.js";
+import { claimsEscape, enterDialog, isTopDialog, leaveDialog } from "../dialog-escape.js";
 import { ChildrenGlyph, CrownGlyph, ExpandGlyph, TrophyGlyph } from "./glyphs.js";
 
 type Sources = { after: string; before: string } | "loading" | "missing";
@@ -102,13 +102,20 @@ export function CandidateInspector({
 
   useEffect(() => {
     if (!expanded) return;
+    // The source view is a sheet over the panel, so it takes the Escape token
+    // when it opens. A full-screen task view registered earlier then stays
+    // open underneath: one Escape goes back one surface.
+    const token = enterDialog();
     const onKey = (event: KeyboardEvent) => {
-      if (!claimsEscape(event)) return;
+      if (!isTopDialog(token) || !claimsEscape(event)) return;
       event.preventDefault();
       setExpanded(false);
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      leaveDialog(token);
+    };
   }, [expanded]);
 
   const rows = typeof sources === "object"

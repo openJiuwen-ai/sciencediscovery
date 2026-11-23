@@ -178,9 +178,10 @@ test("a search stays reachable after its turn and opens in the task tab", { tag:
   await expect(page.locator(".evolve-overview-value").first()).toContainText("0.6100");
   await expect(page.locator(".evolve-chart-line")).toBeVisible();
   await expect(page.locator(".evolve-node-row")).toHaveCount(2);
-  // The title row carries the stop control and no close button: leaving the
-  // task is a tab change or the column's own collapse.
-  await expect(page.locator(".evolve-task-head").getByRole("button")).toHaveCount(1);
+  // The title row carries the stop control and the full-screen toggle, and no
+  // close button: leaving the task is a tab change or the column's own
+  // collapse.
+  await expect(page.locator(".evolve-task-head").getByRole("button")).toHaveCount(2);
 
   await page.locator(".evolve-node-row").filter({ hasText: "Node #1" }).click();
   await expect(page.locator(".evolve-drawer")).toContainText("缓存 fit 的结果");
@@ -224,6 +225,81 @@ test("a search stays reachable after its turn and opens in the task tab", { tag:
   // The card remains in the transcript: leaving the task is not stopping the
   // search.
   await expect(page.locator(".evolve-run-card")).toBeVisible();
+});
+
+test("a long goal reads back in full, and full screen leaves it where it was", async ({ page }) => {
+  const goal = "写一对标准库 Python 函数 pack(text: str) -> bytes 与 unpack(blob: bytes) -> str，两者都必须无损往返，并拒绝损坏的输入";
+  const fixture = liveRun();
+  fixture.run.goal.statement = goal;
+  await installMockApi(page, {
+    evolveRunsBySession: { "session-1": [fixture] },
+    sessions: [makeSession({
+      messages: [
+        { content: "让压缩比更高", createdAt: CREATED_AT, id: "message-user", role: "user" },
+        {
+          content: "评分装置能明确区分好坏候选，搜索已在后台启动。",
+          createdAt: CREATED_AT,
+          id: "message-assistant",
+          role: "assistant",
+        },
+      ],
+    })],
+  });
+  await page.goto("/");
+  await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
+  await page.locator(".evolve-run-card").first().click();
+
+  // The eyebrow names the surface; the title is the one-line reading and says
+  // that it is one by ending in an ellipsis.
+  await expect(page.locator(".evolve-task-eyebrow")).toHaveText("程序演进");
+  await expect(page.locator("#evolve-panel-title")).toHaveText(/…$/);
+  const fullGoal = page.locator(".evolve-task-goal p");
+  await expect(fullGoal).toBeHidden();
+  await page.locator(".evolve-task-goal summary").click();
+  await expect(fullGoal).toHaveText(goal);
+
+  // The toggle is a real button, so it works from the keyboard: focus it and
+  // press Enter, then leave the same way a keyboard user would.
+  const toggle = page.getByRole("button", { name: "全屏", exact: true });
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "退出全屏", exact: true })).toBeFocused();
+
+  const detail = page.locator(".evolve-detail");
+  await expect(detail).toHaveClass(/is-fullscreen/);
+  const box = await detail.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  if (box === null || viewport === null) throw new Error("the full-screen sheet and the viewport were not measured");
+  expect([Math.round(box.x), Math.round(box.y)]).toEqual([0, 0]);
+  expect([Math.round(box.width), Math.round(box.height)]).toEqual([viewport.width, viewport.height]);
+  // The whole reading came with it, not a blank sheet with a header.
+  await expect(page.locator(".evolve-overview")).toBeVisible();
+  await expect(page.locator(".evolve-chart-line")).toBeVisible();
+
+  // Narrowing the window after entering the mode must not hide the sheet with
+  // the column the shell would otherwise hide: the task still fills the window
+  // and both header controls stay reachable.
+  await page.setViewportSize({ width: 720, height: 700 });
+  await expect(detail).toHaveClass(/is-fullscreen/);
+  await expect(page.getByRole("button", { name: "退出全屏", exact: true })).toBeVisible();
+  await expect(page.locator(".evolve-task-stop")).toBeVisible();
+  const narrowed = await detail.boundingBox();
+  expect(narrowed).not.toBeNull();
+  if (narrowed === null) throw new Error("the narrowed full-screen sheet was not measured");
+  expect([Math.round(narrowed.x), Math.round(narrowed.y)]).toEqual([0, 0]);
+  expect([Math.round(narrowed.width), Math.round(narrowed.height)]).toEqual([720, 700]);
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+  await page.keyboard.press("Escape");
+  await expect(detail).not.toHaveClass(/is-fullscreen/);
+  await expect(page.getByRole("button", { name: "全屏", exact: true })).toBeFocused();
+  // Leaving the mode does not reset the panel: the goal is still open, the run
+  // still live and the stop control still there.
+  await expect(fullGoal).toHaveText(goal);
+  await expect(page.locator(".evolve-overview")).toBeVisible();
+  await expect(page.locator(".evolve-task-stop")).toBeVisible();
 });
 
 test("a search started in this window opens its task tab by itself", async ({ page }) => {
