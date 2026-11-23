@@ -81,6 +81,20 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
  * so the English dictionary cannot grow or lose a key without the compiler
  * saying so. Wording is reviewable here without reading any JSX.
  */
+/**
+ * How long a run took, in the units a wait is actually felt in. Shared by the
+ * finished span and the live clock on the folded line so the two never read
+ * differently: an hour is where "72 分" stops being readable, and the seconds
+ * are dropped there because by then they are noise.
+ */
+function runSpan(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
 export const ZH = {
   configurationLegacy: {
     title: "启用连接器", awaiting: "等待确认", change: "修改", scope: "范围", session: "仅当前会话",
@@ -549,18 +563,23 @@ export const ZH = {
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */
     thinkingNow: "正在规划下一步",
+    /** What the live line says while a tool is still running: the name is the
+     *  only thing on screen that says which part of the work is taking so
+     *  long. */
+    workingTool: (name: string) => `正在运行 ${name}`,
+    /** The same, for a child agent. The task is the child's own wording, taken
+     *  from the snapshot the transcript already holds. */
+    workingSubagent: (task: string) => `子代理正在处理：${task}`,
     /**
-     * The same line once the run is over. Minutes and seconds are the units a
+     * The folded line once the run is over. Minutes and seconds are the units a
      * wait is actually felt in; an hour is where "72 分" stops being readable,
      * and the seconds are dropped there because by then they are noise.
      */
-    elapsed: (ms: number) => {
-      const seconds = Math.max(1, Math.round(ms / 1000));
-      if (seconds < 60) return `用时 ${seconds} 秒`;
-      const minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return `用时 ${minutes} 分 ${seconds % 60} 秒`;
-      return `用时 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
-    },
+    elapsed: (ms: number) => `用时 ${runSpan(ms)}`,
+    /** The same span while the run is still going. A long run that reports no
+     *  clock at all is indistinguishable from a stuck one, so the line keeps
+     *  counting until the final span replaces it. */
+    elapsedNow: (ms: number) => `已用 ${runSpan(ms)}`,
     expand: "▸ 展开",
     collapse: "▼ 收起",
     running: "生成中",

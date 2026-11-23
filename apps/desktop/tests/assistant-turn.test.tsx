@@ -23,6 +23,7 @@ import type { ApiClient } from "../src/api/client.js";
 import type { Subagent } from "../src/api/types.js";
 import { emptyRunStream, type AssistantTurn, type RunStreamState } from "../src/run-stream/model.js";
 import { AssistantTurns } from "../src/views/AssistantTurn.js";
+import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 
 const { describe, it } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
@@ -47,6 +48,13 @@ function render(run: Partial<RunStreamState>): string {
 
 function spinners(html: string): number {
   return (html.match(/class="spinner"/gu) ?? []).length;
+}
+
+/** Put a global back the way the test found it, so a shim installed for one
+ *  case does not become an accident the next case depends on. */
+function restoreGlobal(name: string, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor === undefined) Reflect.deleteProperty(globalThis, name);
+  else Object.defineProperty(globalThis, name, descriptor);
 }
 
 /**
@@ -277,6 +285,114 @@ describe("a run folds into one line", () => {
     assert.ok(fold !== -1);
     assert.equal(html.match(/PERMISSION-SUMMARY/gu)?.length, 1);
     assert.ok(html.indexOf("PERMISSION-SUMMARY") > closesAt(html, fold));
+  });
+});
+
+describe("a running turn shows how long it has been going and what it is on", () => {
+  const answered = {
+    responses: [{ content: "the answer", responseId: "a", settled: true, truncated: false }],
+    thinking: "a thought",
+    turn: 1,
+  };
+
+  it("keeps a clock on the folded line before the run ends", () => {
+    // #1315: the line used to say 正在规划下一步 and nothing else for the whole
+    // run, so a 77-minute wait looked exactly like a stuck one.
+    const html = render({
+      startedAt: Date.now() - (77 * 60_000 + 30_000),
+      status: "running",
+      turns: [turn(answered)],
+    });
+    assert.match(html, /class="collapse-elapsed"/u);
+    assert.match(html, /已用 1 小时 17 分/u);
+    assert.doesNotMatch(html, /用时 1 小时 17 分/u);
+  });
+
+  it("names the tool that is running instead of repeating the planning sentence", () => {
+    const html = render({
+      startedAt: Date.now() - 120_000,
+      status: "running",
+      turns: [turn({
+        tools: [{ after: -1, id: "c1", trace: { id: "c1", name: "web_search", status: "running" } }],
+      })],
+    });
+    assert.match(html, /正在运行 web_search/u);
+    assert.match(html, /已用 2 分/u);
+    assert.doesNotMatch(html, /正在规划下一步/u);
+    // A narrow column cuts the stage name with an ellipsis, so the whole
+    // sentence stays reachable as the line's tooltip.
+    assert.match(html, /title="正在运行 web_search"/u);
+  });
+
+  it("names a running subagent, which is what a long delegation looks like", () => {
+    const html = render({
+      startedAt: Date.now() - 300_000,
+      status: "running",
+      turns: [turn({ subagents: [{ after: -1, subagent: child({ status: "running" }) }] })],
+    });
+    assert.match(html, /子代理正在处理：read the literature/u);
+    assert.match(html, /已用 5 分/u);
+  });
+
+  it("falls back to the planning sentence when no activity can be derived", () => {
+    const html = render({ status: "running", turns: [turn({ thinking: "a thought" })] });
+    assert.match(html, /正在规划下一步/u);
+    // No startedAt: a record that predates the times still says something.
+    assert.doesNotMatch(html, /class="collapse-elapsed"/u);
+  });
+
+  it("leaves the finished line as the final span, with no live clock", () => {
+    const html = render({
+      finishedAt: Date.parse("2026-01-01T00:46:06.303Z"),
+      startedAt: Date.parse("2026-01-01T00:13:33.993Z"),
+      terminal: true,
+      turns: [turn(answered)],
+    });
+    assert.match(html, /用时 32 分 32 秒/u);
+    assert.doesNotMatch(html, /已用/u);
+    assert.doesNotMatch(html, /class="collapse-elapsed"/u);
+    assert.doesNotMatch(html, /run-spinner/u);
+  });
+
+  it("counts up once a second while the run is live", async (context) => {
+    const startedAt = Date.parse("2026-01-01T00:00:00.000Z");
+    context.mock.timers.enable({ apis: ["setInterval", "Date"], now: startedAt + 65_000 });
+    // The component reads the browser's own timer; in Node that is a shim over
+    // the mocked global one, resolved at call time so the mock is what runs.
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const previousAct = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: { clearInterval: (id: number) => clearInterval(id), setInterval: (callback: () => void, ms: number) => setInterval(callback, ms) },
+    });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
+
+    let view!: ReactTestRenderer;
+    await act(async () => {
+      view = create(
+        <AssistantTurns
+          client={client}
+          onDecide={() => Promise.resolve()}
+          run={{ ...emptyRunStream(), modelName: "m", runId: "r1", startedAt, status: "running" }}
+          sessionId="s1"
+        />,
+      );
+    });
+    try {
+      const clock = () => view.root
+        .findAll((node) => node.props.className === "collapse-elapsed")
+        .map((node) => node.children.join(""))
+        .join("");
+      assert.equal(clock(), "已用 1 分 5 秒");
+      await act(async () => context.mock.timers.tick(60_000));
+      assert.equal(clock(), "已用 2 分 5 秒");
+    } finally {
+      await act(async () => view.unmount());
+      context.mock.timers.reset();
+      restoreGlobal("window", previousWindow);
+      restoreGlobal("IS_REACT_ACT_ENVIRONMENT", previousAct);
+    }
   });
 });
 
