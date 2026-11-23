@@ -330,6 +330,10 @@
   position: relative;
   height: 100vh;
   overflow: hidden;
+  /* The Chinese tagline has to hold one line, so its size comes from this
+     column's width (see the :lang(zh) rule below) rather than the viewport's:
+     a viewport size wraps it at every width in the 340–710px clamp. */
+  container-type: inline-size;
   background:
     radial-gradient(90% 60% at 18% 6%, rgba(255, 255, 255, .5), transparent 62%),
     linear-gradient(168deg, #a9dced 0%, #b8e0ea 40%, #cfe7d8 68%, #efe6c9 100%);
@@ -360,10 +364,21 @@
 .login-art-copy h2 {
   margin: 0;
   font-family: "HarmonyOS Sans", "Segoe UI", system-ui, sans-serif;
-  font-size: clamp(28px, 2.5vw, 48px);
+  /* The English title is 42 characters: no size that reads well puts it on one
+     line in this column, so break it evenly rather than leaving a short tail. */
+  font-size: clamp(20px, 2.5vw, 44px);
   font-weight: 400;
   line-height: 1.12;
   letter-spacing: .2px;
+  text-wrap: balance;
+}
+
+/* The Chinese title is 14 full-width glyphs and must stay on one line; sizing
+   from the panel's own width keeps it inside panel − 48px from the 340px floor
+   to the 710px cap. */
+.login-art-copy h2:lang(zh) {
+  font-size: clamp(18px, 5.4cqw, 44px);
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {

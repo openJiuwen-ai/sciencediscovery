@@ -12,6 +12,7 @@ import { GUIDE_STORAGE_KEY, LOCALE_STORAGE_KEY, SIDEBAR_STORAGE_KEY } from "../.
 const [language, scenario] = process.argv.slice(2);
 assert.ok(language === "zh-CN" || language === "en");
 assert.ok(scenario);
+const initialToken = randomUUID();
 const storage = new Map<string, string>([[GUIDE_STORAGE_KEY, "1"], [LOCALE_STORAGE_KEY, language]]);
 if (scenario === "sidebar-collapsed") storage.set(SIDEBAR_STORAGE_KEY, "0");
 const localStorage = {
@@ -81,6 +82,11 @@ if (scenario === "empty-catalog") {
   data.projects.push({ ...inbox, id: "history-project", name: "Existing history", kind: undefined });
   newSession("history-project");
 }
+if (scenario === "credits-sign-in") data.models = [];
+
+/** The credits-backed provider `ensureCreditsModel` writes; kept so a repeated
+ *  sign-in finds it instead of creating a second one. */
+const providers: Array<Record<string, unknown>> = [];
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input), "http://render.example.test");
@@ -92,7 +98,28 @@ globalThis.fetch = async (input, init = {}) => {
   else if (path === "/api/health") result = { status: "ok" };
   else if (path === "/api/models") result = data.models;
   else if (path === "/api/specialists" || path === "/api/skills") result = [];
-  else if (path === "/api/providers") result = { providers: [], presets: [] };
+  // The account gateway `ensureCreditsModel` reads before it registers the
+  // credits provider; the empty `VITE_ACCOUNTS_API` in the render makes it a
+  // same-origin `/v1/models`.
+  else if (method === "GET" && path === "/v1/models") result = { data: [{ id: first.id }] };
+  else if (path === "/api/providers" && method === "POST") {
+    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    const provider = {
+      id: "credits-provider", name: body.name, apiProtocol: body.apiProtocol,
+      baseUrl: body.baseUrl, createdAt: now, updatedAt: now,
+    };
+    providers.push(provider);
+    result = provider;
+  } else if (method === "POST" && /^\/api\/providers\/[^/]+\/models$/u.test(path)) {
+    data.models = [first];
+    result = first;
+  } else if (method === "PUT" && /^\/api\/providers\/[^/]+$/u.test(path)) {
+    // The signed-in effect rotates the stored token on every launch, so the
+    // sign-in path also writes the provider once.
+    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    const existing = providers[0] ?? {};
+    result = { ...existing, ...body, updatedAt: now };
+  } else if (path === "/api/providers") result = { providers, presets: [] };
   else if (path === "/api/settings") result = { ...settings(), overrides: globalModel ? { modelId: globalModel } : {} };
   else if (path === "/api/evolve/status") result = { state: "ready", canInitialize: false };
   else if (path === "/api/evolve/runs") result = [];
@@ -171,8 +198,24 @@ async function click(node: ReactTestInstance) {
   await act(async () => { await handler(); });
 }
 try {
-  await act(async () => { renderer = create(React.createElement(App, { initialToken: randomUUID() })); });
-  if (scenario === "empty-catalog") {
+  await act(async () => { renderer = create(React.createElement(App, { initialToken })); });
+  if (scenario === "credits-sign-in") {
+    // The machine token is already in place (localToken === token), so signing
+    // in takes the path that used to leave the setup wizard on screen.
+    assertSetup();
+    const authenticated = root().findByType(LoginPage).props.onAuthenticated;
+    assert.ok(typeof authenticated === "function");
+    const session = {
+      userId: 1, openId: "open-id", displayName: "Signed-in user",
+      accessToken: "gateway-token", refreshToken: "refresh-token",
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      balanceCredits: 100, createdAt: now,
+    };
+    await act(async () => { await authenticated(session, initialToken); });
+    assert.ok(calls.includes("POST /api/providers"), "the credits provider must be registered");
+    assert.ok(calls.includes("GET /api/projects"), "the bootstrap must re-run after sign-in");
+    assertModel();
+  } else if (scenario === "empty-catalog") {
     assertSetup();
     assert.ok(!calls.includes("GET /api/projects"), "existing history must not bypass the rendered setup gate");
     assert.ok(!JSON.stringify(renderer?.toJSON()).includes("Existing history"));

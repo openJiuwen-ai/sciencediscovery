@@ -864,8 +864,10 @@ export function App({ initialToken }: Props) {
    *  never briefly empty (which would show the model wizard for a user who
    *  already chose to pay with credits). */
   const authenticate = useCallback(async (session: UserSession, localToken: string) => {
+    let creditsModelReady = false;
     try {
       await ensureCreditsModel(new ApiClient(localToken, onAuthRejected), session);
+      creditsModelReady = true;
     } catch {
       // The gateway may be unreachable; the model wizard is the fallback.
     }
@@ -875,13 +877,18 @@ export function App({ initialToken }: Props) {
     // needs refreshing, which keeps the account details on screen.
     if (localToken !== token) {
       acceptToken(localToken);
+    } else if (creditsModelReady && boot === "setup") {
+      // The sign-in registered the credits model after boot had already decided
+      // the catalog was empty. Re-run the bootstrap so the non-empty catalog
+      // opens the workspace instead of leaving the setup wizard on screen.
+      actions.finishSetup();
     } else {
       void actions.refreshCatalog();
     }
     setAccountSession(session);
     setSettlingAuth(false);
     setAccountOpen(returnToAccount.current);
-  }, [actions, onAuthRejected, token]);
+  }, [actions, boot, onAuthRejected, token]);
 
   // A restored account settles the callback latch as well: the ticket is no
   // longer the reason this render is a sign-in page.
