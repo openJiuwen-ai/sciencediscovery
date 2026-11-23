@@ -146,8 +146,11 @@ export function SessionManagementSettings({
 
   // The workspace hands over a fresh `projects` array after every listing read,
   // so an effect keyed on that identity re-read every Project on every refresh
-  // and blanked the rows while it did. This key changes only when the set of
-  // Projects does.
+  // and blanked the rows while it did. The latest arrays are kept here and the
+  // read depends on a key that changes only when the set of Projects does — a
+  // rename still reaches the rows, because the read looks at this ref.
+  const latest = useRef({ inbox, projects });
+  latest.current = { inbox, projects };
   const scopeKey = `${projects.map((entry) => entry.id).join(",")}|${inbox?.id ?? ""}|${project}`;
 
   /**
@@ -156,7 +159,8 @@ export function SessionManagementSettings({
    * unreachable Project must not hide the archived Sessions of the others.
    */
   const read = useCallback(async (): Promise<ArchivedRow[]> => {
-    const all = inbox ? [...projects, inbox] : projects;
+    const { inbox: currentInbox, projects: currentProjects } = latest.current;
+    const all = currentInbox ? [...currentProjects, currentInbox] : currentProjects;
     const scoped = project === "all" ? all : all.filter((entry) => entry.id === project);
     const lists = await Promise.all(
       scoped.map(async (entry) => {
@@ -171,9 +175,7 @@ export function SessionManagementSettings({
     // Newest archive first: the Session put away a minute ago is the one a
     // user most often comes here to bring back.
     return lists.flat().sort((left, right) => (right.session.archivedAt ?? "").localeCompare(left.session.archivedAt ?? ""));
-    // `scopeKey` is the dependency that matters; the arrays themselves are new
-    // objects on every workspace refresh.
-  }, [client, inbox, projects, project, scopeKey]);
+  }, [client, project, scopeKey]);
 
   const [reloads, setReloads] = useState(0);
   /** Whether a listing has been read once. Only the first read replaces the rows
