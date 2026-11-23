@@ -28,6 +28,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { Queryable } from "./db.js";
+import { appendLedger } from "./ledger.js";
 import type { ModelPrice } from "./pricing.js";
 
 /**
@@ -278,6 +279,9 @@ export interface AccountsStore {
   getCredit(userId: number): Promise<CreditRow | undefined>;
   updateProfile(userId: number, patch: { displayName?: string | undefined; email?: string | undefined }): Promise<UserRow | undefined>;
   listLedger(userId: number, beforeId: number | undefined, limit: number): Promise<LedgerRow[]>;
+  /** Every daily check-in, counted in SQL: the reward strip needs the whole
+   *  history, not just the newest ledger page. */
+  countCheckins(userId: number): Promise<{ total: number; lastDate: string | null }>;
 
   createTicket(jti: string, openid: string, expiresAt: Date): Promise<void>;
   consumeTicket(jti: string, now: Date): Promise<string | undefined>;
@@ -486,19 +490,24 @@ export class PostgresStore implements AccountsStore {
 
       await tx.query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [user.id]);
       await tx.query(`INSERT INTO credit_accounts (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [user.id]);
+      // Hold the account row before any ledger insert. `settleCredits` and
+      // `adjustCredits` take the same lock, so the previous-row read inside
+      // `appendLedger` cannot be overtaken by another writer committing a row
+      // with a lower id than the one computed from a stale read.
+      await tx.query(`SELECT balance FROM credit_accounts WHERE user_id = $1 FOR UPDATE`, [user.id]);
 
       let grantedMilli = 0;
       if (isNewUser && input.grantMilliCredits > 0) {
         // The ledger's (biz_type, biz_id) unique index is what makes the grant
         // exactly-once even if two callbacks race on the same brand-new user.
-        const granted = await tx.query<{ id: number }>(
-          `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
-           VALUES ($1, $2, $2, 'REGISTER', $3, '注册赠送')
-           ON CONFLICT (biz_type, biz_id) DO NOTHING
-           RETURNING id`,
-          [user.id, input.grantMilliCredits, String(user.id)],
-        );
-        if (granted.length > 0) {
+        const granted = await appendLedger(tx, {
+          userId: user.id,
+          delta: input.grantMilliCredits,
+          bizType: "REGISTER",
+          bizId: String(user.id),
+          remark: "注册赠送",
+        });
+        if (granted) {
           await tx.query(
             `UPDATE credit_accounts
                 SET balance = balance + $2, total_earned = total_earned + $2, updated_at = now()
@@ -527,14 +536,14 @@ export class PostgresStore implements AccountsStore {
           rewardDay = day;
           // One CHECKIN row per user per day: signing in twice cannot pay twice,
           // and a missed day simply has no row to claim later.
-          const paid = await tx.query<{ id: number }>(
-            `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
-             VALUES ($1, $2, (SELECT balance FROM credit_accounts WHERE user_id = $1) + $2, 'CHECKIN', $3, $4)
-             ON CONFLICT (biz_type, biz_id) DO NOTHING
-             RETURNING id`,
-            [user.id, program.milliCredits, `${user.id}:${checkinDate}`, `每日签到 · ${checkinDate}`],
-          );
-          if (paid.length > 0) {
+          const paid = await appendLedger(tx, {
+            userId: user.id,
+            delta: program.milliCredits,
+            bizType: "CHECKIN",
+            bizId: `${user.id}:${checkinDate}`,
+            remark: `每日签到 · ${checkinDate}`,
+          });
+          if (paid) {
             await tx.query(
               `UPDATE credit_accounts
                   SET balance = balance + $2, total_earned = total_earned + $2, updated_at = now()
@@ -555,14 +564,14 @@ export class PostgresStore implements AccountsStore {
               const count = claimed[0]?.count ?? 0;
               const cycle = Math.floor(count / program.cycleDays);
               if (cycle >= 1) {
-                const bonus = await tx.query<{ id: number }>(
-                  `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
-                   VALUES ($1, $2, (SELECT balance FROM credit_accounts WHERE user_id = $1) + $2, 'BONUS', $3, $4)
-                   ON CONFLICT (biz_type, biz_id) DO NOTHING
-                   RETURNING id`,
-                  [user.id, program.bonusMilliCredits, `${user.id}:cycle-${cycle}`, `累计签到 ${cycle * program.cycleDays} 天奖励`],
-                );
-                if (bonus.length > 0) {
+                const bonus = await appendLedger(tx, {
+                  userId: user.id,
+                  delta: program.bonusMilliCredits,
+                  bizType: "BONUS",
+                  bizId: `${user.id}:cycle-${cycle}`,
+                  remark: `累计签到 ${cycle * program.cycleDays} 天奖励`,
+                });
+                if (bonus) {
                   await tx.query(
                     `UPDATE credit_accounts
                         SET balance = balance + $2, total_earned = total_earned + $2, updated_at = now()
@@ -617,6 +626,20 @@ export class PostgresStore implements AccountsStore {
       [userId, beforeId ?? null, limit],
     );
     return rows.map(toLedger);
+  }
+
+  async countCheckins(userId: number): Promise<{ total: number; lastDate: string | null }> {
+    // A CHECKIN row's biz_id is `<user id>:<China date>`; the date is pulled out
+    // of the id rather than the timestamp so "today" means the same calendar
+    // day the row was claimed on, not the UTC day `created_at` falls in.
+    const rows = await this.db.query<{ total: number; last_date: string | null }>(
+      `SELECT count(*)::int AS total,
+              max(substring(biz_id from '[0-9]{4}-[0-9]{2}-[0-9]{2}')) AS last_date
+         FROM credit_ledger
+        WHERE user_id = $1 AND biz_type = 'CHECKIN'`,
+      [userId],
+    );
+    return { total: rows[0]?.total ?? 0, lastDate: rows[0]?.last_date ?? null };
   }
 
   async createTicket(jti: string, openid: string, expiresAt: Date): Promise<void> {
@@ -927,32 +950,37 @@ export class PostgresStore implements AccountsStore {
     return this.db.transaction(async (tx) => {
       const current = await tx.query<{ balance: number }>(`SELECT balance FROM credit_accounts WHERE user_id = $1 FOR UPDATE`, [input.userId]);
       if (!current[0]) return undefined;
-      const balanceAfter = current[0].balance + input.deltaMilli;
-      if (balanceAfter < 0) return undefined;
+      // The spendable balance is what may not go negative; the row itself
+      // records the ledger's running total, like every other writer.
+      const spendable = current[0].balance + input.deltaMilli;
+      if (spendable < 0) return undefined;
 
-      const inserted = await tx.query<LedgerRaw>(
-        `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
-         VALUES ($1, $2, $3, 'ADMIN', $4, $5) RETURNING *`,
-        [input.userId, input.deltaMilli, balanceAfter, randomUUID(), input.remark],
-      );
+      const inserted = await appendLedger(tx, {
+        userId: input.userId,
+        delta: input.deltaMilli,
+        bizType: "ADMIN",
+        bizId: randomUUID(),
+        remark: input.remark,
+      });
+      if (!inserted) return undefined;
       await tx.query(
         `UPDATE credit_accounts
-            SET balance = $2,
+            SET balance = balance + $2,
                 total_earned = total_earned + GREATEST($3::bigint, 0),
                 total_spent  = total_spent  + GREATEST(-$3::bigint, 0),
                 updated_at = now()
           WHERE user_id = $1`,
-        [input.userId, balanceAfter, input.deltaMilli],
+        [input.userId, input.deltaMilli, input.deltaMilli],
       );
       await insertAudit(tx, {
         adminId: input.adminId,
         action: "CREDIT_ADJUST",
         targetType: "user",
         targetId: String(input.userId),
-        detail: { delta: input.deltaMilli, balanceBefore: current[0].balance, balanceAfter, remark: input.remark },
+        detail: { delta: input.deltaMilli, balanceBefore: current[0].balance, balanceAfter: spendable, remark: input.remark },
         ip: input.ip,
       });
-      return { balance: balanceAfter, ledger: toLedger(inserted[0]!) };
+      return { balance: spendable, ledger: toLedger(inserted) };
     });
   }
 
@@ -1061,17 +1089,15 @@ export class PostgresStore implements AccountsStore {
       // page's "previous balance + delta = this balance" check for whichever
       // of two concurrent calls settles first. The row therefore continues
       // the ledger's own running total; the two agree once no hold is open.
-      const previous = await tx.query<{ balance_after: number }>(
-        `SELECT balance_after FROM credit_ledger WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
-        [input.userId],
-      );
-      const ledgerAfter = (previous[0]?.balance_after ?? 0) - charged;
-      await tx.query(
-        `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
-         VALUES ($1, $2, $3, 'LLM_USAGE', $4, $5)
-         ON CONFLICT (biz_type, biz_id) DO NOTHING`,
-        [input.userId, -charged, ledgerAfter, input.requestId, `${input.model} 调用`],
-      );
+      // The `UPDATE credit_accounts … RETURNING` above holds the row lock, so
+      // the previous-row read inside `appendLedger` is already serialised.
+      await appendLedger(tx, {
+        userId: input.userId,
+        delta: -charged,
+        bizType: "LLM_USAGE",
+        bizId: input.requestId,
+        remark: `${input.model} 调用`,
+      });
       await tx.query(
         `INSERT INTO llm_usage (user_id, request_id, channel, model, input_tokens, cached_tokens, output_tokens, credits_used, latency_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

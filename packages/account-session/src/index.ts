@@ -46,6 +46,13 @@ export interface AccountSession {
 export interface AccountMe {
   user: AccountUser;
   credit: AccountCredit;
+  /** Daily check-ins counted by the service, so the seven-day strip does not
+   *  have to count only the newest ledger page. Absent on older services. */
+  checkins?: {
+    total: number;
+    /** The China-local date of the newest check-in, `YYYY-MM-DD`. */
+    lastDate: string | null;
+  } | undefined;
   onlineSessions: number;
   activeSessions: number;
   currentSessionId: string;
