@@ -263,7 +263,7 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       label: TEXT.reviewer.gaps,
       labelTip: labelTipFor("gaps"),
       title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
-      body: gap.reason,
+      body: TEXT.reviewer.gapBodies[gap.check] ?? (gap.reason || TEXT.reviewer.gapBodyUnknown),
       badge: TEXT.reviewer.gaps,
     });
   }

@@ -422,6 +422,15 @@ export const ZH = {
       citation_identity: "引用身份",
       computation: "计算",
     } as Record<string, string>,
+    /** What the unperformed check would have covered, in the card's language.
+     *  The server's own reason is an English template and is only the fallback
+     *  for a check this map does not know. */
+    gapBodies: {
+      claim_support: "这次审查没有核对结论有没有来源支撑。要核对请用深度审查。",
+      citation_identity: "这次审查没有核对文献身份（作者、期刊、年份）。",
+      computation: "这次审查没有核对数字与计算依据。",
+    } as Record<string, string>,
+    gapBodyUnknown: "这次审查没有执行这一项。",
     /** A source check that could not conclude is not a report defect. */
     inconclusive: "来源核验没有得出结论",
     inconclusiveBody: "来源服务未返回结论，这不代表报告有问题。",
