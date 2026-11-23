@@ -353,6 +353,7 @@ export const EN: Text = {
     savedGlobal: "Written to the global settings",
     unchanged: "Nothing was changed here, so the global settings are untouched.",
     noSession: "Open a conversation to change the settings for it alone.",
+  },
   /** Reviewer Specialist: the session's own toggle, and the review card the
    *  conversation draws at its checkpoint. */
   reviewer: {

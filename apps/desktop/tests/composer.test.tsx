@@ -182,6 +182,8 @@ test("会话设置 carries the idea-tree entry under 程序演进实验", () => 
   assert.ok(markup.indexOf("idea-tree") < markup.indexOf(">专家<"));
   // A settings menu that cannot open the card does not offer the row.
   assert.doesNotMatch(settingsMenu(true), /idea-tree/);
+});
+
 test("会话设置 can ask for a review now, and the same row stops one under way", async () => {
   const calls: string[] = [];
   const menu = (runningReview: boolean, reviewerEnabled = true) => (
