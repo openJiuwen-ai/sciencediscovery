@@ -33,6 +33,7 @@ import { MemorySettings } from "./settings/system/MemorySettings.js";
 import { SpecialistsSettings } from "./settings/system/Specialists.js";
 import { TimeoutSettings } from "./settings/system/Timeouts.js";
 import { ExportHistorySettings } from "./settings/system/ExportHistory.js";
+import { SessionManagementSettings } from "./settings/system/Sessions.js";
 import { IdeaTreeSettings } from "./settings/IdeaTreeSettings.js";
 
 /** The original desktop nav, extended with MCP, 专家, 科学记忆 and 超时. */
@@ -51,6 +52,7 @@ export type SettingsGroup =
   | "web"
   | "proxies"
   | "timeouts"
+  | "session-management"
   | "export-history";
 
 type CategoryId = "system" | "intelligence" | "connection" | "workspace";
@@ -62,7 +64,7 @@ const CATEGORIES: { groups: SettingsGroup[]; id: CategoryId }[] = [
   // the agent rather than the environment it runs in.
   { groups: ["models", "usage", "skills", "mcp", "specialists", "idea-tree", "memory", "web"], id: "intelligence" },
   { groups: ["sandbox-network", "proxies", "remote"], id: "connection" },
-  { groups: ["timeouts", "quotas", "export-history"], id: "workspace" },
+  { groups: ["timeouts", "quotas", "session-management", "export-history"], id: "workspace" },
 ];
 
 function categoryOf(group: SettingsGroup): CategoryId {
@@ -193,6 +195,15 @@ export function SystemSettingsDialog({
         return <ProxySettings client={client} onConfirm={actions.confirmAction} />;
       case "timeouts":
         return <TimeoutSettings client={client} />;
+      case "session-management":
+        return (
+          <SessionManagementSettings
+            actions={actions}
+            client={client}
+            onClose={onClose}
+            projects={state.projects}
+          />
+        );
       case "export-history":
         return <ExportHistorySettings projects={state.projects} />;
     }

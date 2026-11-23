@@ -121,6 +121,22 @@ export const ZH = {
     forget: "移除记录",
     revealMissing: "文件已被移动或删除，可以从记录里移除它。",
   },
+  /** 会话管理: 归档把会话移出侧栏，这里就是它被移去的地方——打开是只读的，
+   *  恢复让它回到活跃，彻底删除是这一页唯一不可撤销的动作。 */
+  sessionManagement: {
+    title: "会话管理",
+    description: "已归档的会话，可恢复或彻底删除",
+    empty: "没有已归档的会话。",
+    noMatch: "没有符合筛选条件的会话。",
+    loading: "正在读取已归档的会话…",
+    searchPlaceholder: "搜索会话",
+    allProjects: "全部项目",
+    archivedAt: (when: string) => `归档于 ${when}`,
+    readOnly: "归档期间只读：恢复后可以继续对话",
+    open: "打开",
+    restore: "恢复",
+    remove: "彻底删除",
+  },
   appName: "ScienceDiscovery",
   /** The BCP 47 tag the language calls itself, for `Intl` and `<html lang>`. */
   languageTag: "zh-CN",
@@ -1454,6 +1470,7 @@ export const ZH = {
         web: { label: "联网搜索", description: "JiuwenSwarm 搜索服务与网页读取" },
         proxies: { label: "网络代理", description: "默认代理、服务器与模块策略" },
         timeouts: { label: "超时", description: "墙钟限制与不限模式" },
+        "session-management": { label: "会话管理", description: "已归档的会话，可恢复或彻底删除" },
         "export-history": { label: "导出记录", description: "本机保存过的研究包" },
         "idea-tree": { label: "Idea Tree", description: "假设树的研究范围与阶段提示词" },
       },

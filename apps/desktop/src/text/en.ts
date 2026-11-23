@@ -124,6 +124,23 @@ export const EN: Text = {
     forget: "Remove record",
     revealMissing: "The file was moved or deleted; you can remove this record.",
   },
+  /** Session management: archiving moves a Session out of the sidebar, and this
+   *  is where it goes — read-only while it waits, back to 活跃 with restore, and
+   *  deleted for good only through the same confirmation the ⋯ menu uses. */
+  sessionManagement: {
+    title: "Session management",
+    description: "Archived sessions, to restore or delete for good",
+    empty: "No Session is archived.",
+    noMatch: "No Session matches the current filter.",
+    loading: "Reading the archived Sessions…",
+    searchPlaceholder: "Search sessions",
+    allProjects: "All projects",
+    archivedAt: (when: string) => `Archived ${when}`,
+    readOnly: "Read-only while archived — restore it to carry on",
+    open: "Open",
+    restore: "Restore",
+    remove: "Delete for good",
+  },
   appName: "ScienceDiscovery",
   languageTag: "en-US",
 
@@ -1435,6 +1452,7 @@ export const EN: Text = {
         web: { label: "Web search", description: "JiuwenSwarm search services and webpage reading" },
         proxies: { label: "Network proxies", description: "Default proxy, servers and module policies" },
         timeouts: { label: "Timeouts", description: "Wall-clock limits and unlimited mode" },
+        "session-management": { label: "Session management", description: "Archived sessions, to restore or delete for good" },
         "export-history": { label: "Export history", description: "Study packages saved on this machine" },
         "idea-tree": { label: "Idea Tree", description: "Research scope and stage prompt overrides" },
       },
