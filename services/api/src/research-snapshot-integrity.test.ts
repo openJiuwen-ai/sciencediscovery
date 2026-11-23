@@ -125,3 +125,13 @@ test("duplicate execution observations still reject a missing settled observatio
   const sessions = new Map([["source", targetId]]);
   assert.throws(() => verifyResearchCopy(source, target, ids, sessions, "project"), /executionRuns count/);
 });
+
+test("a wake link is remapped while an evolve run's own resume link keeps its identity", () => {
+  const ids = new ResearchPackageIds();
+  const mapped = remapRunEvent({ id: "run", wakeAfterRunId: "interrupted-run",
+    evolve: { id: "evolve", resumedFromRunId: "previous-evolve-run" } }, ids);
+  assert.equal(mapped.wakeAfterRunId, ids.id("interrupted-run"));
+  // EvolveRun.resumedFromRunId means an evolve run continuing another evolve
+  // run; it is not a wake link and must not share its remapping.
+  assert.equal(mapped.evolve.resumedFromRunId, "previous-evolve-run");
+});

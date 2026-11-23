@@ -153,6 +153,7 @@ export type {
   RunnerResources,
   RunnerRuntimeStatus,
   RunnerTarget,
+  RuntimeNotice,
   RuntimeSessionRun,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,

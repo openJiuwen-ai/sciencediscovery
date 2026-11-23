@@ -95,7 +95,7 @@ export function remapRunStreamId(streamId: string, ids: ResearchPackageIds): str
 
 /** Rewrite structured routing keys while leaving paths and textual evidence intact. */
 export function remapRunEvent<T>(value: T, ids: ResearchPackageIds): T {
-  const routing = new Set(["sessionId", "runId", "turnId", "parentTurnId", "parentRunId", "subagentId", "toolCallId", "executionId", "executionRunId", "workspaceId", "artifactId", "artifactVersionId", "environmentRevisionId", "messageId", "userMessageId", "assistantMessageId", "checkpointMessageId", "retryOfRunId", "promptManifestId", "reviewRunId", "claimId", "evidenceItemId"]);
+  const routing = new Set(["sessionId", "runId", "turnId", "parentTurnId", "parentRunId", "subagentId", "toolCallId", "executionId", "executionRunId", "workspaceId", "artifactId", "artifactVersionId", "environmentRevisionId", "messageId", "userMessageId", "assistantMessageId", "checkpointMessageId", "retryOfRunId", "wakeAfterRunId", "promptManifestId", "reviewRunId", "claimId", "evidenceItemId"]);
   for (const key of ["taskId", "checkpointId", "supersededBy", "reusedFromReviewId", "invocationId", "connectorInvocationId", "remoteJobId", "fileId", "parentRevisionId", "currentRevisionId", "projectId", "attachedMessageId"]) routing.add(key);
   const identityArrays = new Set(["annotationIds", "executionRunIds", "inputArtifactVersionIds", "artifactVersionIds", "reviewIds"]);
   const visit = (item: unknown, context = ""): unknown => {

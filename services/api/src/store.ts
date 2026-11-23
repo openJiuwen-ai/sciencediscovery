@@ -7360,6 +7360,8 @@ export class SessionStore {
   async createSessionRun(input: {
     notificationDelivery?: SessionRun["notificationDelivery"];
     automaticWake?: boolean;
+    wakeAfterRunId?: string;
+    wakeAttempt?: number;
     annotationIds?: string[];
     prompt: string;
     references?: ComposerReference[];
@@ -7380,6 +7382,8 @@ export class SessionStore {
       const run: SessionRun = {
         ...(input.notificationDelivery ? { notificationDelivery: structuredClone(input.notificationDelivery) } : {}),
         ...(input.automaticWake ? { automaticWake: true } : {}),
+        ...(input.wakeAfterRunId ? { wakeAfterRunId: input.wakeAfterRunId } : {}),
+        ...(input.wakeAttempt !== undefined ? { wakeAttempt: input.wakeAttempt } : {}),
         annotationIds: [...new Set(input.annotationIds ?? [])],
         createdAt: new Date().toISOString(),
         id: randomUUID(),

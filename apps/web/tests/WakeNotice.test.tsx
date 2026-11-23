@@ -120,3 +120,23 @@ test("a cancelled execution is summarised as cancelled, not unconfirmed", () => 
   assert.match(html, /activity-badge cancelled/);
   assert.doesNotMatch(html, /unconfirmed/);
 });
+
+test("a wake that follows an interrupted run explains the automatic continuation and names the interrupted run", () => {
+  const html = renderToStaticMarkup(createElement(WakeNotice, {
+    notice: { ...notice, wakeAfterRunId: "run-interrupted", wakeAttempt: 2 },
+  }));
+  assert.match(html, /previous run did not reach a completed state/);
+  assert.match(html, /automatic wake is attempt 2/);
+  assert.match(html, /does not redo the interrupted task/);
+  assert.match(html, /See the run record for why it stopped/);
+  assert.match(html, /Interrupted run: run-interrupted \(still marked as interrupted\)/);
+  // The model-facing prompt stays diagnostic data, even with an interruption.
+  assert.doesNotMatch(html, /Interruption notice/);
+  assert.doesNotMatch(html, /Do not continue, restart or redo/);
+});
+
+test("a generic wake notice carries no interruption text", () => {
+  const html = renderToStaticMarkup(createElement(WakeNotice, { notice }));
+  assert.doesNotMatch(html, /previous run did not reach a completed state/);
+  assert.doesNotMatch(html, /Interrupted run:/);
+});

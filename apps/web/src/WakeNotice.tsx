@@ -71,6 +71,10 @@ export function WakeNotice({ agentLabel, notice, onOpenRecord }: {
       <div>
         <span className="message-role">{t("app.roleRuntimeNotice")}</span>
         <p className="wake-notice-summary">{summary}{outcome ? <span className="wake-notice-outcome">{outcome}</span> : null}</p>
+        {notice.wakeAfterRunId ? <div className="wake-notice-interruption">
+          <p>{t("chat.wakeNoticeInterruptedResume", { attempt: notice.wakeAttempt ?? 2 })}</p>
+          <p className="wake-notice-interrupted-run">{t("chat.wakeNoticeInterruptedRun", { runId: notice.wakeAfterRunId })}</p>
+        </div> : null}
         {records.length ? <ul className="wake-notice-records">
           {records.map((record) => {
             const target: ActivityRecordTarget = { id: record.sourceId, kind: record.kind === "execution" ? "executions" : "timers" };

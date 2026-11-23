@@ -33,6 +33,7 @@ import type {
   ComposerReference,
   PermissionDecision,
   PermissionRequest,
+  RuntimeNotice,
   SessionArtifactOutput,
   SessionDetail,
   WorkspaceFile,
@@ -153,6 +154,28 @@ function NoticeRow({ message }: { message: ChatMessage }) {
   );
 }
 
+/** The one wake the transcript must explain: a run the server started after an
+ *  interruption cut the previous turn short before it reported anything. Every
+ *  other wake has nothing to add to the run below it, but this one is the only
+ *  reason a second run exists at all, and the interrupted run stays marked as
+ *  interrupted. */
+function InterruptionNotice({ notice, runId }: { notice: RuntimeNotice; runId: string }) {
+  return (
+    <div className="message assistant is-notice">
+      <div aria-hidden="true" className="avatar-mini">
+        ⌁
+      </div>
+      <div className="body">
+        <div className="role">
+          <span>{TEXT.conversation.notices.wake_notice}</span>
+        </div>
+        <div className="status-strip">{TEXT.conversation.interruptedResume(notice.wakeAttempt ?? 2)}</div>
+        <div className="status-strip">{TEXT.conversation.interruptedRun(runId)}</div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * One of the reader's turns: the text alone, in the handoff's grey bubble
  * against the right edge. There is no avatar and no role line — the bubble's
@@ -199,12 +222,18 @@ function MessageRow({
 }) {
   // An automatic wake carries no user-authored body — the schema keeps the
   // model-facing prompt out of `content` precisely so a wake is never shown as
-  // something the user typed — so a card for it was a blank strip with an
-  // avatar, saying nothing the run below it does not say better. The message
-  // itself stays in the transcript either way: it is where the run the wake
-  // started is anchored, and dropping it would send that run to the end of the
-  // conversation instead of to the place it happened.
-  if (message.kind === "wake_notice") return null;
+  // something the user typed — so a generic wake's card was a blank strip,
+  // saying nothing the run below it does not say better. The one exception is
+  // a wake the server started after an interruption: that card explains why a
+  // second run exists, so it is drawn here. Either way the message stays in the
+  // transcript: it is where the run the wake started is anchored, and dropping
+  // it would send that run to the end of the conversation instead of to the
+  // place it happened.
+  if (message.kind === "wake_notice") {
+    return message.runtimeNotice?.wakeAfterRunId
+      ? <InterruptionNotice notice={message.runtimeNotice} runId={message.runtimeNotice.wakeAfterRunId} />
+      : null;
+  }
   // The review record is the Reviewer Specialist's own audit trail. A
   // checkpoint never reaches here — the transcript draws `ReviewCard` for it
   // above — so the second kind in the set is a guard for any other entry point.
