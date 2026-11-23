@@ -469,9 +469,13 @@ export class PostgresStore implements AccountsStore {
           user = raced[0];
         }
       } else {
+        // A name the user saved on the account page wins over the HUAWEI
+        // profile, which the client re-sends on every sign-in. The name is
+        // filled only while it is still null, so a rename survives a sign-out
+        // and a later sign-in; avatar and email keep following the profile.
         await tx.query(
           `UPDATE users
-              SET display_name = COALESCE($2, display_name),
+              SET display_name = COALESCE(display_name, $2),
                   avatar_url   = COALESCE($3, avatar_url),
                   email        = COALESCE($4, email)
             WHERE id = $1`,
@@ -1051,11 +1055,22 @@ export class PostgresStore implements AccountsStore {
         [input.userId, hold.hold_amount, charged],
       );
       const balanceAfter = settled[0]!.balance;
+      // `balance` is the money this user can still spend, and a second call
+      // that is still in flight has its hold subtracted from it without a
+      // ledger row of its own. Recording that figure here would break the
+      // page's "previous balance + delta = this balance" check for whichever
+      // of two concurrent calls settles first. The row therefore continues
+      // the ledger's own running total; the two agree once no hold is open.
+      const previous = await tx.query<{ balance_after: number }>(
+        `SELECT balance_after FROM credit_ledger WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
+        [input.userId],
+      );
+      const ledgerAfter = (previous[0]?.balance_after ?? 0) - charged;
       await tx.query(
         `INSERT INTO credit_ledger (user_id, delta, balance_after, biz_type, biz_id, remark)
          VALUES ($1, $2, $3, 'LLM_USAGE', $4, $5)
          ON CONFLICT (biz_type, biz_id) DO NOTHING`,
-        [input.userId, -charged, balanceAfter, input.requestId, `${input.model} 调用`],
+        [input.userId, -charged, ledgerAfter, input.requestId, `${input.model} 调用`],
       );
       await tx.query(
         `INSERT INTO llm_usage (user_id, request_id, channel, model, input_tokens, cached_tokens, output_tokens, credits_used, latency_ms)

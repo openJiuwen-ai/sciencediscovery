@@ -2329,6 +2329,7 @@ export const ZH = {
     /** A response that claims to be an event stream but has no body. */
     noStream: "响应没有可读的流",
     modelUnavailable: "原模型已删除，请重新选择",
+    modelSignInRequired: "积分模型需要登录华为账号后才能使用",
     modelRequired: "还没有可用的模型，请先在设置里配置。",
     rename: "重命名失败",
     deleteWarning: (title: string) => `删除「${title}」会连同它的工作区数据一起清掉，且无法恢复。`,

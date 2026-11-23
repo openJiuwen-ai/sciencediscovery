@@ -57,9 +57,11 @@ function formatNumber(value: number): string {
 }
 
 /** Credits settle per milli-credit, so a charge can be 0.35 and a balance
- *  598.891; flooring would turn that into -1 and 598 on the audit page. */
+ *  598.891; flooring would turn that into -1 and 598 on the audit page. Three
+ *  decimals are always shown, because "895.877" alone reads as a thousands
+ *  separator in Chinese. */
 function formatCredits(value: number): string {
-  return value.toLocaleString("zh-CN", { maximumFractionDigits: 3 });
+  return value.toLocaleString("zh-CN", { maximumFractionDigits: 3, minimumFractionDigits: 3 });
 }
 
 function formatTokens(value: number): string {
@@ -88,6 +90,30 @@ function bizLabel(type: string): string {
     REFUND: "退还",
   };
   return labels[type] ?? type;
+}
+
+export interface RewardProgress {
+  /** Slots that are already paid for, counted from day one. */
+  doneDays: number;
+  /** The slot to mark as the current day; -1 when this cycle is complete. */
+  todaySlot: number;
+  /** Days of signing in still needed to collect the seventh-day bonus. */
+  remaining: number;
+}
+
+/**
+ * The seven-day strip's state.
+ *
+ * Today's reward is already a ledger row, so the cycle counts it: four
+ * check-ins mean days 1–4 are done and the fourth slot is the one to mark.
+ * Highlighting `cycle` instead would point at day five while the hint still
+ * says three days are missing.
+ */
+export function rewardProgress(checkins: number, checkedInToday: boolean): RewardProgress {
+  const cycle = checkins % WEEK_DAYS;
+  const remaining = cycle === 0 ? WEEK_DAYS : WEEK_DAYS - cycle;
+  const doneDays = checkedInToday ? (cycle === 0 && checkins > 0 ? WEEK_DAYS : cycle) : cycle;
+  return { doneDays, todaySlot: checkedInToday ? doneDays - 1 : doneDays, remaining };
 }
 
 export function AccountPage({
@@ -213,8 +239,8 @@ export function AccountPage({
   const checkedInToday = ledger.some((row) => row.bizType === "CHECKIN" && chinaDate(row.createdAt) === today);
   // Seven slots name the reward each accumulated day pays. Day one is the
   // registration grant plus the first daily reward; the seventh adds 50.
-  const cycle = ledger.filter((row) => row.bizType === "CHECKIN").length % WEEK_DAYS;
-  const remaining = cycle === 0 ? WEEK_DAYS : WEEK_DAYS - cycle;
+  const checkins = ledger.filter((row) => row.bizType === "CHECKIN").length;
+  const { doneDays, todaySlot, remaining } = rewardProgress(checkins, checkedInToday);
 
   const filteredAll = useMemo(
     () => ledger.filter((row) => matchesFilter(row, filter)),
@@ -388,7 +414,7 @@ export function AccountPage({
           </div>
           <div className="account-reward-days">
             {Array.from({ length: WEEK_DAYS }, (_, index) => (
-              <div className={`account-reward-day${index < cycle ? " is-done" : ""}${index === cycle ? " is-today" : ""}`} key={index}>
+              <div className={`account-reward-day${index < doneDays ? " is-done" : ""}${index === todaySlot ? " is-today" : ""}`} key={index}>
                 <span>{TEXT.account.day(index + 1)}</span>
                 <strong>{index === 0 ? 600 : index === 6 ? "+50" : 100}</strong>
               </div>
@@ -507,9 +533,16 @@ export function AccountPage({
  * action that changes that. The workspace stays behind it — a custom-model
  * workspace keeps working without an account, and signing in can wait.
  */
-export function SignedOutAccount({ pending = false }: { pending?: boolean }) {
+export function SignedOutAccount({ pending = false, onClose }: { pending?: boolean; onClose?: () => void }) {
   return (
     <div className="account-page">
+      {onClose ? (
+        // Paying a visit to the account page must not strand a workspace that
+        // needs no account, so the way back is on the page itself.
+        <div className="account-topbar">
+          <button className="account-back" onClick={onClose} type="button">{TEXT.account.back}</button>
+        </div>
+      ) : null}
       <div className="account-scroll">
         <div className="account-signedout">
           <span className="account-hero-avatar is-guest" aria-hidden="true">

@@ -2283,6 +2283,7 @@ export const EN: Text = {
     sessionCreate: "Could not create the session",
     noStream: "The response has no readable stream",
     modelUnavailable: "Selected model deleted; choose another",
+    modelSignInRequired: "Sign in with HUAWEI ID to use the credits model",
     modelRequired: "No model is available yet. Configure one in Settings.",
     rename: "Rename failed",
     deleteWarning: (title: string) =>
