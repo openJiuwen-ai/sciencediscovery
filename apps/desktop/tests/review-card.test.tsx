@@ -258,7 +258,9 @@ describe("a review's rows", () => {
     const row = reviewRows(gapped).find((candidate) => candidate.id === "review-1:gap:0");
     assert.ok(row);
     assert.equal(row.label, TEXT.reviewer.gaps);
-    assert.equal(row.body, "no source text");
+    // The card's own words, not the server's English template, with the raw
+    // reason kept only for a check the map does not know.
+    assert.equal(row.body, TEXT.reviewer.gapBodies.claim_support);
     // An absence is not a warning about the artifact, and it is not a pass.
     assert.equal(row.tone, "neutral");
   });

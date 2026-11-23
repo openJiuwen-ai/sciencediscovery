@@ -363,6 +363,15 @@ export const EN: Text = {
       citation_identity: "Citation identity",
       computation: "Computation",
     } as Record<string, string>,
+    /** What the unperformed check would have covered, in the card's language.
+     *  The server's own reason is an English template and is only the fallback
+     *  for a check this map does not know. */
+    gapBodies: {
+      claim_support: "This review did not check the claims against their sources. Use Deep review to check that.",
+      citation_identity: "This review did not check the papers' identity (authors, journal, year).",
+      computation: "This review did not check the numbers against the computation evidence.",
+    } as Record<string, string>,
+    gapBodyUnknown: "This review did not run this check.",
     /** A source check that could not conclude is not a report defect. */
     inconclusive: "Source verification reached no conclusion",
     inconclusiveBody: "The source service returned no verdict; this is not a problem with the report.",
