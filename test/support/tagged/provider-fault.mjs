@@ -33,6 +33,15 @@
  * product delivery failure that merely quotes a provider status is the
  * product's failure, and stays one.
  *
+ * One product reporter is provider context too: Idea Tree's own transport
+ * (`vendor/idea_tree/research.py`) relays the answer the local
+ * `/internal/evolve-llm` proxy gave as `Model HTTP <status>: <body>`, so a 5xx
+ * there is the gateway's outage wearing the product's words. That reporter also
+ * relays the 5xx answers the proxy writes itself: its 503 refusal when the
+ * run's model has no API token, a 502 for a call it refused or aborted before
+ * the provider answered, and the catch-all 500 of a request it did not finish.
+ * Those are product failures, not the gateway's, so they are carved out below.
+ *
  * A transport break is checked before the product-report rule on purpose: the
  * failed case text wraps the provider's words in `delivery_status=failed`,
  * which is the product restating a run that died on the wire, not evidence it
@@ -100,6 +109,79 @@ const ROUTING_FAILURE = /\bno available channel\b|\bmodel_not_found\b|\bnew_api_
 const GATEWAY_CONTEXT = /\b181001\b|\bmodel call failed\b|\bopenai api\b|\bchat\/completions\b/i;
 
 /**
+ * Idea Tree's own reporter for the status the model endpoint answered.
+ *
+ * `services/evolve/src/sciencediscovery_evolve/vendor/idea_tree/research.py`
+ * raises `Model HTTP <status>: <body>` for the answer it got, and the Nightly
+ * recorded `Model HTTP 502: {"error":"Model stream failed after response
+ * headers: read ECONNRESET"}` from it. That is the gateway's outage relayed by
+ * the product, so the 5xx is provider evidence even though the text carries
+ * none of the gateway's own vocabulary. Only 5xx counts: a 4xx is a decision
+ * or the product's own request, and the rate-limit rule below already keeps
+ * a 429 out. A 5xx the proxy wrote itself is carved out by
+ * `MODEL_HTTP_LOCAL_FAILURE` below, because the same reporter relays it.
+ */
+const MODEL_HTTP_SERVER_ERROR = /\bmodel\s+http\s+(5\d\d)\b/i;
+
+/**
+ * The local `/internal/evolve-llm` proxy's own refusal, which is the product's
+ * failure rather than the gateway's: it answers 503 with this wording when the
+ * run's model has no API token, before any provider call is made. Idea Tree
+ * reports that refusal with the same `Model HTTP <status>` wording, so the
+ * reporter above has to be narrowed by it.
+ */
+const LOCAL_PROXY_REFUSAL = /\bno\s+api\s+token\b/i;
+
+/**
+ * The 5xx answers the local proxy writes itself, as Idea Tree relays them.
+ *
+ * `services/api/src/evolution/llm-proxy.ts` forwards the provider's own status
+ * and body at :219-226, but three other exits are its own words:
+ *
+ * - :144-146 answers 503 when the run's model has no API token (matched by
+ *   `LOCAL_PROXY_REFUSAL` above);
+ * - :180-188 answers 502 for every error `completeChatRequest` threw that is
+ *   not a malformed provider response (that one is a 422). That set includes
+ *   the proxy's request validation (`packages/model/src/completion.ts:67-78`),
+ *   its own aborts — the response closed, the run token was revoked, or the
+ *   `CALL_CEILING_MS` deadline fired (`llm-proxy.ts:89,123,176-179`), which
+ *   `requestWithRetry` reports as `aborted` and the signal itself as
+ *   `This operation was aborted` / `The operation was aborted due to timeout`
+ *   — and a non-`Error` throw, reported as `The model provider could not be
+ *   reached`;
+ * - `services/api/src/http/index.ts:5044-5051` answers the catch-all 500
+ *   `Internal server error` for a request that threw before it could answer.
+ *
+ * None of those is the gateway answering, so a relayed 5xx carrying one of
+ * them is the product's failure and must not be read as the provider's. Keep
+ * the match on the relayed line (`[^\n]*`): an assertion or a second error
+ * appended by Playwright must not let the same words veto a sibling outage
+ * elsewhere in the message.
+ */
+const MODEL_HTTP_LOCAL_FAILURE = new RegExp(
+  String.raw`\bmodel\s+http\s+5\d\d\s*:[^\n]*(?:`
+  + String.raw`"error"\s*:\s*"internal\s+server\s+error"`
+  + String.raw`|"error"\s*:\s*"aborted"`
+  + String.raw`|\b(?:this|the)\s+operation\s+was\s+aborted\b`
+  + String.raw`|\bunsupported\s+model\s+(?:parameters|tool)\b`
+  + String.raw`|\binvalid\s+model\s+message\s+history\b`
+  + String.raw`|\bunsupported\s+thinking\s+control\b`
+  + String.raw`|\bmax_tokens\s+must\s+be\s+a\s+positive\s+integer\b`
+  + String.raw`|\buse\s+the\s+shared\s+model\s+gateway\s+for\s+streaming\s+chat\s+requests\b`
+  + String.raw`|\bthe\s+model\s+provider\s+could\s+not\s+be\s+reached\b`
+  + `)`,
+  'i',
+);
+
+/**
+ * Whether a text places a server status at the provider: the gateway naming
+ * itself, or Idea Tree relaying an answer the provider gave. A 5xx the local
+ * proxy wrote itself is not that answer.
+ */
+const namesProvider = text => GATEWAY_CONTEXT.test(text)
+  || (MODEL_HTTP_SERVER_ERROR.test(text) && !MODEL_HTTP_LOCAL_FAILURE.test(text));
+
+/**
  * A transport break the provider caused after it had already answered. There is
  * no HTTP status to read: the gateway said `200`, streamed for a while and then
  * the connection died. The words are the only evidence, so they must be exact.
@@ -156,6 +238,13 @@ export function detectProviderFault(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
   // An authentication or rate-limit answer is a decision, not an outage.
   if (UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return null;
+  // The local proxy refusing the call — no API token for this run's model — is
+  // the product misconfigured, not the gateway failing, whichever reporter
+  // relays it.
+  if (LOCAL_PROXY_REFUSAL.test(text)) return null;
+  // A relayed 5xx carrying the local proxy's own failure wording is the
+  // product's, even though the same reporter relays the provider's 5xx.
+  if (MODEL_HTTP_LOCAL_FAILURE.test(text)) return null;
   // A stream that broke after the provider had already answered carries no
   // status at all: the gateway returned 200, sent records, then the connection
   // died (`read ECONNRESET`, `other side closed`). It is checked before the
@@ -163,13 +252,13 @@ export function detectProviderFault(text) {
   // provider's words in `delivery_status=failed`, and that wrapper is the
   // product restating a run that died on the transport, not evidence that the
   // product mis-handled an answer it received whole.
-  if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return { code: 'provider-transport', status: null };
+  if (TRANSPORT_BREAK.test(text) && namesProvider(text)) return { code: 'provider-transport', status: null };
   // A delivery miss is the product's own verdict, even when the provider's
   // words were recorded beside it: the product ran and did not deliver.
   if (DELIVERY_MISS.test(text)) return null;
   const routing = ROUTING_FAILURE.test(text);
   const status = serverStatus(text);
-  const gatewayStatus = status !== null && GATEWAY_CONTEXT.test(text);
+  const gatewayStatus = status !== null && namesProvider(text);
   // The gateway naming its own server status outranks the assertion wrapper
   // that carries it: `[181001] model call failed … 503` followed by
   // `Expected: "completed" / Received: "failed"` is the outage, not the
@@ -178,7 +267,7 @@ export function detectProviderFault(text) {
   // A status alone belongs to the product until something places it at the
   // gateway: the local API answering 500 is a product failure, not an outage.
   if (!routing && !status) return null;
-  if (!routing && !GATEWAY_CONTEXT.test(text)) return null;
+  if (!routing && !namesProvider(text)) return null;
   // A timeout is the product's stalled run, unless the same text names the
   // gateway's own status and context: `Error code: 504 - Gateway Timeout` from
   // a text carrying `181001`/`model call failed`/`openai api`/`chat/completions`
@@ -214,16 +303,21 @@ function vetoesCase(text) {
   // its attempts: `attempt 1: … 401` beside `attempt 2: read ECONNRESET`. This
   // is the order `detectProviderFault` keeps, so the two rules cannot disagree.
   if (UNAUTHORIZED.test(text) || RATE_LIMITED.test(text)) return true;
+  // The local proxy's own refusal is a product verdict too, so it vetoes a
+  // sibling outage exactly like the provider's decision does. A relayed 5xx
+  // the proxy wrote itself (validation, its own abort, the catch-all 500) is
+  // the same kind of verdict.
+  if (LOCAL_PROXY_REFUSAL.test(text) || MODEL_HTTP_LOCAL_FAILURE.test(text)) return true;
   // A status-less transport break outranks the product's report wrapper for the
   // same reason `detectProviderFault` checks it first: the wrapper restates a run
   // that died on the transport after the provider had answered whole. The text
   // that carries it therefore records no verdict of its own, and an assertion
   // wrapper beside it neither.
-  if (TRANSPORT_BREAK.test(text) && GATEWAY_CONTEXT.test(text)) return false;
+  if (TRANSPORT_BREAK.test(text) && namesProvider(text)) return false;
   if (DELIVERY_MISS.test(text)) return true;
   if (!TIMED_OUT.test(text)) return false;
   const status = serverStatus(text);
-  const gatewayStatus = status !== null && GATEWAY_CONTEXT.test(text);
+  const gatewayStatus = status !== null && namesProvider(text);
   return !ROUTING_FAILURE.test(text) && !gatewayStatus;
 }
 

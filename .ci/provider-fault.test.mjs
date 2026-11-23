@@ -26,6 +26,11 @@ const UNAUTHORIZED = "[181001] model call failed, reason: openAI API async strea
 const RATE_LIMITED = "[181001] model call failed, reason: openAI API async stream error: RateLimitError: Error code: 429 - {'error': {'message': 'scripted http429'}}";
 const DELIVERY_MISS = 'Main run must complete with readable, nonempty declared final artifacts; delivery_status=failed; run_status=failed; delivered_artifacts=0; run_error=none';
 
+// The text Nightly 45212568993 recorded for research-11, twice, unchanged.
+const IDEA_TREE_502 = 'research settled as "interrupted": Model HTTP 502: {"error":"Model stream failed after response headers: read ECONNRESET"}';
+// The same failure as Playwright reports it, with the failed expect() appended.
+const IDEA_TREE_502_WRAPPED = `${IDEA_TREE_502}\nexpect(received).toBe(expected) // Object.is equality\n\nExpected: "completed"\nReceived: "interrupted"`;
+
 const directory = t => {
   const path = mkdtempSync(join(tmpdir(), 'provider-fault-'));
   t.after(() => rmSync(path, { recursive: true, force: true }));
@@ -214,6 +219,75 @@ test('a product failure that quotes a provider status is never soft-classified',
   assert.equal(detectProviderFault(GATEWAY_500).code, 'provider-server-error');
   assert.equal(detectProviderFault(GATEWAY_503).code, 'provider-server-error');
   assert.equal(detectProviderFault('Error: Main run failed: ' + GATEWAY_500).code, 'provider-server-error');
+});
+
+test('Idea Tree relaying the provider 502 is a provider fault, not a product failure', t => {
+  // Idea Tree's transport raises `Model HTTP <status>: <body>` for the answer
+  // the model endpoint gave (research.py), so the 502 that carried a broken
+  // stream is the gateway's outage (#1340). It must classify without the
+  // gateway's own 181001/model-call vocabulary and reach the accounting as a
+  // fault instead of `FAIL`.
+  assert.deepEqual(detectProviderFault(IDEA_TREE_502), { code: 'provider-transport', status: null });
+  assert.deepEqual(detectProviderFaultFromErrors([IDEA_TREE_502_WRAPPED]),
+    { code: 'provider-transport', status: null });
+  const { plan, written } = report(t, {
+    title: 'research-11', tags: realCaseTags, status: 'failed', errors: [IDEA_TREE_502_WRAPPED], duration: 174_000,
+  });
+  assert.equal(written.results[0].outcome, PROVIDER_FAULT);
+  assert.deepEqual(written.results[0].providerFault, { code: 'provider-transport', status: null });
+  assert.deepEqual(written.results[0].errors, [IDEA_TREE_502_WRAPPED]);
+  const verdict = verifyResults(plan, written.results);
+  assert.equal(verdict.providerFaults, 1);
+  assert.equal(verdict.failed, 0);
+  assert.ok(!verdict.problems.some(problem => problem.startsWith('FAIL:')));
+  // A relayed 5xx without a transport break keeps the status it reports.
+  assert.deepEqual(detectProviderFault('research settled as "interrupted": Model HTTP 500: {"error":"upstream database error"}'),
+    { code: 'provider-server-error', status: 500 });
+});
+
+test('Idea Tree relaying a 5xx the local proxy wrote itself stays the product failure', () => {
+  // /internal/evolve-llm does not only forward the provider's status: it also
+  // answers 5xx from its own code (`services/api/src/evolution/llm-proxy.ts`).
+  // A 502 covers every error `completeChatRequest` threw — its request
+  // validation (`packages/model/src/completion.ts:67-78`), its own aborts for a
+  // closed response, a revoked token or the 20-minute call ceiling — and the
+  // catch-all 500 is `services/api/src/http/index.ts:5044-5051`. Those are the
+  // product's failures, so the relayed 5xx must not excuse them (#1341 review).
+  const relayed = body => `research settled as "interrupted": Model HTTP ${body}`;
+  const localFailures = [
+    relayed('502: {"error":"Unsupported model parameters: stream"}'),
+    relayed('502: {"error":"Invalid model message history"}'),
+    relayed('502: {"error":"Use the shared model gateway for streaming Chat requests"}'),
+    relayed('502: {"error":"max_tokens must be a positive integer"}'),
+    relayed('502: {"error":"aborted"}'),
+    relayed('502: {"error":"The operation was aborted due to timeout"}'),
+    relayed('502: {"error":"The model provider could not be reached"}'),
+    relayed('500: {"error":"Internal server error"}'),
+  ];
+  for (const text of localFailures) assert.equal(detectProviderFault(text), null, text);
+  // The same verdict keeps a sibling gateway outage out of the case, exactly as
+  // the proxy's "no API token" refusal does.
+  assert.equal(detectProviderFaultFromErrors([localFailures[4], GATEWAY_503]), null);
+  // Playwright's appended assertion block does not change either answer.
+  assert.equal(detectProviderFault(`${localFailures[0]}\nExpected: "completed"\nReceived: "interrupted"`), null);
+  // The provider's own relayed 5xx is still provider evidence: the broken
+  // stream keeps its transport class and a provider body keeps its status.
+  assert.deepEqual(detectProviderFault(IDEA_TREE_502), { code: 'provider-transport', status: null });
+  assert.deepEqual(detectProviderFault(relayed('500: {"error":"upstream database error"}')),
+    { code: 'provider-server-error', status: 500 });
+});
+
+test('Idea Tree relaying a decision or the local proxy refusal stays the product failure', () => {
+  // A 429 is the provider's decision and a 422 is the proxy rejecting the
+  // shape, so neither is an outage.
+  assert.equal(detectProviderFault('research settled as "interrupted": Model HTTP 429: retry budget exhausted after 2 attempts: quota'), null);
+  assert.equal(detectProviderFault('research settled as "interrupted": Model HTTP 422: {"error":"Invalid Chat completion response"}'), null);
+  // A 503 "no API token" is the local /internal/evolve-llm proxy refusing the
+  // call before it reaches the provider: the product misconfigured, not an
+  // outage. The refusal also vetoes a sibling outage in the same case.
+  const refusal = 'research settled as "interrupted": Model HTTP 503: {"error":"The model this run was created with has no API token"}';
+  assert.equal(detectProviderFault(refusal), null);
+  assert.equal(detectProviderFaultFromErrors([refusal, GATEWAY_503]), null);
 });
 
 test('the reporter records a live-model gateway fault apart from a product failure', t => {
