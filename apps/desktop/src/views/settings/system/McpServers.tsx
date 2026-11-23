@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ConnectorId } from "@sciencediscovery/schema";
 import { useMcpDiscoveryRefresh } from "@sciencediscovery/configuration-ui";
@@ -42,6 +42,7 @@ import { useLoaded } from "../../../app/use-loaded.js";
 import { writeSettingsCache } from "../../../app/settings-cache.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
+import { McpImportMenu } from "../McpImportMenu.js";
 import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
 
 interface Props {
@@ -235,8 +236,10 @@ function readSpec(text: string): { entries: ImportEntry[]; error?: string } {
   if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
     return { entries: [], error: text_.importNoServers };
   }
+  const configs = Object.entries(servers as Record<string, unknown>);
+  if (configs.length > 50) return { entries: [], error: text_.importTooMany };
   const entries: ImportEntry[] = [];
-  for (const [name, raw] of Object.entries(servers as Record<string, unknown>)) {
+  for (const [name, raw] of configs) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       return { entries: [], error: text_.importBadEntry(name) };
     }
@@ -337,6 +340,8 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
    *  open so a wrong command or URL is visible where it was typed. */
   const [created, setCreated] = useState<{ name: string; tools: string[]; error?: string }>();
   const [importOpen, setImportOpen] = useState(false);
+  const importFileInput = useRef<HTMLInputElement>(null);
+  const [importFileName, setImportFileName] = useState<string>();
   const [importText, setImportText] = useState("");
   const [importEntries, setImportEntries] = useState<ImportEntry[]>();
   const [importError, setImportError] = useState<string>();
@@ -364,7 +369,36 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     setImportEntries(undefined);
     setImportError(undefined);
     setImportText("");
+    setImportFileName(undefined);
     setImportOpen(true);
+  };
+
+  const loadImportFile = async (file: File) => {
+    if (busy) return;
+    setBusy(true);
+    setImportText("");
+    setImportEntries(undefined);
+    setImportError(undefined);
+    setOutcomes(undefined);
+    setImportFileName(undefined);
+    try {
+      // Match the API's ordinary JSON request limit; avoid reading huge files.
+      if (file.size > 1_500_000) {
+        setImportError(TEXT.settings.system.mcp.importFileTooLarge);
+      } else {
+        const text = (await file.text()).replace(/^\uFEFF/, "");
+        const parsed = readSpec(text);
+        setImportFileName(file.name);
+        setImportText(text);
+        setImportEntries(parsed.entries);
+        setImportError(parsed.error);
+      }
+    } catch {
+      setImportError(TEXT.settings.system.mcp.importFileReadFailed);
+    } finally {
+      setImportOpen(true);
+      setBusy(false);
+    }
   };
 
   const previewImport = () => {
@@ -383,6 +417,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
    * ones written when one is refused.
    */
   const runImport = async () => {
+    if (busy) return;
     const parsed = importEntries === undefined ? readSpec(importText) : { entries: importEntries, error: importError };
     if (parsed.error !== undefined || parsed.entries.length === 0) {
       setImportEntries(parsed.entries);
@@ -622,9 +657,23 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
               <button className="secondary-button" disabled={busy} onClick={openCreate} type="button">
                 {TEXT.settings.system.mcp.addServer}
               </button>
-              <button className="secondary-button" disabled={busy} onClick={openImport} type="button">
-                {TEXT.settings.system.mcp.importServers}
-              </button>
+              <McpImportMenu disabled={busy} onChoose={(source) => {
+                if (source === "paste") openImport();
+                else importFileInput.current?.click();
+              }} />
+              <input
+                accept=".json,application/json"
+                aria-label={TEXT.settings.system.mcp.importFile}
+                disabled={busy}
+                hidden
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file) void loadImportFile(file);
+                }}
+                ref={importFileInput}
+                type="file"
+              />
             </div>
             {page.custom.length === 0 && page.builtins.length === 0 ? (
               <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
@@ -863,6 +912,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       {current ? (
         <SettingsModal
           label={editing ? TEXT.settings.system.mcp.editTitle : TEXT.settings.system.mcp.createTitle}
+          closeDisabled={busy}
           onClose={() => { if (!busy) closeForm(); }}
           wide
         >
@@ -1086,20 +1136,24 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       {importOpen ? (
         <SettingsModal
           label={TEXT.settings.system.mcp.importTitle}
-          onClose={() => setImportOpen(false)}
+          closeDisabled={busy}
+          onClose={() => { if (!busy) setImportOpen(false); }}
           wide
         >
           <section className="settings-card is-form">
             <div className="settings-card-form">
+              {importFileName ? <p className="settings-note">{TEXT.settings.system.mcp.importFileLoaded(importFileName)}</p> : null}
               <Row hint={TEXT.settings.system.mcp.importHint} title={TEXT.settings.system.mcp.importJson}>
                 <textarea
                   aria-label={TEXT.settings.system.mcp.importJson}
-                  className="field-input settings-textarea"
+                  className="field-textarea is-code"
+                  disabled={busy}
                   onChange={(event) => {
                     setImportText(event.target.value);
                     setImportEntries(undefined);
                     setImportError(undefined);
                     setOutcomes(undefined);
+                    setImportFileName(undefined);
                   }}
                   rows={10}
                   spellCheck={false}
@@ -1116,7 +1170,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                   {TEXT.settings.system.mcp.importPreview}
                 </button>
               </div>
-              {importError ? <small className="row-note is-error">{importError}</small> : null}
+              {importError ? <small className="row-note is-error" role="alert">{importError}</small> : null}
               {importEntries !== undefined && importEntries.length > 0 ? (
                 <ul className="mcp-import-list" aria-label={TEXT.settings.system.mcp.importPreview}>
                   {importEntries.map((entry) => (
@@ -1142,12 +1196,12 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 </ul>
               ) : null}
               <div className="settings-card-actions">
-                <button className="secondary-button" onClick={() => setImportOpen(false)} type="button">
+                <button className="secondary-button" disabled={busy} onClick={() => setImportOpen(false)} type="button">
                   {TEXT.settings.cancel}
                 </button>
                 <button
                   className="primary-button"
-                  disabled={busy || importText.trim() === ""}
+                  disabled={busy || importText.trim() === "" || importError !== undefined}
                   onClick={() => void runImport()}
                   type="button"
                 >

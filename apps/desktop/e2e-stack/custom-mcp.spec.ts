@@ -45,10 +45,10 @@ interface ServerDetails {
 
 /**
  * E2E-META
- * Purpose: Create, edit, call and delete a custom MCP server from the desktop UI.
+ * Purpose: Import, edit, call and delete a custom MCP server from the desktop UI.
  * Steps:
  *   1. Open the add dialog and check the defaults.
- *   2. Save a disabled local STDIO server in the UI and read back its config.
+ *   2. Upload JSON and confirm a disabled local STDIO import, then read back its config.
  *   3. Test the connection and verify discovery of two tools.
  *   4. Enable the server and select it as a default source.
  *   5. Edit the saved description, reload and verify persistence.
@@ -65,7 +65,7 @@ interface ServerDetails {
  * Credentials: E2E_API_TOKEN for the isolated stack; local model stub only.
  * CostSideEffects: temporary isolated project, session, model, and MCP server.
  */
-test("creates, edits, calls and deletes a custom MCP server in desktop settings", { tag: "@mocked" }, async ({ page, journey }) => {
+test("imports, edits, calls and deletes a custom MCP server in desktop settings", { tag: "@mocked" }, async ({ page, journey }) => {
   page.setDefaultTimeout(12_000);
   page.setDefaultNavigationTimeout(25_000);
   if (!process.env.E2E_API_TOKEN?.trim()) throw new Error("BLOCKED: E2E_API_TOKEN is required");
@@ -116,18 +116,24 @@ test("creates, edits, calls and deletes a custom MCP server in desktop settings"
       await expect(form.getByRole("checkbox", { name: "启用服务" })).not.toBeChecked();
       await expect(form.getByLabel("传输方式")).toHaveValue("http");
       await expect(form.getByRole("spinbutton", { name: "超时（秒）" })).toHaveValue("60");
+      await form.getByRole("button", { name: "取消", exact: true }).click();
     });
-    await journey.step("Create a local STDIO server", "A disabled STDIO server appears in the settings list.", async () => {
-      await form.getByLabel("名称", { exact: true }).fill(name);
-      await form.getByLabel("传输方式").selectOption("stdio");
-      await form.getByLabel("命令", { exact: true }).fill(process.execPath);
-      await form.getByLabel("参数", { exact: true }).fill(fileURLToPath(new URL("../../../test/fixtures/mcp-echo.mjs", import.meta.url)));
-      await form.getByRole("button", { name: "保存", exact: true }).click();
-      await form.getByRole("button", { name: "完成", exact: true }).click();
-      await expect(form).toBeHidden();
+    await journey.step("Import a local STDIO server from a JSON file", "The file fills its preview without saving; confirmation creates a disabled STDIO server.", async () => {
+      const args = [fileURLToPath(new URL("../../../test/fixtures/mcp-echo.mjs", import.meta.url)), "argument with spaces"];
+      const config = { mcpServers: { [name]: { command: process.execPath, args, enabled: true, timeoutSeconds: 60 } } };
+      await settings.getByRole("button", { name: "导入", exact: true }).click();
+      const chooser = page.waitForEvent("filechooser");
+      await settings.getByRole("menuitem", { name: "上传 JSON 文件", exact: true }).click();
+      await (await chooser).setFiles({ name: "mcp-servers.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(config)) });
+      const importer = page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
+      await expect(importer.getByRole("list", { name: "预览", exact: true })).toContainText(name);
+      expect((await getServers()).some((server) => server.name === name)).toBe(false);
+      await importer.getByRole("button", { name: "开始导入", exact: true }).click();
+      await expect(importer.getByRole("list", { name: "导入结果", exact: true })).toContainText("已添加");
+      await importer.getByRole("button", { name: "取消", exact: true }).click();
       await expect(card).toBeVisible();
       const server = (await getServers()).find((item) => item.name === name);
-      expect(server).toMatchObject({ enabled: false, timeoutSeconds: 60, transport: "stdio" });
+      expect(server).toMatchObject({ enabled: false, timeoutSeconds: 60, transport: "stdio", args, command: process.execPath });
       serverId = server!.id;
     });
     await journey.step("Test the saved connection", "The connection test finds two tools while the server remains disabled.", async () => {
