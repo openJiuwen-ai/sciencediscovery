@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export interface MenuItem {
@@ -31,6 +31,11 @@ export interface MenuItem {
   /** Shown greyed out and inert. A command the service would refuse is better
    *  named here than answered with a 409 the reader has to interpret. */
   disabled?: boolean;
+  /** A sentence about this entry alone, drawn beside it while the pointer is on
+   *  it (or the keyboard is). Not the `note` below: that one is always on screen
+   *  because it explains why the whole menu is inert, while this is a
+   *  consequence worth one look, not a permanent line in the menu. */
+  hint?: string;
   onSelect: () => void;
 }
 
@@ -85,6 +90,12 @@ export function leavesMenu(
  */
 export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  /** The entry whose `hint` is on screen. Kept as an index and drawn *inside*
+   *  the menu, under the entry itself: a floating box over the page behind it
+   *  reads as a stray note, and this one only exists while the pointer is on the
+   *  entry (or the keyboard is), so it never sits in the menu as a line of its
+   *  own. */
+  const [hinted, setHinted] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     if (!menu) return;
@@ -134,10 +145,14 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
             aria-disabled={item.disabled ? "true" : undefined}
             className="ctx-item"
             disabled={item.disabled}
+            onBlur={() => setHinted(undefined)}
             onClick={() => {
               onClose();
               item.onSelect();
             }}
+            onFocus={() => setHinted(item.hint === undefined ? undefined : index)}
+            onMouseEnter={() => setHinted(item.hint === undefined ? undefined : index)}
+            onMouseLeave={() => setHinted(undefined)}
             role="menuitem"
             type="button"
           >
@@ -145,6 +160,11 @@ export function RowMenu({ menu, onClose }: { menu?: MenuState; onClose: () => vo
             <span className="ctx-item-label">{item.label}</span>
             {item.checked ? <span aria-hidden="true" className="ctx-item-check">✓</span> : null}
           </button>
+          {/* Under the entry, and only while it is the one under the pointer:
+              the menu is unchanged otherwise, which is the point. */}
+          {hinted === index && item.hint !== undefined ? (
+            <div className="ctx-hint" role="tooltip">{item.hint}</div>
+          ) : null}
         </Fragment>
       ))}
       {menu.note ? <div className="ctx-note">{menu.note}</div> : null}

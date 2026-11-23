@@ -66,15 +66,15 @@ interface Props {
 export function archiveActionFor(
   session: Pick<Session, "archivedAt">,
   running: boolean,
-): { disabled: boolean; label: string; note?: string } {
+): { disabled: boolean; hint?: string; label: string; note?: string } {
   if (running) return { disabled: true, label: TEXT.menu.archive, note: TEXT.errors.archiveBlockedByRun };
   // Archiving tears the Session's scientific-environment kernels down and drops
   // persistent memory that was not written to disk; 恢复 clears `archivedAt` and
   // nothing else. The confirmation dialog was removed on purpose — archiving is
-  // reversible enough to need no gate — so the consequence is said here, under
-  // the entry, where it is read before the click.
+  // reversible enough to need no gate — so the consequence is a `hint`: shown
+  // while the pointer is on 归档, not left sitting in the menu.
   if (session.archivedAt !== undefined) return { disabled: false, label: TEXT.menu.restore };
-  return { disabled: false, label: TEXT.menu.archive, note: TEXT.errors.archiveTearsDownKernel };
+  return { disabled: false, label: TEXT.menu.archive, hint: TEXT.errors.archiveTearsDownKernel };
 }
 
 function basename(session: Session): string {
@@ -234,11 +234,15 @@ export function Sidebar({
                   },
                   // Archiving is reversible — the Session waits in 设置 → 会话管理
                   // and can be restored — so it runs without a confirmation
-                  // dialog. What it does *not* give back is said under the menu;
-                  // a run in progress is refused by the service with a 409, and
-                  // that replaces the sentence instead of joining it.
+                  // dialog. What it does *not* give back is a hint on this entry,
+                  // shown while the pointer is on it; a run in progress is refused
+                  // by the service with a 409, and that one is the menu's `note`,
+                  // because it is why the entry is inert.
                   {
                     disabled: archiveActionFor(session, running === true && active).disabled,
+                    ...(archiveActionFor(session, running === true && active).hint !== undefined
+                      ? { hint: archiveActionFor(session, running === true && active).hint as string }
+                      : {}),
                     // A box with its lid, the same "put it away, it can come
                     // back" idea as the 会话管理 page it lands on. Drawn inline
                     // like the export glyph: the design has no icon font.

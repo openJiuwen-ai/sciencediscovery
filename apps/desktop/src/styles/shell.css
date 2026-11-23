@@ -483,6 +483,17 @@ body.is-resizing * {
   font-size: 11px;
   line-height: 1.5;
 }
+/* What one entry does, under it while the pointer is on it. Same indentation as
+ * the label, so it reads as that entry's own line and not as a note about the
+ * whole menu (`.ctx-note` is that). Capped, or its sentence would stretch the
+ * whole menu to the width of one line of text. */
+.ctx-hint {
+  max-width: 186px;
+  padding: 3px 9px 6px 31px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
 
 
 /* 4006:4014 */
