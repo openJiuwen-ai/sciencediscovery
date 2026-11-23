@@ -4,7 +4,7 @@ import { expect } from "@playwright/test";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
-import { cleanupJourney, createProjectAndSession, openProjectSession, type JourneyRun } from "./helpers/journeys.ts";
+import { cleanupJourney, createProjectAndSession, type JourneyRun } from "./helpers/journeys.ts";
 import { RunPollRecovery } from "./helpers/run-poll-recovery.ts";
 
 const cases = [
@@ -111,6 +111,17 @@ for (const scenario of cases) {
         waitingConfigurations.length ? `configuration requests: ${waitingConfigurations.map((item) => `${item.capabilityId ?? "?"}:${item.state ?? "?"}`).join(", ")}` : "",
       ].filter(Boolean).join("; ");
     };
+    // Open the Session by its URL instead of clicking the sidebar. The stack is
+    // shared, so it already holds many Projects; the sidebar renders only the first
+    // rows and hides the rest behind "Show more", and a Project row that is not
+    // rendered made the click wait until the case timeout. The URL carries the same
+    // selection the click would, and it is also how a reload restores a Session.
+    const openSession = async () => {
+      await page.goto(`/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`);
+      const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
+      if (await tour.isVisible().catch(() => false)) await tour.click();
+      await expect(page.getByRole("heading", { name: fixture!.session.title })).toBeVisible({ timeout: 60_000 });
+    };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
         // A three-round standard research prepares inputs with governed tools, and
@@ -127,7 +138,7 @@ for (const scenario of cases) {
         const override = await page.request.patch(`${base()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
         expect(override.ok()).toBe(true);
         const existingIds = new Set((await read()).map((item) => item.research.id));
-        await openProjectSession(page, fixture);
+        await openSession();
         await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
         // Identify this run by the id that was not there before the command was
@@ -202,7 +213,7 @@ for (const scenario of cases) {
         const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
         if (await tour.isVisible().catch(() => false)) await tour.click();
         const card = page.getByRole("region", { name: /Idea Tree/ });
-        if (!(await card.isVisible().catch(() => false))) await openProjectSession(page, fixture!);
+        if (!(await card.isVisible().catch(() => false))) await openSession();
         // The API answering is not the same claim as the page still showing the
         // research: check the user-visible control region first, then the API.
         await expect(card).toBeVisible({ timeout: 60_000 });
