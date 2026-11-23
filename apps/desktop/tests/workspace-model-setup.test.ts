@@ -70,7 +70,9 @@ async function workspace(t: TestContext, initiallyEmpty = false) {
       if (method === "GET" && rest === "") { sessions.set(id, current); return current; }
       if (rest === "/runs" || rest === "/files" || rest === "/artifact-outputs" || rest === "/artifacts") return [];
     }
-    if (/^\/api\/projects\/[^/]+\/sessions\?state=active$/u.test(path)) return [];
+    // Unfiltered: the sidebar draws the active set, the read answers with every
+    // Session the Project holds, so membership can be pruned correctly.
+    if (/^\/api\/projects\/[^/]+\/sessions\?state=all$/u.test(path)) return [];
     assert.fail(`Unexpected request: ${method} ${path}`);
   } } as unknown as ApiClient;
   let handle: ReturnType<typeof useWorkspace> | undefined;
