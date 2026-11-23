@@ -55,23 +55,26 @@ interface Props {
 }
 
 /**
- * What the row's menu offers for archiving, and why it is inert when it is.
+ * What the row's menu offers for archiving, and what has to be said before the
+ * click.
  *
  * Kept as a function of the Session and the run state rather than inline in the
- * menu, because "an archived Session offers 恢复" and "a running one offers
- * neither" are the two rules a reviewer will check, and a portal is a poor place
- * to check them.
+ * menu, because "an archived Session offers 恢复", "a running one offers
+ * neither", and "archiving is not fully undone by 恢复" are the three rules a
+ * reviewer will check, and a portal is a poor place to check them.
  */
 export function archiveActionFor(
   session: Pick<Session, "archivedAt">,
   running: boolean,
-): { disabled: boolean; label: string; reason?: string } {
-  const archived = session.archivedAt !== undefined;
-  return {
-    disabled: running,
-    label: archived ? TEXT.menu.restore : TEXT.menu.archive,
-    ...(running ? { reason: TEXT.errors.archiveBlockedByRun } : {}),
-  };
+): { disabled: boolean; label: string; note?: string } {
+  if (running) return { disabled: true, label: TEXT.menu.archive, note: TEXT.errors.archiveBlockedByRun };
+  // Archiving tears the Session's scientific-environment kernels down and drops
+  // persistent memory that was not written to disk; 恢复 clears `archivedAt` and
+  // nothing else. The confirmation dialog was removed on purpose — archiving is
+  // reversible enough to need no gate — so the consequence is said here, under
+  // the entry, where it is read before the click.
+  if (session.archivedAt !== undefined) return { disabled: false, label: TEXT.menu.restore };
+  return { disabled: false, label: TEXT.menu.archive, note: TEXT.errors.archiveTearsDownKernel };
 }
 
 function basename(session: Session): string {
@@ -231,9 +234,9 @@ export function Sidebar({
                   },
                   // Archiving is reversible — the Session waits in 设置 → 会话管理
                   // and can be restored — so it runs without a confirmation
-                  // dialog. A run in progress is refused by the service with a
-                  // 409; saying so here is cheaper than letting the reader find
-                  // out that way.
+                  // dialog. What it does *not* give back is said under the menu;
+                  // a run in progress is refused by the service with a 409, and
+                  // that replaces the sentence instead of joining it.
                   {
                     disabled: archiveActionFor(session, running === true && active).disabled,
                     // A box with its lid, the same "put it away, it can come
@@ -259,7 +262,9 @@ export function Sidebar({
                     onSelect: () => void actions.deleteSession(session),
                   },
                 ],
-                ...(running === true && active ? { note: TEXT.errors.archiveBlockedByRun } : {}),
+                ...(archiveActionFor(session, running === true && active).note !== undefined
+                  ? { note: archiveActionFor(session, running === true && active).note as string }
+                  : {}),
               })
             }
             title={TEXT.sessionBar.sessionMenu}

@@ -2356,6 +2356,7 @@ export const ZH = {
     archivedBanner: "这条会话已归档，处于只读状态。恢复后可以继续发消息与运行。",
     archivedComposer: "已归档的会话不能发消息，恢复后即可继续。",
     archiveBlockedByRun: "会话正在运行，等它结束后再归档或恢复。",
+    archiveTearsDownKernel: "归档会停掉它在运行的科研内核，尚未落盘的内存不会随之恢复。",
     /** A Project takes its Sessions with it, so the sentence has to say so —
      *  deleting one Session is not what the reader is agreeing to. */
     deleteProjectWarning: (name: string) =>
