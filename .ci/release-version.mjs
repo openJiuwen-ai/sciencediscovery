@@ -22,10 +22,11 @@
  * while leaving `ScienceDiscovery-0.4.0.rc1-…` in place is the original defect
  * wearing a release title. And a plain substring test is not enough either:
  * `0.4.0` is a prefix of `0.4.0.rc1`, so a GA release moving `0.4.0-rc1 ->
- * 0.4.0` would pass while the installer stayed named `0.4.0.rc1` and the badges
- * still linked `v0.4.0-rc1` — the same drift. Every check below therefore
- * matches a whole token with its delimiter (`ScienceDiscovery-<v>-`, `!define
- * VERSION "<v>"`, `Release-<v>-`, `releases/tag/v<v>` followed by a boundary).
+ * 0.4.0` would pass while the installer stayed named `0.4.0.rc1` — the same
+ * drift. Every check below therefore matches a whole token with its delimiter
+ * (`ScienceDiscovery-<v>-`, `!define VERSION "<v>"`). The README badge is not
+ * in this list: it links the release list and shows the latest tag from a
+ * dynamic badge, so it has no hand-written number to drift.
  *
  * This lives in `.ci/` rather than as a `ci.yml` step because the repository has
  * one frozen test plan: a command check gets a planned identity there and is
@@ -75,8 +76,6 @@ function escapeRegExp(value) {
 export const RELEASE_METADATA = Object.freeze([
   "application/electron-builder.yml",
   "application/build/nsh-syntax-check-stub.nsi",
-  "README.md",
-  "README_zh.md",
 ]);
 
 /**
@@ -102,25 +101,12 @@ export function requirementsFor(version) {
         path,
       };
     }
-    if (path === "application/build/nsh-syntax-check-stub.nsi") {
-      return {
-        checks: [{
-          expected: `!define VERSION "${dot}"`,
-          matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
-        }],
-        path,
-      };
-    }
-    // The badge is read by a person (dot form, hyphen-delimited in the badge URL)
-    // and links the tag (hyphen form, boundary after it).
+    // application/build/nsh-syntax-check-stub.nsi
     return {
-      checks: [
-        { expected: `Release-${dot}-`, matches: new RegExp(`Release-${escapeRegExp(dot)}-`, "u") },
-        {
-          expected: `releases/tag/v${version}`,
-          matches: new RegExp(`releases/tag/v${escapeRegExp(version)}(?![0-9A-Za-z.-])`, "u"),
-        },
-      ],
+      checks: [{
+        expected: `!define VERSION "${dot}"`,
+        matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
+      }],
       path,
     };
   });
