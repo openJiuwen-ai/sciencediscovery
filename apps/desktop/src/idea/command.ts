@@ -21,6 +21,16 @@
 
 const IDEA_TREE_COMMANDS = ["/idea-tree-team", "/idea-tree"] as const;
 
+/** The command 会话设置's `idea-tree` row seeds into the composer once its card
+ *  is confirmed.
+ *
+ *  The card collects parameters; the research starts when the reader sends the
+ *  message that carries this token, so the card never sends anything itself.
+ *  The team variant is the one that row seeds — the research flow with its
+ *  collaborator skills — and the parameters the card just wrote reach it through
+ *  the Session override the server reads when the research is created. */
+export const IDEA_TREE_TEAM_COMMAND = "/idea-tree-team";
+
 /** True when the draft is one of the Idea Tree commands (longest prefix first).
  *
  *  The command itself is never intercepted: it is sent as a message so the agent
@@ -30,4 +40,35 @@ const IDEA_TREE_COMMANDS = ["/idea-tree-team", "/idea-tree"] as const;
 export function isIdeaTreeCommand(text: string): boolean {
   const trimmed = text.trim();
   return IDEA_TREE_COMMANDS.some((command) => trimmed === command || trimmed.startsWith(`${command} `));
+}
+
+/** The Idea Tree command a draft starts with, or undefined when it starts with
+ *  something else.
+ *
+ *  The toggle the parameters card seeds is exactly this: a typed `/idea-tree`
+ *  keeps saying `/idea-tree`, and the settings row seeds the team variant. */
+export function ideaCommandOf(text: string): string | undefined {
+  const trimmed = text.trim();
+  return IDEA_TREE_COMMANDS.find((command) => trimmed === command || trimmed.startsWith(`${command} `));
+}
+
+/** The task a draft carries, with a leading Idea Tree command taken off.
+ *
+ *  A draft that is itself the command contributes no task, which is what keeps a
+ *  token from becoming another token's objective: typing `/idea-tree-team`, then
+ *  adjusting the parameters instead of pressing Enter, used to send
+ *  `/idea-tree-team /idea-tree-team …`. */
+export function ideaTaskOf(text: string): string {
+  const trimmed = text.trim();
+  const command = ideaCommandOf(trimmed);
+  if (command === undefined) return trimmed;
+  return trimmed.slice(command.length).trim();
+}
+
+/** The message a seeded token sends: the command, then the task the reader
+ *  wrote under it. With no task the bare command goes out and the agent asks for
+ *  the objective, which is the only honest option left. */
+export function composeIdeaMessage(command: string, task: string): string {
+  const trimmed = task.trim();
+  return trimmed === "" ? command : `${command} ${trimmed}`;
 }

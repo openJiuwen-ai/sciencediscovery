@@ -82,12 +82,12 @@ function render(
 
 /** 会话设置's rows are rendered directly, since the menu they belong to is
  *  only mounted while open. */
-function settingsMenu(evolve = false, ideaTree = false): string {
+function settingsMenu(evolve = false, ideaTree = false, onIdeaTree?: (draft: string) => void): string {
   return renderToStaticMarkup(
     <SessionSettingsMenu
       onClose={() => {}}
       onEvolve={evolve ? () => {} : undefined}
-      onIdeaTree={ideaTree ? () => {} : undefined}
+      onIdeaTree={ideaTree ? (onIdeaTree ?? (() => {})) : undefined}
     />,
   );
 }
@@ -752,6 +752,111 @@ test("a send that answers false keeps the draft, and the same send then goes out
     await act(async () => { send!.props.onClick?.(); });
     assert.deepEqual(attempts, ["/idea-tree-team 分析钙钛矿", "/idea-tree-team 分析钙钛矿"]);
     assert.equal(textarea.props.value, "");
+  } finally {
+    await act(async () => { view!.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
+});
+
+test("the idea-tree row hands the composer draft to the parameters card", async () => {
+  // The card starts a research, and `create_idea_research` needs an objective.
+  // Carrying the draft through is what keeps a sentence the reader already wrote
+  // from being dropped when the card opens — the row used to be called with no
+  // text at all.
+  const received: string[] = [];
+  let view: { root: never; unmount: () => void };
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onCreateProject={() => {}}
+        onIdeaTree={(draft) => { received.push(draft); }}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={() => true}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    ) as never;
+  });
+  try {
+    const textarea = (view!.root as unknown as { findByType: (type: string) => { props: { onChange?: (event: { target: { value: string } }) => void } } })
+      .findByType("textarea");
+    await act(async () => { textarea.props.onChange?.({ target: { value: "研究钙钛矿带隙" } }); });
+
+    const trigger = (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onClick?: (event: { stopPropagation: () => void }) => void } }[] })
+      .findAllByType("button")
+      .find((node) => node.props["aria-label"] === "会话设置");
+    assert.ok(trigger, "会话设置 is drawn");
+    await act(async () => { trigger!.props.onClick?.({ stopPropagation() {} }); });
+
+    const row = (view!.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; onClick?: () => void } }[] })
+      .findAllByType("span")
+      .find((node) => node.props.className === "session-menu-label" && node.props.children === TEXT.composer.ideaTree)?.parent;
+    assert.ok(row, "the idea-tree row is drawn");
+    await act(async () => { (row!.props.onClick as () => void)(); });
+
+    assert.deepEqual(received, ["研究钙钛矿带隙"], "the draft rides with the row");
+  } finally {
+    await act(async () => { view!.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
+});
+test("a seeded idea-tree token sends the command with the task written under it", async () => {
+  // The parameters card seeds this token instead of sending anything, so the
+  // send is the reader's: the composer has to hand the shell the command and the
+  // sentence as the two halves of one message.
+  const sent: { content: string; command?: string }[] = [];
+  let view: { root: never; unmount: () => void };
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onClearCommand={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={(content, command) => { sent.push({ content, command }); return true; }}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "研究钙钛矿带隙" }}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    ) as never;
+  });
+  try {
+    const send = (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.composer.send);
+    assert.ok(send, "the send button is drawn");
+    await act(async () => { send!.props.onClick?.(); });
+    assert.deepEqual(sent, [{ command: "/idea-tree-team", content: "研究钙钛矿带隙" }],
+      "the token and its task leave as one message");
   } finally {
     await act(async () => { view!.unmount(); });
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;

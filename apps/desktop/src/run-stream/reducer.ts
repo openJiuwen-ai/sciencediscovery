@@ -43,7 +43,6 @@ const DEFERRED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "agent.record",
   "artifact.upserted",
   "artifact_review.completed",
-  "idea_research.created",
   "idea_tree.phase",
   // One record per model turn, persisted by the API so a run's spend can be
   // recomputed from its stream (#1109). The transcript shows tokens through the
@@ -250,6 +249,14 @@ export function reduceRunStream(
       // and the list is not polled until something is running. Counting the
       // event is what lets the app re-read the list when a search appears.
       return { ...advanced, evolveRunsCreated: advanced.evolveRunsCreated + 1 };
+
+    case "idea_research.created":
+      // The Idea Tree card at the transcript's foot reads the same kind of
+      // list, and the research is created by the agent partway through the
+      // turn. Counting it here is what re-reads that list when the research
+      // starts, instead of relying on the command's waiting window — which a
+      // real model's preparation outlasts, leaving the card missing.
+      return { ...advanced, ideaResearchesCreated: advanced.ideaResearchesCreated + 1 };
 
     default:
       if (DEFERRED_EVENT_TYPES.has(event.type) || STREAMED_ELSEWHERE.has(event.type)) return advanced;
