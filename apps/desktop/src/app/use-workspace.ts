@@ -32,7 +32,8 @@ import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./sess
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
-import { DEFAULT_SESSION_FILTERS, filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
+import { readListFilters, rememberListFilters } from "./list-filters-preference.js";
+import { filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -404,7 +405,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // and the sidebar draws the active subset — so there is no three-way state to
   // keep here any more.
   /** How the list is narrowed: scope, running, artifacts, time window. */
-  const [listFilters, setListFiltersState] = useState<SessionListFilters>(DEFAULT_SESSION_FILTERS);
+  // Read before the first paint: #1251 asks for the choice to survive a reload.
+  const [listFilters, setListFiltersState] = useState<SessionListFilters>(() => readListFilters());
   /** The query the field holds, the answer it produced and why it failed. */
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<WorkbenchSearchResponse>();
@@ -2545,13 +2547,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     [client],
   );
 
+  // The clock the time window is measured against, to the minute. A frozen
+  // `now` inside the memo would keep "today" pinned to whenever the last
+  // dependency changed; bucketing to the minute keeps the memo useful and the
+  // window honest, with at most a minute of lag after midnight.
+  const filterNow = Math.floor(Date.now() / 60000) * 60000;
+
   // What the sidebar lists: the raw listing keeps the drafts as well, because
   // 新建会话 reuses one and a draft is what a new Project opens on, but a
   // Session nobody has written in is not a row the reader asked for.
   const listedByProject = useMemo(() => {
     const listed: Record<string, Session[]> = {};
     const context: FilterContext = {
-      now: Date.now(),
+      now: filterNow,
       runningSessionId: running ? sessionId : undefined,
       withArtifacts: new Set(Object.entries(artifactsBySession.current)
         .filter(([, outputs]) => outputs.length > 0)
@@ -2567,7 +2575,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         ? [] : filterSessions(visible, listFilters, context);
     }
     return listed;
-  }, [activeProjectId, listFilters, outputs, running, sessionId, sessionsByProject]);
+  }, [activeProjectId, filterNow, listFilters, outputs, running, sessionId, sessionsByProject]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
@@ -2607,7 +2615,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // The id has to be the bare one — the route composes `artifact:<id>`, and
       // `pendingArtifactHit` compares it with `output.artifact.id`. A hit for the
       // Session already open has its outputs in hand, so it opens at once; any
-      // other is held until the read `openSession` starts lists them.
+      // other is held until the read `openSession` starts lists them — which is
+      // why that read is started below, not assumed.
       const plan = artifactHitPlan(outputs, { id: result.id, sessionId: result.sessionId }, sessionId);
       if ("open" in plan) {
         void openArtifact(plan.open);
@@ -2615,6 +2624,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       }
       pendingArtifact.current = plan.pending;
       setArtifactTicket((ticket) => ticket + 1);
+      void openSession(result.sessionId);
       return;
     }
     pendingArtifact.current = undefined;
@@ -2627,7 +2637,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
-      setListFilters: (next) => setListFiltersState((current) => ({ ...current, ...next })),
+      setListFilters: (next) => setListFiltersState((current) => {
+        // Written on every change: the stored copy is what a reload reads.
+        const updated = { ...current, ...next };
+        rememberListFilters(updated);
+        return updated;
+      }),
       search,
       openSearchResult,
       createProject: createProjectAndOpen,
