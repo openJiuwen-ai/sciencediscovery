@@ -22,7 +22,7 @@ import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.j
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { flatResults, groupSearchResults, moveHit, searchDetail } from "../app/session-search.js";
-import { DEFAULT_SESSION_FILTERS, type SessionListFilters } from "../app/session-filters.js";
+import { DEFAULT_SESSION_FILTERS, hasActiveFilters, type SessionListFilters } from "../app/session-filters.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -195,6 +195,9 @@ export function Sidebar({
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const stars = useGithubStars();
+  /** Whether a chip is narrowing at all. An empty list under a filter is that
+   *  filter's answer, not an empty workspace, and the two must not read alike. */
+  const narrowed = hasActiveFilters(listFilters);
 
   useEffect(() => {
     // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
@@ -530,6 +533,10 @@ export function Sidebar({
         </div>
         {projects.length === 0 ? <div className="side-empty">{TEXT.sidebar.noProjects}</div> : null}
         {projects.map((project) => {
+          // 仅当前项目 is a narrowing over the folds, not a per-Project empty
+          // state: the Projects it excludes are not drawn at all, so none of
+          // them can say 暂无会话 about Sessions it was never asked for.
+          if (listFilters?.scope === "current" && project.id !== activeProjectId) return null;
           const open = !folded.has(project.id);
           const sessions = sessionsByProject[project.id] ?? [];
           // A folded Project says its own rule above the page, so the size of
@@ -609,7 +616,7 @@ export function Sidebar({
                       narrow column each time the row's actions appear. */}
                   {foldedPage ? <div className="side-project-rule">{TEXT.sidebar.pageRule(PAGE_SIZE)}</div> : null}
                   {sessions.length === 0
-                    ? <div className="side-empty">{TEXT.sidebar.noTasks}</div>
+                    ? <div className="side-empty">{narrowed ? TEXT.sidebar.noMatch : TEXT.sidebar.noTasks}</div>
                     : sessionList(project.id, sessions)}
                 </>
               ) : null}
@@ -623,7 +630,7 @@ export function Sidebar({
             user filed anything. */}
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
-          <div className="side-empty">{TEXT.sidebar.noRecent}</div>
+          <div className="side-empty">{narrowed ? TEXT.sidebar.noMatch : TEXT.sidebar.noRecent}</div>
         ) : (
           <div className="side-flat">{sessionList("recent", recent)}</div>
         )}

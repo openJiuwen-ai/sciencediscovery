@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { StubClient, split } from "./api-stub.js";
 import { searchWorkbench } from "../src/api/workbench.js";
 import {
-  flatResults, groupSearchResults, isSearchable, moveHit, pendingArtifactHit, searchDetail,
+  artifactHitPlan, bareSearchId, flatResults, groupSearchResults, isSearchable, moveHit, pendingArtifactHit, searchDetail,
 } from "../src/app/session-search.js";
 import type { SessionArtifactOutput, WorkbenchSearchResult } from "../src/api/types.js";
 
@@ -94,4 +94,48 @@ test("output that predates the Session field counts as the open Session's", () =
     "figure");
   assert.equal(pendingArtifactHit([anonymous], { artifactId: "figure", sessionId: "s2" })?.artifact.id,
     "figure", "and it is nameless, so any Session's hit may claim it");
+});
+
+test("a hit's id carries its kind, and the actions take the bare one", () => {
+  // `GET /api/search` composes ids as `<kind>:<id>` so two hits with the same
+  // uuid cannot collide. Everything that acts on a hit — selectProject,
+  // pendingArtifactHit — compares against the bare id the rest of the API uses.
+  assert.equal(bareSearchId("project:7d1f"), "7d1f");
+  assert.equal(bareSearchId("session:7d1f"), "7d1f");
+  assert.equal(bareSearchId("artifact:7d1f"), "7d1f");
+  assert.equal(bareSearchId("7d1f"), "7d1f", "a bare id is already bare");
+  assert.equal(bareSearchId("artifact:"), "", "an empty tail stays empty rather than becoming the kind");
+
+  // The failure this guards: the route's `artifact:<id>` used as the pending id
+  // never matches the listed output, so the click opened nothing.
+  const listed = [output("7d1f", { createdIn: "s1" })];
+  const pending = { artifactId: bareSearchId("artifact:7d1f"), sessionId: "s1" };
+  assert.equal(pendingArtifactHit(listed, pending)?.artifact.id, "7d1f",
+    "the prefixed hit opens the document the panel lists under its bare id");
+  assert.equal(pendingArtifactHit(listed, { artifactId: "artifact:7d1f", sessionId: "s1" }), undefined,
+    "and passing the prefixed id through unchanged would match nothing");
+});
+
+test("an artifact hit for the Session already open opens at once, and for any other waits", () => {
+  const listed = [output("7d1f", { createdIn: "s1" })];
+
+  // The case that used to do nothing: the hit names the open Session, so
+  // `openSession` is a no-op and nothing would ever re-run the wait.
+  const same = artifactHitPlan(listed, { id: "artifact:7d1f", sessionId: "s1" }, "s1");
+  assert.ok("open" in same, "a document the panel already lists must open immediately");
+  assert.equal(same.open.artifact.id, "7d1f", "and the prefixed hit still resolves to the bare id");
+
+  // Same Session, but its list has not arrived yet: hold it rather than drop it.
+  const notYet = artifactHitPlan([], { id: "artifact:7d1f", sessionId: "s1" }, "s1");
+  assert.ok("pending" in notYet, "an unlisted document for the open Session is still a wait");
+  assert.deepEqual(notYet.pending, { artifactId: "7d1f", sessionId: "s1" });
+
+  // Another Session: always a wait, because its outputs are not in hand.
+  const other = artifactHitPlan(listed, { id: "artifact:7d1f", sessionId: "s2" }, "s1");
+  assert.ok("pending" in other, "another Session's document cannot open before that Session is read");
+  assert.deepEqual(other.pending, { artifactId: "7d1f", sessionId: "s2" });
+
+  // Nothing open at all: same answer.
+  const none = artifactHitPlan([], { id: "artifact:7d1f", sessionId: "s1" }, undefined);
+  assert.ok("pending" in none);
 });

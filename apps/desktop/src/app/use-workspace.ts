@@ -31,7 +31,7 @@ import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
-import { isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
+import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
 import { DEFAULT_SESSION_FILTERS, filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
@@ -413,6 +413,15 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** A search hit for an artifact, waiting for the panel to list it. */
   const pendingArtifact = useRef<PendingArtifact | undefined>(undefined);
+  /**
+   * Bumped by every artifact hit.
+   *
+   * A hit for the Session that is already open changes neither `sessionId` nor
+   * `outputs`, so an effect keyed on those alone would never run for it and the
+   * click would close the results and open nothing. The pending ref carries the
+   * what; this counter is what makes the effect re-read it.
+   */
+  const [artifactTicket, setArtifactTicket] = useState(0);
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
   /** Every Session a read has seen, archived ones included. Pruning runs against
@@ -2373,7 +2382,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     if (hit === undefined) return;
     pendingArtifact.current = undefined;
     void openArtifact(hit);
-  }, [openArtifact, outputs, sessionId]);
+  }, [artifactTicket, openArtifact, outputs, sessionId]);
 
   /**
    * Show another version of the artifact a tab already holds.
@@ -2550,8 +2559,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     };
     for (const [projectId, sessions] of Object.entries(sessionsByProject)) {
       const visible = withConversation(sessions);
-      // 仅当前项目 hides the other folds rather than emptying them, so the
-      // sidebar shows one Project's Sessions and nothing else.
+      // 仅当前项目 hides the other folds rather than emptying them; the hiding
+      // is the sidebar's (it owns which folds are drawn), so the list it is
+      // handed stays honest — an empty entry here would draw 暂无会话 under a
+      // Project that simply is not on screen.
       listed[projectId] = listFilters.scope === "current" && projectId !== activeProjectId
         ? [] : filterSessions(visible, listFilters, context);
     }
@@ -2586,17 +2597,29 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     setSearchQuery("");
     setSearchResults(undefined);
     if (result.kind === "project") {
-      selectProject(result.id);
+      // `result.id` is `project:<id>`; the Project actions take the bare id the
+      // rest of the API uses, which is why the hit carries `projectId`.
+      selectProject(result.projectId);
       return;
     }
     if (result.sessionId === undefined) return;
-    // The document is opened by the effect below rather than here: its output
-    // arrives with the panel listing, which `openSession` starts now.
-    pendingArtifact.current = result.kind === "artifact"
-      ? { artifactId: result.id, sessionId: result.sessionId }
-      : undefined;
+    if (result.kind === "artifact") {
+      // The id has to be the bare one — the route composes `artifact:<id>`, and
+      // `pendingArtifactHit` compares it with `output.artifact.id`. A hit for the
+      // Session already open has its outputs in hand, so it opens at once; any
+      // other is held until the read `openSession` starts lists them.
+      const plan = artifactHitPlan(outputs, { id: result.id, sessionId: result.sessionId }, sessionId);
+      if ("open" in plan) {
+        void openArtifact(plan.open);
+        return;
+      }
+      pendingArtifact.current = plan.pending;
+      setArtifactTicket((ticket) => ticket + 1);
+      return;
+    }
+    pendingArtifact.current = undefined;
     void openSession(result.sessionId);
-  }, [openSession, selectProject]);
+  }, [openArtifact, openSession, outputs, selectProject, sessionId]);
 
 
   const actions: WorkspaceActions = useMemo(

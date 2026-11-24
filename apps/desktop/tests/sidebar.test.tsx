@@ -22,6 +22,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { EN } from "../src/text/en.js";
+import { DEFAULT_SESSION_FILTERS } from "../src/app/session-filters.js";
 import { Sidebar } from "../src/views/Sidebar.js";
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
@@ -224,4 +225,28 @@ test("the project the open session belongs to is the only fold marked active", (
     projects: [project("p1", "脓毒症研究"), project("p2", "文献综述")],
   });
   assert.equal(markup.split("side-project is-open is-active").length - 1, 1);
+});
+
+test("a filter that hides every row says so instead of reading as an empty workspace", () => {
+  // 仅运行中 with nothing running: every row is gone, and "暂无会话" would be a
+  // claim about the workspace rather than about the filter.
+  const markup = render({
+    listFilters: { ...DEFAULT_SESSION_FILTERS, onlyRunning: true },
+    projects: [project("p1", "项目一")],
+    sessionsByProject: { p1: [session("s1", "会话一")] },
+  });
+  assert.ok(markup.includes("没有符合筛选条件的会话。"), "the narrowed empty state is missing");
+  assert.ok(!markup.includes("暂无会话"), "the list read as an empty workspace under a filter");
+  assert.equal(EN.sidebar.noMatch, "No Session matches the current filter.");
+});
+
+test("仅当前项目 hides the other folds instead of emptying them", () => {
+  const markup = render({
+    activeProjectId: "p1",
+    listFilters: { ...DEFAULT_SESSION_FILTERS, scope: "current" },
+    projects: [project("p1", "项目一"), project("p2", "项目二")],
+    sessionsByProject: { p1: [session("s1", "会话一")], p2: [session("s2", "会话二")] },
+  });
+  assert.ok(markup.includes("项目一"), "the current Project's fold is missing");
+  assert.ok(!markup.includes("项目二"), "an excluded Project was drawn as a fold");
 });
