@@ -3508,6 +3508,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/app/search-narrowing.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/search-narrowing-preference.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/app/search-narrowing-preference.ts",
       "risk": "P1",
       "owner": "desktop",

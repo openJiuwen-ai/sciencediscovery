@@ -412,6 +412,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [searchQuery, setSearchQuery] = useState("");
   const [searchAnswer, setSearchResults] = useState<WorkbenchSearchResponse>();
   const [searchError, setSearchError] = useState<string>();
+  /** Ids of the Sessions the last listing read as archived, for the search rules. */
+  const archivedIds = useRef<ReadonlySet<string>>(new Set());
   const searchTicket = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** A search hit for an artifact, waiting for the panel to list it. */
@@ -909,7 +911,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (ticket !== refreshTicket.current) return undefined;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
-      // Archived Sessions are read for membership, not for the list.
+      // Archived Sessions are read for membership, not for the list — and for the
+      // search, which has to answer "is this hit archived?" for artifacts too.
+      archivedIds.current = new Set(
+        sessions.filter((session) => session.archivedAt !== undefined).map((session) => session.id),
+      );
       const drawn = sessions.filter((session) => session.archivedAt === undefined);
       setSessionsByProject(Object.fromEntries(
         entries.map(([id, list]) => [id, list.filter((session) => session.archivedAt === undefined)]),
@@ -2579,15 +2585,22 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    */
   const searchResults = useMemo(() => {
     if (searchAnswer === undefined) return undefined;
+    // The column holds the active set, so `sessionsByProject` cannot answer
+    // "archived" for anything — and artifact hits carry no archived flag of their
+    // own. The listing read that filled it also saw the archived Sessions, and
+    // those ids are kept for exactly this question.
     const facts = new Map<string, SearchSessionFacts>();
     for (const sessions of Object.values(sessionsByProject)) {
       for (const session of sessions) {
         const stamp = Date.parse(session.updatedAt ?? session.createdAt);
         facts.set(session.id, {
-          archived: session.archivedAt !== undefined,
+          archived: archivedIds.current.has(session.id),
           stamp: Number.isNaN(stamp) ? undefined : stamp,
         });
       }
+    }
+    for (const id of archivedIds.current) {
+      if (!facts.has(id)) facts.set(id, { archived: true });
     }
     const results = narrowResults(searchAnswer.results, narrowing, {
       now: filterNow,
@@ -2597,7 +2610,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         .map(([id]) => id)),
       sessionFacts: (id) => facts.get(id),
     });
-    return { ...searchAnswer, results, total: results.length };
+    // The route keeps `total` and `hasMore`: a client-side narrowing cannot count
+    // what the route did not send, and a narrowed page is not an empty answer.
+    return { ...searchAnswer, results };
   }, [filterNow, narrowing, running, searchAnswer, sessionId, sessionsByProject]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
