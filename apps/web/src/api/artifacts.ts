@@ -236,7 +236,8 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/memory/subgraph?session_id=${encodeURIComponent(sessionId)}`);
   }
 
-  /** Memory-graph health from the aggregated `/health`: "healthy" | "degraded" | "disabled" | "needs-password". */
+  /** Memory-graph health from the aggregated `/health`: "healthy" | "degraded" | "unauthorized" | "disabled" | "needs-password".
+   *  `unauthorized` means the service is reachable but rejected this installation's internal token. */
 
   getMemoryHealth(): Promise<{ memoryGraph: string }> {
     return this.request("/health");

@@ -63,6 +63,25 @@ import { mgLog } from "./log.js";
 // degraded fallback (1.5 s in services/api/src/http/index.ts).
 const HEALTH_REQUEST_TIMEOUT_MS = 1_500;
 
+/** The token `/health` is deliberately unauthenticated, so on its own it says
+ *  nothing about whether this process can read the graph: /query/* needs the
+ *  Bearer token, and a mismatched internal token answers 401 to every query
+ *  while /health keeps saying healthy. The probe therefore repeats the read
+ *  the citation card will do — a by-node-type for one valid label, scoped to a
+ *  Session id that cannot exist, so it cannot pull real rows. The sidecar
+ *  refuses an empty node_types list with 400, hence the label below. */
+const HEALTH_PROBE_SESSION_ID = "__sciencediscovery_health_probe__";
+const HEALTH_PROBE_NODE_TYPE: MemoryGraphNodeLabel = "Evidence";
+
+/** The reason a read carries when the sidecar answered but refused this
+ *  client's credentials. Distinct from `memory_graph_unreachable` because the
+ *  user cannot fix it by waiting or restarting: the internal token is wrong. */
+export const MEMORY_GRAPH_UNAUTHORIZED = "memory_graph_unauthorized";
+
+function isAuthRejection(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
 /** Aggregated provenance addressing info for one Artifact version, returned
  * by the sidecar's ``GET /query/artifact-provenance``. Every field is a hash or
  * a routing key — never a content blob (graph = directory, CAS/store =
@@ -393,7 +412,19 @@ export class MemoryGraphClient {
     }
   }
 
+  /** The sidecar's health, plus whether this client is allowed to query it.
+   *
+   *  `/health` is unauthenticated and only reports the store, so a healthy
+   *  answer followed by an authenticated by-node-type probe is the smallest
+   *  pair that answers the question the settings line is actually asked:
+   *  "can this installation read scientific memory?". A reachable sidecar that
+   *  refuses the probe's Bearer token returns `unauthorized` — never
+   *  `healthy`, which is what let a token mismatch look like a working
+   *  installation. A transport failure or an unusable store stays
+   *  `degraded`, and `disabled` / `needs-password` keep their meaning. */
   async health(): Promise<string> {
+    const deadline = Date.now() + HEALTH_REQUEST_TIMEOUT_MS;
+    let status: string;
     try {
       const response = await fetch(`${this.baseUrl}/health`, {
         signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
@@ -403,11 +434,58 @@ export class MemoryGraphClient {
         return "degraded";
       }
       const body = (await response.json()) as { status?: string };
-      const status = body.status ?? "degraded";
+      status = body.status ?? "degraded";
+    } catch (error) {
+      mgLog.warn("health check error: %s", error instanceof Error ? error.message : String(error));
+      return "degraded";
+    }
+    if (status !== "healthy") {
+      mgLog.info("health check: memory-graph status is %s", status);
+      return status;
+    }
+    // `/health` answered healthy. Only now is the authenticated read worth a
+    // request: a down or unconfigured store already has its own status. The
+    // probe must fit what is left of the budget the API route already gives
+    // the whole reading (1.5 s), so a slow `/health` cannot push it past.
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      mgLog.warn("health check: no time left for the authenticated probe");
+      return "degraded";
+    }
+    try {
+      const response = await fetch(`${this.baseUrl}/query/by-node-type`, {
+        method: "POST",
+        headers: this.initHeaders(true),
+        body: JSON.stringify({
+          node_types: [HEALTH_PROBE_NODE_TYPE],
+          session_id: HEALTH_PROBE_SESSION_ID,
+        }),
+        signal: AbortSignal.timeout(remaining),
+      });
+      if (isAuthRejection(response.status)) {
+        mgLog.warn("health check: memory-graph refused this client's credentials (HTTP %s)", response.status);
+        return "unauthorized";
+      }
+      if (!response.ok) {
+        mgLog.warn("health check: authenticated probe returned HTTP %s", response.status);
+        return "degraded";
+      }
+      // A 200 can still carry a failure reason: the sidecar reports a
+      // reachable-but-unusable store (and an intermediary a rejected
+      // credential) in the body, not in the status. Inspecting only the HTTP
+      // status would call that healthy — the same class of false assurance
+      // that let the original 401 look like a working installation.
+      const probeBody = (await response.json().catch(() => null)) as { reason?: unknown } | null;
+      const probeReason = typeof probeBody?.reason === "string" ? probeBody.reason : undefined;
+      if (probeReason) {
+        mgLog.warn("health check: authenticated probe answered with reason=%s", probeReason);
+        return probeReason === MEMORY_GRAPH_UNAUTHORIZED ? "unauthorized" : "degraded";
+      }
       mgLog.info("health check: memory-graph status is %s", status);
       return status;
     } catch (error) {
-      mgLog.warn("health check error: %s", error instanceof Error ? error.message : String(error));
+      mgLog.warn("health check: authenticated probe failed: %s",
+        error instanceof Error ? error.message : String(error));
       return "degraded";
     }
   }
@@ -626,8 +704,12 @@ export class MemoryGraphClient {
       return { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" };
     }
     if (!response.ok) {
-      mgLog.warn("getSubgraph not ok: memory-graph returned HTTP %s (session=%s)", response.status, sessionId);
-      return { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_unreachable" };
+      const reason = isAuthRejection(response.status)
+        ? MEMORY_GRAPH_UNAUTHORIZED
+        : "memory_graph_unreachable";
+      mgLog.warn("getSubgraph not ok: memory-graph returned HTTP %s (session=%s, reason=%s)",
+        response.status, sessionId, reason);
+      return { nodes: [], edges: [], total: 0, truncated: false, reason };
     }
     const body = (await response.json()) as Record<string, unknown>;
     const result: MemorySubgraph = {
@@ -668,9 +750,12 @@ export class MemoryGraphClient {
       return { contentHash: null, reason: "memory_graph_unreachable" };
     }
     if (!response.ok) {
-      mgLog.warn("getWebPageContentHash not ok: memory-graph returned HTTP %s (session=%s)",
-        response.status, sessionId);
-      return { contentHash: null, reason: "memory_graph_unreachable" };
+      const reason = isAuthRejection(response.status)
+        ? MEMORY_GRAPH_UNAUTHORIZED
+        : "memory_graph_unreachable";
+      mgLog.warn("getWebPageContentHash not ok: memory-graph returned HTTP %s (session=%s, reason=%s)",
+        response.status, sessionId, reason);
+      return { contentHash: null, reason };
     }
     const body = (await response.json()) as { content_hash?: string | null; reason?: string };
     return { contentHash: body.content_hash ?? null, reason: body.reason };
@@ -1178,7 +1263,13 @@ export class MemoryGraphClient {
       const code = detail !== null && typeof detail === "object"
         ? (detail as Record<string, unknown>).code
         : undefined;
-      const reason = typeof code === "string" ? code : "memory_graph_unreachable";
+      // A 401/403 is the sidecar answering "not you", not an outage. The
+      // sidecar's FastAPI detail for a bad token is a bare string (no `code`),
+      // so without this check it fell through to memory_graph_unreachable and
+      // the citation card blamed a timeout for a credential mismatch.
+      const reason = isAuthRejection(response.status)
+        ? MEMORY_GRAPH_UNAUTHORIZED
+        : typeof code === "string" ? code : "memory_graph_unreachable";
       mgLog.warn("postJson %s not ok: memory-graph returned HTTP %s code=%s",
         path, response.status, reason);
       return { hits: [], total: 0, truncated: false, reason };
@@ -1243,7 +1334,12 @@ export class MemoryGraphClient {
         method: "POST",
       });
       if (response.status === 404) return { cells: [], edges: [], nodes: [], reason: "search_not_found", truncated: false };
-      if (!response.ok) return { cells: [], edges: [], nodes: [], reason: "memory_graph_unreachable", truncated: false };
+      if (!response.ok) {
+        return {
+          cells: [], edges: [], nodes: [], truncated: false,
+          reason: isAuthRejection(response.status) ? MEMORY_GRAPH_UNAUTHORIZED : "memory_graph_unreachable",
+        };
+      }
       return await response.json();
     } catch {
       return { cells: [], edges: [], nodes: [], reason: "memory_graph_unreachable", truncated: false };

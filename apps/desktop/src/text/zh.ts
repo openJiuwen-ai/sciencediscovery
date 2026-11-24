@@ -830,6 +830,8 @@ export const ZH = {
     disabledBody: "在「设置 → 科学记忆」里开启后，报告的引用就能展开成证据与产物。",
     unreachableTitle: "暂时读不到科学记忆",
     unreachableBody: "记忆服务没有响应。稍后再试一次。",
+    authTitle: "记忆服务拒绝了访问凭据",
+    authBody: "记忆服务有响应，但拒绝了本机 API 使用的内部令牌。请确认 API 与记忆服务的内部令牌配置一致，再重新检查。",
     errorTitle: "读取失败",
     retry: "重试",
     previewTab: "预览",
@@ -846,6 +848,7 @@ export const ZH = {
     },
     status: {
       healthy: "运行正常",
+      unauthorized: "凭据被拒绝",
       degraded: "连接失败",
       checking: "检查中",
       unknown: "状态未知",

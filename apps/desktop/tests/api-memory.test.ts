@@ -18,7 +18,7 @@ const { describe, it } = createTest(import.meta.url, {
 });
 import assert from "node:assert/strict";
 
-import { graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../src/api/memory.js";
+import { graphCredentialsRejected, graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../src/api/memory.js";
 import { StubClient, json } from "./api-stub.js";
 
 describe("a graph that could not answer", () => {
@@ -31,6 +31,18 @@ describe("a graph that could not answer", () => {
     assert.equal(graphTemporarilyUnavailable("node_not_found"), false);
     assert.equal(graphTemporarilyUnavailable("memory_graph_disabled"), false);
     assert.equal(graphTemporarilyUnavailable(undefined), false);
+  });
+
+  // Issue #1352: the sidecar answered 401, it did not time out. Before the
+  // split, both cases produced memory_graph_unreachable and the card told the
+  // reader the service did not answer.
+  it("keeps an auth rejection apart from a transport failure", () => {
+    assert.equal(graphCredentialsRejected("memory_graph_unauthorized"), true);
+    assert.equal(graphTemporarilyUnavailable("memory_graph_unauthorized"), false);
+    assert.equal(graphCredentialsRejected("memory_graph_unreachable"), false);
+    assert.equal(graphCredentialsRejected("memory_graph_query_limit"), false);
+    assert.equal(graphCredentialsRejected("memory_graph_disabled"), false);
+    assert.equal(graphCredentialsRejected(undefined), false);
   });
 });
 

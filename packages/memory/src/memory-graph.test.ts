@@ -27,7 +27,7 @@ import type { ObserveToolCallPayload } from "./memory-graph.js";
  * to assert the API-side client/sink posts the right shape to /observe/tool-call
  * and that the sink's fire-and-forget contract never throws into the caller.
  */
-function startFakeMemoryGraph(handler: (path: string, body: unknown) => { status: number; json: unknown }): Promise<http.Server> {
+function startFakeMemoryGraph(handler: (path: string, body: unknown, request: http.IncomingMessage) => { status: number; json: unknown }): Promise<http.Server> {
   const server = http.createServer((request, response) => {
     let data = "";
     request.on("data", (chunk) => { data += chunk; });
@@ -36,7 +36,7 @@ function startFakeMemoryGraph(handler: (path: string, body: unknown) => { status
       if (data) {
         try { body = JSON.parse(data); } catch { /* leave null */ }
       }
-      const { status, json } = handler(request.url ?? "/", body);
+      const { status, json } = handler(request.url ?? "/", body, request);
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(json));
     });
@@ -57,18 +57,85 @@ function close(server: http.Server): Promise<void> {
 test("health requests carry a timeout signal", async () => {
   const originalFetch = globalThis.fetch;
   const signals: AbortSignal[] = [];
-  globalThis.fetch = async (_input, init) => {
+  const calls: Array<{ input: unknown; init: RequestInit | undefined }> = [];
+  globalThis.fetch = async (input, init) => {
     assert.ok(init?.signal instanceof AbortSignal);
     signals.push(init.signal);
+    calls.push({ input, init });
     return Response.json({ status: "healthy", backend: "neo4j" });
   };
   try {
     const client = new MemoryGraphClient({ url: "http://memory-graph.test", token: "t" });
     assert.deepEqual(await client.healthInfo(), { status: "healthy", backend: "neo4j" });
     assert.equal(await client.health(), "healthy");
-    assert.equal(signals.length, 2);
+    // /health plus the authenticated query probe the status now depends on.
+    assert.equal(signals.length, 3);
+    assert.equal(String(calls[1]!.input), "http://memory-graph.test/health");
+    assert.equal(String(calls[2]!.input), "http://memory-graph.test/query/by-node-type");
+    assert.equal(new Headers(calls[2]!.init?.headers).get("authorization"), "Bearer t");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("health reports unauthorized, not healthy, when /health answers but the authenticated query is refused", async () => {
+  // The exact misconfiguration from Issue #1352: the sidecar's `/health` does
+  // not need the internal token, so it keeps saying healthy while every
+  // `/query/*` request carries the wrong Bearer token and is refused. Reading
+  // only `/health` therefore called a broken installation healthy.
+  const probes: Array<{ authorization: string | undefined; body: unknown; path: string }> = [];
+  const server = await startFakeMemoryGraph((path, body, request) => {
+    if (path === "/health") return { status: 200, json: { status: "healthy", backend: "local" } };
+    probes.push({ authorization: request.headers.authorization, body, path });
+    return { status: 401, json: { detail: "invalid internal token" } };
+  });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "wrong-token" });
+    assert.equal(await client.health(), "unauthorized");
+    // The probe has to exercise the same authenticated path the card uses:
+    // a valid non-empty label (the sidecar 400s on an empty list) scoped to a
+    // Session that cannot exist, so no real rows are read.
+    assert.equal(probes.length, 1);
+    assert.equal(probes[0]!.path, "/query/by-node-type");
+    assert.equal(probes[0]!.authorization, "Bearer wrong-token");
+    const probe = probes[0]!.body as { node_types: string[]; session_id: string };
+    assert.deepEqual(probe.node_types, ["Evidence"]);
+    assert.equal(typeof probe.session_id, "string");
+    assert.notEqual(probe.session_id, "");
+  } finally {
+    await close(server);
+  }
+});
+
+test("health stays degraded for a store the sidecar itself calls degraded", async () => {
+  const server = await startFakeMemoryGraph((path) => path === "/health"
+    ? { status: 200, json: { status: "degraded" } }
+    : { status: 200, json: { hits: [], total: 0, truncated: false } });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    assert.equal(await client.health(), "degraded");
+  } finally {
+    await close(server);
+  }
+});
+
+test("health reads the probe body: a 200 carrying a failure reason is not healthy", async () => {
+  // The sidecar can answer the authenticated read with 200 and still say, in
+  // the body, that the store was unreachable. Trusting only the status is the
+  // same false assurance as #1352, one layer down.
+  let probeReason = "memory_graph_unreachable";
+  const server = await startFakeMemoryGraph((path) => path === "/health"
+    ? { status: 200, json: { status: "healthy", backend: "local" } }
+    : { status: 200, json: { hits: [], total: 0, truncated: false, reason: probeReason } });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    assert.equal(await client.health(), "degraded");
+    probeReason = "memory_graph_unauthorized";
+    assert.equal(await client.health(), "unauthorized");
+    probeReason = "memory_graph_query_limit";
+    assert.equal(await client.health(), "degraded");
+  } finally {
+    await close(server);
   }
 });
 
@@ -103,6 +170,45 @@ test("queryMatch degrades to an empty result with a reason when the sidecar erro
     assert.equal(result.truncated, false);
     assert.equal(result.reason, "memory_graph_unreachable");
     assert.deepEqual(result.hits, []);
+  } finally {
+    await close(server);
+  }
+});
+
+test("a refused credential keeps its own reason instead of reading as an unreachable service", async () => {
+  // 401 and 403 mean the service answered; a timeout or a dead socket does
+  // not. The citation card needs the difference to decide between "try again"
+  // and "this installation's token is wrong".
+  let status = 401;
+  const server = await startFakeMemoryGraph(() => ({ status, json: { detail: "invalid internal token" } }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "wrong-token" });
+    assert.equal((await client.byNodeType(["Evidence"])).reason, "memory_graph_unauthorized");
+    assert.equal((await client.getChain("evidence-1", "s1", undefined, "viewSourcePaper")).reason, "memory_graph_unauthorized");
+    status = 403;
+    assert.equal((await client.queryMatch("x")).reason, "memory_graph_unauthorized");
+    status = 503;
+    assert.equal((await client.byNodeType(["Evidence"])).reason, "memory_graph_unreachable");
+  } finally {
+    await close(server);
+  }
+});
+
+test("GET and search reads keep a refused credential distinct from an outage", async () => {
+  // The subgraph, web-page hash and search-graph reads share the same defensive
+  // "never throw" contract, so they must share the reason split too; otherwise
+  // a token mismatch still reaches the web UI as an unreachable graph.
+  let status = 401;
+  const server = await startFakeMemoryGraph(() => ({ status, json: { detail: "invalid internal token" } }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "wrong-token" });
+    assert.equal((await client.getSubgraph("s1")).reason, "memory_graph_unauthorized");
+    assert.equal((await client.getWebPageContentHash("s1", "wp-1")).reason, "memory_graph_unauthorized");
+    // getSearchGraph's payload is opaque by design; only the reason is asserted.
+    assert.equal((await client.getSearchGraph("search-1") as { reason?: string }).reason, "memory_graph_unauthorized");
+    status = 500;
+    assert.equal((await client.getSubgraph("s1")).reason, "memory_graph_unreachable");
+    assert.equal((await client.getWebPageContentHash("s1", "wp-1")).reason, "memory_graph_unreachable");
   } finally {
     await close(server);
   }

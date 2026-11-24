@@ -179,6 +179,11 @@ function unavailable(reason?: string): boolean {
   return reason === "memory_graph_disabled"
     || reason === "memory_graph_unreachable"
     || reason === "network_error"
+    // The service answered but refused this installation's internal token.
+    // That is still a limitation of the check, never evidence that the
+    // Artifact has no provenance marker: without it the reason reaches the
+    // !startNode branch and a credential mismatch becomes a critical finding.
+    || reason === "memory_graph_unauthorized"
     // A budget refusal (HTTP 503 memory_graph_query_limit) means the graph was
     // too busy to answer, not that the Artifact has no provenance node. Without
     // this the reason reaches the !startNode branch below and the review emits

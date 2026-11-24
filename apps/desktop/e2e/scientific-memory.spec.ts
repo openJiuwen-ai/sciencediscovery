@@ -644,6 +644,30 @@ test("a 上游文件 link opens the dependency beside the dialog, not in place o
   await expect(panel.locator(".doc-tab.is-active .doc-tab-name")).toHaveText("trend.csv");
 });
 
+test("the card names a rejected credential instead of blaming a timeout", async ({ page }) => {
+  // Issue #1352: the memory service answered 401, so it is up and this
+  // installation's internal token is wrong. The card must not repeat the
+  // "did not answer" story, and retrying the same token cannot help.
+  await installMockApi(page, {
+    artifactContents: { "version-1": REPORT_BODY },
+    artifactsBySession: { [SESSION]: [REPORT_OUTPUT] },
+    memory: { hits: [], reason: "memory_graph_unauthorized" },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  const panel = await openReport(page);
+
+  await panel.locator(".graph-chip").nth(0).click();
+  const dialog = page.locator(".memory-dialog");
+  await expect(dialog.getByText("记忆服务拒绝了访问凭据")).toBeVisible();
+  await expect(dialog.getByText(/内部令牌/u)).toBeVisible();
+  await expect(dialog.getByText("暂时读不到科学记忆")).toHaveCount(0);
+  await expect(dialog.getByText("记忆服务没有响应。稍后再试一次。")).toHaveCount(0);
+  // The status line in settings is where the same state is explained.
+  await expect(dialog.getByRole("button", { name: "打开科学记忆设置" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "重试" })).toHaveCount(0);
+});
+
 test("a disabled memory graph says so in the card instead of an empty story", async ({ page }) => {
   await installMockApi(page, {
     artifactContents: { "version-1": REPORT_BODY },
@@ -765,6 +789,41 @@ test("a provenance hop that cannot reach the graph is an error, not an empty sto
   await expect(dialog.locator(".evidence-source-papers")).toHaveCount(0);
 });
 
+test("a provenance hop that is refused for its credential offers the settings route", async ({ page }) => {
+  // The list and the provenance tab classify the same reason the same way: a
+  // 401 is not a timeout, so the tab shows the auth copy and the settings
+  // action instead of a Retry that would resend the same token.
+  await installMockApi(page, {
+    artifactContents: { "version-1": REPORT_BODY },
+    artifactsBySession: { [SESSION]: [REPORT_OUTPUT] },
+    memory: {
+      hits: [EVIDENCE],
+      chains: {
+        "evidence-1|viewSourcePaper": {
+          edges: [],
+          nodes: [],
+          reason: "memory_graph_unauthorized",
+          total: 0,
+          truncated: false,
+        },
+      },
+    },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  const panel = await openReport(page);
+
+  await panel.locator(".graph-chip").nth(0).click();
+  const dialog = page.locator(".memory-dialog");
+  await dialog.getByRole("button", { name: "溯源" }).click();
+
+  await expect(dialog.getByText("记忆服务拒绝了访问凭据")).toBeVisible();
+  await expect(dialog.getByText(/内部令牌/u)).toBeVisible();
+  await expect(dialog.getByText("记忆服务没有响应。稍后再试一次。")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "打开科学记忆设置" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "重试" })).toHaveCount(0);
+});
+
 test("the memory state reads beside the switch, and only while the switch is on", async ({ page }) => {
   const mock = await installMockApi(page, {
     memorySettings: { enabled: false },
@@ -803,6 +862,15 @@ test("the memory state reads beside the switch, and only while the switch is on"
   await status.getByRole("button", { name: "重新检查" }).click();
   await expect(status).toHaveClass(/is-degraded/u);
   await expect(status).toContainText("连接失败");
+
+  // A service that answers but refuses this installation's token is not
+  // "cannot connect": the row names the credential and never claims the
+  // installation is running normally.
+  mock.state.memorySettings.memoryGraphStatus = "unauthorized";
+  await status.getByRole("button", { name: "重新检查" }).click();
+  await expect(status).toHaveClass(/is-unauthorized/u);
+  await expect(status).toContainText("凭据被拒绝");
+  await expect(status).not.toContainText("运行正常");
 
   // A store that has not been given its credential is the memory service's own
   // configuration; this window has no field to enter one, so it reads as any

@@ -269,9 +269,11 @@ export const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
 /**
  * Memory-graph settings as returned to the UI. Carries the live sidecar
  * health (`memoryGraphStatus`, same values as `/api/health.memoryGraph`:
- * `healthy`/`degraded`/`disabled`/`needs-password`) so the settings editor's
- * status badge needs no independent polling. The password is never sent back
- * — only whether one is set.
+ * `healthy`/`degraded`/`unauthorized`/`disabled`/`needs-password`).
+ * `unauthorized` means the service is reachable but rejected this
+ * installation's internal token, so every query would fail even though
+ * `/health` answers. The settings editor's status badge needs no independent
+ * polling. The password is never sent back — only whether one is set.
  */
 export interface MemoryGraphSettingsDetails {
   enabled: boolean;

@@ -40,16 +40,21 @@ import type { ApiClient } from "../api/client.js";
 import { getHealth } from "../api/models.js";
 import { TEXT } from "../text.js";
 
-/** The four readings the line can show. Named apart from the component below:
+/** The readings the line can show. Named apart from the component below:
  *  a type alias and a function may share a name in TypeScript, but the mirror's
  *  CodeCheck reads that as a redeclaration (`MemoryStatus` is already defined).
+ *
+ *  `unauthorized` is not `degraded`: the service answered, so waiting and
+ *  restarting cannot help — the internal token this installation sends is not
+ *  the one the service expects. Folding the two would put "cannot connect"
+ *  next to a service that is connected, which is what hid the mismatch.
  *
  *  `needs-password` is deliberately not one of them. A Neo4j deployment that
  *  has not been given its credential is the memory service's own configuration
  *  — where the graph is stored is not asked for, or answered, in this window —
  *  so naming it would point the reader at a step they cannot take from here.
  *  It reads as any other service that is not working: `degraded`. */
-export type MemoryState = "checking" | "degraded" | "healthy" | "unknown";
+export type MemoryState = "checking" | "degraded" | "healthy" | "unauthorized" | "unknown";
 
 /** How often a line left on screen asks `/api/health` again. Slower than the
  *  polls that follow a running job: the memory service answers within seconds
@@ -61,6 +66,7 @@ export const MEMORY_STATUS_POLL_MS = 15_000;
 function statusOf(value: string | undefined): MemoryState {
   switch (value) {
     case "healthy": return "healthy";
+    case "unauthorized": return "unauthorized";
     case "degraded":
     case "needs-password": return "degraded";
     default: return "unknown";
@@ -71,6 +77,7 @@ function labelOf(status: MemoryState): string {
   const text = TEXT.memory.status;
   switch (status) {
     case "healthy": return text.healthy;
+    case "unauthorized": return text.unauthorized;
     case "degraded": return text.degraded;
     case "checking": return text.checking;
     default: return text.unknown;
