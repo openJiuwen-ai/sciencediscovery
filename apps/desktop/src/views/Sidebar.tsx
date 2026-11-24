@@ -205,7 +205,11 @@ export function Sidebar({
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setSearching(true);
+        // Open it only when there is no field; when one is already on screen the
+        // state is unchanged, React skips the render, and the effect below never
+        // runs — so the focus is taken here instead.
+        if (searchField.current === null) setSearching(true);
+        else searchField.current.focus();
         return;
       }
       if (event.key === "Escape" && searchField.current === document.activeElement) {
