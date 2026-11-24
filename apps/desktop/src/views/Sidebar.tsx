@@ -224,6 +224,9 @@ export function Sidebar({
   /** Whether anything is narrowed at all. An empty result list under a narrowing
    *  is that narrowing's answer, not an empty workspace. */
   const narrowed = hasActiveNarrowing(narrowing);
+  /** A narrowing with no query filters the column itself, so an empty fold
+   *  there is that narrowing's answer rather than an empty workspace. */
+  const narrowingActive = narrowed && searchQuery.trim() === "";
   /** Whether the field is open: the entry is a row until it is asked for, and a
    *  restored query opens it with that query already in place. */
   const [searching, setSearching] = useState(() => searchQuery.trim() !== "");
@@ -778,7 +781,7 @@ export function Sidebar({
             user filed anything. */}
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
-          <div className="side-empty">{TEXT.sidebar.noRecent}</div>
+          <div className="side-empty">{narrowingActive ? TEXT.sidebar.noMatch : TEXT.sidebar.noRecent}</div>
         ) : (
           <div className="side-flat">{sessionList("recent", recent)}</div>
         )}

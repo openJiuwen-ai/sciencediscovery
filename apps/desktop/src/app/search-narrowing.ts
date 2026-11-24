@@ -112,6 +112,33 @@ export function hasActiveNarrowing(narrowing: SearchNarrowing): boolean {
  * the route found it, and dropping a result the workspace merely has not read
  * would hide Sessions from another Project.
  */
+/**
+ * Apply the same narrowing to the Session column.
+ *
+ * With no query in the field, the `...` settings narrow the list itself — which is
+ * what #1251's fourth criterion asks for ("the session list can be narrowed by
+ * scope / running / artifacts / time window, and the choice survives a reload").
+ * With a query they narrow its results: the field is then the thing being
+ * narrowed, and a narrowed result list over an unfiltered column is the shape the
+ * owner asked for.
+ */
+export function narrowSessions<T extends { archivedAt?: string; createdAt: string;
+  id: string; projectId?: string; updatedAt?: string }>(
+  sessions: readonly T[],
+  narrowing: SearchNarrowing,
+  context: SearchNarrowContext,
+): T[] {
+  const projects = new Set(narrowing.projectIds);
+  return sessions.filter((session) => {
+    if (session.archivedAt !== undefined) return false;
+    if (projects.size > 0 && !projects.has(session.projectId ?? "")) return false;
+    if (narrowing.onlyRunning && session.id !== context.runningSessionId) return false;
+    if (narrowing.onlyWithArtifacts && !context.withArtifacts.has(session.id)) return false;
+    const stamp = Date.parse(session.updatedAt ?? session.createdAt);
+    return inWindow(narrowing.window, Number.isNaN(stamp) ? undefined : stamp, context.now, narrowing.custom);
+  });
+}
+
 export function narrowResults(
   results: readonly WorkbenchSearchResult[],
   narrowing: SearchNarrowing,

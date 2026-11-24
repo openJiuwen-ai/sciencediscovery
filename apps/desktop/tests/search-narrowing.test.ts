@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import type { WorkbenchSearchResult } from "../src/api/types.js";
 import {
-  DEFAULT_SEARCH_NARROWING, hasActiveNarrowing, inWindow, narrowResults,
+  DEFAULT_SEARCH_NARROWING, hasActiveNarrowing, inWindow, narrowResults, narrowSessions,
   type SearchNarrowing,
 } from "../src/app/search-narrowing.js";
 
@@ -96,6 +96,41 @@ test("运行中, 有产物 and the time presets narrow the hits they can judge",
     narrowResults(rows, { ...DEFAULT_SEARCH_NARROWING, window: "custom",
       custom: { from: Date.parse("2026-10-01T00:00:00.000Z"), to: Date.parse("2026-10-02T00:00:00.000Z") } }, context)
       .map((row) => row.sessionId), ["plain", "plain"], "the custom range is inclusive and picks only October");
+});
+
+function session(id: string, over: { archivedAt?: string; projectId?: string; updatedAt?: string } = {}) {
+  return { createdAt: "2026-11-21T11:00:00.000Z", id, projectId: "p1", updatedAt: "2026-11-21T11:00:00.000Z", ...over };
+}
+
+test("with no query the same narrowing filters the column itself", () => {
+  // #1251's fourth criterion: the list can be narrowed without a search.
+  const rows = [
+    session("art"),
+    session("run"),
+    session("plain"),
+    session("gone", { archivedAt: "2026-11-20T00:00:00.000Z" }),
+    session("other-project", { projectId: "p2" }),
+    session("old", { updatedAt: "2026-10-01T11:00:00.000Z" }),
+  ];
+
+  assert.deepEqual(narrowSessions(rows, DEFAULT_SEARCH_NARROWING, context).map((row) => row.id),
+    ["art", "run", "plain", "other-project", "old"], "the default keeps every active Session");
+
+  assert.deepEqual(
+    narrowSessions(rows, { ...DEFAULT_SEARCH_NARROWING, onlyRunning: true }, context).map((row) => row.id),
+    ["run"]);
+  assert.deepEqual(
+    narrowSessions(rows, { ...DEFAULT_SEARCH_NARROWING, onlyWithArtifacts: true }, context).map((row) => row.id),
+    ["art"]);
+  assert.deepEqual(
+    narrowSessions(rows, { ...DEFAULT_SEARCH_NARROWING, projectIds: ["p2"] }, context).map((row) => row.id),
+    ["other-project"], "a Project selection limits the folds, which is the old 仅当前项目 in its new shape");
+  assert.deepEqual(
+    narrowSessions(rows, { ...DEFAULT_SEARCH_NARROWING, window: "day" }, context).map((row) => row.id),
+    ["art", "run", "plain", "other-project"], "the October row is outside the window");
+
+  // An archived Session never comes back, whatever the narrowing says.
+  assert.equal(narrowSessions(rows, DEFAULT_SEARCH_NARROWING, context).some((row) => row.id === "gone"), false);
 });
 
 test("a hit this page cannot judge is kept rather than hidden", () => {
