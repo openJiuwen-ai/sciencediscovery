@@ -114,6 +114,8 @@ jobs:
       macos_desktop: ${{ steps.policy.outputs.macos_desktop }}
       package_platform: ${{ steps.policy.outputs.package_platform }}
       docs_only: ${{ steps.policy.outputs.docs_only }}
+      self_hosted_merge_queue: ${{ steps.policy.outputs.self_hosted_merge_queue }}
+      ut_runner: ${{ steps.policy.outputs.ut_runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,6 +128,7 @@ jobs:
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'pr' }}
           CI_REQUESTED_PACKAGE_PLATFORM: ${{ inputs['package-platform'] }}
           CI_REQUESTED_BACKEND: ${{ inputs.backend || vars.CI_E2E_BACKEND || 'jiuwenswarm' }}
+          CI_SELF_HOSTED_MERGE_QUEUE: ${{ vars.CI_SELF_HOSTED_MERGE_QUEUE }}
           # Dispatch/call always have a profile input, even if explicitly empty.
           # A called workflow retains its caller's event_name (for example push).
           CI_DIFF_ENABLED: ${{ !contains(toJSON(inputs), '"profile"') }}
@@ -186,6 +189,7 @@ jobs:
       CI_WEB_UI_ST_SPECS: ${{ needs.policy.outputs.web_ui_st_specs }}
       CI_PROFILE: ${{ needs.policy.outputs.profile }}
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
+      CI_SELF_HOSTED_MERGE_QUEUE: ${{ needs.policy.outputs.self_hosted_merge_queue }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -246,7 +250,7 @@ jobs:
     needs: [policy, l1]
     name: UT
     if: ${{ success() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.policy.outputs.ut_runner) }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -256,21 +260,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
+          cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' && 'pnpm' || '' }}
 
       - uses: astral-sh/setup-uv@v6
         with:
-          enable-cache: true
+          enable-cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' }}
 
       # ut-runner executes real bubblewrap. Ubuntu 24.04 runners ship an
       # AppArmor policy that denies unprivileged user namespaces, which the
       # sandbox needs; without this the Runner tests fail on the host policy
-      # rather than on product behaviour.
+      # rather than on product behaviour. Pre-provisioned containers pass the
+      # probe directly without requiring sudo.
       - name: Provision the bubblewrap sandbox
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if ! bwrap --unshare-user --ro-bind / / --dev /dev true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends bubblewrap
+            sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          fi
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
@@ -280,12 +287,19 @@ jobs:
       # missing (about 1.5 GB with its virtualenv), starts one instance and one
       # adapter for those tests, and stops them afterwards.
       - name: Cache the JiuwenSwarm install
+        if: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' }}
         uses: actions/cache@v4
         with:
           path: |
             .sciencediscovery-data/jiuwenswarm/src
             ~/.local/share/uv/python
           key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+
+      - name: Use local JiuwenSwarm cache
+        if: ${{ needs.policy.outputs.self_hosted_merge_queue == 'true' }}
+        env:
+          CI_SWARM_CACHE_KEY: ${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+        run: bash .ci/use-local-swarm-cache.sh
 
       # The `category:ut` slice, including the tests that drive the real
       # bubblewrap sandbox provisioned above. `--coverage` records coverage in
@@ -562,12 +576,12 @@ jobs:
     if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
       CI_WEB_UI_ST_SPECS: ${{ needs.policy.outputs.web_ui_st_specs }}
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -577,25 +591,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
+          cache: ${{ !matrix.self_hosted && 'pnpm' || '' }}
 
       - uses: astral-sh/setup-uv@v6
         with:
-          enable-cache: true
+          enable-cache: ${{ !matrix.self_hosted }}
 
       # Mocked journeys start the product stack, whose Runner executes
       # bubblewrap, and Chromium's own sandbox needs the same capability.
+      # Pre-provisioned containers pass the probe directly without requiring sudo.
       - name: Provision the bubblewrap sandbox
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if ! bwrap --unshare-user --ro-bind / / --dev /dev true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends bubblewrap
+            sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          fi
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
       # Keyed on the committed E2E lockfile, which pins the only Playwright
       # version .ci/run-e2e.sh is allowed to install.
       - name: Cache the pinned Chromium
+        if: ${{ !matrix.self_hosted }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -607,12 +625,19 @@ jobs:
       # and compatibility patches, so a new pin or patch set installs afresh; uv's managed
       # Python is kept too, since the virtualenv points into it.
       - name: Cache the JiuwenSwarm install
+        if: ${{ !matrix.self_hosted }}
         uses: actions/cache@v4
         with:
           path: |
             .sciencediscovery-data/jiuwenswarm/src
             ~/.local/share/uv/python
           key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+
+      - name: Use local JiuwenSwarm cache
+        if: ${{ matrix.self_hosted }}
+        env:
+          CI_SWARM_CACHE_KEY: ${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+        run: bash .ci/use-local-swarm-cache.sh
 
       # The `category:e2e` slice. The layer still drives run-e2e.sh, which owns
       # the whole lifecycle: it generates an ephemeral token, starts and stops
