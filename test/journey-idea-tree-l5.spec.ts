@@ -117,17 +117,27 @@ for (const scenario of cases) {
     // rendered made the click wait until the case timeout. The URL carries the same
     // selection the click would, and it is also how a reload restores a Session.
     //
-    // The deep link is retried because the app resolves it against the Project and
-    // Session lists it fetches on mount: on a stack with twenty Projects the first
-    // navigation can render before those lists arrive, and one 60s wait then reports
-    // a missing heading for a Session that exists. Three bounded attempts keep that
-    // race out of the release gate while still failing if the Session is unopenable.
+    // The deep link is resolved on mount against the Project and Session lists, so it
+    // has to arrive after the shell has finished loading: measured, a navigation that
+    // beat those lists left the app on its start-up shell (Project count rendered,
+    // no Session selected) and reported a missing heading three times in a row while
+    // the same Session opened in 11 ms through the API. Each attempt therefore waits
+    // for the Project list first, navigates, and — if the heading is still absent —
+    // reloads once so the still-mounted app re-resolves the URL it already has.
+    // Three bounded attempts keep the race out of the release gate without turning an
+    // unopenable Session into a pass.
     const openSession = async () => {
       const heading = page.getByRole("heading", { name: fixture!.session.title });
+      const projects = page.getByRole("button", { name: /^(Projects|项目)$/ });
+      const deepLink = `/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
-        await page.goto(`/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`);
+        await page.goto("/");
+        await projects.first().waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+        await page.goto(deepLink);
         const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
         if (await tour.isVisible().catch(() => false)) await tour.click();
+        if (await heading.isVisible({ timeout: 20_000 }).catch(() => false)) return;
+        await page.reload();
         if (await heading.isVisible({ timeout: 20_000 }).catch(() => false)) return;
         console.warn(`[l5-open] session heading not visible on attempt ${attempt}/3`);
       }
