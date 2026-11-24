@@ -109,18 +109,12 @@ test('a raw PR checkout or an unrelated merge cannot stand in for the tested mer
   }
 });
 
-function readme(version, dot) {
-  return `[![Release](https://img.shields.io/badge/Release-${dot}-1f6feb)](https://github.com/o/r/releases/tag/v${version})\n`;
-}
-
 /** The repository as a pre-release leaves it: the artifact name is the literal. */
 function files(version = '0.4.0-rc1') {
   const dot = dotForm(version);
   return {
     'application/electron-builder.yml': `win:\n  artifactName: ScienceDiscovery-${dot}-win-x64-setup.\${ext}\n`,
     'application/build/nsh-syntax-check-stub.nsi': `!define VERSION "${dot}"\n`,
-    'README.md': readme(version, dot),
-    'README_zh.md': readme(version, dot),
   };
 }
 
@@ -129,8 +123,6 @@ function gaFiles(version = '0.4.0') {
   return {
     'application/electron-builder.yml': 'win:\n  artifactName: ScienceDiscovery-${version}-win-x64-setup.${ext}\n',
     'application/build/nsh-syntax-check-stub.nsi': `!define VERSION "${version}"\n`,
-    'README.md': readme(version, version),
-    'README_zh.md': readme(version, version),
   };
 }
 
@@ -171,8 +163,6 @@ test('a GA bump that leaves the rc metadata in place fails', () => {
   assert.equal(result.ok, false, result.reason);
   assert.match(result.reason, /electron-builder\.yml does not carry ScienceDiscovery-0\.4\.0- or ScienceDiscovery-\$\{version\}-/u);
   assert.match(result.reason, /nsh-syntax-check-stub\.nsi does not carry !define VERSION "0\.4\.0"/u);
-  assert.match(result.reason, /README\.md does not carry Release-0\.4\.0-/u);
-  assert.match(result.reason, /README_zh\.md does not carry releases\/tag\/v0\.4\.0/u);
 });
 
 test('a version that merely starts with the expected one does not satisfy it', () => {
@@ -180,8 +170,6 @@ test('a version that merely starts with the expected one does not satisfy it', (
   const rc10 = {
     'application/electron-builder.yml': 'win:\n  artifactName: ScienceDiscovery-0.4.0.rc10-win-x64-setup.${ext}\n',
     'application/build/nsh-syntax-check-stub.nsi': '!define VERSION "0.4.0.rc10"\n',
-    'README.md': readme('0.4.0-rc10', '0.4.0.rc10'),
-    'README_zh.md': readme('0.4.0-rc10', '0.4.0.rc10'),
   };
   const result = verdict({ files: rc10 });
   assert.equal(result.ok, false);
@@ -209,7 +197,7 @@ test('a functional change that bumps the version is rejected, like #1197 was', (
 test('the title alone is not enough', () => {
   const result = verdict({ baseVersion: '0.4.0', files: files('0.4.0'), headVersion: '0.4.1' });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /README\.md does not carry Release-0\.4\.1-/u);
+  assert.match(result.reason, /electron-builder\.yml does not carry ScienceDiscovery-0\.4\.1-/u);
 });
 
 test('one file left behind is named, with the string it is missing', () => {
@@ -298,8 +286,6 @@ test('every requirement declares a delimiter and a matcher', () => {
   assert.deepEqual(RELEASE_METADATA, [
     'application/electron-builder.yml',
     'application/build/nsh-syntax-check-stub.nsi',
-    'README.md',
-    'README_zh.md',
   ]);
 });
 
