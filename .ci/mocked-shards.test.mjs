@@ -161,8 +161,9 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const job = name => workflow.split(`  ${name}:\n`)[1].split(/\n  [a-z][a-z-]*:\n/)[0];
   assert.match(job('e2e'), /needs: \[policy, l1, e2e-plan\]/);
-  assert.match(job('e2e'), /max-parallel: 4/);
+  assert.match(job('e2e'), /max-parallel: 5/);
   assert.match(job('e2e'), /fail-fast: false/);
+  assert.match(job('e2e'), /runs-on: \$\{\{ matrix\.runner \}\}/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
   // The summary step reads the stack that actually runs the checks, named by
   // the same batch key the run writes under.
