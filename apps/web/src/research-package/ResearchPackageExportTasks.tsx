@@ -5,6 +5,7 @@ import type { ApiClient } from "../api.js";
 import { downloadBlob } from "../artifact-download.js";
 import type { ToastTone } from "../Toasts.js";
 import type { ResearchPackageExportTaskView } from "../api/plugins.js";
+import { ResearchPackageDownloadStalledError } from "../api/research-package-stream.js";
 import { translateActive } from "../i18n/index.js";
 import { exportCompletionStep, exportPollStep } from "./export-poll.js";
 
@@ -52,6 +53,7 @@ const failures = new Map<string, number>();
  *  download that inherited four status failures would drop a finished export
  *  after a single attempt. */
 const downloadFailures = new Map<string, number>();
+const EXPORT_STATUS_REQUEST_TIMEOUT_MS = 15_000;
 
 const POLL_TEXT = () => ({
   exportCanceled: translateActive("researchPackage.exportCanceled"),
@@ -84,7 +86,7 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
         for (const task of readTasks()) {
           if (!active) return;
           try {
-            const status = await client.getResearchPackageExport(task.projectId, task.id);
+            const status = await client.getResearchPackageExport(task.projectId, task.id, AbortSignal.timeout(EXPORT_STATUS_REQUEST_TIMEOUT_MS));
             if (!active) return;
             // The status step still owes the user the server's reason when the
             // export failed; without it a `failed` export only ever shows the
@@ -110,7 +112,11 @@ export function ResearchPackageExportMonitor({ client, onToast }: {
                   failures.delete(task.id);
                   downloadFailures.delete(task.id);
                   removeResearchPackageExport(task.id);
-                  if (save.notice) onToast(save.notice.tone, save.notice.title, save.notice.detail);
+                  if (save.notice) {
+                    const detail = reason instanceof ResearchPackageDownloadStalledError
+                      ? translateActive("researchPackage.exportDownloadStalled") : save.notice.detail;
+                    onToast(save.notice.tone, save.notice.title, detail);
+                  }
                 }
               }
               continue;

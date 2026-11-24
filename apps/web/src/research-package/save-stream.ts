@@ -8,6 +8,8 @@
  * Aborting the writable discards the temporary file, so a refused export
  * leaves nothing behind on disk.
  */
+import { readResearchPackageBlob } from "../api/research-package-stream.js";
+
 const ARCHIVE_TYPES = [{ description: "ScienceDiscovery research package", accept: { "application/octet-stream": [".sdresearch"] } }];
 
 type WritableLike = {
@@ -22,6 +24,7 @@ export type SaveOutcome = "saved" | "cancelled";
 export type SaveHooks = {
   picker?: SaveFilePicker;
   download?: (blob: Blob, name: string) => void;
+  signal?: AbortSignal;
 };
 
 function defaultDownload(blob: Blob, name: string): void {
@@ -42,11 +45,11 @@ function isAbort(reason: unknown): boolean {
  * still belongs to the click. Without the File System Access API the response is
  * buffered into the pre-existing anchor download, which is the old behaviour.
  */
-export async function savePackageResponse(open: () => Promise<Response>, name: string, hooks: SaveHooks = {}): Promise<SaveOutcome> {
+export async function savePackageResponse(open: (signal?: AbortSignal) => Promise<Response>, name: string, hooks: SaveHooks = {}): Promise<SaveOutcome> {
   const picker = hooks.picker ?? (globalThis as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
   if (!picker) {
-    const response = await open();
-    (hooks.download ?? defaultDownload)(await response.blob(), name);
+    const response = await open(hooks.signal);
+    (hooks.download ?? defaultDownload)(await readResearchPackageBlob(response), name);
     return "saved";
   }
   let handle: FileHandleLike;
@@ -58,7 +61,7 @@ export async function savePackageResponse(open: () => Promise<Response>, name: s
   }
   const writable = await handle.createWritable();
   try {
-    const response = await open();
+    const response = await open(hooks.signal);
     if (!response.body) {
       await writable.write(new Uint8Array(await response.arrayBuffer()));
       await writable.close();

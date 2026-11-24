@@ -102,13 +102,13 @@ async def test_legacy_down_is_a_502_with_a_json_body():
     assert json.loads(response.text)["error"] == "legacy_unavailable"
 
 
-async def test_retries_one_transient_transport_error_for_safe_reads():
+async def test_retries_transient_transport_errors_for_safe_reads():
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls < 3:
             raise httpx.ReadError("stale keep-alive socket")
         return streamed(200, b'{"ok":true}', {"content-type": "application/json"})
 
@@ -116,7 +116,7 @@ async def test_retries_one_transient_transport_error_for_safe_reads():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert calls == 2
+    assert calls == 3
 
 
 async def test_read_failure_is_correlated_without_logging_secrets_or_retrying(caplog):

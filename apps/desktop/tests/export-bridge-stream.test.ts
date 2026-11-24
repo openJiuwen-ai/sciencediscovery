@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { canStreamExport, writeExportStream, type ExportShellBridge } from "../src/app/export-bridge.js";
+import { readResearchPackageBlob, ResearchPackageDownloadStalledError, withResearchPackageIdleTimeout } from "../src/api/research-package-stream.js";
 
 function streamOf(chunks: number[][]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -44,6 +45,21 @@ test("the archive crosses the shell boundary chunk by chunk", async () => {
   assert.deepEqual(bytes, [1, 2, 3, 4, 5]);
 });
 
+test("a continuous download can exceed the idle timeout budget", async () => {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const part of ["one", "two", "three", "four"]) {
+        controller.enqueue(encoder.encode(part));
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      }
+      controller.close();
+    },
+  });
+  const response = withResearchPackageIdleTimeout(new Response(body), 15);
+  assert.equal(await response.text(), "onetwothreefour");
+});
+
 test("a failed chunk aborts the destination and cancels the response body", async () => {
   // #1216 F3: releasing the lock only unlocks; the server keeps producing into a body
   // nobody reads, so the failure path has to cancel it.
@@ -70,4 +86,34 @@ test("a shell without the streaming channels is refused rather than silently buf
   };
   assert.equal(canStreamExport(legacy), false);
   await assert.rejects(writeExportStream(legacy, "token-1", streamOf([[1]])), /streaming saves/);
+});
+
+
+test("preserves the idle timeout when Blob conversion masks the stream error", async () => {
+  const response = withResearchPackageIdleTimeout(new Response(new ReadableStream({})), 5);
+  const nativeBlob = response.blob.bind(response);
+  response.blob = () => nativeBlob().catch(() => { throw new TypeError("Failed to fetch"); });
+  await assert.rejects(readResearchPackageBlob(response), ResearchPackageDownloadStalledError);
+});
+
+test("reports a stalled download while cancellation of the source is still pending", { timeout: 1_000 }, async () => {
+  const reasons: unknown[] = [];
+  let finishCancel!: () => void;
+  const cancellation = new Promise<void>((resolve) => { finishCancel = resolve; });
+  const body = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      reasons.push(reason);
+      return cancellation;
+    },
+  });
+  const response = withResearchPackageIdleTimeout(new Response(body), 5);
+  try {
+    await assert.rejects(response.arrayBuffer(), (reason: unknown) => {
+      assert.ok(reason instanceof ResearchPackageDownloadStalledError);
+      assert.deepEqual(reasons, [reason], "the source is cancelled exactly once with the timeout reason");
+      return true;
+    });
+  } finally {
+    finishCancel();
+  }
 });

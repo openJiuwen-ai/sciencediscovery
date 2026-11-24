@@ -8,6 +8,7 @@ import { ExportPreviewCache, PreviewBudgetExpired } from "./export-preview-cache
 import { savePackageResponse } from "./save-stream.js";
 import { ApiRequestError } from "../api/auth.js";
 import { isAbortError } from "../api/client.js";
+import { ResearchPackageDownloadStalledError } from "../api/research-package-stream.js";
 import { translateActive, useLocale } from "../i18n/index.js";
 
 export type ResearchPackageDialogTarget = { projectId: string; sessionId: string; kind: "conversation" | "package" | "import" };
@@ -58,6 +59,8 @@ const errorText = (reason: unknown) => {
     return translateActive("researchPackage.packageTooLarge");
   if (reason instanceof Error && reason.message === "Research package exceeds the archive size limit")
     return translateActive("researchPackage.packageTooLarge");
+  if (reason instanceof ResearchPackageDownloadStalledError) return translateActive("researchPackage.exportDownloadStalled");
+  if (isAbortError(reason)) return translateActive("researchPackage.exportCanceled");
   return reason instanceof Error ? reason.message : translateActive("researchPackage.operationFailed");
 };
 const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
@@ -126,6 +129,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const [selectedPaths, setSelectedPaths] = useState<string[] | undefined>();
   const [preview, setPreview] = useState<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; omissions: string[]; exportProfile?: ResearchPackageExportProfile; maxBytes?: number; archiveBytes?: number } | undefined>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary);
   const [busy, setBusy] = useState(false);
+  const exportAbortRef = useRef<AbortController | undefined>(undefined);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   // "Not answered yet" and "the server says there are none" are different states.
@@ -215,14 +219,20 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     if (!selectedPaths) load();
     return () => { active = false; if (timer !== undefined) clearTimeout(timer); };
   }, [previewCache, defaults, level, includeFullTrajectory, includeFullMemoryGraph, selectedPaths, sessionRevision, target.projectId, target.sessionId]);
+  const cancelExport = () => { exportAbortRef.current?.abort(); };
   const exportPackage = async () => {
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
     setBusy(true); setMessage(undefined); setError(undefined);
     try {
       const safeTitle = sessionTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || t("researchPackage.scientificSession");
-      const outcome = await savePackageResponse(() => client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged), `${safeTitle}.sdresearch`);
+      const outcome = await savePackageResponse((signal) => client.exportResearchPackage(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, level === "complete" && includeFullMemoryGraph, overLimitAcknowledged, signal), `${safeTitle}.sdresearch`, { signal: controller.signal });
       if (outcome === "saved") onClose();
     }
-    catch (reason) { setError(errorText(reason)); } finally { setBusy(false); }
+    catch (reason) { setError(errorText(reason)); } finally {
+      if (exportAbortRef.current === controller) exportAbortRef.current = undefined;
+      setBusy(false);
+    }
   };
   const exportPackageInBackground = async () => {
     if (!preview?.revision) return;
@@ -267,7 +277,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   // `defaults`, and those survive the gone answer — in that window the cards show
   // last-known bytes, so the sentence has to admit them.
   const hasVisibleSizes = preview !== undefined || necessarySize !== undefined || completeSize !== undefined;
-  return <DialogFrame description={t("researchPackage.exportDescription")} onClose={onClose} title={t("researchPackage.exportEvidence")}>
+  return <DialogFrame busy={busy} description={t("researchPackage.exportDescription")} onClose={busy ? cancelExport : onClose} title={t("researchPackage.exportEvidence")}>
     <div className="research-export-body">
       <div className="research-choice-grid"><ChoiceCard checked={level === "necessary"} description={t("researchPackage.necessaryDescription", { size: sizeText(necessarySize) })} onClick={() => chooseLevel("necessary")} title={t("researchPackage.scopeNecessary")} /><ChoiceCard checked={level === "complete"} description={t("researchPackage.completeDescription", { size: sizeText(completeSize) })} onClick={() => chooseLevel("complete")} title={t("researchPackage.scopeComplete")} /></div>
       <div className="research-export-estimate" aria-live="polite"><strong>{preview ? t("researchPackage.estimatedSize", { size: formatSize(preview.estimatedBytes) }) : sizeText(undefined)}</strong><span>{t("researchPackage.selectedFiles", { selected: checkedPaths.length, total: files.length })}</span></div>
@@ -298,7 +308,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {preparing && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
       {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
-    <footer className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || blockedByLimit || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || blockedByLimit || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
+    <footer className="dialog-actions"><button className="secondary-button" onClick={() => { if (busy) cancelExport(); else onClose(); }} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || blockedByLimit || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || blockedByLimit || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;
 }
 

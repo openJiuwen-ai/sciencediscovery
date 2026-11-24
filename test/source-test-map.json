@@ -3458,6 +3458,102 @@
           "complexity": "C3"
         }
       ]
+    },
+    {
+      "source": "apps/desktop/src/api/research-package.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/research-package.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/api/research-package-stream.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/export-bridge-stream.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/api/plugins.ts",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/ApiClient.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/api/research-package-stream.ts",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/save-stream.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/research-package/ResearchPackageActions.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/ResearchPackageActions.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/research-package/save-stream.ts",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/save-stream.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/web/src/research-package/ResearchPackageExportTasks.tsx",
+      "risk": "P1",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/research-package-poll.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/research-snapshot-integrity.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/research-snapshot-integrity.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
     }
   ]
 }

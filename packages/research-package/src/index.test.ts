@@ -2,7 +2,10 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
 import { Writable } from "node:stream";
-import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, sha256, type ResearchPackageExportProfile } from "./index.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, importResearchPackageStreamed, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, RESEARCH_PACKAGE_MAX_ENTRIES, sha256, type ResearchPackageExportProfile } from "./index.js";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
 
@@ -63,15 +66,57 @@ test("rejects tampered package bytes and unsafe objects", () => {
   assert.throws(() => createResearchPackage({ source: { projectId: "p", title: "x" }, records: {}, objects: [{ path: "objects/not-a-hash", bytes: object }] }), /SHA-256/);
 });
 
-test("rejects exports that the importer would reject for too many entries", () => {
-  const objects = Array.from({ length: 9_998 }, (_, index) => {
+test("round trips evidence packages with more than ten thousand entries", () => {
+  const objects = Array.from({ length: 10_001 }, (_, index) => {
     const bytes = new TextEncoder().encode(`object-${index}`);
     return { path: sha256(bytes), bytes };
   });
-  assert.throws(
-    () => createResearchPackage({ source: { projectId: "p", title: "Too many entries" }, records: {}, objects }),
-    /entry limit/,
-  );
+  assert.ok(10_001 < RESEARCH_PACKAGE_MAX_ENTRIES);
+  const exported = createResearchPackage({ source: { projectId: "p", title: "Long research history" }, records: {}, objects });
+  const inspected = inspectResearchPackage(exported.bytes);
+  assert.equal(inspected.valid, true);
+  assert.equal(inspected.objectCount, objects.length);
+  assert.equal(importResearchPackage(exported.bytes).objects.size, objects.length);
+});
+
+test("rejects export when objects and package metadata exceed the entry ceiling", () => {
+  // The manifest, records and README bring this archive to the ceiling plus one.
+  const objects = Array.from({ length: RESEARCH_PACKAGE_MAX_ENTRIES - 2 }, (_, index) => {
+    const bytes = new TextEncoder().encode(`ceiling-object-${index}`);
+    return { path: sha256(bytes), bytes };
+  });
+  assert.throws(() => createResearchPackage({ source: { projectId: "p", title: "Entry ceiling" }, records: {}, objects }), /exceeds the entry limit/);
+});
+
+test("streams imports with more than ten thousand entries without quadratic duplicate scans", async () => {
+  const objects = Array.from({ length: 10_001 }, (_, index) => {
+    const bytes = new TextEncoder().encode(`streamed-object-${index}`);
+    return { path: sha256(bytes), bytes };
+  });
+  const exported = createResearchPackage({ source: { projectId: "p-stream-many", title: "Many entries" }, records: {}, objects });
+  const directory = await mkdtemp(join(tmpdir(), "research-package-streamed-"));
+  try {
+    const source = (async function* () {
+      for (let offset = 0; offset < exported.bytes.byteLength; offset += 8192) yield exported.bytes.subarray(offset, offset + 8192);
+    })();
+    const originalSome = Array.prototype.some;
+    let someCalls = 0;
+    Array.prototype.some = function (this: unknown[], ...args: Parameters<typeof originalSome>) {
+      someCalls += 1;
+      return originalSome.apply(this, args);
+    } as typeof originalSome;
+    try {
+      const imported = await importResearchPackageStreamed(source, { objectDirectory: directory });
+      assert.equal(imported.objects.size, objects.length);
+    } finally {
+      Array.prototype.some = originalSome;
+    }
+    // The manifest validator uses a fixed number of membership checks. The
+    // importer itself must not scan all previously seen object paths per entry.
+    assert.ok(someCalls < 10, `streamed importer made ${someCalls} Array#some calls`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("exposes the provider through the trusted plugin host", async () => {

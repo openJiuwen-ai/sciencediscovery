@@ -9521,16 +9521,16 @@ test("memory query and provenance routes forward complete success contracts", { 
     });
   });
   await new Promise<void>((done) => sidecar.listen(0, "127.0.0.1", done));
-  context.after(async () => {
-    await new Promise<void>((done) => sidecar.close(() => done()));
-    await rm(root, { recursive: true, force: true });
-  });
   const api = createProductionApiServer({
     ...testConfig(root),
     memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "test" },
   });
   await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
-  context.after(async () => { await closeApiServer(api); });
+  context.after(async () => {
+    await closeApiServer(api);
+    await new Promise<void>((done) => sidecar.close(() => done()));
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  });
   const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
   const headers = { ...authorization, "content-type": "application/json" };
   const setting = await fetch(`${origin}/api/memory/settings`, { method: "PUT", headers, body: JSON.stringify({ enabled: true }) });

@@ -527,3 +527,35 @@ test("Export preview pending responses stay out of the cache, recover, and prese
     globalThis.fetch = previousFetch;
   }
 });
+
+test("research package downloads retry transient gateway failures before returning the stream", async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls += 1;
+    assert.equal(init?.signal, undefined, "foreground streaming exports must not use a wall-clock timeout");
+    if (calls < 3) return Response.json({ error: "legacy_unavailable" }, { status: 502 });
+    return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+  };
+  try {
+    const response = await new ApiClient("test-token").exportResearchPackage("project", "session", "complete", undefined, false, false);
+    assert.equal(calls, 3);
+    assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [1, 2, 3]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+test("foreground package export forwards and honors the caller abort signal", async () => {
+  const previousFetch = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(init?.signal, controller.signal);
+    return await new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+      controller.signal.addEventListener("abort", abort, { once: true });
+    });
+  };
+  try {
+    const pending = new ApiClient("test-token").exportResearchPackage("project", "session", "complete", undefined, false, false, false, controller.signal);
+    controller.abort();
+    await assert.rejects(pending, (reason: unknown) => reason instanceof Error && reason.name === "AbortError");
+  } finally { globalThis.fetch = previousFetch; }
+});
