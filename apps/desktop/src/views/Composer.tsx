@@ -123,9 +123,11 @@ interface Props {
    *  searches keep their cards in the transcript. The composer's draft rides
    *  along, so a sentence already written becomes the new design's task. */
   onEvolve?: (draft: string) => void;
-  /** Opens the Idea Tree parameters card. Absent where there is nothing to
-   *  configure — a static render, for one. */
-  onIdeaTree?: () => void;
+  /** Opens the Idea Tree parameters card. The composer's draft rides along, so
+   *  the research the card starts carries the objective already written instead
+   *  of asking for it again. Absent where there is nothing to configure — a
+   *  static render, for one. */
+  onIdeaTree?: (draft: string) => void;
   onOpenSettings: () => void;
   /** A skill whose choice has more to it than its command: the pick is handed
    *  here with the draft it would have replaced, and `true` means the surface
@@ -1295,7 +1297,7 @@ export function Composer({
               // The draft is carried into the setup dialog: a sentence already
               // written is the task the new design would start from.
               onEvolve={onEvolve === undefined ? undefined : () => onEvolve(text)}
-              onIdeaTree={onIdeaTree}
+              onIdeaTree={onIdeaTree === undefined ? undefined : () => onIdeaTree(text)}
               onSelectSpecialist={onSelectSpecialist}
               selectedSpecialistId={selectedSpecialistId}
             />

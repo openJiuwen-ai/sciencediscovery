@@ -218,6 +218,22 @@ test("a created search is counted as a reason to re-read the list, not as a mess
   assert.equal(next.turns.length, 0);
 });
 
+test("a created research is counted too, so its card cannot be missed", () => {
+  // The agent creates the research partway through the turn. Before this was
+  // counted the event was deferred (i.e. swallowed), and the desktop only
+  // re-read the list while the command's waiting window was open — which a real
+  // model's preparation outlasts, leaving the Idea Tree card missing.
+  const event = {
+    research: { id: "research-1" },
+    type: "idea_research.created",
+  } as RunStreamEvent;
+  const next = reduceRunStream(emptyRunStream(), event);
+  assert.equal(next.ideaResearchesCreated, 1);
+  assert.equal(next.evolveRunsCreated, 0, "the two counters stay apart");
+  assert.equal(next.unknownEvents, 0);
+  assert.equal(next.turns.length, 0);
+});
+
 test("only the skill the command names opens the setup dialog", () => {
   // `/api/skills` reports the design skill under the id the command uses, so
   // the palette pick is the same skill the composer would have written.

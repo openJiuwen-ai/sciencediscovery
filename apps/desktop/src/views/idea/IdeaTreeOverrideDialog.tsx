@@ -15,11 +15,16 @@
 /**
  * Idea Tree parameters, for one conversation or for the deployment.
  *
- * The card opens from 会话设置's `idea-tree` row. It reads the global settings and
- * offers the two writes the setting now has: the Session override, which the
- * next research started in this conversation freezes and every later one
- * re-reads, and the global settings themselves. Cancel writes nothing, and the
- * dialog never sends a message — the composer keeps the last word.
+ * The card opens from 会话设置's `idea-tree` row, and from a `/idea-tree-team`
+ * command that is waiting for its parameters. It reads the global settings and
+ * offers exactly three actions: 确认 (write this conversation's override, then
+ * let the shell start the research), 取消 (write nothing), and 覆盖全局设置
+ * (write the deployment's defaults, which every conversation without an
+ * override follows from then on).
+ *
+ * 跟随全局设置 is gone on purpose: an override is undone by putting every field
+ * back to the deployment value and confirming, which writes the empty override
+ * the Session normalizer already understands.
  *
  * The fields are drawn with the same Group/Row/Select the Idea Tree settings
  * page uses, so the card reads as that form rather than a lookalike, and the
@@ -85,11 +90,28 @@ const DIRECTIONS = [
   { label: fields.minimize, value: "minimize" },
 ];
 
+/** What a select shows for a value, for the deployment note beside a row. */
+function labelOf(options: ReadonlyArray<{ label: string; value: string }>, value: string): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
+
+/** The row's hint, plus the deployment value it inherits and whether this
+ *  conversation has moved away from it.
+ *
+ *  Showing the inherited value is what makes "put the field back to the
+ *  deployment value and confirm" an actionable undo now that 跟随全局设置 is
+ *  gone: without it the reader has no way to see what they would be going back
+ *  to. */
+function withGlobal(hint: string, inherited: string, overridden: boolean): string {
+  return `${hint} · ${t.globalValue(inherited)}${overridden ? ` · ${t.overridden}` : ""}`;
+}
+
 export function IdeaTreeOverrideDialog({
   client,
   onClose,
   onConfirm,
   sessionId,
+  seedsCommand,
 }: {
   client: ApiClient;
   onClose: () => void;
@@ -99,6 +121,11 @@ export function IdeaTreeOverrideDialog({
   /** The conversation whose research settings would change; absent on the
    *  landing page, where there is nothing to override yet. */
   sessionId?: string;
+  /** This card was opened from the settings row, so its confirm is also the
+   *  write that makes the token mean anything. A confirm that could not write is
+   *  then not allowed at all: a token placed on the deployment values while the
+   *  hint promises "these values" is the one outcome the card must not produce. */
+  seedsCommand?: boolean;
 }) {
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
   /** The deployment values: what each field falls back to, and what a Session
@@ -180,8 +207,11 @@ export function IdeaTreeOverrideDialog({
 
   const saveSession = async () => {
     if (!draft || !sessionId) {
-      // Nothing to store (no Session, or the settings never loaded) — but the
-      // command the card is holding still has to leave.
+      // The settings row's confirm is what makes its token mean anything, so a
+      // confirm that could not write must do nothing: the token would otherwise
+      // run on the deployment values while the hint says "with these values".
+      if (seedsCommand) return;
+      // Otherwise the token the reader typed still has to go back to them.
       if (!closed.current) onConfirm?.();
       return;
     }
@@ -262,24 +292,6 @@ export function IdeaTreeOverrideDialog({
     }
   };
 
-  /** Hand the Session back to the global settings. */
-  const inheritGlobal = async () => {
-    if (!sessionId) return;
-    setStatus("saving");
-    setFailure(undefined);
-    try {
-      await updateSession(client, sessionId, { ideaTreeOverride: null });
-      setDraft(inherited);
-      setOpened(inherited);
-      setPins({});
-      setHasOverride(false);
-      setStatus("session");
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : String(reason));
-      setStatus("failed");
-    }
-  };
-
   const busy = status === "saving";
 
   return (
@@ -306,7 +318,7 @@ export function IdeaTreeOverrideDialog({
 
           {draft === undefined ? null : (
             <Group heading={fields.scopeHeading}>
-              <Row hint={fields.templateHint} title={fields.template}>
+              <Row hint={withGlobal(fields.templateHint, labelOf(TEMPLATES, inherited?.templateId ?? draft.templateId), draft.templateId !== inherited?.templateId)} title={fields.template}>
                 <Select
                   label={fields.template}
                   onChange={(value) => patch({ templateId: value as IdeaTreeSettingsDetails["templateId"] })}
@@ -314,7 +326,7 @@ export function IdeaTreeOverrideDialog({
                   value={draft.templateId}
                 />
               </Row>
-              <Row hint={fields.intensityHint} title={fields.intensity}>
+              <Row hint={withGlobal(fields.intensityHint, labelOf(INTENSITIES, inherited?.explorationIntensity ?? draft.explorationIntensity), draft.explorationIntensity !== inherited?.explorationIntensity)} title={fields.intensity}>
                 <Select
                   label={fields.intensity}
                   onChange={(value) => patch({ explorationIntensity: value as IdeaTreeSettingsDetails["explorationIntensity"] })}
@@ -322,7 +334,7 @@ export function IdeaTreeOverrideDialog({
                   value={draft.explorationIntensity}
                 />
               </Row>
-              <Row hint={fields.directionHint} title={fields.direction}>
+              <Row hint={withGlobal(fields.directionHint, labelOf(DIRECTIONS, inherited?.scoreDirection ?? draft.scoreDirection), draft.scoreDirection !== inherited?.scoreDirection)} title={fields.direction}>
                 <Select
                   label={fields.direction}
                   onChange={(value) => patch({ scoreDirection: value as IdeaTreeSettingsDetails["scoreDirection"] })}
@@ -330,7 +342,7 @@ export function IdeaTreeOverrideDialog({
                   value={draft.scoreDirection}
                 />
               </Row>
-              <Row hint={fields.maxDepthHint} title={fields.maxDepth}>
+              <Row hint={withGlobal(fields.maxDepthHint, String(inherited?.maxDepth ?? draft.maxDepth), draft.maxDepth !== inherited?.maxDepth)} title={fields.maxDepth}>
                 <input
                   aria-label={fields.maxDepth}
                   className="field-input"
@@ -341,7 +353,7 @@ export function IdeaTreeOverrideDialog({
                   value={draft.maxDepth}
                 />
               </Row>
-              <Row hint={fields.maxNodesHint} title={fields.maxNodes}>
+              <Row hint={withGlobal(fields.maxNodesHint, String(inherited?.maxNodes ?? draft.maxNodes), draft.maxNodes !== inherited?.maxNodes)} title={fields.maxNodes}>
                 <input
                   aria-label={fields.maxNodes}
                   className="field-input"
@@ -362,30 +374,31 @@ export function IdeaTreeOverrideDialog({
           {status === "unchanged" ? <p className="evolve-create-confirm-hint" role="status">{t.unchanged}</p> : null}
 
           <div className="modal-footer">
-            <button className="evolve-create-cancel" onClick={close} type="button">{t.cancel}</button>
             <button
-              className="evolve-create-cancel"
-              // Only a failed *read* leaves nothing to save, and the discriminator
-              // is `draft === undefined`: a failed write keeps the draft, so the
-              // reader has to be able to press again and retry. The command entry
-              // (onConfirm) stays live either way — it sends without writing.
-              disabled={busy
-                || (draft === undefined && (onConfirm === undefined || status !== "failed"))
-                || (sessionId === undefined && onConfirm === undefined)}
+              className="evolve-create-submit"
+              // Two different guarantees, so two different rules.
+              //
+              // Releasing a waiting command keeps its old rule: only a failed
+              // *read* leaves nothing to save, and a failed write keeps the
+              // draft so the reader can press again. The command is theirs; it
+              // leaves even when the write cannot happen.
+              //
+              // Seeding from the settings row is the opposite: it needs a
+              // conversation and a draft that was actually read, because the
+              // token is placed under exactly what this card wrote. A confirm
+              // that could not write would run on the deployment values instead,
+              // so it is refused rather than downgraded.
+              disabled={busy || (seedsCommand
+                ? sessionId === undefined || draft === undefined
+                : (draft === undefined && (onConfirm === undefined || status !== "failed"))
+                  || (sessionId === undefined && onConfirm === undefined))}
               onClick={() => void saveSession()}
               type="button"
             >
               {onConfirm === undefined ? t.saveSession : t.confirmSend}
             </button>
-            <button
-              className="evolve-create-cancel"
-              disabled={busy || sessionId === undefined || !hasOverride}
-              onClick={() => void inheritGlobal()}
-              type="button"
-            >
-              {t.inheritGlobal}
-            </button>
-            <button className="evolve-create-submit" disabled={busy || draft === undefined} onClick={() => void saveGlobal()} type="button">
+            <button className="evolve-create-cancel" onClick={close} type="button">{t.cancel}</button>
+            <button className="evolve-create-cancel" disabled={busy || draft === undefined} onClick={() => void saveGlobal()} type="button">
               {t.saveGlobal}
             </button>
           </div>

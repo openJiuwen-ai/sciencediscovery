@@ -121,6 +121,19 @@ export interface RunStreamState {
    * than waiting for the next poll or a manual refresh.
    */
   evolveRunsCreated: number;
+  /**
+   * How many Idea Tree researches this stream has announced
+   * (`idea_research.created`).
+   *
+   * Same situation as `evolveRunsCreated`, and worse without it: the research is
+   * created by the agent while the turn runs, and the desktop re-reads its list
+   * only while the command that asked for it is still waiting — a real model
+   * spends minutes on preparation first, so that window can be over before the
+   * research exists and the card would never appear. Counting the event is what
+   * makes the app re-read the list the moment the research starts, however long
+   * the agent took to get there.
+   */
+  ideaResearchesCreated: number;
   /** Largest replay cursor seen, for `?after=` on a reconnect. */
   lastSequence?: number;
   modelName?: string;
@@ -162,6 +175,7 @@ export function emptyRunStream(): RunStreamState {
   return {
     droppedEvents: 0,
     evolveRunsCreated: 0,
+    ideaResearchesCreated: 0,
     pendingResponses: {},
     permissions: [],
     terminal: false,

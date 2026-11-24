@@ -108,7 +108,7 @@ test("only the field that was changed is written, so the rest keep inheriting", 
       .find((node) => node.props["aria-label"] === "最大深度");
     assert.ok(depth, "the depth field is drawn");
     await act(async () => { depth!.props.onChange?.({ target: { value: "3" } }); });
-    await act(async () => { click(view, "只用于本次会话"); });
+    await act(async () => { click(view, "确认"); });
     await flush();
 
     assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "no global write");
@@ -123,16 +123,21 @@ test("only the field that was changed is written, so the rest keep inheriting", 
   }
 });
 
-test("following the global settings clears the override", async () => {
-  const { calls, client } = stubClient();
-  const { view } = await mount(client, "s1");
+test("the card offers exactly 确认, 取消 and 覆盖全局设置", async () => {
+  const { client } = stubClient();
+  const { markup, view } = await mount(client, "s1");
   try {
-    await act(async () => { click(view, "跟随全局设置"); });
-    await flush();
-    const patch = calls.find((call) => call.method === "PATCH");
-    assert.ok(patch, "the session is patched");
-    assert.equal((patch!.body as { ideaTreeOverride: unknown }).ideaTreeOverride, null,
-      "null is how a Session goes back to inheriting");
+    const labels = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown } }[] })
+      .findAllByType("button")
+      .map((node) => String(node.props.children));
+    // 跟随全局设置 is gone on purpose: an override is released by putting every
+    // field back to the deployment value and confirming, which the empty-diff
+    // path writes as `{}`.
+    assert.deepEqual(labels.filter((label) => label !== "×"), ["确认", "取消", "覆盖全局设置"]);
+    assert.doesNotMatch(markup(), /跟随全局设置/);
+    // The top hint says what each of the two writes means for the defaults.
+    assert.match(markup(), /单次修改只用于当前会话，不影响全局默认/);
+    assert.match(markup(), /只有点「覆盖全局设置」才会改全局默认/);
   } finally {
     await act(async () => { view.unmount(); });
   }
@@ -178,11 +183,11 @@ test("with no conversation the session write is refused and said so", async () =
   const { markup, view } = await mount(client, undefined);
   try {
     assert.match(markup(), /打开一个会话后/);
-    // Two controls need a Session and are refused in this state: the override
-    // write and the return to inheriting. Cancel and the global write stay.
-    assert.equal((markup().match(/"disabled":true/g) ?? []).length, 2,
-      "exactly the two Session-scoped actions are refused");
-    assert.match(markup(), /只用于本次会话/);
+    // One control needs a Session: the override write, and with it the research
+    // the card would start. Cancel and the global write stay pressable.
+    assert.equal((markup().match(/"disabled":true/g) ?? []).length, 1,
+      "exactly the Session-scoped action is refused");
+    assert.match(markup(), /只用于本次会话|确认/);
     assert.match(markup(), /覆盖全局设置/);
   } finally {
     await act(async () => { view.unmount(); });
@@ -229,7 +234,7 @@ test("confirming writes the change and then lets the command out", async () => {
       .findAllByType("input")
       .find((node) => node.props["aria-label"] === "最大深度");
     await act(async () => { depth!.props.onChange?.({ target: { value: "3" } }); });
-    await act(async () => { click(view as never, "确认并发送"); });
+    await act(async () => { click(view as never, "确认"); });
     await flush();
     // The parameters go to the Session first, then the command is allowed out.
     const patch = calls.find((call) => call.method === "PATCH");
@@ -257,7 +262,7 @@ test("confirming with nothing changed still lets the command out", async () => {
   });
   await flush();
   try {
-    await act(async () => { click(view as never, "确认并发送"); });
+    await act(async () => { click(view as never, "确认"); });
     await flush();
     // No field differs, so there is nothing to store — but the command that is
     // waiting on this card must still leave, or confirming would swallow it.
@@ -298,7 +303,7 @@ test("putting every field back to the deployment value releases the pin", async 
       .findAllByType("input")
       .find((node) => node.props["aria-label"] === "最大深度");
     await act(async () => { depth!.props.onChange?.({ target: { value: "5" } }); });
-    await act(async () => { click(view, "只用于本次会话"); });
+    await act(async () => { click(view, "确认"); });
     await flush();
     const patch = calls.find((call) => call.method === "PATCH");
     assert.ok(patch, "the undo has to be written, or the pin stays");
@@ -320,7 +325,7 @@ test("a global write rebases the diff, so nothing is pinned at the value it inhe
     await act(async () => { click(view, "覆盖全局设置"); });
     await flush();
     // The deployment now says 120, so a later Session save has nothing to pin.
-    await act(async () => { click(view, "只用于本次会话"); });
+    await act(async () => { click(view, "确认"); });
     await flush();
     const patches = calls.filter((call) => call.method === "PATCH");
     // 120 equals the value it now inherits, so the diff is empty and nothing is pinned.
@@ -418,6 +423,86 @@ test("a global write keeps the Session's pins on screen, and the new deployment 
   }
 });
 
+test("each row shows the deployment value it inherits, and marks what it overrides", async () => {
+  SESSION_OVERRIDES = { maxDepth: 3 };
+  const { client } = stubClient();
+  const { markup, view } = await mount(client, "s1");
+  try {
+    // 跟随全局设置 is gone, so the undo has to be visible: the deployment value
+    // sits beside every field, and the pinned one is marked as overridden.
+    assert.match(markup(), /全局：5/, "the inherited depth is shown");
+    assert.match(markup(), /全局：100/, "the inherited node cap is shown");
+    assert.match(markup(), /已覆盖/, "the pinned field is marked");
+  } finally {
+    SESSION_OVERRIDES = {};
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("seeding the command needs a conversation and a read, so 确认 is refused without one", async () => {
+  // The settings row supplies onConfirm, so the old "no command waiting" rule
+  // would let this press through: it writes nothing (no Session) and would send
+  // `/idea-tree-team`, spending the deployment values while the hint promises
+  // "these values".
+  const { calls, client } = stubClient();
+  const confirmed: number[] = [];
+  const { markup, view } = await mountTo(client, undefined, () => { confirmed.push(1); }, true);
+  try {
+    assert.match(markup(), /打开一个会话后/);
+    const confirm = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => String(node.props.children) === "确认");
+    assert.ok(confirm, "the confirm action is drawn");
+    assert.equal(confirm!.props.disabled, true, "it must not be pressable without a conversation");
+    await act(async () => { confirm!.props.onClick?.(); });
+    await flush();
+    assert.equal(confirmed.length, 0, "nothing was started");
+    assert.equal(calls.filter((call) => call.method !== "GET").length, 0, "and nothing was written");
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("seeding the command is refused when the settings could not be read", async () => {
+  // Same guarantee from the other direction: with no draft there is nothing to
+  // write, so the research would run on whatever is in force while the reader
+  // believes they just set it.
+  const { client } = failingClient();
+  const confirmed: number[] = [];
+  const { view } = await mountTo(client, "s1", () => { confirmed.push(1); }, true);
+  try {
+    assert.match(JSON.stringify(view.toJSON()), /settings unavailable/);
+    const confirm = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
+      .findAllByType("button")
+      .find((node) => String(node.props.children) === "确认");
+    assert.ok(confirm, "the confirm action is drawn");
+    assert.equal(confirm!.props.disabled, true, "a failed read cannot start a research");
+    await act(async () => { confirm!.props.onClick?.(); });
+    await flush();
+    assert.equal(confirmed.length, 0);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+/** Mount with the settings-row shape: an onConfirm, and seedsCommand set. */
+async function mountTo(client: unknown, sessionId: string | undefined, onConfirm: () => void, seedsCommand: boolean) {
+  let view: { toJSON: () => unknown; root: never; unmount: () => void };
+  await act(async () => {
+    view = create(
+      <IdeaTreeOverrideDialog
+        client={client as never}
+        onClose={() => {}}
+        onConfirm={onConfirm}
+        sessionId={sessionId}
+        seedsCommand={seedsCommand}
+      />,
+    ) as never;
+  });
+  await flush();
+  return { markup: () => JSON.stringify(view!.toJSON()), view: view! };
+}
+
 /** A client whose Idea Tree settings read fails, for the states below. */
 function failingClient() {
   const calls: { method: string; path: string }[] = [];
@@ -442,7 +527,7 @@ test("a failed settings read disables the Session action instead of leaving it i
     assert.match(markup(), /settings unavailable/);
     const save = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
       .findAllByType("button")
-      .find((node) => String(node.props.children) === "只用于本次会话");
+      .find((node) => String(node.props.children) === "确认");
     assert.ok(save, "the save action is drawn");
     assert.equal(save!.props.disabled, true, "nothing to save, so it must not be pressable");
   } finally {
@@ -468,7 +553,7 @@ test("a failed settings read still lets a waiting command out", async () => {
   try {
     const save = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
       .findAllByType("button")
-      .find((node) => String(node.props.children) === "确认并发送");
+      .find((node) => String(node.props.children) === "确认");
     assert.ok(save, "the confirm action is drawn");
     assert.equal(save!.props.disabled, false, "the command has to be releasable");
     await act(async () => { save!.props.onClick?.(); });
@@ -508,7 +593,7 @@ test("a failed write keeps the Session action pressable, so the reader can retry
 
     const save = () => (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
       .findAllByType("button")
-      .find((node) => String(node.props.children) === "只用于本次会话");
+      .find((node) => String(node.props.children) === "确认");
 
     await act(async () => { save()!.props.onClick?.(); });
     await flush();

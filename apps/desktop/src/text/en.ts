@@ -349,7 +349,12 @@ export const EN: Text = {
 
   ideaTreeOverride: {
     title: "Idea Tree parameters",
-    hint: "The next research uses these values without changing the global settings; only the global button below writes them back.",
+    hint: "Confirming applies these values to this conversation and puts the Idea Tree command in the composer; add the research task and send. The change applies to this conversation only and leaves the global defaults alone; only Overwrite the global settings writes them back.",
+    /** Beside a field: the deployment value it inherits, so the reader can see
+     *  what 确认 would write and what releasing a pin means. */
+    globalValue: (value: string) => `Global: ${value}`,
+    /** Badge on a field whose draft differs from the deployment value. */
+    overridden: "Overridden",
     template: "Research template",
     templateGeneral: "General scientific hypothesis",
     templateWater: "Water-treatment materials",
@@ -362,14 +367,13 @@ export const EN: Text = {
     minimize: "Minimize",
     maxDepth: "Maximum depth",
     maxNodes: "Maximum nodes",
-    saveSession: "Use for this conversation",
-    inheritGlobal: "Follow the global settings",
+    saveSession: "Confirm",
     pinned: "This conversation pins some parameters; the others still follow the global settings.",
     saveGlobal: "Overwrite the global settings",
     cancel: "Cancel",
     loading: "Reading…",
     savedSession: "This conversation will use these settings",
-    confirmSend: "Confirm and send",
+    confirmSend: "Confirm",
     savedGlobal: "Written to the global settings",
     unchanged: "Nothing was changed here, so the global settings are untouched.",
     noSession: "Open a conversation to change the settings for it alone.",

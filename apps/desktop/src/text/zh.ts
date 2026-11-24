@@ -348,7 +348,7 @@ export const ZH = {
 
   ideaTreeOverride: {
     title: "idea-tree 参数",
-    hint: "只用于之后发起的研究；不改全局设置。点「覆盖全局设置」才会写回全局。",
+    hint: "确认后把这套参数用于当前会话，并在输入框放好 Idea Tree 命令；补全研究任务后发送即可。单次修改只用于当前会话，不影响全局默认；只有点「覆盖全局设置」才会改全局默认。",
     template: "研究模板",
     templateGeneral: "通用科学假设",
     templateWater: "水处理材料",
@@ -361,14 +361,18 @@ export const ZH = {
     minimize: "最小化",
     maxDepth: "最大深度",
     maxNodes: "最大节点数",
-    saveSession: "只用于本次会话",
-    inheritGlobal: "跟随全局设置",
+    saveSession: "确认",
+    /** Beside a field: the deployment value it inherits, so the reader can see
+     *  what 确认 would write and what releasing a pin means. */
+    globalValue: (value: string) => `全局：${value}`,
+    /** Badge on a field whose draft differs from the deployment value. */
+    overridden: "已覆盖",
     pinned: "本次会话已固定部分参数；其余字段仍跟随全局设置。",
     saveGlobal: "覆盖全局设置",
     cancel: "取消",
     loading: "正在读取…",
     savedSession: "已用于本次会话，之后发起的研究会用这套参数",
-    confirmSend: "确认并发送",
+    confirmSend: "确认",
     savedGlobal: "已写入全局设置",
     unchanged: "没有需要写入全局的改动。",
     noSession: "打开一个会话后，才能只给本次会话改参数。",

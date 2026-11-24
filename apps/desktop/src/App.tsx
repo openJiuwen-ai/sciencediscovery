@@ -67,7 +67,7 @@ import {
   splitEvolveCommand,
 } from "./evolve/command.js";
 import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
-import { isIdeaTreeCommand } from "./idea/command.js";
+import { composeIdeaMessage, IDEA_TREE_TEAM_COMMAND, ideaCommandOf, ideaTaskOf, isIdeaTreeCommand } from "./idea/command.js";
 import { stepAwaitingIdea } from "./idea/awaiting.js";
 import { taskTabKept } from "./idea/task-tab.js";
 import { useEvolve } from "./evolve/use-evolve.js";
@@ -336,6 +336,14 @@ export function App({ initialToken }: Props) {
   const [ideaTreeOpen, setIdeaTreeOpen] = useState(false);
   /** An Idea Tree command waiting for its parameters; the card is open on it. */
   const [pendingIdeaSend, setPendingIdeaSend] = useState<string>();
+  /** The card was opened from 会话设置 instead of from a typed command. Confirming
+   *  it starts the research, so the command is one this window sends itself —
+   *  there is no draft to send, and cancelling must not seed one. */
+  const [ideaTreeStart, setIdeaTreeStart] = useState(false);
+  /** The task the composer held when the settings row was pressed. It becomes
+   *  the sentence under the token, so a draft the reader already wrote is kept
+   *  rather than replaced by an empty box. */
+  const [ideaTreeTask, setIdeaTreeTask] = useState("");
   /** The same value for the callbacks a card holds from an earlier render: a
    *  write that resolves after the reader cancelled must not resurrect it. */
   const pendingIdeaSendRef = useRef<string | undefined>(undefined);
@@ -369,6 +377,7 @@ export function App({ initialToken }: Props) {
     setAwaitingIdea(false);
     awaitingIdeaFrom.current = undefined;
     setSeededCommand(undefined);
+    setIdeaTreeStart(false);
     seenRunIds.current = new Set();
   }, [state.sessionId]);
 
@@ -459,6 +468,15 @@ export function App({ initialToken }: Props) {
   useEffect(() => {
     if (state.run.evolveRunsCreated > 0) void refreshEvolve();
   }, [refreshEvolve, state.run.evolveRunsCreated]);
+
+  // The same for a research: the agent starts it partway through the turn, the
+  // list is only polled while one is live, and the command's waiting window is
+  // shorter than a real model's preparation. The created event is the one
+  // moment the app knows to look now, so the card at the transcript's foot
+  // appears with the research rather than after an unrelated refresh.
+  useEffect(() => {
+    if (state.run.ideaResearchesCreated > 0) idea.reload();
+  }, [idea.reload, state.run.ideaResearchesCreated]);
 
   // The shell (when present) pushes JiuwenSwarm cluster readiness.
   // "shell present, no verdict yet" is NOT ready — the composer stays gated
@@ -935,14 +953,37 @@ export function App({ initialToken }: Props) {
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
+  /** A research is expected: remember the baseline its panel opens against.
+   *
+   *  The command stays a message — the agent runs its preparation and calls
+   *  `create_idea_research`, because the evidence it gathers cannot be produced
+   *  here. Remembering that one was asked for, plus the ids the session already
+   *  had when a read has finished, is what lets the panel open on the research
+   *  that request creates rather than on one that was already there. */
+  const rememberAwaitingIdea = () => {
+    awaitingIdeaFrom.current = idea.loads > 0
+      ? { loads: idea.loads, baseline: new Set(idea.views.map((view) => view.research.id)) }
+      : { loads: idea.loads };
+    setAwaitingIdea(true);
+  };
+
   const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput, ideaConfirmed = false): boolean => {
     if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return true; }
-    // An archived Session is read-only on the server, and the composer alone is
-    // not enough: a Session with no transcript opens on the welcome page, whose
-    // composer had no reason to show. The refusal belongs at the send, where it
-    // is one rule for both surfaces.
-    if (state.detail?.archivedAt !== undefined) { actions.toast(TEXT.errors.archivedComposer, "error"); return true; }
-    // The token came from the design dialog, which collected the goal, the
+      // An archived Session is read-only on the server, and the composer alone is
+      // not enough: a Session with no transcript opens on the welcome page, whose
+      // composer had no reason to show. The refusal belongs at the send, where it
+      // is one rule for both surfaces.
+      if (state.detail?.archivedAt !== undefined) { actions.toast(TEXT.errors.archivedComposer, "error"); return true; }
+      // The Idea Tree token the parameters card seeded: the parameters are already
+      // chosen, so this is the confirmed pass and the command is the token itself.
+      // Composing it here — rather than deferring it back into the card — is what
+      // makes "the card never sends anything" true.
+      if (command !== undefined && isIdeaTreeCommand(command)) {
+        setSeededCommand(undefined);
+        rememberAwaitingIdea();
+        void actions.send(composeIdeaMessage(command, content));
+        return true;
+      }    // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
     // question about the sentence only, so the detour below — which is for
     // commands typed by hand — does not apply.
@@ -977,17 +1018,7 @@ export function App({ initialToken }: Props) {
       return false;
     }
     if (isIdeaTreeCommand(content)) {
-      // The command stays a message: the agent runs its preparation and calls
-      // `create_idea_research`, because the evidence it gathers cannot be
-      // produced here. Remembering that one was asked for — plus the ids the
-      // session already had, when a read has finished — is what lets the panel
-      // open on the research that request creates rather than on one that was
-      // already there. Without a finished read there is no baseline to compare
-      // against, so the first read after the command takes that role instead.
-      awaitingIdeaFrom.current = idea.loads > 0
-        ? { loads: idea.loads, baseline: new Set(idea.views.map((view) => view.research.id)) }
-        : { loads: idea.loads };
-      setAwaitingIdea(true);
+      rememberAwaitingIdea();
     }
     void actions.send(content);
     return true;
@@ -1251,13 +1282,40 @@ export function App({ initialToken }: Props) {
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
-  /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row. */
-  const openIdeaTree = () => {
+  /** The Idea Tree parameters card, opened from 会话设置's `idea-tree` row.
+   *
+   *  Confirming it is not a send. The card writes this conversation's parameters
+   *  and then `seedIdeaTree` places the command token in the composer, where the
+   *  reader completes the task and sends it — the same shape Evolve's setup
+   *  dialog already uses. `goal` is whatever the composer held; a draft that is
+   *  itself an Idea Tree command contributes no task, so a token can never
+   *  become another token's objective. */
+  const openIdeaTree = (goal = "") => {
     rememberPendingIdeaSend(undefined);
+    setIdeaTreeTask(ideaTaskOf(goal));
+    setIdeaTreeStart(true);
     setIdeaTreeOpen(true);
   };
 
-  /** The card was confirmed: send the command that was waiting for it. */
+  const closeIdeaTree = () => {
+    setIdeaTreeStart(false);
+    setIdeaTreeOpen(false);
+  };
+
+  /** Put the command token in the composer, with the task the reader already
+   *  wrote under it. Nothing is sent: the send button is theirs, and it is also
+   *  the only place a running turn refuses the message. */
+  const seedIdeaCommand = (command: string, task: string) => {
+    setIdeaTreeStart(false);
+    setIdeaTreeOpen(false);
+    setIdeaTreeTask("");
+    setSeededCommand({ command, nonce: Date.now(), text: task });
+  };
+
+  const seedIdeaTree = () => seedIdeaCommand(IDEA_TREE_TEAM_COMMAND, ideaTreeTask);
+
+  /** A typed Idea Tree command was waiting for the card: turn it into the token
+   *  the reader sends, keeping the command they typed and the task under it. */
   const confirmIdeaSend = () => {
     // Read through the ref: the card may be calling a callback captured before a
     // cancel cleared this.
@@ -1265,10 +1323,7 @@ export function App({ initialToken }: Props) {
     rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(false);
     if (pending === undefined) return;
-    // The composer kept the draft when the send was deferred; sending it now
-    // clears it, so the same words are not left behind in the box.
-    setSeededCommand({ nonce: Date.now(), text: "" });
-    sendMessage(pending, undefined, undefined, true);
+    seedIdeaCommand(ideaCommandOf(pending) ?? IDEA_TREE_TEAM_COMMAND, ideaTaskOf(pending));
   };
 
   /** The card was dismissed: nothing is sent and the draft comes back. */
@@ -1692,9 +1747,14 @@ export function App({ initialToken }: Props) {
       {ideaTreeOpen ? (
         <IdeaTreeOverrideDialog
           client={client}
-          onClose={pendingIdeaSend === undefined ? () => setIdeaTreeOpen(false) : cancelIdeaSend}
-          onConfirm={pendingIdeaSend === undefined ? undefined : confirmIdeaSend}
+          onClose={pendingIdeaSend === undefined ? closeIdeaTree : cancelIdeaSend}
+          // Both paths seed the command token; neither sends. The settings row's
+          // confirm is also the write, so it needs a Session open.
+          onConfirm={pendingIdeaSend === undefined
+            ? (ideaTreeStart && state.detail?.id !== undefined ? seedIdeaTree : undefined)
+            : confirmIdeaSend}
           sessionId={state.detail?.id}
+          seedsCommand={pendingIdeaSend === undefined && ideaTreeStart}
         />
       ) : null}
 
