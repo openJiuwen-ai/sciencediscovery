@@ -69,9 +69,13 @@ export const APPROVAL_MODE_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:approval-mod
  *  from it (#1205). Only an explicit pick writes it. */
 export const REMEMBERED_MODEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:last-model`;
 
-/** How the sidebar list is narrowed (#1251). The issue asks for the choice to
- *  survive a reload, so the four chips are written on every change and read
+/** How the search results are narrowed (#1251). The issue asks for the choice to
+ *  survive a reload, so the `...` settings are written on every change and read
  *  before the first paint. */
+export const SEARCH_NARROWING_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:search-narrowing`;
+
+/** Superseded by `SEARCH_NARROWING_STORAGE_KEY`; kept until the column that read
+ *  it is gone, so a tree mid-migration still compiles. */
 export const LIST_FILTERS_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:list-filters`;
 
 function safeRead(storage: ReadableStorage, key: string): string | null {
