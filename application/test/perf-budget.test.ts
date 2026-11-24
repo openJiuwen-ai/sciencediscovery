@@ -1,0 +1,327 @@
+// Pins the perf timing-budget gate against the REAL 2026-11-24 three-session
+// log of the signed v0.4.0 build (the log the budgets were measured on).
+// The numbers asserted below are the measured values:
+//
+//   session 1 (first, provisioning=true): shell-boot 6167ms (stack-spawned
+//     elapsed), unpack 1969ms, runner 221ms, memory-graph 2858ms,
+//     evolve 2852ms, api 2797ms (wall clock 12:07:41.201 -> 43.998),
+//     jw 7868ms, AGENT-READY 18781ms, shell-ui 118ms, warmup 1256ms
+//   session 2 (warm, 12:10:28): shell-boot 1577ms, runner 214ms,
+//     memory-graph 640ms, evolve 1046ms, api 1660ms, jw 4845ms,
+//     AGENT-READY 8456ms, shell-ui 145ms, warmup 533ms
+//   session 3 (warm, 12:13:12): shell-boot 1516ms, runner 426ms,
+//     memory-graph 653ms, evolve 1034ms, api 1481ms, jw 4782ms,
+//     AGENT-READY 8178ms, shell-ui 64ms, warmup 713ms
+//
+// Any parser change that stops extracting these numbers turns a test red
+// by name (pyc-budget precedent). The incident-shaped inputs pin the
+// thresholds: a W25-shaped "every gate green but the user wait is minutes"
+// must NOT pass — see the missing-healthy and regression tests near the end.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  parsePerfLine,
+  parsePerfTimeline,
+  splitSessions,
+  sessionKind,
+  componentDurations,
+} from "../scripts/lib/parse-perf-timeline.mjs";
+import {
+  BUDGETS,
+  TOLERANCE_RATIO,
+  judgeComponent,
+  judgeSession,
+  exitCode,
+} from "../scripts/lib/perf-verdict.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+// ---------------------------------------------------------------------------
+// helpers
+
+function durationRows(session) {
+  return Object.fromEntries(
+    componentDurations(session).map((r) => [r.component, r.durationMs]),
+  );
+}
+
+// Shape-exact synthetic logs: real line shapes (timestamped relay lines,
+// bare pipe-flush lines, multi-word shell events, warmup 200) with the
+// 2026-11-24 measured timings, so judged rows land on the same numbers
+// the budget file was built from.
+function syntheticFirstSession() {
+  const lines = [
+    "2026-11-24T12:07:34.353Z [perf] module-load elapsed=0ms",
+    "2026-11-24T12:07:34.521Z [perf] app-ready elapsed=169ms sinceModuleLoad=169ms",
+    "2026-11-24T12:07:34.749Z [perf] window-created elapsed=397ms",
+    "2026-11-24T12:07:37.386Z [perf] ensureBackend-enter elapsed=3034ms",
+    "2026-11-24T12:07:38.433Z [perf] bootstrapPackaged-enter elapsed=4081ms provisioning=true",
+    "2026-11-24T12:07:38.434Z [perf] bootstrapPackaged start",
+    "2026-11-24T12:07:38.435Z [perf] bootstrap enter +1ms",
+    "2026-11-24T12:07:38.440Z [perf] bootstrap unpack-enter +6ms",
+    "2026-11-24T12:07:40.409Z [perf] bootstrap unpack-done +1975ms self=1969ms",
+    "2026-11-24T12:07:40.517Z [perf] bootstrapPackaged-done elapsed=6165ms",
+    "2026-11-24T12:07:40.519Z [perf] stack-spawned elapsed=6167ms pid=67019",
+    "2026-11-24T12:07:40.952Z [stack:err] [SD-PERF] stack script-enter +0ms",
+    "2026-11-24T12:07:40.959Z [stack:err] [SD-PERF] stack port-preflight-done +8ms checked=5 failures=0",
+    "[SD-PERF] stack runner-spawn +8ms",
+    "2026-11-24T12:07:41.180Z [stack:err] [SD-PERF] stack runner-healthy +229ms",
+    "[SD-PERF] stack memory-graph-spawn +229ms",
+    "[SD-PERF] stack evolve-spawn +236ms",
+    "2026-11-24T12:07:41.201Z [stack:err] [SD-PERF] stack api-spawn +250ms",
+    "2026-11-24T12:07:43.535Z [stack:err] [SD-PERF] jw spawn-jw-app +1687ms self=5ms pid=67073",
+    "2026-11-24T12:07:43.998Z [perf] HEALTH-200 elapsed=9646ms url=http://127.0.0.1:4410/api/health",
+    "2026-11-24T12:07:44.038Z [stack:err] [SD-PERF] stack memory-graph-healthy +3087ms",
+    "2026-11-24T12:07:44.039Z [stack:err] [SD-PERF] stack evolve-healthy +3088ms",
+    "2026-11-24T12:07:51.403Z [stack:err] [SD-PERF] jw IS-UP +9555ms loopTotal=7866ms probe#32",
+    "2026-11-24T12:07:53.133Z [perf] AGENT-READY elapsed=18781ms watchAttempts=36",
+    "2026-11-24T12:07:53.255Z [perf] loadUi elapsed=18899ms",
+    "2026-11-24T12:07:54.389Z [warmup] first-chat /api/mcp/sources/reload -> 200",
+  ];
+  const events = parsePerfTimeline(lines.join("\n"));
+  return splitSessions(events)[0];
+}
+
+function syntheticWarmSession() {
+  const lines = [
+    "2026-11-24T12:10:28.248Z [perf] module-load elapsed=0ms",
+    "2026-11-24T12:10:29.812Z [perf] bootstrapPackaged-enter elapsed=1565ms provisioning=false",
+    "2026-11-24T12:10:29.821Z [perf] bootstrap short-circuit +8ms unpackNeeded=false",
+    "2026-11-24T12:10:29.824Z [perf] stack-spawned elapsed=1577ms pid=69078",
+    "2026-11-24T12:10:29.983Z [stack:err] [SD-PERF] stack script-enter +0ms",
+    "2026-11-24T12:10:29.990Z [stack:err] [SD-PERF] stack port-preflight-done +7ms checked=5 failures=0",
+    "[SD-PERF] stack runner-spawn +7ms",
+    "2026-11-24T12:10:30.204Z [stack:err] [SD-PERF] stack runner-healthy +221ms",
+    "[SD-PERF] stack memory-graph-spawn +221ms",
+    "[SD-PERF] stack evolve-spawn +222ms",
+    "2026-11-24T12:10:30.222Z [stack:err] [perf] start-stack pre-API elapsed=238ms",
+    "[SD-PERF] stack api-spawn +238ms",
+    "2026-11-24T12:10:30.672Z [stack:err] [SD-PERF] jw spawn-jw-app +107ms self=1ms pid=69094",
+    "2026-11-24T12:10:30.844Z [stack:err] [SD-PERF] stack memory-graph-healthy +861ms",
+    "2026-11-24T12:10:31.252Z [stack:err] [SD-PERF] stack evolve-healthy +1268ms",
+    "2026-11-24T12:10:31.882Z [perf] HEALTH-200 elapsed=3635ms",
+    "2026-11-24T12:10:35.615Z [stack:err] [SD-PERF] jw gateway-first-tcp +4943ms",
+    "[SD-PERF] jw IS-UP +4952ms loopTotal=4845ms probe#20",
+    "2026-11-24T12:10:36.703Z [perf] AGENT-READY elapsed=8456ms watchAttempts=19",
+    "2026-11-24T12:10:36.854Z [perf] loadUi elapsed=8601ms",
+    "2026-11-24T12:10:37.236Z [warmup] first-chat /api/mcp/sources/reload -> 200",
+  ];
+  const events = parsePerfTimeline(lines.join("\n"));
+  return splitSessions(events)[0];
+}
+
+// ---------------------------------------------------------------------------
+// parser: line shapes
+
+test("timestamped relay lines parse (stack/jw domains)", () => {
+  const ev = parsePerfLine(
+    "2026-11-24T12:07:41.180Z [stack:err] [SD-PERF] stack runner-healthy +229ms",
+    null,
+  );
+  assert.equal(ev.domain, "stack");
+  assert.equal(ev.event, "runner-healthy");
+  assert.equal(ev.offsetMs, 229);
+});
+
+test("bare [SD-PERF] lines inherit the last seen timestamp", () => {
+  const lastTs = Date.parse("2026-11-24T12:07:40.959Z");
+  const ev = parsePerfLine("[SD-PERF] stack runner-spawn +8ms", lastTs);
+  assert.equal(ev.domain, "stack");
+  assert.equal(ev.event, "runner-spawn");
+  assert.equal(ev.offsetMs, 8);
+  assert.equal(ev.atMs, lastTs);
+});
+
+test("shell [perf] lines parse with multi-word event names", () => {
+  const ev = parsePerfLine(
+    "2026-11-24T12:07:38.440Z [perf] bootstrap unpack-enter +6ms",
+    null,
+  );
+  assert.equal(ev.domain, "shell");
+  assert.equal(ev.event, "bootstrap unpack-enter");
+  assert.equal(ev.offsetMs, 6);
+});
+
+test("shell [perf] elapsed= lines parse", () => {
+  const ev = parsePerfLine(
+    "2026-11-24T12:07:53.133Z [perf] AGENT-READY elapsed=18781ms watchAttempts=36",
+    null,
+  );
+  assert.equal(ev.domain, "shell");
+  assert.equal(ev.event, "AGENT-READY");
+  assert.equal(ev.offsetMs, 18781);
+});
+
+test("warmup only counts on a 200 response", () => {
+  const ok = parsePerfLine(
+    "2026-11-24T12:07:54.389Z [warmup] first-chat /api/mcp/sources/reload -> 200",
+    null,
+  );
+  assert.ok(ok, "200 warmup line must parse");
+  assert.equal(ok.domain, "warmup");
+  const fail = parsePerfLine(
+    "2026-11-24T12:07:54.389Z [warmup] first-chat /api/mcp/sources/reload -> 500",
+    null,
+  );
+  assert.equal(fail, null);
+});
+
+// ---------------------------------------------------------------------------
+// parser: sessions and durations
+
+test("splitSessions slices at module-load and kind is detected", () => {
+  const first = syntheticFirstSession();
+  assert.equal(sessionKind(first), "first");
+  const warm = syntheticWarmSession();
+  assert.equal(sessionKind(warm), "warm");
+});
+
+test("first-session durations match the 2026-11-24 measured values", () => {
+  const rows = durationRows(syntheticFirstSession());
+  assert.equal(rows["shell-boot"], 6167);
+  assert.equal(rows["unpack"], 1969);
+  assert.equal(rows["runner-ready"], 221);
+  assert.equal(rows["memory-graph-ready"], 2858);
+  assert.equal(rows["evolve-ready"], 2852);
+  assert.equal(rows["api-ready"], 2797);
+  assert.equal(rows["jw-ready"], 7868);
+  assert.equal(rows["agent-ready"], 18781);
+  assert.equal(rows["shell-ui"], 118);
+  assert.equal(rows["warmup-done"], 1256);
+});
+
+test("warm-session durations match the measured values (session 2)", () => {
+  const rows = durationRows(syntheticWarmSession());
+  assert.equal(rows["shell-boot"], 1577);
+  assert.equal(rows["runner-ready"], 214);
+  assert.equal(rows["memory-graph-ready"], 640);
+  assert.equal(rows["evolve-ready"], 1046);
+  assert.equal(rows["api-ready"], 1660);
+  assert.equal(rows["jw-ready"], 4845);
+  assert.equal(rows["agent-ready"], 8456);
+  assert.equal(rows["shell-ui"], 145);
+  assert.equal(rows["warmup-done"], 533);
+});
+
+// ---------------------------------------------------------------------------
+// verdict: the three states and the missing-pair rule
+
+test("judgeComponent: ok under both lines, hang over hangMs, regression between", () => {
+  const budget = { hangMs: 30000, baselineMs: 6200 };
+  assert.equal(judgeComponent("shell-boot", 6200, undefined, budget).verdict, "ok");
+  assert.equal(judgeComponent("shell-boot", 8681, undefined, budget).verdict, "regression");
+  assert.equal(judgeComponent("shell-boot", 30001, undefined, budget).verdict, "hang");
+});
+
+test("missing pair is a hang, not a pass", () => {
+  const budget = { hangMs: 30000, baselineMs: 6200 };
+  const row = judgeComponent("shell-boot", null, "from event module-load (shell) not in log", budget);
+  assert.equal(row.verdict, "hang");
+  assert.match(row.missing, /module-load/);
+});
+
+test("judgeSession judges first sessions with the first table", () => {
+  const judged = judgeSession(syntheticFirstSession());
+  assert.equal(judged.kind, "first");
+  assert.equal(judged.summary.hang, 0);
+  assert.equal(judged.summary.regression, 0);
+  assert.equal(judged.summary.ok, 10);
+});
+
+test("judgeSession judges warm sessions with the warm table", () => {
+  const judged = judgeSession(syntheticWarmSession());
+  assert.equal(judged.kind, "warm");
+  assert.equal(judged.summary.hang, 0);
+  assert.equal(judged.summary.regression, 0);
+  assert.equal(judged.summary.ok, 9);
+});
+
+// ---------------------------------------------------------------------------
+// verdict: W25-shaped incident inputs must NOT pass
+
+test("the missing-healthy incident shape fails (hang verdict, not green)", () => {
+  // The W25-class failure: a component never reaches healthy but every
+  // other line is normal. The gate must say hang, not ok.
+  const warm = syntheticWarmSession();
+  const filtered = warm.filter((e) => !(e.domain === "jw" && e.event === "IS-UP"));
+  const judged = judgeSession(filtered);
+  const jwRow = judged.rows.find((r) => r.component === "jw-ready");
+  assert.equal(jwRow.verdict, "hang");
+  assert.match(jwRow.missing, /IS-UP/);
+});
+
+test("a 2x regression is reported as regression (warn), not hang", () => {
+  const warm = syntheticWarmSession();
+  // Slow the api pair to ~4x baseline by pushing HEALTH-200 into the
+  // future: wall clock grows, hang line untouched.
+  const mutated = warm.map((e) =>
+    e.event === "HEALTH-200" ? { ...e, atMs: e.atMs + 5000, offsetMs: e.offsetMs + 5000 } : e,
+  );
+  const judged = judgeSession(mutated);
+  const apiRow = judged.rows.find((r) => r.component === "api-ready");
+  assert.equal(apiRow.verdict, "regression");
+  assert.ok(apiRow.durationMs > 6600, "mutated duration should be ~6.7s");
+  assert.equal(judged.summary.hang, 0, "regression only, not a hang");
+});
+
+test("exitCode: hang anywhere fails the run, regression alone does not", () => {
+  const hangRun = [{ summary: { hang: 1, regression: 0, ok: 9 } }];
+  const regressionRun = [{ summary: { hang: 0, regression: 2, ok: 7 } }];
+  assert.equal(exitCode(hangRun), 1);
+  assert.equal(exitCode(regressionRun), 0);
+});
+
+// ---------------------------------------------------------------------------
+// budget file integrity
+
+test("perf-budget.json first baselines match the measured values (n=1, tight)", () => {
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  assert.equal(budget.toleranceRatio, 1.4);
+  const first = durationRows(syntheticFirstSession());
+  for (const [component, ms] of Object.entries(first)) {
+    if (budget.sessions.first[component]) {
+      assert.ok(
+        Math.abs(budget.sessions.first[component].baselineMs - ms) <= 20,
+        `first baseline ${component}: budget ${budget.sessions.first[component].baselineMs} vs measured ${ms}`,
+      );
+    }
+  }
+});
+
+test("perf-budget.json warm baselines are exactly the n=2 session means", () => {
+  // The two real warm sessions, pair-difference values, hard-pinned:
+  // any change to the warm baselines must update these measured rows.
+  // (session2, session3) -> mean, per component.
+  const measured = {
+    "shell-boot": [1577, 1516],
+    "runner-ready": [214, 426],
+    "memory-graph-ready": [640, 653],
+    "evolve-ready": [1046, 1034],
+    "api-ready": [1660, 1481],
+    "jw-ready": [4845, 4782],
+    "agent-ready": [8456, 8178],
+    "shell-ui": [145, 64],
+    "warmup-done": [533, 713],
+  };
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  for (const [component, [s2, s3]] of Object.entries(measured)) {
+    const expected = Math.round((s2 + s3) / 2);
+    assert.equal(
+      budget.sessions.warm[component].baselineMs,
+      expected,
+      `warm baseline ${component}: expected mean(${s2},${s3})=${expected}`,
+    );
+  }
+});
+
+test("agent-ready hang budget equals the shell's AGENT_READY_TIMEOUT_MS", () => {
+  // 180s from design sec4a H7, matching the code constant so the gate and
+  // the runtime timeout blow together. Pin the equality so a change on
+  // either side turns this red.
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  assert.equal(budget.sessions.first["agent-ready"].hangMs, 180000);
+  assert.equal(budget.sessions.warm["agent-ready"].hangMs, 180000);
+});

@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "updated": "2026-11-24",
+  "source": "design doc P1 sec4a hang / sec4b regression (mac-design/perf-guard, 2026-11-24). Baselines are what the parser pairs actually measure on the 2026-11-24 three-session log of the signed v0.4.0 build.",
+  "mechanism": "hang = fixed seconds, hard fail on exceed; regression = baseline x tolerance, warn on exceed, hard fail on 2nd consecutive run. Missing event pair = hang. Judged per session kind (first/warm); see scripts/lib/perf-verdict.mjs.",
+  "toleranceRatio": 1.4,
+  "sessions": {
+    "first": {
+      "shell-boot": {
+        "hangMs": 30000,
+        "baselineMs": 6170
+      },
+      "unpack": {
+        "hangMs": 30000,
+        "baselineMs": 1970
+      },
+      "runner-ready": {
+        "hangMs": 30000,
+        "baselineMs": 230
+      },
+      "memory-graph-ready": {
+        "hangMs": 45000,
+        "baselineMs": 2860
+      },
+      "evolve-ready": {
+        "hangMs": 45000,
+        "baselineMs": 2850
+      },
+      "api-ready": {
+        "hangMs": 60000,
+        "baselineMs": 2800
+      },
+      "jw-ready": {
+        "hangMs": 120000,
+        "baselineMs": 7870
+      },
+      "agent-ready": {
+        "hangMs": 180000,
+        "baselineMs": 18780
+      },
+      "shell-ui": {
+        "hangMs": 15000,
+        "baselineMs": 120
+      },
+      "warmup-done": {
+        "hangMs": 60000,
+        "baselineMs": 1260
+      }
+    },
+    "warm": {
+      "shell-boot": {
+        "hangMs": 30000,
+        "baselineMs": 1547
+      },
+      "runner-ready": {
+        "hangMs": 30000,
+        "baselineMs": 320
+      },
+      "memory-graph-ready": {
+        "hangMs": 45000,
+        "baselineMs": 647
+      },
+      "evolve-ready": {
+        "hangMs": 45000,
+        "baselineMs": 1040
+      },
+      "api-ready": {
+        "hangMs": 60000,
+        "baselineMs": 1571
+      },
+      "jw-ready": {
+        "hangMs": 120000,
+        "baselineMs": 4814
+      },
+      "agent-ready": {
+        "hangMs": 180000,
+        "baselineMs": 8317
+      },
+      "shell-ui": {
+        "hangMs": 15000,
+        "baselineMs": 105
+      },
+      "warmup-done": {
+        "hangMs": 60000,
+        "baselineMs": 623
+      }
+    }
+  }
+}
