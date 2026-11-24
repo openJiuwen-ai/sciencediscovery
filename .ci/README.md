@@ -496,6 +496,8 @@ retry report keeps the case and the layer failed. The PR `pr` and merge-queue
 `merge` profiles do not retry a failed case, so their first failure remains the
 final result.
 
+The retry worktree is created from the committed `HEAD`. CI checkouts are clean by contract, while a local daily or release run refuses to retry when the parent checkout has uncommitted changes, so the retry cannot silently test a different tree.
+
 The retry policy intentionally includes product `FAIL` results in `daily` and
 `release` because those profiles validate paid live-model journeys against
 intermittent external conditions. The retry evidence makes recovered failures

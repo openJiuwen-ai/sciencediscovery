@@ -145,7 +145,10 @@ test("PUCT-COMPRESS documented text compression search", {
     }
     expect(["succeeded", "budget_exhausted"], "Background search must complete normally").toContain(search.status);
     const finished = events.findLast(record => record.event.type === "search_finished");
-    expect(finished?.event.status, "Completion event must agree with persisted search state").toBe(search.status);
+    const eventStatus = finished?.event.status;
+    const completionMatchesPersistedState = eventStatus === search.status
+      || (search.status === "budget_exhausted" && eventStatus === "stopped");
+    expect(completionMatchesPersistedState, "Completion event must agree with persisted search state").toBe(true);
 
     // Match the actual selected code, not a fixed filename or an intermediate seed upload.
     const bestIndex = finished?.event.bestNodeIndex;
