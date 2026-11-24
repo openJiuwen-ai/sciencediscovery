@@ -227,6 +227,13 @@ test('use-local-swarm-cache.sh populates once, reuses warm cache, cleans failure
   chmodSync(join(root, '.ci/use-local-swarm-cache.sh'), 0o755);
 
   const callsFile = join(root, 'setup-calls.log');
+  const uvCallsFile = join(root, 'uv-calls.log');
+  const binDir = join(root, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(join(binDir, 'uv'), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${uvCallsFile}"
+`, { mode: 0o755 });
   const stubScript = join(root, 'scripts/jiuwenswarm.sh');
   writeFileSync(stubScript, `#!/usr/bin/env bash
 set -euo pipefail
@@ -241,13 +248,19 @@ cat <<'EOF' > "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
+cat <<'EOF' > "$JIUWENSWARM_SRC/.venv/bin/python"
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start" "$JIUWENSWARM_SRC/.venv/bin/python"
 `, { mode: 0o755 });
 
   const cacheDir = join(root, 'ci-cache');
   const expectedTarget = join(cacheDir, 'jiuwenswarm', 'test-key-01', 'src');
+  const testPath = `${binDir}:${process.env.PATH ?? ''}`;
 
-  // Cold cache populates target, removes .git, creates .ready, and exports only JIUWENSWARM_SRC.
+  // Cold cache populates target, removes .git, pre-installs pytest under lock,
+  // creates .ready, and exports only JIUWENSWARM_SRC.
   const envCold = join(root, 'github-env-cold');
   writeFileSync(envCold, '');
   const cold = spawnSync('bash', [join(root, '.ci/use-local-swarm-cache.sh')], {
@@ -255,6 +268,7 @@ chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
     encoding: 'utf8',
     env: {
       ...process.env,
+      PATH: testPath,
       SD_CI_CACHE_DIR: cacheDir,
       CI_SWARM_CACHE_KEY: 'test-key-01',
       GITHUB_ENV: envCold,
@@ -262,12 +276,16 @@ chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
   });
   assert.equal(cold.status, 0, cold.stderr);
   assert.equal(readFileSync(callsFile, 'utf8').trim(), `setup|1|${expectedTarget}`);
+  assert.equal(
+    readFileSync(uvCallsFile, 'utf8').trim(),
+    `pip install --python ${expectedTarget}/.venv/bin/python pytest>=8.3.5`,
+  );
   assert.equal(existsSync(join(expectedTarget, '.git')), false);
   assert.equal(existsSync(join(expectedTarget, '.venv/bin/jiuwenswarm-start')), true);
   assert.equal(existsSync(join(cacheDir, 'jiuwenswarm', 'test-key-01', '.ready')), true);
   assert.equal(readFileSync(envCold, 'utf8'), `JIUWENSWARM_SRC=${expectedTarget}\n`);
 
-  // Warm cache hits fast path without re-running setup.
+  // Warm cache hits fast path without re-running setup or uv pip install.
   const envWarm = join(root, 'github-env-warm');
   writeFileSync(envWarm, '');
   const warm = spawnSync('bash', [join(root, '.ci/use-local-swarm-cache.sh')], {
@@ -275,6 +293,7 @@ chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
     encoding: 'utf8',
     env: {
       ...process.env,
+      PATH: testPath,
       SD_CI_CACHE_DIR: cacheDir,
       CI_SWARM_CACHE_KEY: 'test-key-01',
       GITHUB_ENV: envWarm,
@@ -282,6 +301,7 @@ chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start"
   });
   assert.equal(warm.status, 0, warm.stderr);
   assert.equal(readFileSync(callsFile, 'utf8').trim().split('\n').length, 1);
+  assert.equal(readFileSync(uvCallsFile, 'utf8').trim().split('\n').length, 1);
   assert.equal(readFileSync(envWarm, 'utf8'), `JIUWENSWARM_SRC=${expectedTarget}\n`);
 
   // Failed cold build cleans partial target and leaves GITHUB_ENV untouched.
