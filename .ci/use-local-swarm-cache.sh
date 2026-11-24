@@ -93,6 +93,16 @@ else
     exit 1
   fi
 
+  # Pre-install pytest for check:swarm-contract (.ci/run-research-python.sh contract)
+  # while holding the lock so concurrent UT/E2E jobs never mutate the shared venv.
+  if [[ -x "$target/.venv/bin/python" ]] && command -v uv >/dev/null 2>&1; then
+    (
+      export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+      [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]] && export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
+      uv pip install --python "$target/.venv/bin/python" "pytest>=8.3.5"
+    )
+  fi
+
   touch "$ready_marker"
   warm_failed=0
   rm -rf "$temp_home"
