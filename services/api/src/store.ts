@@ -5209,7 +5209,7 @@ export class SessionStore {
     sessionId: string,
     files: Array<Pick<WorkspaceFile, "modifiedAt" | "path" | "size">>,
     baseline?: ReadonlyMap<string, string>,
-    options: { scanComplete?: boolean } = {},
+    options: { scanComplete?: boolean; onMutation?: () => void } = {},
   ): Promise<Map<string, WorkspaceFileProvenanceSummary>> {
     if (isEvidenceSessionReadOnly(this.getSession(sessionId)) && !this.isResearchRestoring(sessionId)) {
       const summaries = new Map<string, WorkspaceFileProvenanceSummary>();
@@ -5324,7 +5324,12 @@ export class SessionStore {
           revisionId: revision.id,
         });
       }
-      if (changed) await this.saveCatalog();
+      if (changed) {
+        await this.saveCatalog();
+        // A preview must know whether its own scan moved the evidence revision,
+        // so it can avoid a second whole-tree walk for a write it just caused.
+        options.onMutation?.();
+      }
       return summaries;
     });
   }
@@ -7531,6 +7536,30 @@ export class SessionStore {
       exported.push({ streamId, events: await this.listRunStreamEvents(sessionId, runId, streamId) });
     }
     return exported;
+  }
+
+  /**
+   * How many events `exportRunStreams` would return, without materialising them.
+   *
+   * The `necessary` package profile drops its run streams and only keeps the count
+   * for the receipt (#1365). Reading every event into arrays first made a small
+   * package pay for the whole run history twice; this walks the same streams and
+   * counts their records one line at a time, so the count stays exact while the
+   * events themselves never accumulate.
+   */
+  async countRunStreamEvents(sessionId: string, runId: string, excludeStreamIds?: ReadonlySet<string>): Promise<number> {
+    const names = await readdir(this.runStreamDir(sessionId, runId)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    const streams = new Set([MAIN_RUN_STREAM, ...names.filter((name) => name.endsWith(".jsonl")).map((name) => name.slice(0, -6))]);
+    let count = 0;
+    for (const streamId of streams) {
+      if (excludeStreamIds?.has(streamId)) continue;
+      if (streamId === MAIN_RUN_STREAM) count += (await this.readArray<SessionRunEvent>(this.sessionRunEventsPath(sessionId, runId))).length;
+      for await (const _record of this.streamLines(this.runStreamPath(sessionId, runId, streamId))) count++;
+    }
+    return count;
   }
 
   /** Restore archived observations without publishing live events or replaying work. */

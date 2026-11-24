@@ -1462,6 +1462,10 @@ test("a cursor read returns only the tail of a run stream, and a typed read only
   const main = exported.find((stream) => stream.streamId === "main");
   assert.deepEqual(main?.events, all, "the exported main stream is the full ordered history");
   assert.ok(exported.some((stream) => stream.streamId === "tool-call-1" && stream.events.length === 2));
+  // The necessary profile keeps only this count (#1365), so it must agree exactly
+  // with the streams a complete export materialises.
+  assert.equal(await store.countRunStreamEvents(session.id, run.id),
+    exported.reduce((total, stream) => total + stream.events.length, 0));
 });
 
 test("SessionStore serializes concurrent model usage writes without losing records", async (context) => {

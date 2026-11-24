@@ -1548,17 +1548,27 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // Size from metadata before the task reads anything: the preview walks the same
           // closure without loading payloads, so an over-cap selection is refused up
           // front instead of after the read it was supposed to avoid.
-          const sized = await previewResearchPackage(projectId, sessionId, body.level,
-            body.filePaths ? new Set(body.filePaths as string[]) : undefined,
-            body.level === "complete" && body.includeFullTrajectory === true,
-            body.level === "complete" && body.includeFullMemoryGraph === true);
-          if ((sized.archiveBytes ?? 0) > sizeCap)
-            return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
+          const preflightStarted = performance.now();
+          let sized!: Awaited<ReturnType<typeof previewResearchPackage>>;
+          let preflightOk = false;
           try {
-            assertResearchPackageExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
-          } catch (error) {
-            return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
-              (error as { code?: string }).code);
+            sized = await previewResearchPackage(projectId, sessionId, body.level,
+              body.filePaths ? new Set(body.filePaths as string[]) : undefined,
+              body.level === "complete" && body.includeFullTrajectory === true,
+              body.level === "complete" && body.includeFullMemoryGraph === true);
+            if ((sized.archiveBytes ?? 0) > sizeCap)
+              return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
+            try {
+              assertResearchPackageExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+            } catch (error) {
+              return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+                (error as { code?: string }).code);
+            }
+            preflightOk = true;
+          } finally {
+            apiLog.info("research-package.stage", { projectId, sessionId, level: body.level, mode: "export",
+              phase: "preflight", ms: Math.round((performance.now() - preflightStarted) * 10) / 10, ok: preflightOk,
+              ...(sized?.archiveBytes !== undefined ? { bytes: sized.archiveBytes } : {}) });
           }
           try {
             const task = await packageExports.start({
@@ -1566,7 +1576,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               selectedFiles: body.filePaths as string[] | undefined,
               includeFullTrajectory: body.level === "complete" && body.includeFullTrajectory === true,
               includeFullMemoryGraph: body.level === "complete" && body.includeFullMemoryGraph === true,
-              revision: body.revision, allowOverCap,
+              revision: body.revision, observedRevision: sized.revision, allowOverCap,
             }, `${packageFileName}.sdresearch`);
             return sendJson(response, 202, task);
           } catch (error) { return sendError(response, 409, error instanceof Error ? error.message : "Unable to start export"); }
@@ -1624,7 +1634,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if (researchPackageMatch[2] === "preview") {
             try {
               if (sessionId && url.searchParams.get("defaults") === "1") {
-                exportPreviews.watch(projectId, sessionId);
+                // Register the watcher without warming: `defaults()` below is
+                // this request's build, and a warm first would walk the evidence
+                // revision twice for the same dialog.
+                exportPreviews.watch(projectId, sessionId, false);
                 return sendJson(response, 200, await exportPreviews.defaults(projectId, sessionId, true));
               }
               return sendJson(response, 200, await previewResearchPackage(projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph));
@@ -1651,21 +1664,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const sizeCap = allowOverCap ? RESEARCH_PACKAGE_MAX_MAX_BYTES : RESEARCH_PACKAGE_MAX_BYTES;
           // Size from metadata first: the preview measures the same closure without
           // reading payloads, so the refusal costs a walk instead of the whole read.
-          const sized = await previewResearchPackage(projectId, sessionId, level, selectedFiles,
-            includeFullTrajectory, includeFullMemoryGraph);
-          if ((sized.archiveBytes ?? 0) > sizeCap)
-            return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
-          // The archive streams straight into the response: with the 5 GiB default the old
-          // path held payload + tar + gzip and then copied the archive again for the body,
-          // which OOMed the API on a package the cap allowed (#1211 F2).
-          // This route writes the response, not a file: only its memory headroom is
-          // charged, so a short data volume cannot refuse a streamed download (#1216
-          // review 1).
+          const preflightStarted = performance.now();
+          let sized!: Awaited<ReturnType<typeof previewResearchPackage>>;
+          let preflightOk = false;
           try {
-            assertResearchPackageResponseExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
-          } catch (error) {
-            return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
-              (error as { code?: string }).code);
+            sized = await previewResearchPackage(projectId, sessionId, level, selectedFiles,
+              includeFullTrajectory, includeFullMemoryGraph);
+            if ((sized.archiveBytes ?? 0) > sizeCap)
+              return sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, "RESEARCH_PACKAGE_TOO_LARGE");
+            // The archive streams straight into the response: with the 5 GiB default the old
+            // path held payload + tar + gzip and then copied the archive again for the body,
+            // which OOMed the API on a package the cap allowed (#1211 F2).
+            // This route writes the response, not a file: only its memory headroom is
+            // charged, so a short data volume cannot refuse a streamed download (#1216
+            // review 1).
+            try {
+              assertResearchPackageResponseExportCapacity(await measurePackageCapacity(store.dataDir), sized.archiveBytes ?? 0);
+            } catch (error) {
+              return sendError(response, 507, error instanceof Error ? error.message : "Insufficient capacity",
+                (error as { code?: string }).code);
+            }
+            preflightOk = true;
+          } finally {
+            apiLog.info("research-package.stage", { projectId, sessionId, level, mode: "download",
+              phase: "preflight", ms: Math.round((performance.now() - preflightStarted) * 10) / 10, ok: preflightOk,
+              ...(sized?.archiveBytes !== undefined ? { bytes: sized.archiveBytes } : {}) });
           }
           const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, undefined,
             includeFullTrajectory, includeFullMemoryGraph, undefined, { streamObjects: true });
@@ -1676,11 +1699,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             "content-type": "application/octet-stream",
             "x-content-type-options": "nosniff",
           });
+          const writeStarted = performance.now();
+          let writeOk = false;
           try {
             await writeResearchPackage(input, response, sizeCap);
+            writeOk = true;
           } catch (error) {
             // Headers are out already; a truncated body is the honest signal the client gets.
             response.destroy(error instanceof Error ? error : undefined);
+          } finally {
+            apiLog.info("research-package.stage", { projectId, sessionId, level, mode: "download",
+              phase: "write", ms: Math.round((performance.now() - writeStarted) * 10) / 10, ok: writeOk });
           }
           return;
         }

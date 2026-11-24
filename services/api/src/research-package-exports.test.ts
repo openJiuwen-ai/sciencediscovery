@@ -189,3 +189,18 @@ test("cancel of an unknown task is not found", async () => {
     assert.equal(await exports.cancel("12345678-1234-1234-1234-123456789abc", "project"), undefined);
   } finally { await exports.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test("an export task reuses the revision observed while sizing and only re-walks after writing", async () => {
+  // #1365: the HTTP route has just sized the same selection, so walking the whole
+  // session tree again before packaging is repetition. The post-write walk stays,
+  // because it is what refuses an archive the evidence moved under.
+  const root = await mkdtemp(join(tmpdir(), "research-exports-"));
+  let reads = 0;
+  const exports = new ResearchPackageExports(root, async () => { reads++; return "r1"; }, bytesCreated([1]));
+  try {
+    const task = await exports.start({ ...options, revision: "r1", observedRevision: "r1" }, "observed.sdresearch");
+    await exports.close();
+    assert.equal((await exports.get(task.id, "project"))?.status, "completed");
+    assert.equal(reads, 1, "one post-write walk, with the sizing walk reused as the preflight");
+  } finally { await exports.close(); await rm(root, { recursive: true, force: true }); }
+});
