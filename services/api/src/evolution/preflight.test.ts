@@ -90,6 +90,11 @@ async function codes(overrides: Partial<EvolveGoal> = {}, extra: {
   return issues.map((issue) => issue.code);
 }
 
+/** The full refusal, for the cases whose wording is part of the contract. */
+async function findings(overrides: Partial<EvolveGoal> = {}): Promise<Array<{ code: string; fix: string; message: string }>> {
+  return preflight({ casHas: async () => true, goal: goal(overrides), model: MODEL, sandbox: SANDBOX });
+}
+
 type DatasetMeasure = Extract<ScorecardCriterion["measure"], { kind: "dataset_metric" }>;
 
 /** Rewrite the one criterion's measure, keeping the rest of the card intact. */
@@ -207,6 +212,34 @@ test("expansions that do not divide by workers are refused", async () => {
   assert.ok(uneven.includes("expansions_not_divisible"));
   const even = await codes({ budget: { ...goal().budget, expansions: 6, workers: 3 } });
   assert.equal(even.includes("expansions_not_divisible"), false);
+});
+
+test("a budget above the stated maximum is refused with a readable fix", async () => {
+  // The dialog states 1–40 expansions and 1–8 workers; this gate applies the
+  // same caps. A count is not a spend budget, so the refusal names the cap and
+  // the remedy, and the test reads the text rather than only the code.
+  // `describe` in proposal.ts composes the user-facing refusal as
+  // `${message}（${fix}）`; assert that string, so a remedy in both fields fails.
+  const composed = (issue: { message: string; fix: string }) => `${issue.message}（${issue.fix}）`;
+  const expansions = await findings({ budget: { ...goal().budget, expansions: 41, workers: 1 } });
+  assert.deepEqual(expansions, [{
+    code: "expansions_too_high",
+    fix: "use at most 40 expansions",
+    message: "41 expansions is above the 40-expansion maximum",
+  }]);
+  assert.equal(composed(expansions[0]!),
+    "41 expansions is above the 40-expansion maximum（use at most 40 expansions）");
+  // 36 expansions over 9 workers satisfies the wave and divisibility rules, so
+  // the worker maximum is the only reason to refuse it.
+  const workers = await findings({ budget: { ...goal().budget, expansions: 36, workers: 9 } });
+  assert.deepEqual(workers, [{
+    code: "workers_too_high",
+    fix: "use at most 8 workers",
+    message: "9 workers is above the 8-worker maximum",
+  }]);
+  assert.equal(composed(workers[0]!), "9 workers is above the 8-worker maximum（use at most 8 workers）");
+  // The bounds themselves are accepted.
+  assert.deepEqual(await codes({ budget: { ...goal().budget, expansions: 40, workers: 8 } }), []);
 });
 
 test("a run with no isolation is refused rather than run unconfined", async () => {

@@ -2194,6 +2194,13 @@
   cursor: pointer;
 }
 .evolve-json-budget > summary::-webkit-details-marker { display: none; }
+/* Keyboard reach, shown: the summary is a control, so it gets the same visible
+   focus treatment as the other controls rather than the browser's thin ring. */
+.evolve-json-budget > summary:focus-visible {
+  outline: 2px solid var(--primary, #1476ff);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
 .evolve-json-budget > summary h4 {
   grid-column: 1;
   display: inline;

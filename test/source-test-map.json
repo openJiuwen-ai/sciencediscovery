@@ -264,6 +264,18 @@
       ]
     },
     {
+      "source": "packages/schema/src/evolve-budget.ts",
+      "risk": "P1",
+      "owner": "schema",
+      "tests": [
+        {
+          "source": "packages/schema/src/evolve-budget.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "packages/idea-tree/src/contract.ts",
       "risk": "P1",
       "owner": "idea-tree",
