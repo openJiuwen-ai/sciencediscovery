@@ -4,13 +4,13 @@
 # 快速上手：
 #   cd <repo>
 #   # 日常出包（指定仓库目录，推荐）
-#   SD_REPO=E:\\package\\sd-0.4.0-rc1 bash scripts/package-sd-windows.sh
+#   SD_REPO=E:\\package\\sd-0.4.0 bash scripts/package-sd-windows.sh
 #   # 全链路默认目录（脚本所在仓库本身）
 #   bash scripts/package-sd-windows.sh
 #   # 从某个阶段续跑：code | data | sea | dist
-#   SD_REPO=E:\\package\\sd-0.4.0-rc1 bash scripts/package-sd-windows.sh dist
+#   SD_REPO=E:\\package\\sd-0.4.0 bash scripts/package-sd-windows.sh dist
 #   # 挂独立进程（关终端/退 WorkBuddy 都照跑，日志落盘带 PKG_EXIT 终态）
-#   SD_REPO=E:\\package\\sd-0.4.0-rc1 bash scripts/package-sd-windows.sh dist --detach
+#   SD_REPO=E:\\package\\sd-0.4.0 bash scripts/package-sd-windows.sh dist --detach
 #   # 强制全量重来（忽略 stage 缓存）
 #   bash scripts/package-sd-windows.sh --force
 #

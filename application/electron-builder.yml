@@ -48,7 +48,7 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: ScienceDiscovery
-  artifactName: ScienceDiscovery-0.4.0.rc1-win-x64-setup.${ext}
+  artifactName: ScienceDiscovery-${version}-win-x64-setup.${ext}
   # Installer presentation tweaks (progress bar behavior) live in
   # build/installer.nsh.
   include: build/installer.nsh
