@@ -332,6 +332,7 @@ export const ZH = {
     showMore: (count: number) => `显示更早的 ${count} 个会话`,
     /** The rule a folded Project states above its page: the newest N are shown. */
     pageRule: (count: number) => `最近 ${count} 个`,
+    noMatch: "没有符合筛选条件的会话。",
     filtersLabel: "筛选",
     filterScopeCurrent: "当前项目",
     filterScopeAll: "全部项目",

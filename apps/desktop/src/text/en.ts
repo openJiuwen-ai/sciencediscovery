@@ -341,6 +341,7 @@ export const EN: Text = {
     showMore: (count: number) => `Show ${count} older ${count === 1 ? "Session" : "Sessions"}`,
     /** The rule a folded Project states above its page: the newest N are shown. */
     pageRule: (count: number) => `Latest ${count}`,
+    noMatch: "No Session matches the current filter.",
     filtersLabel: "Filters",
     filterScopeCurrent: "Current project",
     filterScopeAll: "All projects",
