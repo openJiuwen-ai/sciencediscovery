@@ -41,6 +41,11 @@ const DAY_MS = 86_400_000;
 const PAGE_SIZES = [10, 30, 50, 100] as const;
 /** The ledger endpoint's own ceiling; one request fills several UI pages. */
 const LEDGER_CHUNK = 100;
+/** The most rows the page will read or show. A busy account's spending history
+ *  can be long, and the UI is a reading surface, not an export: the database
+ *  keeps the same ceiling per kind, so this is the whole history the page ever
+ *  asks for. */
+export const MAX_LEDGER_ROWS = 1000;
 /** Guard against a page number that would walk an unreasonably long ledger. */
 const MAX_CHUNK_ROUNDS = 20;
 
@@ -62,6 +67,27 @@ function formatNumber(value: number): string {
  *  separator in Chinese. */
 function formatCredits(value: number): string {
   return value.toLocaleString("zh-CN", { maximumFractionDigits: 3, minimumFractionDigits: 3 });
+}
+
+/** The three credit figures the summary reads, derived from the same
+ *  milli-credit integers so they always add up: available + spent = earned.
+ *  The server reports `totalSpent` too, but an in-flight call holds credits the
+ *  balance no longer shows; deriving the spend from earned − available makes
+ *  the page's arithmetic true at every moment, which is what the summary is
+ *  for. Rounding happens once, on display, so the error cannot exceed the
+ *  milli-credit unit. */
+export interface CreditTotals {
+  available: number;
+  earned: number;
+  spent: number;
+}
+
+export function creditTotals(balanceMilli: number, earnedMilli: number): CreditTotals {
+  return {
+    available: balanceMilli / 1000,
+    earned: earnedMilli / 1000,
+    spent: Math.max(0, earnedMilli - balanceMilli) / 1000,
+  };
 }
 
 function formatTokens(value: number): string {
@@ -130,7 +156,10 @@ export function AccountPage({
   const [jump, setJump] = useState("");
   const [sessions, setSessions] = useState<AccountSessionRow[]>([]);
   const [records, setRecords] = useState<AccountUsageRecord[]>([]);
-  const [totalEarned, setTotalEarned] = useState(0);
+  /** Milli-credit figures the summary derives from, so the three numbers it
+   *  prints stay additive (see `creditTotals`). */
+  const [credit, setCredit] = useState<{ balance: number; earned: number }>();
+  const [ledgerCapped, setLedgerCapped] = useState(false);
   /** The service's own count of daily check-ins. Counting the loaded ledger page
    *  instead loses today's row once enough newer usage rows fill it. */
   const [checkinSummary, setCheckinSummary] = useState<{ total: number; lastDate: string | null }>();
@@ -148,6 +177,14 @@ export function AccountPage({
   // `onAccountChange` trigger another round of requests.
   const accountRef = useRef(account);
   accountRef.current = account;
+  // The callbacks are read through refs for the same reason. A caller whose
+  // own handlers change identity (the shell's do, whenever the workspace
+  // updates) must not turn this page's one load into a polling loop that
+  // blanks the ledger every few seconds.
+  const onAccountChangeRef = useRef(onAccountChange);
+  onAccountChangeRef.current = onAccountChange;
+  const onSignOutRef = useRef(onSignOut);
+  onSignOutRef.current = onSignOut;
   const accessToken = account.accessToken;
 
   // The ledger is cursor-paginated: the newest-first chunk can be extended as
@@ -159,6 +196,9 @@ export function AccountPage({
    *  a cursor read starting at the same time would fetch that page again and
    *  append a duplicate copy of the newest rows. */
   const reloadingRef = useRef(false);
+  /** How many rows are already held; the cap is decided per fetch, not by a
+   *  render, because two cursor reads can be in flight from different triggers. */
+  const loadedCountRef = useRef(0);
   const rowsRef = useRef<AccountLedgerRow[]>([]);
   rowsRef.current = ledger;
   const filterRef = useRef<Filter>(filter);
@@ -166,12 +206,22 @@ export function AccountPage({
 
   const fetchLedgerChunk = useCallback(async (): Promise<AccountLedgerRow[]> => {
     if (loadingRef.current || reloadingRef.current) return [];
+    const room = MAX_LEDGER_ROWS - loadedCountRef.current;
+    if (room <= 0) {
+      endRef.current = true;
+      setLedgerEnd(true);
+      setLedgerCapped(true);
+      return [];
+    }
     loadingRef.current = true;
     try {
-      const chunk = await listAccountLedger(accessToken, LEDGER_CHUNK, cursorRef.current ?? undefined);
+      const chunk = await listAccountLedger(accessToken, Math.min(LEDGER_CHUNK, room), cursorRef.current ?? undefined);
       cursorRef.current = chunk.nextBeforeId;
-      endRef.current = chunk.nextBeforeId === null;
+      loadedCountRef.current += chunk.items.length;
+      const capped = loadedCountRef.current >= MAX_LEDGER_ROWS;
+      endRef.current = chunk.nextBeforeId === null || capped;
       setLedgerEnd(endRef.current);
+      setLedgerCapped(capped);
       setLedger((previous) => [...previous, ...chunk.items]);
       return chunk.items;
     } finally {
@@ -200,7 +250,9 @@ export function AccountPage({
     reloadingRef.current = true;
     cursorRef.current = null;
     endRef.current = false;
+    loadedCountRef.current = 0;
     setLedgerEnd(false);
+    setLedgerCapped(false);
     setLedger([]);
     try {
       const [me, ledgerPage, sessionPage, usage] = await Promise.all([
@@ -210,7 +262,7 @@ export function AccountPage({
         fetchAccountUsage(accessToken),
       ]);
       const current = accountRef.current;
-      onAccountChange({
+      onAccountChangeRef.current({
         ...current,
         avatarUrl: me.user.avatarUrl ?? undefined,
         balanceCredits: me.credit.balanceCredits,
@@ -218,26 +270,35 @@ export function AccountPage({
         email: me.user.email?.trim() || undefined,
       });
       cursorRef.current = ledgerPage.nextBeforeId;
-      endRef.current = ledgerPage.nextBeforeId === null;
+      loadedCountRef.current = ledgerPage.items.length;
+      const capped = ledgerPage.items.length >= MAX_LEDGER_ROWS;
+      endRef.current = ledgerPage.nextBeforeId === null || capped;
       setLedgerEnd(endRef.current);
+      setLedgerCapped(capped);
       setLedger(ledgerPage.items);
       setSessions(sessionPage.items);
       setRecords(usage.records);
-      setTotalEarned(Math.floor(me.credit.totalEarnedCredits));
+      // The summary reads milli-credits from the same response as the balance,
+      // so the three figures cannot come from different snapshots.
+      setCredit({ balance: me.credit.balance, earned: me.credit.totalEarned });
       setCheckinSummary(me.checkins);
     } catch (reason) {
-      if (reason instanceof AccountApiError && reason.denied) onSignOut();
+      if (reason instanceof AccountApiError && reason.denied) onSignOutRef.current();
       else setError(reason instanceof Error ? reason.message : TEXT.account.loadFailed);
     } finally {
       reloadingRef.current = false;
     }
-  }, [accessToken, onAccountChange, onSignOut]);
+  }, [accessToken]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const balance = account.balanceCredits;
+  const totals = creditTotals(
+    credit?.balance ?? Math.round(account.balanceCredits * 1000),
+    credit?.earned ?? Math.round(account.balanceCredits * 1000),
+  );
+  const balance = totals.available;
   const tokenEstimate = balance * 40_000;
   const today = chinaDay();
   const checkedInToday = checkinSummary
@@ -288,8 +349,10 @@ export function AccountPage({
 
   // The page shows one spend figure, and it is the one the user can check:
   // everything granted minus what is still available. Summing the loaded
-  // ledger rows would stop at the page size and disagree with itself.
-  const totalSpent = Math.max(0, totalEarned - balance);
+  // ledger rows would stop at the page size and disagree with itself. Both
+  // operands come from `creditTotals`, so available + spent = earned holds to
+  // the milli-credit, and display rounding cannot move it past 0.001.
+  const totalSpent = totals.spent;
 
   async function saveName(): Promise<void> {
     const next = name.trim();
@@ -300,10 +363,13 @@ export function AccountPage({
     setBusy(true);
     setNameError("");
     try {
+      // One press, one write: the server is the record of the name, so a later
+      // sign-in (which re-sends the HUAWEI profile) keeps this value.
       const user = await updateAccountProfile(accessToken, { displayName: next });
       onAccountChange({ ...accountRef.current, displayName: user.displayName?.trim() || next });
       setName(next);
       setEditingName(false);
+      setNotice(TEXT.account.saved);
     } catch (reason) {
       setNameError(reason instanceof Error ? reason.message : TEXT.account.saveFailed);
     } finally {
@@ -343,14 +409,21 @@ export function AccountPage({
           </div>
           <div className="account-hero-name">
             {editingName ? (
-              <div className="account-name-editor">
+              // A form, so Enter submits the same write; the button calls it
+              // directly. Either gesture is one press, one request.
+              <form
+                className="account-name-editor"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!busy) void saveName();
+                }}
+              >
                 <input
                   autoFocus
                   className="field-input account-name-input"
                   maxLength={24}
                   onChange={(event) => { setName(event.target.value); setNameError(""); }}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") void saveName();
                     if (event.key === "Escape") {
                       setEditingName(false);
                       setName(account.displayName);
@@ -362,12 +435,14 @@ export function AccountPage({
                 <button
                   className="account-save"
                   disabled={busy || name.trim() === account.displayName || name.trim().length < 1}
-                  onClick={() => void saveName()}
+                  onClick={() => {
+                    if (!busy) void saveName();
+                  }}
                   type="button"
                 >
                   {TEXT.account.saveShort}
                 </button>
-              </div>
+              </form>
             ) : (
               <div className="account-name-view">
                 <h1>{account.displayName}</h1>
@@ -408,7 +483,7 @@ export function AccountPage({
           </div>
           <div className="account-metric">
             <span>{TEXT.account.earned}</span>
-            <strong>{formatCredits(totalEarned)}</strong>
+            <strong>{formatCredits(totals.earned)}</strong>
           </div>
           <div className="account-metric">
             <span>{TEXT.account.spent}</span>
@@ -509,6 +584,7 @@ export function AccountPage({
               </label>
             </div>
           </div>
+          {ledgerCapped ? <p className="account-hint">{TEXT.account.ledgerCapped(MAX_LEDGER_ROWS)}</p> : null}
         </section>
 
         <section className="account-section">

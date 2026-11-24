@@ -35,7 +35,10 @@
 .account-scroll {
   flex: 1;
   width: 100%;
-  padding: 30px clamp(24px, 3vw, 44px) 56px;
+  /* The same 1120px reading column 设置 uses: the page owns the window, but its
+     content stops growing at a comfortable line length and centres instead of
+     stretching the metric cards and ledger rows from edge to edge. */
+  padding: 42px max(48px, calc((100% - 1120px) / 2)) 56px;
   overflow: auto;
 }
 
@@ -128,9 +131,14 @@
 }
 
 /* Editing keeps the nickname's own typography: no field box, so no rules are
-   left behind once the input is replaced by the saved name. */
-.account-name-input,
-.account-name-input:focus {
+   left behind once the input is replaced by the saved name.
+   Scoped through the editor so this wins over the shared `.field-input` rules
+   regardless of stylesheet order: an input whose width changed when it lost
+   focus moved the 保存 button out from under the pointer, which is why the
+   first press used to do nothing and the second one saved. */
+.account-name-editor .account-name-input,
+.account-name-editor .account-name-input:focus {
+  flex: none;
   width: 240px;
   padding: 0;
   border: 0;
@@ -486,6 +494,7 @@
 .account-signout:hover { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
 
 @media (max-width: 760px) {
+  .account-scroll { padding: 28px 24px 40px; }
   .account-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-profile { grid-template-columns: 1fr; }
   .account-profile-actions { min-height: 0; }

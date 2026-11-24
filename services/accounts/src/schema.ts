@@ -61,6 +61,8 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     UNIQUE (biz_type, biz_id)
   )`,
   `CREATE INDEX IF NOT EXISTS credit_ledger_user ON credit_ledger (user_id, created_at DESC)`,
+  // Newest-first pruning (the per-kind ceiling in ledger.ts) walks this order.
+  `CREATE INDEX IF NOT EXISTS credit_ledger_user_id ON credit_ledger (user_id, id DESC)`,
   `CREATE TABLE IF NOT EXISTS credit_holds (
     request_id     UUID PRIMARY KEY,
     user_id        BIGINT NOT NULL,
@@ -125,6 +127,20 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     credits      BIGINT NOT NULL,
     PRIMARY KEY (user_id, checkin_date)
   )`,
+  // The check-in table is the durable count, so pruning old CHECKIN ledger rows
+  // cannot reset a user's seven-day cycle. Seed it from the ledger the first
+  // time this version runs against an existing database. Backfilled rows keep
+  // `streak = 0` — the ledger has no consecutive-day history — while sign-in
+  // writes the real streak for every row it creates.
+  `INSERT INTO checkins (user_id, checkin_date, streak, credits)
+   SELECT user_id,
+          substring(biz_id from '[0-9]{4}-[0-9]{2}-[0-9]{2}')::date,
+          0,
+          delta
+     FROM credit_ledger
+    WHERE biz_type = 'CHECKIN'
+      AND biz_id ~ '^[0-9]+:[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+   ON CONFLICT (user_id, checkin_date) DO NOTHING`,
   `CREATE TABLE IF NOT EXISTS auth_tickets (
     jti        UUID PRIMARY KEY,
     openid     VARCHAR(64) NOT NULL,

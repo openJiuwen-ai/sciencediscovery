@@ -187,9 +187,12 @@ function sidebarToggle(open: boolean) {
   return toggle;
 }
 function assertSetup() {
-  // With no account and no model the entry page offers both ways in; the
-  // workspace stays closed until one of them succeeds.
-  assert.equal(root().findAllByProps({ className: "login-tabs" }).length, 1);
+  // With no account and no model the entry page is the sign-in step; the
+  // bring-your-own-model route sits beside it as a button rather than as a
+  // tab, and the workspace stays closed until one of them succeeds.
+  assert.equal(root().findAllByProps({ className: "login-tabs" }).length, 0);
+  assert.equal(root().findAllByProps({ className: "login-entry" }).length, 1);
+  assert.equal(root().findAllByProps({ className: "login-skip-button" }).length, 1);
   assert.ok(root().findAllByType("h1").some(node => text(node) === TEXT.login.title));
   assert.equal(root().findAllByProps({ className: "composer-model-pill" }).length, 0);
   assert.equal(root().findAllByType("div").filter(node => String(node.props.className).split(" ").includes("app-shell")).length, 0);

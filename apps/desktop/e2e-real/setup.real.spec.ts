@@ -53,10 +53,10 @@ test("the first-run entry tests a real provider before unlocking the workspace",
 
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
   await expect(page.locator(".app-shell")).toHaveCount(0);
-  await page.getByRole("tab", { name: "自定义模型" }).click();
-  await expect(page.getByRole("heading", { name: "配置你的模型" })).toBeVisible();
+  await page.getByRole("button", { name: "暂不登录，配置自定义模型" }).click();
+  await expect(page.getByRole("heading", { name: "自定义模型配置" })).toBeVisible();
   await expect(page.getByLabel("基础URL")).toBeVisible();
   await expect(page.getByPlaceholder("请输入 API key")).toBeVisible();
   await expect(page.getByPlaceholder("例如 deepseek-chat")).toBeVisible();

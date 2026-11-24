@@ -4692,6 +4692,20 @@ body.is-resizing {
   border-color: var(--primary-border-soft);
 }
 
+/* The credits model belongs to the account. Signed out it stays on the list —
+   it comes back with the next sign-in — but nothing about it is actionable, so
+   the row is muted and its identity no longer answers a hover. */
+.model-row.is-unavailable {
+  border-color: #ededed;
+  background: #fafafa;
+}
+
+.model-row.is-unavailable .model-row-main { cursor: default; }
+.model-row.is-unavailable .model-row-main:hover strong { color: #a6a6a6; }
+.model-row.is-unavailable .model-row-title strong,
+.model-row.is-unavailable .model-row-main small { color: #a6a6a6; }
+.model-row.is-unavailable .model-row-mark { opacity: .45; }
+
 .model-row-detail {
   flex: 0 0 100%;
   display: grid;

@@ -72,6 +72,16 @@
   letter-spacing: 0;
 }
 
+/* Step one's copy is one paragraph — the credit benefit and the redirect
+   notice read together — so it reads in a single colour. It sits directly
+   under the title: the heading's 16px bottom margin is the whole gap. */
+.login-lead.is-ink { color: var(--login-ink); }
+
+/* The entry block is set a little below the page's top edge rather than at the
+   start of the reading column: the sign-in question should sit around the
+   upper third, not pressed against the brand. */
+.login-entry { padding-top: clamp(40px, 9.8vh, 112px); }
+
 .login-lead {
   margin: 0;
   color: var(--login-muted);
@@ -83,6 +93,48 @@
   max-width: 480px;
   margin-top: 48px;
 }
+
+/* Step one offers both ways in at once: the account button leads, and the
+   bring-your-own-model route sits beside it as a real button rather than a
+   footnote-style link below. The row is set further down so the copy above it
+   and the buttons read as one block, clear of the page's top edge. */
+.login-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 12px;
+  max-width: 600px;
+  margin-top: 92px;
+}
+
+.login-entry-primary {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.login-skip-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 20px;
+  border: 1px solid var(--login-line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--login-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease;
+}
+
+.login-skip-button:hover { border-color: #a8a8a8; background: #f6f6f6; }
+.login-skip-button:focus-visible { outline: 2px solid var(--login-ink); outline-offset: 2px; }
 
 /* ---------- entry choice: HUAWEI ID or a bring-your-own model ---------- */
 .login-tabs {
@@ -179,7 +231,7 @@
   min-height: 40px;
   padding: 0 24px;
   border: 1px solid var(--login-line);
-  border-radius: 999px;
+  border-radius: 6px;
   background: #fff;
   color: var(--login-ink);
   font: inherit;
@@ -212,7 +264,7 @@
   min-height: 40px;
   padding: 0 24px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 6px;
   background: var(--login-ink);
   color: #fff;
   font: inherit;

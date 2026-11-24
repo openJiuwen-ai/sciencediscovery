@@ -36,15 +36,20 @@ test("a workspace with no model opens the gate, and the shell waits for a tested
 
   await page.goto("/");
 
-  // No model and no account: the entry page is the whole app, offering the
-  // account path and the bring-your-own-model path.
-  await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+  // No model and no account: the entry page is the whole app. Step one is the
+  // HUAWEI sign-in; skipping it leads to the model page, which cannot be
+  // skipped, and the shell does not exist behind either until a model is tested.
+  await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
+  await expect(page.getByText("使用华为账号登录成功后即可获得积分", { exact: false })).toBeVisible();
   await expect(page.locator(".app-shell")).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "自定义模型" }).click();
-  await expect(page.getByRole("heading", { name: "配置你的模型" })).toBeVisible();
+  await page.getByRole("button", { name: "暂不登录，配置自定义模型" }).click();
+  await expect(page.getByRole("heading", { name: "自定义模型配置" })).toBeVisible();
   const enter = page.getByRole("button", { name: "保存并进入工作台" });
-  await expect(page.getByRole("heading", { name: "配置你的模型" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "自定义模型配置" })).toBeVisible();
+  // The model step is mandatory: no skip, no tabs back to the sign-in step.
+  await expect(page.getByRole("button", { name: "暂不登录，配置自定义模型" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "自定义模型" })).toHaveCount(0);
 
   await page.getByLabel("基础URL").fill("http://127.0.0.1:9999/v1");
   await page.getByPlaceholder("请输入 API key").fill("sk-e2e");

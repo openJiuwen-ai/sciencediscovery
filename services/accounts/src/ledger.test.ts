@@ -28,7 +28,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import type { Queryable } from "./db.js";
-import { appendLedger, ledgerAfter } from "./ledger.js";
+import { appendLedger, ledgerAfter, LEDGER_MAX_ROWS_PER_KIND } from "./ledger.js";
 import { PostgresStore } from "./store.js";
 
 type Row = Record<string, unknown>;
@@ -94,6 +94,25 @@ test("a repeated (biz_type, biz_id) writes nothing and reports no row", async ()
   assert.equal(row, undefined);
 });
 
+test("a written row prunes both kinds past the per-user ceiling", async () => {
+  const { queryable, calls } = fakeQueryable((sql) => {
+    if (has(sql, "SELECT balance_after FROM credit_ledger")) return [{ balance_after: 700_000 }];
+    if (has(sql, "INSERT INTO credit_ledger")) return [{ id: 2000, user_id: 1, delta: -1, balance_after: 699_999, biz_type: "LLM_USAGE", biz_id: "r-2", remark: "m", created_at: new Date() }];
+    return [];
+  });
+
+  await appendLedger(queryable, { userId: 1, delta: -1, bizType: "LLM_USAGE", bizId: "r-2", remark: "m" });
+
+  const deletes = calls.filter((call) => has(call.sql, "DELETE FROM credit_ledger"));
+  assert.equal(deletes.length, 2, "spent and earned rows are capped independently");
+  for (const call of deletes) {
+    assert.equal(call.values[1], LEDGER_MAX_ROWS_PER_KIND);
+    assert.match(call.sql, /ORDER BY id DESC OFFSET \$2 LIMIT 1/u);
+  }
+  assert.ok(deletes.some((call) => has(call.sql, "delta < 0")), "the spent history is capped");
+  assert.ok(deletes.some((call) => has(call.sql, "delta >= 0")), "the earned history is capped, zero deltas included");
+});
+
 test("an admin adjustment records the running total, not the spendable balance", async () => {
   const ledgerRow: Row = {
     id: 12, user_id: 1, delta: 41_000, balance_after: 741_000,
@@ -122,4 +141,34 @@ test("an admin adjustment records the running total, not the spendable balance",
   assert.ok(accountUpdate, "the account row was updated");
   assert.equal(accountUpdate.values[1], 41_000, "balance moves by the delta, not to an absolute value");
   assert.ok(!accountUpdate.sql.includes("balance = $2"), "balance is never set to the ledger total");
+});
+
+test("sign-in keeps a saved nickname instead of overwriting it with the HUAWEI profile", async () => {
+  const userRaw: Row = {
+    id: 1, openid: "openid-1", display_name: "研究者", avatar_url: null, email: null,
+    status: 0, created_at: new Date("2026-03-01T08:00:00.000Z"), last_login_at: null,
+  };
+  const creditRaw: Row = {
+    user_id: 1, balance: 0, frozen: 0, total_earned: 0, total_spent: 0,
+    updated_at: new Date("2026-03-01T08:00:00.000Z"),
+  };
+  const { queryable, calls } = fakeQueryable((sql) => {
+    if (has(sql, "FROM users WHERE openid")) return [userRaw];
+    if (has(sql, "FROM users WHERE id = $1")) return [userRaw];
+    if (has(sql, "FROM credit_accounts WHERE user_id = $1")) return [creditRaw];
+    return [];
+  });
+  const db = {
+    query: queryable.query.bind(queryable),
+    transaction: async <T>(work: (tx: Queryable) => Promise<T>): Promise<T> => work(queryable),
+  };
+  const store = new PostgresStore(db);
+
+  const result = await store.signIn({ openid: "openid-1", displayName: "HUAWEI 昵称", grantMilliCredits: 500_000 });
+  assert.equal(result.user.displayName, "研究者", "the saved name is what the session carries");
+
+  const nameUpdate = calls.find((call) => has(call.sql, "UPDATE users", "display_name"));
+  assert.ok(nameUpdate, "sign-in updates the profile fields it owns");
+  // The saved name wins: HUAWEI only fills the column while it is empty.
+  assert.match(nameUpdate.sql, /display_name\s*=\s*COALESCE\(display_name, \$2\)/u);
 });

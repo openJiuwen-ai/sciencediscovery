@@ -38,29 +38,55 @@ export function ConfirmDialog({
   // a card on `document` — stays open until the question is answered.
   useTopmostEscape(onDismiss);
 
+  // A confirmation that names its own context wears an eyebrow chip; one that
+  // passes "" is a plain decision and shows no chip at all.
+  const eyebrow = request.eyebrow ?? TEXT.menu.confirm;
+
   return (
     <div className="modal-backdrop" onPointerDown={onDismiss}>
       <div
         aria-labelledby="confirm-title"
-        className="modal-panel modal-panel-narrow"
+        className="modal-panel modal-panel-narrow confirm-dialog"
         onPointerDown={(event) => event.stopPropagation()}
         role="dialog"
       >
         <header className="modal-header">
-          <span className="modal-eyebrow">{request.eyebrow ?? TEXT.menu.confirm}</span>
+          {eyebrow === "" ? null : <span className="modal-eyebrow">{eyebrow}</span>}
           <h2 id="confirm-title">{request.title}</h2>
           <button aria-label={TEXT.menu.cancel} className="modal-close" onClick={onDismiss} type="button">
             ×
           </button>
         </header>
-        <div className="modal-body"><p>{request.body}</p>{request.modelReplacement ? <label className="form-field">
-          <span>{request.modelReplacement.label}</span>
-          <select value={replacement} onChange={(event) => setReplacement(event.target.value)}>
-            <option value="">{request.modelReplacement.emptyLabel}</option>
-            {request.modelReplacement.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-          </select>
-        </label> : null}</div>
-        <footer className="modal-footer">
+        <div className="modal-body">
+          <p className={request.warning === true ? "modal-body-warning" : undefined}>
+            {request.warning === true ? (
+              <svg
+                aria-hidden="true"
+                fill="none"
+                height="16"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.8"
+                viewBox="0 0 24 24"
+                width="16"
+              >
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+            ) : null}
+            {request.body}
+          </p>
+          {request.modelReplacement ? <label className="form-field">
+            <span>{request.modelReplacement.label}</span>
+            <select value={replacement} onChange={(event) => setReplacement(event.target.value)}>
+              <option value="">{request.modelReplacement.emptyLabel}</option>
+              {request.modelReplacement.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </select>
+          </label> : null}
+        </div>
+        <footer className="modal-footer confirm-footer">
           <button className="secondary-button" onClick={onDismiss} type="button">
             {TEXT.menu.cancel}
           </button>

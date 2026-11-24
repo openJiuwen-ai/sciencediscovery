@@ -123,10 +123,13 @@ export interface Toast {
 export interface ConfirmRequest {
   accept: string;
   body: string;
-  modelReplacement?: { label: string; emptyLabel: string; models: ModelProfile[] };
+  /** Pass "" to omit the context chip above the title. */
   eyebrow?: string;
+  modelReplacement?: { label: string; emptyLabel: string; models: ModelProfile[] };
   onAccept: (replacementModelId?: string) => void | Promise<void>;
   title: string;
+  /** Leads the body with a warning triangle instead of a bare sentence. */
+  warning?: boolean;
 }
 
 /** The composer's optimistic echo of the message being sent. It is replaced by
@@ -394,6 +397,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [detail, setDetail] = useState<SessionDetail>();
   const [loadingSession, setLoadingSession] = useState(false);
   const [models, setModels] = useState<ModelProfile[]>([]);
+  /** The catalog as the latest render sees it. The 5 s catalog refresh installs a
+   *  fresh array even when nothing changed, and a callback that closed over that
+   *  array would land in `actions` — which is memoized and read by consumers
+   *  that must not rerun (the account page reloads on its identity). */
+  const modelsRef = useRef<ModelProfile[]>([]);
+  modelsRef.current = models;
   const [presets, setPresets] = useState<ModelProviderPreset[]>([]);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [defaultModelId, setDefaultModelId] = useState<string>();
@@ -463,6 +472,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    */
   const rememberedModelId = useRef<string | undefined>(readRememberedModel(modelStorage()));
   const modelSelectionEpoch = useRef(0);
+  /** Which provider-catalog read is the newest. The registry is global, so a
+   *  read that merely raced the next view still describes the truth; only an
+   *  older read landing after a newer one is stale. */
+  const catalogSeq = useRef(0);
   const modelSelectionQueue = useRef(Promise.resolve());
   const runningRef = useRef(false);
   /** Checkpoint messages this window drew for a manual review, until the
@@ -662,6 +675,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // a model. A failure there must not block a workspace that would
         // otherwise work, so it degrades to an empty list instead of an offline
         // screen.
+        const catalogRead = catalogSeq.current + 1;
+        catalogSeq.current = catalogRead;
         const [profiles, settings, catalog] = await Promise.all([
           listModels(client),
           getSettings(client),
@@ -669,8 +684,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         ]);
         if (cancelled) return;
         setModels(profiles);
-        setPresets(catalog.presets);
-        setProviders(catalog.providers);
+        if (catalogRead === catalogSeq.current) {
+          setPresets(catalog.presets);
+          setProviders(catalog.providers);
+        }
         const decision = resolveCatalog(profiles, settings.overrides);
         if (decision.boot === "setup") {
           setBoot("setup");
@@ -704,6 +721,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       const projectId = projectRef.current;
       const epoch = modelSelectionEpoch.current;
       const view = viewEpoch.current;
+      const catalogRead = catalogSeq.current + 1;
+      catalogSeq.current = catalogRead;
       try {
         const [profiles, settings, catalog, fresh, projectSettings] = await Promise.all([
           listModels(client), getSettings(client), listProviders(client).catch(() => undefined),
@@ -712,12 +731,17 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             ? client.request<RuntimeSettingsDetails>(`/api/projects/${encodeURIComponent(projectId)}/settings`)
             : Promise.resolve(undefined),
         ]);
-        if (viewEpoch.current !== view || modelSelectionEpoch.current !== epoch) return;
-        setModels(profiles);
-        if (catalog) {
+        // The provider registry is global rather than view-scoped, so the newest
+        // read applies even when the view moved on while it was in flight: the
+        // credits provider is created right after sign-in, which is also when
+        // the first Session may be opening. An older read landing later is
+        // still discarded, so it cannot put an empty registry back.
+        if (catalog && catalogRead === catalogSeq.current) {
           setPresets(catalog.presets);
           setProviders(catalog.providers);
         }
+        if (viewEpoch.current !== view || modelSelectionEpoch.current !== epoch) return;
+        setModels(profiles);
         if (!profiles.length) {
           draftModelOverride.current = undefined;
           rememberedModelId.current = undefined;
@@ -1804,7 +1828,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // A Project arrives with one untitled conversation. Give it the model the user
         // last picked, so "new conversation" means the same thing on this path too
         // (#1205). A failure here is not fatal: opening the Session reads its real model.
-        const remembered = modelForNewConversation(rememberedModelId.current, models);
+        const remembered = modelForNewConversation(rememberedModelId.current, modelsRef.current);
         if (remembered && created.firstSession.modelId !== remembered) {
           try { await updateSession(client, created.firstSession.id, { modelId: remembered }); }
           catch { /* the stored selection still applies to the next conversation */ }
@@ -1815,7 +1839,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         report(reason);
       }
     },
-    [client, models, openSession, refreshSessionLists, report],
+    [client, openSession, refreshSessionLists, report],
   );
 
   const selectModel = useCallback(

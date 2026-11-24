@@ -28,6 +28,9 @@ import { TEXT } from "../text.js";
 import { ModelForm } from "./ModelForm.js";
 
 type Step = "idle" | "redirecting" | "verifying" | "done" | "error";
+/** Which way in the entry gate is showing. The account page is step one and
+ *  can be skipped; the model page it leads to cannot. */
+type Entry = "account" | "model";
 
 interface Props {
   /** Called once the account is signed in and its local service credential is issued. */
@@ -90,11 +93,19 @@ export function LoginPage({
 }: Props) {
   const [session, setSession] = useState<UserSession | undefined>(() => readSession());
   const [step, setStep] = useState<Step>(() => (readSession() ? "verifying" : "idle"));
-  const [choice, setChoice] = useState<"account" | "model">("account");
+  const [entry, setEntry] = useState<Entry>("account");
   const [localToken, setLocalToken] = useState("");
   // Settling consumes the ticket and rotates the refresh token, so it must run
   // exactly once per mount.
   const settlementStarted = useRef(false);
+  /** The latest callback, read when the sign-in settles: the effect that
+   *  exchanges the ticket runs once, while the parent's handler closes over the
+   *  boot state of that first render. */
+  const onAuthenticatedRef = useRef(onAuthenticated);
+  onAuthenticatedRef.current = onAuthenticated;
+  /** A sign-in that has settled enters the workspace by itself; this keeps a
+   *  second render (or StrictMode's double effect) from calling in twice. */
+  const entered = useRef(false);
 
   useEffect(() => {
     if (settlementStarted.current) return;
@@ -180,20 +191,41 @@ export function LoginPage({
     void settle();
   }, []);
 
+  // A settled sign-in is the whole of step one: the workspace opens as soon as
+  // the session and this machine's credential are both in hand, so there is no
+  // second "enter" press between a successful sign-in and the workbench.
+  useEffect(() => {
+    if (step !== "done" || session === undefined || localToken === "" || entered.current) return;
+    entered.current = true;
+    onAuthenticatedRef.current(session, localToken);
+  }, [localToken, session, step]);
+
+  /** The cached-session path can settle without a local credential (the loopback
+   *  service was down). Re-run the whole settle rather than only the credential:
+   *  the stored access token may need the refresh this page would otherwise skip. */
+  function retrySettle(): void {
+    window.location.reload();
+  }
+
+  /** Leave the recovery panel instead of being stuck on it. The server session
+   *  is revoked like the workspace's sign-out; a failure only leaves it to
+   *  expire, which is why it is best-effort. */
+  function leaveAccount(): void {
+    const current = session;
+    clearSession();
+    setSession(undefined);
+    setLocalToken("");
+    setStep("idle");
+    setEntry("account");
+    if (current) void revokeAccountSession(current.accessToken).catch(() => undefined);
+  }
+
   function startSignIn(): void {
     setStep("redirecting");
     // This workbench has no `/login` route: the sign-in page is what `/`
     // renders while the local service credential is missing. Returning to the
     // root keeps the fragment on the page that exchanges the ticket.
     window.location.assign(huaweiSignInUrl(`${window.location.origin}/`));
-  }
-
-  function signOut(): void {
-    const current = session;
-    clearSession();
-    setSession(undefined);
-    setStep("idle");
-    if (current) void revokeAccountSession(current.accessToken).catch(() => undefined);
   }
 
   return (
@@ -206,33 +238,9 @@ export function LoginPage({
 
         <div className="login-scroll">
           <div className="login-content">
-            {offerModelSetup ? (
-              <div aria-label={TEXT.login.choiceLabel} className="login-tabs" role="tablist">
-                <button
-                  aria-selected={choice === "account"}
-                  className={`login-tab${choice === "account" ? " is-active" : ""}`}
-                  onClick={() => setChoice("account")}
-                  role="tab"
-                  type="button"
-                >
-                  {TEXT.login.accountTab}
-                </button>
-                <button
-                  aria-selected={choice === "model"}
-                  className={`login-tab${choice === "model" ? " is-active" : ""}`}
-                  onClick={() => setChoice("model")}
-                  role="tab"
-                  type="button"
-                >
-                  {TEXT.login.modelTab}
-                </button>
-              </div>
-            ) : null}
-
-            {choice === "model" && offerModelSetup ? (
+            {entry === "model" && offerModelSetup ? (
               <section>
                 <h1>{TEXT.login.modelTitle}</h1>
-                <p className="login-lead">{TEXT.login.modelSub}</p>
                 {client ? (
                   <div className="login-model-form">
                     <ModelForm
@@ -244,28 +252,41 @@ export function LoginPage({
                       revealSubmitOnSuccess
                       submitLabel={TEXT.login.modelEnter}
                       testLabel={TEXT.wizard.testAndContinue}
+                      trailingAction={
+                        <button
+                          className="secondary-button"
+                          onClick={() => {
+                            setStep("idle");
+                            setEntry("account");
+                          }}
+                          type="button"
+                        >
+                          {TEXT.wizard.back}
+                        </button>
+                      }
                     />
                   </div>
                 ) : null}
               </section>
-            ) : step === "done" && session ? (
-              <section className="login-done">
-                <span className="login-done-mark" aria-hidden="true">✓</span>
-                <h1>{TEXT.login.doneTitle}</h1>
-                <p className="login-lead">
-                  {session.isNewUser
-                    ? TEXT.login.doneBody(session.displayName, session.balanceCredits)
-                    : TEXT.login.doneBodyReturning(session.displayName, session.balanceCredits)}
-                </p>
+            ) : step === "done" && session && localToken === "" ? (
+              <section>
+                <h1>{TEXT.login.title}</h1>
+                <p className="login-lead">{TEXT.login.localTokenMissing}</p>
                 <div className="login-actions">
-                  <button
-                    className="primary-button login-wide"
-                    onClick={() => onAuthenticated(session, localToken)}
-                    type="button"
-                  >
-                    {TEXT.login.enter}
+                  <button className="primary-button login-wide" onClick={retrySettle} type="button">
+                    {TEXT.login.retry}
                   </button>
-                  <button className="login-link-button" onClick={signOut} type="button">{TEXT.login.signOut}</button>
+                  <button className="secondary-button login-wide" onClick={leaveAccount} type="button">
+                    {TEXT.account.signOut}
+                  </button>
+                </div>
+              </section>
+            ) : step === "done" && session ? (
+              <section>
+                <h1>{TEXT.login.title}</h1>
+                <div className="login-status">
+                  <span className="login-spinner" aria-hidden="true" />
+                  <p className="login-lead">{TEXT.login.entering}</p>
                 </div>
               </section>
             ) : step === "redirecting" || step === "verifying" ? (
@@ -289,14 +310,18 @@ export function LoginPage({
                 </div>
               </section>
             ) : (
-              <section>
+              <section className="login-entry">
                 <h1>{TEXT.login.title}</h1>
-                <p className="login-lead">{TEXT.login.subtitle}</p>
-                <div className="login-actions">
-                  <button className="login-huawei-button login-wide" onClick={startSignIn} type="button">
+                <p className="login-lead is-ink">{TEXT.login.subtitle}</p>
+                <div className="login-actions login-entry-actions">
+                  <button className="login-huawei-button login-entry-primary" onClick={startSignIn} type="button">
                     <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.huaweiButton}
                   </button>
-                  <p className="login-consent">{TEXT.login.consent}</p>
+                  {offerModelSetup ? (
+                    <button className="login-skip-button" onClick={() => setEntry("model")} type="button">
+                      {TEXT.login.skipToModel}
+                    </button>
+                  ) : null}
                 </div>
               </section>
             )}

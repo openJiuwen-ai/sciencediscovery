@@ -551,14 +551,44 @@ export class PostgresStore implements AccountsStore {
               [user.id, program.milliCredits],
             );
             grantedMilli += program.milliCredits;
+            // The durable check-in record, written with the reward it paid. The
+            // ledger row is a receipt that pruning may later drop; this row is
+            // what the seven-day strip and the bonus cycle count.
+            //
+            // `streak` is the run of consecutive days ending at this check-in,
+            // not the tenure `day` above. A break is a prior date whose next day
+            // is neither another check-in nor today; counting the dates after
+            // the latest break gives this run, and today's row is not inserted
+            // yet, hence the `+ 1`.
+            const streak = await tx.query<{ streak: number }>(
+              `SELECT count(*)::int + 1 AS streak
+                 FROM checkins
+                WHERE user_id = $1
+                  AND checkin_date < $2::date
+                  AND checkin_date > COALESCE((
+                    SELECT max(gap.checkin_date)
+                      FROM checkins gap
+                     WHERE gap.user_id = $1
+                       AND gap.checkin_date < $2::date
+                       AND gap.checkin_date + 1 <> $2::date
+                       AND NOT EXISTS (
+                         SELECT 1 FROM checkins next
+                          WHERE next.user_id = gap.user_id
+                            AND next.checkin_date = gap.checkin_date + 1
+                       )
+                  ), DATE '0001-01-01')`,
+              [user.id, checkinDate],
+            );
+            await tx.query(
+              `INSERT INTO checkins (user_id, checkin_date, streak, credits)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id, checkin_date) DO NOTHING`,
+              [user.id, checkinDate, streak[0]?.streak ?? 1, program.milliCredits],
+            );
 
             if (program.bonusMilliCredits > 0 && program.cycleDays > 0) {
               const claimed = await tx.query<{ count: number }>(
-                `SELECT count(*)::int AS count
-                   FROM credit_ledger
-                  WHERE user_id = $1
-                    AND biz_type = 'CHECKIN'
-                    AND biz_id ~ '^[0-9]+:[0-9]{4}-[0-9]{2}-[0-9]{2}$'`,
+                `SELECT count(*)::int AS count FROM checkins WHERE user_id = $1`,
                 [user.id],
               );
               const count = claimed[0]?.count ?? 0;
@@ -629,14 +659,14 @@ export class PostgresStore implements AccountsStore {
   }
 
   async countCheckins(userId: number): Promise<{ total: number; lastDate: string | null }> {
-    // A CHECKIN row's biz_id is `<user id>:<China date>`; the date is pulled out
-    // of the id rather than the timestamp so "today" means the same calendar
-    // day the row was claimed on, not the UTC day `created_at` falls in.
+    // The check-ins table is the durable count: the ledger keeps only the newest
+    // rows per kind, so counting CHECKIN receipts there would start going down
+    // once a long-lived account reaches the ceiling.
     const rows = await this.db.query<{ total: number; last_date: string | null }>(
       `SELECT count(*)::int AS total,
-              max(substring(biz_id from '[0-9]{4}-[0-9]{2}-[0-9]{2}')) AS last_date
-         FROM credit_ledger
-        WHERE user_id = $1 AND biz_type = 'CHECKIN'`,
+              max(checkin_date)::text AS last_date
+         FROM checkins
+        WHERE user_id = $1`,
       [userId],
     );
     return { total: rows[0]?.total ?? 0, lastDate: rows[0]?.last_date ?? null };

@@ -213,6 +213,36 @@
   background: var(--surface-subtle);
 }
 
+/* The confirmation is read beside 设置, so it borrows that page's type. The
+   display stack has no Chinese Windows face, which left this title in a serif
+   fallback while the rest of the app renders in Microsoft YaHei. */
+.confirm-dialog { font-family: var(--font-sans); }
+.confirm-dialog .modal-header h2 {
+  margin-top: 0;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+/* Both answers are one decision each: equal footprints keep the destructive
+   one from reading as the only button. */
+.confirm-footer .secondary-button,
+.confirm-footer .primary-button { min-width: 84px; }
+
+/* A consequence worth stopping at leads with a warning triangle; the body text
+   still starts at the same left edge as the title. */
+.modal-body-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.modal-body-warning svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
 /* form */
 .form-field {
   display: block;

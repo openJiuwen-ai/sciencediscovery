@@ -200,7 +200,7 @@ describe("a configured model row", () => {
   } as unknown as WorkspaceState;
 
   const markup = renderToStaticMarkup(
-    <ModelSettings actions={actions} adding={false} client={client} onAddingChange={noConfirm} state={state} />,
+    <ModelSettings actions={actions} adding={false} client={client} onAddingChange={noConfirm} signedIn state={state} />,
   );
 
   it("opens in place, so its name can be changed", () => {
@@ -227,6 +227,7 @@ describe("the settings directory", () => {
       onClose={noConfirm}
       onGroupChange={noConfirm}
       onShowGuide={noConfirm}
+      signedIn
       state={{} as unknown as WorkspaceState}
     />,
   );

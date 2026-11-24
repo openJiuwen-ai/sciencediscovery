@@ -211,7 +211,7 @@ test("settings navigation preserves the original model page and add button", asy
   setLanguage("en");
   const { SystemSettingsDialog } = await import("../src/views/SystemSettingsDialog.js");
   const html = renderToStaticMarkup(<SystemSettingsDialog group="models" client={new ApiClient("test")}
-    actions={{} as never} state={{ models: [], providers: [] } as never} onClose={() => {}} onGroupChange={() => {}} onShowGuide={() => {}} />);
+    actions={{} as never} state={{ models: [], providers: [] } as never} onClose={() => {}} onGroupChange={() => {}} onShowGuide={() => {}} signedIn />);
   assert.match(html, /Add model/);
   assert.doesNotMatch(html, /configuration-settings-context|configuration-settings-request|Back to conversation|Request-only editor/);
 });
