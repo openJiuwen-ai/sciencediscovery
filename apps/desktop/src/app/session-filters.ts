@@ -45,12 +45,20 @@ export interface FilterContext {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Midnight of the day `at` falls in, in the reader's own zone. The window is a
+ *  calendar question — "today" means the day on the clock, not the last 24h. */
+function startOfDay(at: number): number {
+  const date = new Date(at);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
 /**
  * Whether one Session survives the filters.
  *
- * The window counts back from `now` over `updatedAt`, which is what the row
- * prints: a Session written to this morning is "today" even if it was created
- * last month.
+ * The window counts back from the calendar day `now` falls in, over `updatedAt`,
+ * which is what the row prints: a Session written to this morning is "today" even
+ * if it was created last month. `week` is the seven calendar days ending today.
  */
 export function keepsSession(
   session: Pick<Session, "id" | "updatedAt" | "createdAt">,
@@ -62,8 +70,8 @@ export function keepsSession(
   if (filters.window === "all") return true;
   const stamp = Date.parse(session.updatedAt ?? session.createdAt);
   if (Number.isNaN(stamp)) return false;
-  const age = context.now - stamp;
-  return filters.window === "today" ? age < DAY_MS : age < 7 * DAY_MS;
+  const today = startOfDay(context.now);
+  return filters.window === "today" ? stamp >= today : stamp >= today - 6 * DAY_MS;
 }
 
 /** The same rule over a list, keeping the order the caller had. */

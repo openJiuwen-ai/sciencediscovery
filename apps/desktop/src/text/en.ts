@@ -284,6 +284,7 @@ export const EN: Text = {
     projectMenu: "Project menu",
     noTasks: "No sessions yet",
     noMatch: "No Session matches the current filter.",
+    searchRetry: "Retry",
     showMore: "Show more",
     filtersLabel: "Filters",
     filterScopeCurrent: "Current project",

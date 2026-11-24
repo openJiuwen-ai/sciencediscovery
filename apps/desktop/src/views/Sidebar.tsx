@@ -405,7 +405,18 @@ export function Sidebar({
       {onSearch === undefined || searchQuery.trim() === "" ? null : (
         <div className="side-search-results">
           {searchError !== undefined ? (
-            <p className="side-search-note is-error" role="alert">{searchError}</p>
+            // The reason the route gave, plus the next step the empty state also
+            // offers: a failure the reader cannot retry reads as a dead field.
+            <p className="side-search-note is-error" role="alert">
+              {searchError}
+              <button
+                className="side-search-retry"
+                onClick={() => onSearch(searchQuery.trim())}
+                type="button"
+              >
+                {TEXT.sidebar.searchRetry}
+              </button>
+            </p>
           ) : searchResults === undefined ? null
             : searchResults.results.length === 0 ? (
               <p className="side-search-note">{TEXT.sidebar.searchEmpty(searchQuery.trim())}</p>

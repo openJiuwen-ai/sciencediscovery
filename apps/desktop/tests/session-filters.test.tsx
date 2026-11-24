@@ -50,3 +50,21 @@ test("the time window counts back from now over the row's own stamp", () => {
     { ...DEFAULT_SESSION_FILTERS, window: "today" }, context), false,
   "an unparseable stamp is excluded rather than shown as fresh");
 });
+
+test("today is the calendar day on the reader's clock, not a rolling 24 hours", () => {
+  // 00:10 local on the 22nd: a Session written at 23:50 the night before is under
+  // 24 hours old, and it is still yesterday — the window follows the clock the
+  // rows print, so it must not be kept.
+  const justAfterMidnight = new Date(2026, 10, 22, 0, 10, 0).getTime();
+  const lastNight = new Date(2026, 10, 21, 23, 50, 0).toISOString();
+  const thisMorning = new Date(2026, 10, 22, 0, 1, 0).toISOString();
+  const rows = [session("yesterday", lastNight), session("today", thisMorning)];
+  const at = { ...context, now: justAfterMidnight };
+
+  assert.deepEqual(
+    filterSessions(rows, { ...DEFAULT_SESSION_FILTERS, window: "today" }, at).map((row) => row.id),
+    ["today"], "23:50 the night before is yesterday even though it is under 24h");
+  assert.deepEqual(
+    filterSessions(rows, { ...DEFAULT_SESSION_FILTERS, window: "week" }, at).map((row) => row.id),
+    ["yesterday", "today"], "and it is inside the week the calendar day ends");
+});
