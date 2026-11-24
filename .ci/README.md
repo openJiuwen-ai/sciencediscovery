@@ -29,7 +29,7 @@ No workflow maintains its own list of case titles.
 | Tier | Event / authorization | Workflow jobs | Gate / job ceiling |
 | --- | --- | --- | --- |
 | L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT/ST + Linux binary and Docker distribution gates; selected mocked browser checks run based on the diff, with no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; default manual dispatch | L1 + reviewed hermetic UT/ST + Linux binary and Docker distribution gates; selected mocked browser checks run based on the diff, with no external model credentials | Required before enqueue; UT 60, ST 30 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L1/UT/ST rerun on the group SHA + mocked E2E + nine short real API journeys (including Runner wait/finish decisions); Linux binary, Windows desktop and Docker jobs are skipped | Required before automatic merge; mock E2E 90 minutes; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Nightly workflow at 16:00 UTC, or explicit dispatch | L3 + Linux binary, Windows desktop installer and Docker distribution gates + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
 | L5 (`release`) | Version release tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
@@ -39,8 +39,8 @@ and `release` alias L2, L3, L4 and L5. The release policy now includes paid
 research; it is no longer equal to the hermetic PR policy. Release failures
 must not be worked around by moving the tag.
 
-The local test profiles remain cumulative. In the `pr` profile (including PRs
-and default-branch pushes), Desktop unit tests run in UT. The dedicated Desktop
+The local test profiles remain cumulative. In the `pr` profile, Desktop unit
+tests run in UT. The dedicated Desktop
 browser job runs changed mocked specs when the diff selects them. Changes to the
 mocked fixture or Playwright config, or to the real suite's support module or
 Playwright config, select the full Desktop mocked suite. Merge candidates,
@@ -307,7 +307,8 @@ review and enqueue action are the trust decision: queued code can read the
 credentials injected into its job. Repository rules and Environment settings
 are administrative configuration, not created by committing workflow YAML.
 After L3 and the existing review requirements pass, the queue merges without
-another button. Default-branch push does not repeat the paid suite.
+another button. Post-merge pushes to `main` do not re-trigger `ci.yml`;
+Nightly and Release cover `main` and version tags via `workflow_call`.
 
 GitHub's behavior is documented in
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).

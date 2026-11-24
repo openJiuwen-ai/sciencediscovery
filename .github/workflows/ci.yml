@@ -21,8 +21,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main, master]
+  # Commits land on main through the merge queue after passing PR and L3
+  # merge_group checks; Nightly and Release cover scheduled and tagged runs via
+  # workflow_call, so a direct branch push trigger would only repeat CI a third
+  # time after merge.
   # Drafts run policy and L1. UT/ST, coverage, Linux binary, Docker and
   # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
   # events enable the remaining jobs according to the selected profile.
@@ -74,10 +76,11 @@ on:
         type: number
         default: 2
 
-# Keyed on the calling workflow as well as the ref: a nightly run and a push
-# run land on refs/heads/main at the same time, and without the workflow name
-# they would share a group and cancel each other. In a called workflow
-# `github.workflow` is the caller's name, so each pipeline gets its own lane.
+# Keyed on the calling workflow as well as the ref: a nightly run and a manual
+# dispatch or package run can target refs/heads/main at the same time, and
+# without the workflow name they would share a group and cancel each other. In
+# a called workflow `github.workflow` is the caller's name, so each pipeline
+# gets its own lane.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}${{ inputs.profile == 'package' && format('-package-{0}', inputs['package-platform'] || 'linux-windows') || '' }}
   cancel-in-progress: true

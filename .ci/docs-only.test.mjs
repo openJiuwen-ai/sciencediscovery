@@ -428,3 +428,18 @@ test('browser-spec-only PRs require their affected mocked job', () => {
   const mixed = route('pull_request', 'pr', 'jiuwenswarm', ['.ci/tier-policy.mjs', web]);
   assert.deepEqual(webUiStEntries([...baseline, other, { source: web }], mixed.web_ui_st_specs), [...baseline, { source: web }]);
 });
+
+test('CI workflow omits direct branch push trigger while keeping PR, queue, dispatch and call entry points', () => {
+  const triggerBlock = workflow.split('\non:\n')[1].split('\nconcurrency:\n')[0];
+  assert.doesNotMatch(triggerBlock, /^  push:/m, 'post-merge pushes to main/master must not repeat the PR workflow');
+  for (const trigger of ['pull_request', 'merge_group', 'workflow_dispatch', 'workflow_call']) {
+    assert.match(triggerBlock, new RegExp(`^  ${trigger}:`, 'm'), `missing ${trigger} trigger`);
+  }
+  // Tag-push Release calls arrive via workflow_call with event_name=push,
+  // CI_DIFF_ENABLED=false (paths=null), and profile=release.
+  const releaseNeeds = selection('push', null, { profile: 'release' });
+  assert.equal(releaseNeeds.policy.outputs.profile, 'release');
+  assert.equal(releaseNeeds.ut.result, 'success');
+  assert.equal(releaseNeeds['real-scheduled'].result, 'success');
+  assert.deepEqual(gate('release', releaseNeeds), []);
+});

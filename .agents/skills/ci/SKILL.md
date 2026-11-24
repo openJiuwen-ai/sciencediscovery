@@ -46,7 +46,7 @@ reuse it through `workflow_call` with the profiles below.
 | Tier / profile | Trigger | Cumulative coverage and gate |
 | --- | --- | --- |
 | L1 / `l1` | Every CI run, including draft PRs; required before L2 | Lightweight architecture, docs, catalog and E2E metadata checks, without starting services or browsers; required before L2 |
-| L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; push to `main` or `master`; default manual dispatch | L1 + hermetic UT/ST, x86_64/aarch64 binary smoke and Docker deployment checks; no model credentials |
+| L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; default manual dispatch | L1 + hermetic UT/ST, x86_64/aarch64 binary smoke and Docker deployment checks; no model credentials |
 | L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/UT/ST on the group SHA plus mocked browser E2E and basic real API journeys; distribution jobs are skipped; required before automatic merge |
 | L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging, Linux binary smoke, Windows installer, macOS ARM64 DMG/ZIP, and Docker deployment checks |
 | L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases, evaluation modes, and distribution gates as L4, including macOS ARM64 DMG/ZIP. Failure blocks creating the draft Release and its assets while leaving the pushed tag intact. A person publishes the draft from the Releases page |
@@ -56,7 +56,8 @@ reuse it through `workflow_call` with the profiles below.
 Reusable callers can also select `package`, which selects workflow jobs
 without defining a new local test profile. [.ci/tier-policy.mjs](../../../.ci/tier-policy.mjs)
 forces PR events to `pr` and merge-group events to `merge`, including a queue
-with one PR. Default-branch push does not repeat the paid suite. UT and ST
+with one PR. Post-merge pushes to `main` do not trigger `ci.yml`; Nightly and
+Release invoke it via `workflow_call`. UT and ST
 record coverage outside Release runs; Coverage merges those records and runs
 no tests.
 
