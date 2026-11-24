@@ -22,7 +22,7 @@ import { setImmediate } from "node:timers/promises";
 import { RefStore, VersionStore, withWorkspaceMutation, type ObjectRef } from "@sciencediscovery/cas";
 import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
 import { exportEvolveRuns, restoreEvolveRuns, MAX_RUNS } from "./evolution/package.js";
-import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, estimateResearchPackageBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, sha256, writeResearchPackage, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile } from "@sciencediscovery/research-package";
+import { RESEARCH_PACKAGE_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, appendJsonTextSample, estimateResearchPackageBytes, estimateResearchPackageDownloadBytes, jsonBytes, jsonByteLength, jsonDigest, researchPackageArchiveBytes, researchPackageArchiveParts, sha256, writeResearchPackage, type ExportInput, type ImportedResearchPackage, type ResearchPackageCounts, type ResearchPackageExportProfile, type ResearchPackagePayloadBytes } from "@sciencediscovery/research-package";
 import { contextBlocks, type TrajectoryDetail, type TrajectoryEntry } from "@sciencediscovery/trajectory";
 import type { MemoryGraphSnapshot } from "@sciencediscovery/memory";
 import type { ArtifactAnnotation, ArtifactOriginMeta, ArtifactReviewRun, ChatMessage, EnvironmentRevision, ResearchSnapshot, ReviewRun, ReviewerAuditTask, ReviewFeedback, ScientificArtifact, ScientificArtifactVersion, ScientificMemorySummary, Session, SessionRun, SessionRunEvent, WorkspaceFileProvenance } from "@sciencediscovery/schema";
@@ -74,6 +74,27 @@ type PreviewSizing = {
    */
   trajectorySizing?: Map<string, TrajectorySizingEntry[]>;
   /**
+   * Bounded JSON text sampled from the record bytes counted only in
+   * `additionalRecordBytes` — the trajectory details the preview measures but
+   * deliberately does not keep. The download estimate compresses it to learn how well
+   * the largest part of a trajectory export shrinks (#1347). It holds strings, never
+   * the details themselves, is shared by the profiles of one revision, and never
+   * exceeds `RECORD_SAMPLE_BYTES`.
+   */
+  recordSamples: RecordSample;
+  /**
+   * The name or media type seen for each object address. Classification happens once
+   * the selection is final: counting while the walk runs also counted objects a custom
+   * selection later dropped (and counted the same content twice), which made the
+   * displayed download larger than the archive itself (#1347 review).
+   */
+  payloadHints: Map<string, string>;
+  /**
+   * Object payload bytes split by how gzip treats them, filled from the objects the
+   * package really carries once the selection is final.
+   */
+  payloadBytes: ResearchPackagePayloadBytes;
+  /**
    * The complete workspace listing of each session, shared by the profiles of one
    * dialog request for as long as it is young (#1140 §7.8).
    *
@@ -116,9 +137,31 @@ function previewWorkspaceListing(
   return listing;
 }
 
+type RecordSample = { revision: string; bytes: number; text: string[] };
+/** Upper bound on the record JSON the download estimate may compress. */
+const RECORD_SAMPLE_BYTES = 256 * 1024;
+
 type TrajectorySizingEntry =
   | { unreadable: string }
   | { bytes: number; hashes: string[]; id: string; refs: Array<[string, ObjectRef]> };
+
+/** Extensions whose bytes gzip compresses like text. */
+const TEXT_PAYLOAD_PATH = /\.(?:md|markdown|txt|text|csv|tsv|json|jsonl|ndjson|ipynb|py|pyi|ts|tsx|js|jsx|mjs|cjs|html?|css|scss|sass|less|xml|ya?ml|toml|ini|cfg|conf|log|diff|patch|tex|bib|r|jl|m|mm|sh|bash|zsh|sql|svg)$/i;
+
+/**
+ * Whether a payload is expected to gzip well.
+ *
+ * The hint is a workspace path or an artifact media type. An empty hint counts as
+ * text: objects referenced from the JSON records are evidence such as code, stdout or
+ * a prompt far more often than an already-compressed blob, and treating them as opaque
+ * would inflate every such export.
+ */
+function payloadCompressesAsText(hint: string): boolean {
+  if (!hint) return true;
+  if (/^text\//i.test(hint)) return true;
+  if (/(?:json|xml|csv|tsv|yaml|yml|javascript|ecmascript|markdown)/i.test(hint)) return true;
+  return TEXT_PAYLOAD_PATH.test(hint);
+}
 
 export type ExportSessionRecord = PackageHistory & {
   session: Omit<Session, "settingsOverrides"> & { settingsOverrides?: undefined };
@@ -478,9 +521,15 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       if (!objects.has(path)) objects.set(path, { path, open: () => createReadStream(absolutePath) as AsyncIterable<Uint8Array>, kind });
       return path;
     };
-    const addPreviewObject = (path: string, size: number, kind: "artifact" | "evidence" | "log") => {
+    const addPreviewObject = (path: string, size: number, kind: "artifact" | "evidence" | "log", hint = "") => {
       previewObjectSizes!.set(path, size);
       objects.set(path, { path, bytes: new Uint8Array(), kind });
+      // Keep the most telling name/media type seen for this address; the selection is
+      // not final yet, so the classification itself waits for the retained set.
+      if (hint) {
+        const previous = preview!.payloadHints.get(path);
+        if (!previous || (!payloadCompressesAsText(hint) && payloadCompressesAsText(previous))) preview!.payloadHints.set(path, hint);
+      }
       return path;
     };
     const scopedSessionIds = new Set(sessions.map((session) => session.id));
@@ -594,6 +643,11 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
             preview.additionalRecordBytes += bytes + (counted++ ? 1 : 0);
             for (const hash of hashes) preview.hashes.add(hash);
             for (const [key, ref] of refs) preview.refs.set(key, ref);
+            // Bounded JSON text of what these bytes look like, so the download estimate
+            // can measure their gzip ratio instead of assuming it (#1347). Only the
+            // text is kept — never the detail object — so the sample cannot retain a
+            // trajectory in memory and cannot grow past the budget.
+            appendJsonTextSample(preview.recordSamples, kept, RECORD_SAMPLE_BYTES);
             measured.push({ bytes, hashes, id: entry.id, refs });
             if (counted % 32 === 0) await setImmediate();
           } else details.push(detail);
@@ -633,7 +687,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         let objectPath = "";
         if (previewObjectSizes) {
           if (known) {
-            addPreviewObject(known, file.size, "evidence");
+            addPreviewObject(known, file.size, "evidence", file.path);
             objectPath = known;
           } else preview!.unpinnedObjectBytes.push(file.size);
         }
@@ -680,7 +734,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       for (const version of artifact.versions) {
         try {
           const artifactPath = previewObjectSizes
-            ? addPreviewObject(version.content.hash, version.content.size, "artifact")
+            ? addPreviewObject(version.content.hash, version.content.size, "artifact", version.mediaType)
             : streamObjects ? await addObjectSource(version.content.hash, "artifact")
               : await addObject(await provenanceRecorder.cas.read(version.content.hash), "artifact");
           // A missing lazy source already recorded its omission; the version then keeps
@@ -729,7 +783,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         for (const candidate of listed) {
           const bytes = Buffer.from(candidate.source, "utf8");
           const objectPath = previewObjectSizes
-            ? addPreviewObject(sha256(bytes), bytes.byteLength, "log")
+            ? addPreviewObject(sha256(bytes), bytes.byteLength, "log", "text/plain")
             : await addObject(bytes, "log");
           evolveCandidateSources.push({ hash: candidate.hash, objectPath, runId: run.id });
         }
@@ -890,14 +944,14 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         if (previewObjectSizes && !ref.mediaType.includes("json")) {
           const size = await versions.storedSize(ref);
           if (size === undefined) throw new Error("version object is not stored");
-          addPreviewObject(ref.digest.slice(7), size, "log");
+          addPreviewObject(ref.digest.slice(7), size, "log", ref.mediaType);
           continue;
         }
         // Version objects are still read whole here: making them lazy changes which
         // objects a package carries, and the preview/actual parity case rejects the
         // naive version (#1216 F2, tracked separately).
         const bytes = await versions.read(ref);
-        if (previewObjectSizes) addPreviewObject(ref.digest.slice(7), bytes.byteLength, "log");
+        if (previewObjectSizes) addPreviewObject(ref.digest.slice(7), bytes.byteLength, "log", ref.mediaType);
         else await addObject(bytes, "log");
         if (ref.mediaType.includes("json")) {
           try { pending.push(...versionRefs(JSON.parse(bytes.toString("utf8")))); } catch { /* Opaque evidence remains byte-exact. */ }
@@ -910,6 +964,31 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     }
     stage("cas-sizing", sizingStarted, { objects: objects.size,
       ...(previewObjectSizes ? { bytes: [...previewObjectSizes.values()].reduce((total, size) => total + size, 0) } : {}) });
+    // Classify object payload only now that the selection is final: `objects` holds the
+    // addresses the package really carries (a custom selection dropped the rest, and
+    // duplicate addresses collapse to one entry), and the retained workspace entries
+    // hold the files that had no address yet. Counting while the walk ran described
+    // payload the tar did not contain and turned the displayed download larger than the
+    // archive itself (#1347 review). This runs after main's new `cas-sizing` stage so
+    // that stage keeps measuring the object walk alone.
+    if (preview) {
+      const payload: ResearchPackagePayloadBytes = { text: 0, opaque: 0 };
+      const classify = (size: number, hint: string) => {
+        if (payloadCompressesAsText(hint)) payload.text += size;
+        else payload.opaque += size;
+      };
+      for (const [path, size] of preview.objectSizes) {
+        if (!objects.has(path)) continue;
+        classify(size, preview.payloadHints.get(path) ?? "");
+      }
+      for (const record of selectedSessionRecords) for (const file of record.workspace) {
+        // An address-less workspace file is a payload entry of its own; the addressed
+        // ones were counted above from `objects`.
+        if (file.objectPath) continue;
+        classify(file.size ?? 0, file.path);
+      }
+      preview.payloadBytes = payload;
+    }
     return {
       source: { projectId, title: project.name, sessionIds: sessions.map((item) => item.id) },
       packageKind: "evidence",
@@ -944,6 +1023,17 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     trajectorySizing.set("current", { revision, bySession });
     return bySession;
   };
+  // One bounded sample of the record bytes no profile keeps, shared per revision (see
+  // `RecordSample`). Replacing it drops the previous revision's sample.
+  const recordSample = new Map<string, RecordSample>();
+  const recordSampleFor = (revision: string): RecordSample => {
+    const current = recordSample.get("current");
+    if (current && current.revision === revision) return current;
+    const next: RecordSample = { revision, bytes: 0, text: [] };
+    recordSample.clear();
+    recordSample.set("current", next);
+    return next;
+  };
   const exportPreviews = new ResearchExportPreviews(previewRevision, async ({ projectId, sessionId, level, selectedFiles, includeFullTrajectory, includeFullMemoryGraph }, revision, signal, scope) => {
       // `defaults()` owns this map for its five profiles (#1140 §7.8). Keying it on the
       // revision was wrong: the first profile's reconcile writes the very provenance
@@ -952,7 +1042,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       // throwaway map, which is the same behaviour as before the sharing existed.
       const workspaceListings = (scope ?? new Map()) as PreviewWorkspaceListings;
       const preview: PreviewSizing = { objectSizes: new Map(), additionalRecordBytes: 0, unpinnedObjectBytes: [], hashes: new Set(), refs: new Map(),
-        jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(),
+        jsonSizes: new WeakMap(), casVisited: new WeakSet(), refsVisited: new WeakSet(), recordSamples: recordSampleFor(revision),
+        payloadHints: new Map(), payloadBytes: { text: 0, opaque: 0 },
         trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined,
         workspaceListings };
       const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
@@ -966,6 +1057,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         if (previewDependencies.size > 192) previewDependencies.delete(previewDependencies.keys().next().value!);
       }
       const selectedPaths = new Set(records.sessions?.find((record) => record.session.id === sessionId)?.workspace?.map((file) => file.path));
+      const archive = researchPackageArchiveParts(input, preview.objectSizes, preview.additionalRecordBytes, preview.unpinnedObjectBytes);
       return {
         revision, estimatedBytes: estimateResearchPackageBytes(input, preview.objectSizes, preview.additionalRecordBytes, preview.unpinnedObjectBytes), estimateKind: "uncompressed" as const,
         // The cap and the exact tar size the export would be refused on. Both are
@@ -973,7 +1065,12 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         // that uses them gates on the quantity the exporter itself checks rather than
         // on the approximation above (they differ by a few percent either way).
         maxBytes: RESEARCH_PACKAGE_MAX_BYTES,
-        archiveBytes: researchPackageArchiveBytes(input, preview.objectSizes, preview.additionalRecordBytes, preview.unpinnedObjectBytes),
+        archiveBytes: archive.archiveBytes,
+        // What the dialog presents as the download: the `.sdresearch` the user saves
+        // is this tar through gzip (#1347). It costs one bounded 256 KiB gzip of the
+        // records sample plus arithmetic, so previewing a multi-GB Session never builds
+        // or compresses its archive. `maxBytes` above keeps describing the tar.
+        downloadBytes: estimateResearchPackageDownloadBytes(archive, input.records, preview.recordSamples.text, preview.payloadBytes),
         files: sessionId ? (await (preview.workspaceListings
           ? previewWorkspaceListing(preview.workspaceListings, store, sessionId)
           : listWorkspaceFiles(store, sessionId, true))).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],

@@ -8,7 +8,7 @@ import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip, gunzipSync, gzip, gzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
-import { jsonBytes, jsonByteLength, parseJsonBytes } from "./json.js";
+import { jsonBytes, jsonByteLength, jsonTextChunks, parseJsonBytes } from "./json.js";
 export { jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes } from "./json.js";
 
 export const RESEARCH_PACKAGE_FORMAT = "sciencediscovery-research-package" as const;
@@ -362,6 +362,29 @@ function prepareResearchPackage(input: ExportInput, maxBytes: number = RESEARCH_
  */
 export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: ReadonlyMap<string, number>,
   additionalRecordBytes = 0, unpinnedObjectBytes: readonly number[] = []): number {
+  return researchPackageArchiveParts(input, objectSizes, additionalRecordBytes, unpinnedObjectBytes).archiveBytes;
+}
+
+/** The tar size split into the parts a compression ratio has to treat differently. */
+export type ResearchPackageArchiveParts = {
+  /** The exact uncompressed tar size, the quantity the cap is enforced on. */
+  archiveBytes: number;
+  /** Raw JSON bytes of the records entry, including measured additional record bytes. */
+  recordsBytes: number;
+  /** Raw payload bytes carried by object entries. */
+  objectBytes: number;
+};
+
+/**
+ * `researchPackageArchiveBytes`, split into records and object payload bytes.
+ *
+ * The split exists for the download estimate (#1347), which measures the ratio on the
+ * JSON records and applies a payload ratio to the objects. Both numbers come from the
+ * same walk that already produced the tar size, so asking for the split costs nothing
+ * extra.
+ */
+export function researchPackageArchiveParts(input: ExportInput, objectSizes?: ReadonlyMap<string, number>,
+  additionalRecordBytes = 0, unpinnedObjectBytes: readonly number[] = []): ResearchPackageArchiveParts {
   const objects = [...(input.objects ?? [])];
   const recordsBytes = jsonByteLength(input.records) + additionalRecordBytes;
   const readmeBytes = Buffer.byteLength(input.readme ?? DEFAULT_README);
@@ -387,7 +410,9 @@ export function researchPackageArchiveBytes(input: ExportInput, objectSizes?: Re
     source: input.source, inventory, omissions: [...(input.omissions ?? [])],
     ...(input.exportProfile ? { exportProfile: input.exportProfile } : {}),
   };
-  return archiveTotalBytes([jsonByteLength(manifest), ...sizes]);
+  // `sizes` starts with the records and the README; everything after is an object.
+  const objectBytes = sizes.slice(2).reduce((sum, size) => sum + size, 0);
+  return { archiveBytes: archiveTotalBytes([jsonByteLength(manifest), ...sizes]), recordsBytes, objectBytes };
 }
 
 /** Whether a package built from this input stays within maxBytes (default: the shared cap). */
@@ -838,4 +863,164 @@ export function estimateResearchPackageBytes(input: ExportInput, objectSizes?: R
   return padded(recordBytes) + padded(readmeBytes) + padded(manifestEstimate)
     + (input.objects ?? []).reduce((sum, object) => sum + padded(objectSizes?.get(object.path) ?? objectSize(object)), 0)
     + unpinnedObjectBytes.reduce((sum, size) => sum + padded(size), 0) + TAR_BLOCK * 2;
+}
+
+/** The gzip header plus trailer, and the smallest deflate block, of an empty stream. */
+const GZIP_FRAME_BYTES = 20;
+/** How much of the records JSON is compressed to measure its ratio. Bounded on purpose. */
+const DOWNLOAD_RATIO_SAMPLE_BYTES = 256 * 1024;
+
+/**
+ * Fallback share of the uncompressed bytes that a downloaded `.sdresearch` keeps.
+ *
+ * Only used when a caller cannot offer the records JSON to measure. The measured
+ * exports behind it: 189,132 B downloaded for an 824,320 B tar (0.229) and 29,073,956 B
+ * for a 102.9 MB tar (0.27). Real packages compress unevenly — JSON records far more
+ * than an image — which is why the records ratio below is measured instead.
+ */
+export const RESEARCH_PACKAGE_DOWNLOAD_RATIO = 0.25;
+
+/**
+ * Share of a text object payload that a gzip download keeps.
+ *
+ * Object bytes are the evidence itself: workspace files and artifact payloads. In a
+ * research Session most of them are text (CSV, Markdown, JSON, source), which gzip
+ * compresses to roughly a third. The preview holds sizes and names only — never the
+ * payloads — so callers classify each object as text or opaque and this ratio is
+ * applied without reading a multi-GB workspace to answer one dialog.
+ */
+export const RESEARCH_PACKAGE_OBJECT_DOWNLOAD_RATIO = 0.3;
+
+/**
+ * Share of an already-compressed payload (PNG, PDF, zip, NPZ) that a download keeps.
+ *
+ * gzip cannot shrink these, so scaling them like text would understate exactly the
+ * export that needs the warning most (#1347 review F3.3). One, not the ~1.03 the frame
+ * can add, because the tar headers around it still compress.
+ */
+export const RESEARCH_PACKAGE_OPAQUE_PAYLOAD_DOWNLOAD_RATIO = 1;
+
+/** Object payload bytes by how gzip treats them. */
+export type ResearchPackagePayloadBytes = { text: number; opaque: number };
+
+/** The longest prefix of `text` whose UTF-8 encoding fits `maxBytes`. */
+function truncateToBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let end = Math.min(text.length, maxBytes);
+  while (end > 0 && Buffer.byteLength(text.slice(0, end)) > maxBytes) end--;
+  return text.slice(0, end);
+}
+
+/**
+ * JSON text of `value`, truncated to at most `maxBytes`.
+ *
+ * This is what a caller keeps when it wants to measure a gzip ratio without retaining
+ * the value itself: plain strings, not object references, and a hard byte budget. A
+ * truncated sample is fine — only its byte count is used, and deflate does not care
+ * that the JSON ends mid-token.
+ */
+export function jsonTextSample(value: unknown, maxBytes: number): string[] {
+  const chunks: string[] = [];
+  let bytes = 0;
+  for (const part of jsonTextChunks(value)) {
+    const chunk = truncateToBytes(part, maxBytes - bytes);
+    if (!chunk) break;
+    chunks.push(chunk);
+    bytes += Buffer.byteLength(chunk);
+    if (bytes >= maxBytes) break;
+  }
+  return chunks;
+}
+
+/** Text accumulated for a bounded JSON sample, and how many bytes it already holds. */
+export type JsonTextSample = { text: string[]; bytes: number };
+
+/**
+ * Append `value` to a bounded sample, keeping only text and never passing `maxBytes`.
+ *
+ * The sample deliberately holds strings rather than the value: a preview measures
+ * record bytes it does not retain, and retaining the object would keep a trajectory
+ * alive (#1347 review). The budget is enforced against the accumulated total, so
+ * repeated appends cannot grow past it.
+ */
+export function appendJsonTextSample(sample: JsonTextSample, value: unknown, maxBytes: number): void {
+  for (const chunk of jsonTextSample(value, Math.max(0, maxBytes - sample.bytes))) {
+    const size = Buffer.byteLength(chunk);
+    if (sample.bytes + size > maxBytes) break;
+    sample.text.push(chunk);
+    sample.bytes += size;
+  }
+}
+
+/**
+ * gzip ratio of a bounded sample, or undefined when there is nothing to measure.
+ *
+ * `measuredRecordText` is already-bounded JSON text of record bytes a caller counted
+ * but did not keep — the preview measures trajectory details without retaining them.
+ * Its own budget is enforced again here, so a caller cannot push the sample over
+ * `DOWNLOAD_RATIO_SAMPLE_BYTES`.
+ */
+function sampledJsonGzipRatio(records: unknown, measuredRecordText: readonly string[]): number | undefined {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (const text of measuredRecordText) {
+    const chunk = truncateToBytes(text, DOWNLOAD_RATIO_SAMPLE_BYTES - bytes);
+    if (!chunk) break;
+    parts.push(chunk);
+    bytes += Buffer.byteLength(chunk);
+    if (bytes >= DOWNLOAD_RATIO_SAMPLE_BYTES) break;
+  }
+  if (records !== undefined && bytes < DOWNLOAD_RATIO_SAMPLE_BYTES) {
+    for (const chunk of jsonTextSample(records, DOWNLOAD_RATIO_SAMPLE_BYTES - bytes)) {
+      parts.push(chunk);
+      bytes += Buffer.byteLength(chunk);
+    }
+  }
+  if (!bytes) return undefined;
+  const raw = Buffer.from(parts.join(""));
+  return Math.min(1, gzipSync(raw, { level: 6 }).byteLength / raw.byteLength);
+}
+
+/**
+ * Estimated size of the file a `.sdresearch` download produces.
+ *
+ * The dialog used to print the uncompressed tar as `预计大小` while the user saved a
+ * gzip file roughly four times smaller (#1347), so this is the number it presents now.
+ * Nothing is built or compressed: the tar size is already known
+ * (`researchPackageArchiveParts`) and the records ratio is measured on at most 256 KiB
+ * of the JSON records — including `measuredRecordText`, a bounded sample of the
+ * trajectory details a preview counted but did not keep — which keeps the preview of a
+ * multi-GB Session cheap.
+ *
+ * The metadata share (records, manifest, README, tar headers) is compressed at the
+ * measured records ratio. Object payload bytes are never read here: they follow the
+ * caller's split, text at `RESEARCH_PACKAGE_OBJECT_DOWNLOAD_RATIO` and already-compressed
+ * payloads at `RESEARCH_PACKAGE_OPAQUE_PAYLOAD_DOWNLOAD_RATIO`. With no split, every
+ * object byte counts as text; bytes the caller left unclassified carry no weight rather
+ * than a guessed ratio. The result is an estimate and callers must label it as one. It
+ * never feeds the cap, which keeps measuring `archiveBytes`.
+ */
+export function estimateResearchPackageDownloadBytes(parts: ResearchPackageArchiveParts, records?: unknown,
+  measuredRecordText: readonly string[] = [], payloads?: ResearchPackagePayloadBytes): number {
+  if (!Number.isSafeInteger(parts.archiveBytes) || parts.archiveBytes < 0) throw new Error("Invalid archive size");
+  if (parts.archiveBytes === 0) return 0;
+  const metadataRatio = (records === undefined && !measuredRecordText.length
+    ? undefined : sampledJsonGzipRatio(records, measuredRecordText)) ?? RESEARCH_PACKAGE_DOWNLOAD_RATIO;
+  const componentBytes = parts.recordsBytes + parts.objectBytes;
+  // Everything the tar holds beyond the records and the payloads: the manifest, the
+  // README and the block padding, all of which gzip well.
+  const metadataBytes = parts.recordsBytes + Math.max(0, parts.archiveBytes - componentBytes);
+  // Opaque payloads keep their own ratio so an image-heavy export is not reported as
+  // if it were text (#1347 review F3.3). Text payloads — and every object byte when the
+  // caller supplies no split — use the text ratio; bytes the caller left unclassified
+  // carry no weight instead of a guessed ratio. The split is clamped to the object
+  // payload the tar really carries: a caller's classification can outlive the archive it
+  // describes (a custom selection drops objects after they were seen), and the download
+  // can never contain more payload bytes than the tar does.
+  const opaque = Math.min(payloads?.opaque ?? 0, parts.objectBytes);
+  const text = Math.min(payloads?.text ?? parts.objectBytes, Math.max(0, parts.objectBytes - opaque));
+  const payloadEstimate = text * RESEARCH_PACKAGE_OBJECT_DOWNLOAD_RATIO
+    + opaque * RESEARCH_PACKAGE_OPAQUE_PAYLOAD_DOWNLOAD_RATIO;
+  return Math.max(GZIP_FRAME_BYTES, Math.round(metadataBytes * metadataRatio + payloadEstimate));
 }

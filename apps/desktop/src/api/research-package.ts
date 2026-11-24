@@ -5,7 +5,7 @@ import { withResearchPackageIdleTimeout } from "./research-package-stream.js";
 import type { ResearchContinuationOperation } from "@sciencediscovery/schema";
 
 export interface PackagePreview {
-  revision?: string; estimatedBytes: number; maxBytes?: number; archiveBytes?: number;
+  revision?: string; estimatedBytes: number; maxBytes?: number; archiveBytes?: number; downloadBytes?: number;
   files: Array<{ path: string; size: number; selected?: boolean }>;
   omissions: string[];
 }

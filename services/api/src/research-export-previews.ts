@@ -12,6 +12,15 @@ export type ResearchExportPreview = {
   maxBytes?: number;
   /** The exact uncompressed tar size this selection would produce, which is what a refusal is based on. */
   archiveBytes?: number;
+  /**
+   * Estimated size of the downloaded `.sdresearch` file, which is gzip-compressed.
+   *
+   * `estimatedBytes`, `archiveBytes` and `maxBytes` above all describe the
+   * uncompressed archive and keep their meaning; this is the number the dialog
+   * presents to the user, because it is the size of the file they actually save
+   * (#1347). Additive, so an older client keeps showing what it always did.
+   */
+  downloadBytes?: number;
 };
 export type DefaultExportPreviews = {
   revision: string;

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 // Classic JSX runtime under tsx, so React has to be in scope here.
 import React from "react";
 
-import { TEXT } from "../src/text.js";
+import { TEXT, setLanguage } from "../src/text.js";
 import { ResearchPackage, copyStatusLine, taskErrorMessage } from "../src/views/ResearchPackage.js";
 import { act, create } from "./support/dom-renderer.js";
 
@@ -29,6 +29,9 @@ const t = TEXT.researchPackage;
 
 interface PreviewBody {
   estimatedBytes: number;
+  archiveBytes?: number;
+  maxBytes?: number;
+  downloadBytes?: number;
   files: Array<{ path: string; selected?: boolean; size: number }>;
   omissions: string[];
   revision: string;
@@ -680,6 +683,41 @@ test("unticking a workspace file moves the selection's own size line", async (co
   });
 });
 
+test("the export estimate is the gzip download, with the uncompressed size and limit beside it (#1347)", async (context) => {
+  // Issue #1347: an 824,320 B tar (~805 KB) is downloaded as a 189,132 B gzip file.
+  // The dialog printed the tar as 预计大小, about four times what the user saved.
+  const preview: PreviewBody = {
+    estimatedBytes: 824_320, archiveBytes: 824_320, maxBytes: 5 * 1024 * 1024 * 1024,
+    downloadBytes: 206_080,
+    files: [{ path: "a.csv", selected: true, size: 10 }], omissions: [], revision: "r1",
+  };
+  const dialogClient = {
+    request: async (path: string) => {
+      if (path.startsWith("/api/sessions/")) return { id: "s1", messages: [], title: "Session" };
+      if (path.includes("/preview")) return preview;
+      return {};
+    },
+  } as never;
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: dialogClient,
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    const markup = rendered(view);
+    // The card's 预计大小 is the size of the file that is downloaded.
+    assert.match(markup, /"research-package-size"[\s\S]{0,200}201\.3 KB/,
+      "the profile card shows the compressed download size");
+    assert.equal(/"research-package-size"[\s\S]{0,200}805\.0 KB/.test(markup), false,
+      "the card no longer shows the uncompressed tar as the estimate");
+    // Both numbers appear together on the selection line, each with its own label.
+    assert.match(markup, /预计下载[\s\S]{0,80}201\.3 KB[\s\S]{0,80}未压缩估算[\s\S]{0,80}805\.0 KB/);
+    // The dialog states that the downloaded file is compressed, as the web one does.
+    assert.ok(markup.includes(t.downloadNote), markup);
+    // The cap keeps measuring the uncompressed archive.
+    assert.ok(markup.includes("未压缩上限：5.0 GB"), markup);
+  });
+});
+
 test("reopening the export dialog starts a fresh pending budget", async (context) => {
   // A stalled preview used to greet the reopened dialog as already exhausted
   // (#1235 review 2, F11).
@@ -761,4 +799,39 @@ test("a new export request starts with the payload switches off", async (context
     assert.equal(options(view)!.findAllByProps({ type: "checkbox" })[0]!.props.checked, false,
       "choosing complete again shows the memory-graph switch off");
   });
+});
+
+test("a failed estimate keeps the service sentence in the technical details", async (context) => {
+  const closed = () => Object.assign(new Error("Export preview service is closed"), { status: 503, code: "EXPORT_PREVIEW_SERVICE_CLOSED" });
+  const failing = {
+    request: async (path: string) => {
+      if (path.startsWith("/api/sessions/")) return { id: "s1", messages: [], title: "Session" };
+      if (path.includes("/preview")) throw closed();
+      return {};
+    },
+  } as never;
+  try {
+    for (const [language, lead] of [["zh-CN", t.estimateFailed], ["en", "Could not estimate the size"]] as const) {
+      // `setLanguage` touches documentElement when a document exists; set it before
+      // `withView` installs its DOM stub, and restore the default afterwards.
+      setLanguage(language);
+      await withView(context, React.createElement(ResearchPackage, {
+        ...props,
+        client: failing,
+        request: { kind: "export", projectId: "p1", sessionId: "s1" },
+      }), async (view) => {
+        const alerts = () => view.root.findAll((node) => node.props?.role === "alert");
+        for (let attempt = 0; attempt < 20 && !alerts().length; attempt += 1) await act(async () => { await Promise.resolve(); });
+        assert.equal(alerts().length, 1, `${language}: one alert`);
+        const alert = alerts()[0]!;
+        assert.deepEqual(alert.findAllByType("p").map((node) => node.children.join("")), [lead]);
+        const details = alert.findAllByType("details");
+        assert.equal(details.length, 1, `${language}: the raw text is under a disclosure`);
+        assert.equal(details[0]!.findAllByType("summary")[0]!.children.join(""), language === "zh-CN" ? t.detailsRaw : "Technical details");
+        assert.ok(alert.findAllByType("code").some((node) => node.children.join("") === "Export preview service is closed"));
+      });
+    }
+  } finally {
+    setLanguage("zh-CN");
+  }
 });

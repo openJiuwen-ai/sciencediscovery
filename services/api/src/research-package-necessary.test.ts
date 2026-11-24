@@ -44,6 +44,10 @@ function sizing() {
     hashes: new Set<string>(), refs: new Map(),
     jsonSizes: new WeakMap<object, number>(), casVisited: new WeakSet<object>(), refsVisited: new WeakSet<object>(),
     workspaceListings: new Map(),
+    // The download estimate (#1347) measures a bounded record sample and classifies
+    // object payload only after selection; keep this stub equal to the real shape.
+    recordSamples: { revision: "", bytes: 0, text: [] as string[] }, payloadHints: new Map<string, string>(),
+    payloadBytes: { text: 0, opaque: 0 },
   } as never;
 }
 

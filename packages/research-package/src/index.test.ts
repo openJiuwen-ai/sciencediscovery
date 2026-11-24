@@ -5,7 +5,7 @@ import { Writable } from "node:stream";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, importResearchPackage, importResearchPackageStreamed, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, RESEARCH_PACKAGE_MAX_ENTRIES, sha256, type ResearchPackageExportProfile } from "./index.js";
+import { createResearchPackage, createResearchPackageAsync, estimateResearchPackageBytes, appendJsonTextSample, estimateResearchPackageDownloadBytes, jsonTextSample, researchPackageArchiveParts, RESEARCH_PACKAGE_DOWNLOAD_RATIO, RESEARCH_PACKAGE_OBJECT_DOWNLOAD_RATIO, importResearchPackage, importResearchPackageStreamed, type JsonTextSample, inspectResearchPackage, jsonBytes, jsonByteLength, jsonDigest, parseJsonBytes, researchPackageArchiveBytes, researchPackageFits, researchPackageUploadBytes, resolveResearchPackageMaxBytes, writeResearchPackage, RESEARCH_PACKAGE_DEFAULT_MAX_BYTES, RESEARCH_PACKAGE_MAX_MAX_BYTES, RESEARCH_PACKAGE_MIN_MAX_BYTES, RESEARCH_PACKAGE_MAX_ENTRIES, sha256, type ResearchPackageExportProfile } from "./index.js";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { researchPackagePlugin } from "./plugin.js";
 
@@ -33,6 +33,90 @@ test("incremental detail sizes preserve complete package estimates including tar
   const extra = details.reduce((sum, detail, index) => sum + jsonByteLength(detail, sizes) + (index ? 1 : 0), 0);
   assert.equal(estimateResearchPackageBytes(skeleton, undefined, extra), estimateResearchPackageBytes(input));
   assert.throws(() => estimateResearchPackageBytes(skeleton, undefined, -1), /size/i);
+});
+
+test("the download estimate describes the gzip file, not the uncompressed tar (#1347)", () => {
+  // A trajectory-heavy Session: the records JSON is the package. The dialog used to
+  // print that tar as `预计大小`, about four times larger than the gzip file saved.
+  const records = { sessions: Array.from({ length: 400 }, (_, session) => ({ id: `s${session}`,
+    messages: Array.from({ length: 12 }, (_, turn) => ({ role: turn % 2 ? "assistant" : "user",
+      content: `turn ${turn} of ${session}: ${"measured result ".repeat(8)}` })) })) };
+  const input = { source: { projectId: "p-download", title: "Download estimate" }, records };
+  const parts = researchPackageArchiveParts(input);
+  const downloaded = createResearchPackage(input).bytes.byteLength;
+  const estimate = estimateResearchPackageDownloadBytes(parts, records);
+  assert.ok(estimate < parts.archiveBytes, "the estimate is a compressed size, never the tar again");
+  assert.ok(Math.abs(estimate - downloaded) < downloaded * 0.5,
+    `JSON records: estimate ${estimate} vs the ${downloaded} B download of a ${parts.archiveBytes} B tar`);
+
+  // Object payloads are never read for the estimate, so they use the documented
+  // payload ratio. A text payload must still land in the same order of magnitude as
+  // its real download rather than being scaled as if it were the records JSON.
+  const payload = Buffer.from("value,label,note\n" + Array.from({ length: 4000 }, (_, row) =>
+    `${row},group-${row % 7},sample ${row * 2654435761 % 1000003}\n`).join(""));
+  const objectInput = { source: { projectId: "p-objects", title: "Payload estimate" }, records: { claims: [] },
+    objects: [{ path: `objects/${sha256(payload)}`, bytes: payload }] };
+  const objectParts = researchPackageArchiveParts(objectInput);
+  assert.equal(objectParts.objectBytes, payload.byteLength);
+  const objectDownload = createResearchPackage(objectInput).bytes.byteLength;
+  const objectEstimate = estimateResearchPackageDownloadBytes(objectParts, objectInput.records);
+  assert.ok(objectEstimate > objectDownload * 0.25 && objectEstimate < objectDownload * 3,
+    `text payload: estimate ${objectEstimate} vs download ${objectDownload}`);
+
+  // A preview measures trajectory details instead of keeping them and hands over only
+  // bounded JSON text; sampling that instead of the records must reach the same answer.
+  const measuredText = jsonTextSample(records.sessions, 64 * 1024);
+  assert.ok(measuredText.every((chunk) => typeof chunk === "string"), "the sample is text, never objects");
+  const withSample = estimateResearchPackageDownloadBytes({ ...parts, objectBytes: 0 }, { sessions: [] }, measuredText);
+  assert.ok(Math.abs(withSample - estimate) < estimate * 0.5,
+    `measured sample ${withSample} vs records ${estimate}`);
+
+  // The sample never exceeds the byte budget it was given, and the estimate enforces
+  // its own budget even when a caller hands over too much text (#1347 review).
+  const budget = 4096;
+  const bounded = jsonTextSample(records, budget);
+  const boundedBytes = bounded.reduce((sum, chunk) => sum + Buffer.byteLength(chunk), 0);
+  assert.ok(boundedBytes <= budget, `sample ${boundedBytes} must fit the ${budget} B budget`);
+  // Repeated appends cannot grow past the budget either, and only text is kept.
+  const sample: JsonTextSample = { text: [], bytes: 0 };
+  for (let append = 0; append < 5; append += 1) appendJsonTextSample(sample, records, budget);
+  assert.ok(sample.bytes <= budget, `accumulated sample ${sample.bytes} must fit ${budget} B`);
+  assert.equal(sample.text.reduce((sum, chunk) => sum + Buffer.byteLength(chunk), 0), sample.bytes);
+  assert.ok(sample.text.every((chunk) => typeof chunk === "string"), "no record object is retained");
+  const oversized = new Array<string>(200).fill("x".repeat(4096));
+  const clamped = estimateResearchPackageDownloadBytes(parts, { sessions: [] }, oversized);
+  assert.ok(Number.isSafeInteger(clamped) && clamped > 0 && clamped < parts.archiveBytes);
+
+  // Already-compressed payloads are not scaled as text: gzip keeps an image or a zip
+  // about as large as the tar carries it, and understating that would be worse than
+  // the overstatement this fix removes (#1347 review F3.3).
+  const opaqueEstimate = estimateResearchPackageDownloadBytes(objectParts, objectInput.records, [],
+    { text: 0, opaque: payload.byteLength });
+  const textEstimate = estimateResearchPackageDownloadBytes(objectParts, objectInput.records, [],
+    { text: payload.byteLength, opaque: 0 });
+  assert.ok(opaqueEstimate > textEstimate * 2,
+    `opaque ${opaqueEstimate} must stay near the tar while text ${textEstimate} shrinks`);
+  assert.ok(opaqueEstimate > (objectParts.archiveBytes - objectParts.recordsBytes) * 0.8);
+
+  // A caller's payload split can outlive the archive it described (a custom selection
+  // drops objects after they were seen). The share is clamped to the object payload
+  // the tar really carries, so the estimate never exceeds the archive (#1347 review).
+  const overReported = estimateResearchPackageDownloadBytes(objectParts, objectInput.records, [],
+    { text: payload.byteLength * 8, opaque: payload.byteLength * 8 });
+  assert.ok(overReported <= objectParts.archiveBytes,
+    `clamped estimate ${overReported} must stay within the ${objectParts.archiveBytes} B tar`);
+  assert.equal(estimateResearchPackageDownloadBytes(objectParts, objectInput.records, [],
+    { text: 0, opaque: payload.byteLength * 8 }), estimateResearchPackageDownloadBytes(objectParts, objectInput.records, [],
+    { text: 0, opaque: payload.byteLength }));
+
+  // Without the records the estimate still scales the tar the preview already knows,
+  // using the documented whole-archive ratio: no build, no compression.
+  assert.equal(estimateResearchPackageDownloadBytes(parts), Math.round(parts.archiveBytes * RESEARCH_PACKAGE_DOWNLOAD_RATIO));
+  assert.equal(RESEARCH_PACKAGE_DOWNLOAD_RATIO, 0.25);
+  assert.equal(RESEARCH_PACKAGE_OBJECT_DOWNLOAD_RATIO, 0.3);
+  assert.equal(estimateResearchPackageDownloadBytes({ archiveBytes: 0, recordsBytes: 0, objectBytes: 0 }, {}), 0);
+  assert.throws(() => estimateResearchPackageDownloadBytes({ archiveBytes: -1, recordsBytes: 0, objectBytes: 0 }), /archive size/i);
+  assert.throws(() => estimateResearchPackageDownloadBytes({ archiveBytes: 1.5, recordsBytes: 0, objectBytes: 0 }), /archive size/i);
 });
 
 test("exports and imports a deterministic evidence package", () => {

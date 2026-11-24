@@ -95,7 +95,7 @@ test("complete research package import restores a visible Session history", { ta
       await expect(dialog.getByRole("button", { name: "刷新大小", exact: true })).toHaveCount(0);
       // Import invalidates the background cache; all five export profiles must
       // finish before the dialog can publish a consistent revision's sizes.
-      await expect(dialog.locator(".research-choice-card")).toHaveText([/必要导出.*[0-9]+(?:\.[0-9]+)? (?:B|KiB)/, /完整导出.*[0-9]+(?:\.[0-9]+)? (?:B|KiB)/], { timeout: 60_000 });
+      await expect(dialog.locator(".research-choice-card")).toHaveText([/必要导出.*[0-9]+(?:\.[0-9]+)? (?:B|KiB|MiB|GiB)/, /完整导出.*[0-9]+(?:\.[0-9]+)? (?:B|KiB|MiB|GiB)/], { timeout: 60_000 });
       await expect(dialog).toContainText("包含轨迹摘要");
       await dialog.getByText("自定义内容", { exact: true }).click();
       const result = dialog.locator("label").filter({ hasText: "results/verified.csv" }).getByRole("checkbox");
@@ -146,7 +146,12 @@ test("complete research package import restores a visible Session history", { ta
       await dialog.getByText("自定义内容", { exact: true }).click();
       await expect(scratch).toBeChecked();
       await expect(dialog.getByRole("button", { name: "立即导出", exact: true })).toBeEnabled();
-      await expect(dialog).toContainText("显示所选内容的未压缩估算大小");
+      // #1347: the headline is the size of the downloaded gzip file, the uncompressed
+      // size is still shown next to it, and the cap keeps its own label.
+      await expect(dialog.locator(".research-export-estimate strong")).toHaveText(/预计 \d+(?:\.\d+)? (?:B|KiB|MiB|GiB)/);
+      await expect(dialog).toContainText("下载的 .sdresearch 是 gzip 压缩包");
+      await expect(dialog).toContainText(/未压缩约 \d+(?:\.\d+)? (?:B|KiB|MiB|GiB)/);
+      await expect(dialog).toContainText("未压缩上限：");
       await expect(dialog.getByRole("alert")).toHaveCount(0);
       const complete = await downloadPackage(true);
       expect(complete.manifest.exportProfile.level).toBe("complete");
