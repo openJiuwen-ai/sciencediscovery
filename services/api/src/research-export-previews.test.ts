@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import { ResearchExportPreviews, type ExportPreviewOptions } from "./research-export-previews.js";
+import { PREVIEW_EVIDENCE_MUTATED, ResearchExportPreviews, type ExportPreviewOptions } from "./research-export-previews.js";
 import { ApiStatusError } from "./http/api-status-error.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 const statusError = (status: number, code: string) => (error: unknown) =>
@@ -228,12 +228,15 @@ test("idle preview watchers expire until the next explicit visit", async () => {
   } finally { await previews.close(); }
 });
 
-test("default previews share one busy-state check for the admitted revision", async () => {
+test("default previews share the admission busy check but revalidate queued work", async () => {
   let checks = 0;
   const previews = new ResearchExportPreviews(async () => "r1", async (_options, revision) => ({ revision, estimatedBytes: 1, estimateKind: "uncompressed", files: [], omissions: [] }), async () => { checks++; return true; });
   try {
     await previews.defaults("p", "s", true);
-    assert.equal(checks, 1);
+    // One shared admission check, then each queued profile asks again before and
+    // after its work so a Run that starts mid-request still yields PENDING. These
+    // are cheap run-list reads, not the whole-tree revision walk.
+    assert.equal(checks, 11);
   } finally { await previews.close(); }
 });
 
@@ -278,7 +281,7 @@ test("explicit previews answer the pending contract when a run races file public
   } finally { await previews.close(); }
 });
 
-test("failed and stale calculations are retried instead of caching an obsolete size", async () => {
+test("a failed calculation retries, and an external revision change is picked up by the next request", async () => {
   let revision = "r1", calls = 0, fail = true;
   const previews = new ResearchExportPreviews(async () => revision, async (_options, current) => {
     calls++; if (fail) throw new Error("offline");
@@ -287,17 +290,28 @@ test("failed and stale calculations are retried instead of caching an obsolete s
   });
   const options = { projectId: "p", sessionId: "s", level: "complete" as const, includeFullTrajectory: true };
   await assert.rejects(previews.get(options), /offline/);
-  fail = false; const fresh = await previews.get(options);
+  fail = false;
+  // A preview is the request's snapshot: an unrelated external write during the
+  // build does not force a second whole-tree walk here. The next poll asks for
+  // the new revision and recalculates instead of reusing this answer.
+  const stale = await previews.get(options);
+  assert.equal(stale.revision, "r1"); assert.equal(calls, 2);
+  const fresh = await previews.get(options);
   assert.equal(fresh.revision, "r2"); assert.equal(calls, 3);
   assert.deepEqual(await previews.get(options), fresh); assert.equal(calls, 3);
   previews.close();
 });
 
-test("revision changes exhausting calculation retries expose the pending status and can recover", async () => {
+test("a preview whose own reconcile moved the revision retries, and exhaustion exposes the pending status", async () => {
   let revision = 0, changing = true, calculations = 0;
-  const previews = new ResearchExportPreviews(async () => String(revision), async (_options, current) => {
+  const previews = new ResearchExportPreviews(async () => String(revision), async (_options, current, _signal, scope) => {
     calculations++;
-    if (changing) revision++;
+    if (changing) {
+      revision++;
+      // The package build reports this through the request scope when its
+      // workspace reconcile actually wrote provenance.
+      scope?.set(PREVIEW_EVIDENCE_MUTATED, true);
+    }
     return { revision: current, estimatedBytes: 1, estimateKind: "uncompressed", files: [], omissions: [] };
   });
   const options = { projectId: "p", sessionId: "s", level: "necessary" as const, includeFullTrajectory: false };
@@ -326,7 +340,7 @@ test("default profiles exhausting consistency retries expose the pending status"
   } finally { await previews.close(); }
 });
 
-test("queued requests coalesce superseded revisions without recalculating the latest evidence", async () => {
+test("queued requests calculate their own snapshots without recalculating an adopted revision", async () => {
   let revision = "r1", calls = 0;
   let release!: () => void;
   let started!: () => void;
@@ -345,9 +359,11 @@ test("queued requests coalesce superseded revisions without recalculating the la
   await new Promise<void>((resolve) => setImmediate(resolve));
   release();
   const [left, right] = await Promise.all([first, second]);
-  assert.equal(left.revision, "r2");
-  assert.deepEqual(right, left);
-  assert.equal(calls, 2, "only the initial and latest revisions are calculated");
+  assert.equal(left.revision, "r1", "the first request keeps the snapshot it admitted");
+  assert.equal(right.revision, "r2", "the queued request reads the newer snapshot before calculating");
+  assert.equal(calls, 2, "each request calculates once");
+  assert.deepEqual(await previews.get(options), right);
+  assert.equal(calls, 2, "the newer result is cached");
   previews.close();
 });
 
@@ -370,4 +386,95 @@ test("shutdown waits for admitted preview work and rejects new work", async () =
   await assert.rejects(previews.get(options), /closed/);
   release(); await closing; await rejected;
   assert.equal(drained, true);
+});
+
+test("default previews share one evidence-revision snapshot instead of walking per profile", async () => {
+  // #1365: five profiles used to walk the whole session tree three times each
+  // (15 scans). The request now takes one snapshot all five share, and only a
+  // build that wrote evidence takes a second walk.
+  let reads = 0;
+  const previews = new ResearchExportPreviews(async () => { reads++; return "r1"; }, async (_options, revision) => ({
+    revision, estimatedBytes: 1, estimateKind: "uncompressed", files: [], omissions: [],
+  }));
+  try {
+    await previews.defaults("p", "s");
+    assert.equal(reads, 1, "one evidence-revision walk for the whole five-profile request");
+  } finally { await previews.close(); }
+});
+
+test("a panel watch followed by defaults takes one evidence-revision walk", async () => {
+  // The HTTP defaults route registers the watcher and then builds the same
+  // dialog. Warming first would walk the session tree for a preview the request
+  // immediately replaces (#1365).
+  let reads = 0;
+  const previews = new ResearchExportPreviews(async () => { reads++; return "r1"; }, async (_options, revision) => ({
+    revision, estimatedBytes: 1, estimateKind: "uncompressed", files: [], omissions: [],
+  }));
+  try {
+    previews.watch("p", "s", false);
+    await previews.defaults("p", "s");
+    assert.equal(reads, 1);
+  } finally { await previews.close(); }
+});
+
+test("adopting a newer revision drops the obsolete cache key", async () => {
+  let revision = "r1", mutate = true, calculations = 0;
+  const previews = new ResearchExportPreviews(async () => revision, async (_options, current, _signal, scope) => {
+    calculations++;
+    if (mutate) {
+      mutate = false;
+      revision = "r2";
+      scope?.set(PREVIEW_EVIDENCE_MUTATED, true);
+    }
+    return { revision: current, estimatedBytes: calculations, estimateKind: "uncompressed", files: [], omissions: [] };
+  });
+  const options = { projectId: "p", sessionId: "s", level: "necessary" as const, includeFullTrajectory: false };
+  try {
+    const adopted = await previews.get(options);
+    assert.equal(adopted.revision, "r2");
+    assert.equal(calculations, 2, "the first build adopts the revision its write produced and recalculates");
+    // Ask for the abandoned revision again. A surviving r1 key would hand back
+    // the r2 result without calculating.
+    revision = "r1";
+    const old = await previews.get(options);
+    assert.equal(old.revision, "r1");
+    assert.equal(calculations, 3, "the obsolete key is gone");
+  } finally { await previews.close(); }
+});
+
+test("default profiles remove pre-adoption aliases on the success and ready paths", async () => {
+  let revision = "r1", mutated = false, calculations = 0;
+  const previews = new ResearchExportPreviews(async () => revision, async (_options, current, _signal, scope) => {
+    calculations++;
+    if (current === "r0" && !mutated) {
+      mutated = true;
+      revision = "r1";
+      scope?.set(PREVIEW_EVIDENCE_MUTATED, true);
+    }
+    return { revision: current, estimatedBytes: calculations, estimateKind: "uncompressed", files: [], omissions: [] };
+  });
+  // These exactly match the options `defaults()` queues, including the explicit
+  // `includeFullMemoryGraph` boolean, so the aliases are actually reachable.
+  const successOptions = { projectId: "p", sessionId: "s", level: "complete" as const, includeFullTrajectory: true, includeFullMemoryGraph: false };
+  const readyOptions = { projectId: "p", sessionId: "s", level: "complete" as const, includeFullTrajectory: false, includeFullMemoryGraph: false };
+  try {
+    // Seed the ready path: this profile will already have an r1 result when the
+    // defaults request reaches it.
+    assert.equal((await previews.get(readyOptions)).revision, "r1");
+    revision = "r0";
+    const defaults = await previews.defaults("p", "s");
+    assert.equal(defaults.revision, "r1");
+    const afterDefaults = calculations;
+    assert.ok(afterDefaults > 2, "the first profile adopted the revision its own write produced");
+
+    // Success path: a queued sibling calculated at r1 after the adoption.
+    revision = "r0";
+    assert.equal((await previews.get(successOptions)).revision, "r0");
+    assert.equal(calculations, afterDefaults + 1, "the success-path sibling recalculated instead of aliasing r1");
+
+    // Ready path: a queued sibling consumed the seeded r1 entry and returned early.
+    revision = "r0";
+    assert.equal((await previews.get(readyOptions)).revision, "r0");
+    assert.equal(calculations, afterDefaults + 2, "the ready-path sibling recalculated instead of aliasing r1");
+  } finally { await previews.close(); }
 });

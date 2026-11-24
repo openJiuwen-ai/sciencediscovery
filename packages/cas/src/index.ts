@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { lstat, open, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { CasObjectRef } from "@sciencediscovery/schema";
@@ -31,6 +31,12 @@ export interface ContentStore {
   has(hash: string): Promise<boolean>;
   /** Presence only: no payload read, so the caller can decide before streaming. */
   exists(hash: string): Promise<boolean>;
+  /**
+   * The stored byte length from file metadata, or `undefined` when no layout has
+   * the object. Never reads or verifies the payload; callers that need verified
+   * bytes must use `read` or `stream`.
+   */
+  storedSize(hash: string): Promise<number | undefined>;
   put(content: string | Buffer): Promise<CasObjectRef>;
   putFile(path: string): Promise<CasObjectRef>;
   read(hash: string): Promise<Buffer>;
@@ -118,6 +124,37 @@ export class CasStore implements ContentStore {
       }
     }
     return false;
+  }
+
+  /**
+   * The object's length from file metadata, without reading its payload.
+   *
+   * A size preview only needs the number. `stream()` would hash the file twice
+   * before returning its first byte, which made the "metadata only" estimate the
+   * most expensive read in the export (#1365). Integrity is not part of this
+   * answer: the writer still verifies every object it copies, so a corrupt copy
+   * reads as present here and then fails the export loudly instead of being
+   * silently sized as if it were intact.
+   *
+   * When more than one layout exists with different lengths, the answer is
+   * `undefined`: the caller must use `read()` so it sizes the same intact copy
+   * the writer would fall back to. Returning the first layout's shorter length
+   * would under-count an object whose primary copy is truncated.
+   */
+  async storedSize(hash: string): Promise<number | undefined> {
+    const sizes = new Set<number>();
+    for (const path of this.readPaths(hash)) {
+      try {
+        const info = await lstat(path);
+        if (info.isFile()) sizes.add(info.size);
+      } catch (error) {
+        // Only a missing copy falls through to the next layout; any other
+        // filesystem failure is this store's problem, not the object's.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    if (!sizes.size || sizes.size > 1) return undefined;
+    return [...sizes][0];
   }
 
   async verify(hash: string): Promise<boolean> {

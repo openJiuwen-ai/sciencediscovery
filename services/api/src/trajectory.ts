@@ -55,6 +55,16 @@ export async function sessionTrajectory(
     id: `subagent:${child.id}`, label: child.input.description || child.id, parentId: mainId, parentRunId: child.parentTurnId,
   }))];
   const events: RecordedEvent[] = [];
+  /** Records actually read per Run, so a caller can count without a second pass. */
+  const eventCounts = new Map<string, number>();
+  const archivedRunIds = new Set<string>();
+  /** Streams this walk actually opened, so a counter can cover only the rest. */
+  const visitedStreams = new Map<string, Set<string>>();
+  const visited = (runId: string, streamId: string) => {
+    const streams = visitedStreams.get(runId) ?? new Set<string>();
+    streams.add(streamId);
+    visitedStreams.set(runId, streams);
+  };
   let omittedEvents = 0;
   // Trim in blocks so appending stays amortised constant; the exact budget is
   // restored once, after the last event is collected.
@@ -69,12 +79,15 @@ export async function sessionTrajectory(
   };
   const recordedSteps = new Set<string>();
   for (const run of await store.listSessionRuns(sessionId)) {
-    if (archivedRuns.has(run.id)) continue;
+    if (archivedRuns.has(run.id)) { archivedRunIds.add(run.id); continue; }
     signal.throwIfAborted();
     const streams = [{ id: "main", agentId: mainId }, ...children.map(child => ({ id: `subagent-${child.id}`, agentId: `subagent:${child.id}` }))];
     const tools = new Map<string, string>();
     for (const stream of streams) {
-      for (const record of await store.listRunStreamEvents(sessionId, run.id, stream.id)) {
+      const records = await store.listRunStreamEvents(sessionId, run.id, stream.id);
+      visited(run.id, stream.id);
+      eventCounts.set(run.id, (eventCounts.get(run.id) ?? 0) + records.length);
+      for (const record of records) {
         let event = object(record.event);
         const evidence = object(event.evidence);
         // Older packages preserved source identities inside immutable CAS records.
@@ -93,7 +106,10 @@ export async function sessionTrajectory(
       }
     }
     for (const [id, agentId] of tools) {
-      for (const record of await store.listRunStreamEvents(sessionId, run.id, `tool-${id}`)) {
+      const records = await store.listRunStreamEvents(sessionId, run.id, `tool-${id}`);
+      visited(run.id, `tool-${id}`);
+      eventCounts.set(run.id, (eventCounts.get(run.id) ?? 0) + records.length);
+      for (const record of records) {
         keep({ id: `${run.id}:tool-${id}:${record.sequence}`, agentId, streamId: `tool-${id}`, sequence: record.sequence, createdAt: record.createdAt, runId: run.id, event: record.event });
       }
     }
@@ -131,7 +147,7 @@ export async function sessionTrajectory(
   if (omittedEvents > 0) {
     live.index.warnings.push(`Only the newest ${maxEvents.toLocaleString("en-US")} recorded Run events are shown; ${omittedEvents.toLocaleString("en-US")} older events were left out to keep this view within its budget. Raise ${TRAJECTORY_MAX_EVENTS_ENV} to include more.`);
   }
-  if (!archived) return live;
+  if (!archived) return { ...live, eventCounts, archivedRunIds, visitedStreams };
   const untimed = [...(archived.index.untimedEntries ?? archived.index.historicalEntries ?? []), ...(live.index.untimedEntries ?? [])];
   const index = { ...live.index, agents: [...new Map([...archived.index.agents, ...live.index.agents].map((agent) => [agent.id, agent])).values()],
     entries: [...archived.index.entries, ...live.index.entries], untimedEntries: untimed, historicalEntries: untimed,
@@ -147,5 +163,5 @@ export async function sessionTrajectory(
     for (const entry of [...index.entries, ...untimed]) yield JSON.stringify({ type: "entry", ...await detail(entry.id) }) + "\n";
     yield JSON.stringify({ type: "complete", entries: index.entries.length + untimed.length, capturedAt: index.capturedAt }) + "\n";
   }
-  return { index, detail, exportRecords };
+  return { index, detail, exportRecords, eventCounts, archivedRunIds, visitedStreams };
 }

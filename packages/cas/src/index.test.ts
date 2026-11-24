@@ -97,6 +97,46 @@ test("exists() answers presence without reading the payload, in every layout has
   });
 });
 
+test("storedSize() reports the object length from metadata without reading or verifying it", async () => {
+  // #1365: preview sizing must not stream (and hash twice) a payload whose length
+  // the file's own metadata already carries. The same-length rewrite below is the
+  // deliberate trade-off: it stays "present" here, and `read()` still refuses it.
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("1234567890");
+    const object = await store.put(bytes);
+    assert.equal(await store.storedSize(object.hash), bytes.length);
+
+    const blob = resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash);
+    await writeFile(blob, "abcdefghij");
+    assert.equal(await store.storedSize(object.hash), bytes.length, "metadata answers even when the bytes were replaced at the same length");
+    assert.equal(await store.verify(object.hash), false, "verification is still the reader's job");
+    await assert.rejects(store.read(object.hash), /CAS integrity failure/);
+
+    await writeFile(blob, "short");
+    assert.equal(await store.storedSize(object.hash), 5, "a truncated object reports its actual stored length");
+    assert.equal(await store.storedSize(sha256("never stored")), undefined);
+    await assert.rejects(store.storedSize("../escape"), /Invalid CAS hash/);
+  });
+});
+
+test("storedSize() refuses to pick between layouts whose lengths disagree", async () => {
+  // #1365: the preview must size the same intact copy the writer would read. A
+  // truncated primary plus an intact legacy copy is ambiguous, so the metadata
+  // fast path declines and the caller's verified read answers the length.
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("intact legacy evidence");
+    const object = await store.put(bytes);
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(root, "cas", "sha256", object.hash.slice(0, 2)), { recursive: true });
+    await writeFile(legacy, bytes);
+    const primary = resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash);
+    await writeFile(primary, "truncated");
+
+    assert.equal(await store.storedSize(object.hash), undefined, "disagreeing layouts are not a metadata answer");
+    assert.deepEqual(await store.read(object.hash), bytes, "read() falls back to the intact copy");
+  });
+});
+
 test("invalid hashes are rejected and missing objects do not verify", async () => {
   await withStore(async (store) => {
     await assert.rejects(store.read("../escape"), /Invalid CAS hash/);

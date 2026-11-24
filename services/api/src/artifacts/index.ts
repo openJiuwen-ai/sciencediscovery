@@ -84,9 +84,14 @@ const inflightWorkspaceListings = new WeakMap<
 >();
 const MAX_SHARED_LISTING_AGE_MS = 1_000;
 
-export function listWorkspaceFiles(store: SessionStore, sessionId: string, complete = false): Promise<WorkspaceFile[]> {
+export function listWorkspaceFiles(
+  store: SessionStore,
+  sessionId: string,
+  complete = false,
+  options: { onMutation?: () => void } = {},
+): Promise<WorkspaceFile[]> {
   // Complete export scans must never reuse a bounded UI listing.
-  if (complete) return readWorkspaceFiles(store, sessionId, true);
+  if (complete) return readWorkspaceFiles(store, sessionId, true, options);
   let bySession = inflightWorkspaceListings.get(store);
   if (!bySession) {
     bySession = new Map();
@@ -95,7 +100,7 @@ export function listWorkspaceFiles(store: SessionStore, sessionId: string, compl
   const now = Date.now();
   const inflight = bySession.get(sessionId);
   if (inflight && now - inflight.startedAt < MAX_SHARED_LISTING_AGE_MS) return inflight.listing;
-  const entry = { listing: readWorkspaceFiles(store, sessionId), startedAt: now };
+  const entry = { listing: readWorkspaceFiles(store, sessionId, false, options), startedAt: now };
   bySession.set(sessionId, entry);
   void entry.listing.catch(() => {}).finally(() => {
     if (bySession.get(sessionId) === entry) bySession.delete(sessionId);
@@ -103,14 +108,19 @@ export function listWorkspaceFiles(store: SessionStore, sessionId: string, compl
   return entry.listing;
 }
 
-async function readWorkspaceFiles(store: SessionStore, sessionId: string, complete = false): Promise<WorkspaceFile[]> {
+async function readWorkspaceFiles(
+  store: SessionStore,
+  sessionId: string,
+  complete = false,
+  options: { onMutation?: () => void } = {},
+): Promise<WorkspaceFile[]> {
   const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
   const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId), complete ? Number.POSITIVE_INFINITY : undefined);
   const provenance = await store.reconcileWorkspaceFiles(
     sessionId,
     scan.files,
     baseline,
-    { scanComplete: !scan.truncated },
+    { scanComplete: !scan.truncated, onMutation: options.onMutation },
   );
   const files = scan.files;
   return files.map((file) => {

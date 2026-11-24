@@ -42,6 +42,51 @@ class ExportPreviewInvalidatedError extends ApiStatusError {
   constructor() { super(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING"); }
 }
 
+/**
+ * One revision walk per preview request.
+ *
+ * A preview used to read the whole session tree three times per profile: once at
+ * admission, once when the queued work started, and once after the build to prove
+ * the evidence had not moved (#1365). The five default profiles multiplied that to
+ * fifteen walks per dialog. The first read is now the request's snapshot, shared by
+ * every profile; the build reports when its own workspace reconcile wrote evidence,
+ * and only then does the request take a second walk and retry under the new revision.
+ * A preview that writes nothing therefore costs exactly one walk.
+ */
+class PreviewRevisionScope {
+  private initialRead?: Promise<string>;
+  private latestRead?: Promise<string>;
+
+  constructor(private readonly read: (projectId: string, sessionId?: string) => Promise<string>) {}
+
+  initial(projectId: string, sessionId?: string): Promise<string> {
+    return this.initialRead ??= this.read(projectId, sessionId);
+  }
+
+  latest(projectId: string, sessionId?: string): Promise<string> {
+    if (this.latestRead) return this.latestRead;
+    const work = this.read(projectId, sessionId);
+    this.latestRead = work;
+    void work.catch(() => { if (this.latestRead === work) this.latestRead = undefined; });
+    return work;
+  }
+
+  /** A profile observed a newer revision; later profiles start from it. */
+  adopt(revision: string): void {
+    this.initialRead = Promise.resolve(revision);
+    this.latestRead = undefined;
+  }
+
+  /** A sibling deletion invalidated the snapshot; the retry must read it again. */
+  invalidate(): void {
+    this.initialRead = undefined;
+    this.latestRead = undefined;
+  }
+}
+
+/** Scope key the package builder sets when its reconcile actually wrote evidence. */
+export const PREVIEW_EVIDENCE_MUTATED = "previewEvidenceMutated";
+
 const serviceClosed = () => new ApiStatusError(503, "Export preview service is closed", "EXPORT_PREVIEW_SERVICE_CLOSED");
 
 /** Bounded metadata cache and serial work queue; never retain an export payload. */
@@ -49,7 +94,6 @@ export class ResearchExportPreviews {
   private readonly entries = new Map<string, Promise<ResearchExportPreview>>();
   private readonly completed = new WeakMap<Promise<ResearchExportPreview>, ResearchExportPreview>();
   private readonly watching = new Map<string, { projectId: string; sessionId: string; lastSeenAt: number }>();
-  private readonly revisions = new Map<string, Promise<string>>();
   private readonly controllers = new Map<AbortController, ExportPreviewOptions>();
   /**
    * One serial chain *per session*, not one for the whole service.
@@ -76,16 +120,6 @@ export class ResearchExportPreviews {
     private readonly canWarm: (projectId: string, sessionId: string) => Promise<boolean> = async () => true,
     private readonly now: () => number = () => Date.now()) {}
 
-  private currentRevision(projectId: string, sessionId?: string): Promise<string> {
-    const key = JSON.stringify([projectId, sessionId]);
-    const existing = this.revisions.get(key);
-    if (existing) return existing;
-    const work = this.revision(projectId, sessionId);
-    this.revisions.set(key, work);
-    void work.finally(() => { if (this.revisions.get(key) === work) this.revisions.delete(key); }).catch(() => undefined);
-    return work;
-  }
-
   private key(options: ExportPreviewOptions, revision: string): string {
     return JSON.stringify([options.projectId, options.sessionId, revision, options.level,
       options.level === "complete" && options.includeFullTrajectory,
@@ -98,13 +132,16 @@ export class ResearchExportPreviews {
     while (this.entries.size > 192) this.entries.delete(this.entries.keys().next().value!);
   }
 
-  watch(projectId: string, sessionId: string): void {
+  watch(projectId: string, sessionId: string, warmNow = true): void {
     if (this.closed) return;
     const key = JSON.stringify([projectId, sessionId]);
     this.watching.delete(key);
     this.watching.set(key, { projectId, sessionId, lastSeenAt: this.now() });
     if (this.watching.size > 16) this.watching.delete(this.watching.keys().next().value!);
-    void this.warm(projectId, sessionId).catch(() => undefined);
+    // A panel asks for `defaults()` immediately after this call. Warming first
+    // would spend a second evidence walk on the same request; the watcher is
+    // registered here and later ticks still warm it.
+    if (warmNow) void this.warm(projectId, sessionId).catch(() => undefined);
   }
 
   private async warm(projectId: string, sessionId: string): Promise<void> {
@@ -120,10 +157,11 @@ export class ResearchExportPreviews {
     await this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, true, { allowed: true });
   }
 
-  private async assertCanCalculate(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo): Promise<string | undefined> {
+  private async assertCanCalculate(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo,
+    request = new PreviewRevisionScope(this.revision)): Promise<string | undefined> {
     if (this.closed) throw serviceClosed();
     if (!deferWhileRunning || !options.sessionId) return undefined;
-    const current = await this.currentRevision(options.projectId, options.sessionId);
+    const current = await request.initial(options.projectId, options.sessionId);
     let allowed: boolean;
     if (memo?.revision === current && memo.allowed !== undefined) allowed = memo.allowed;
     else if (memo && memo.revision === undefined && memo.allowed !== undefined) allowed = memo.allowed;
@@ -139,9 +177,9 @@ export class ResearchExportPreviews {
   }
 
   async get(options: ExportPreviewOptions, deferWhileRunning = false, memo?: WarmMemo,
-    scope?: Map<string, unknown>): Promise<ResearchExportPreview> {
+    scope?: Map<string, unknown>, request = new PreviewRevisionScope(this.revision)): Promise<ResearchExportPreview> {
     for (let attempt = 0; ; attempt++) {
-      try { return await this.getAttempt(options, deferWhileRunning, memo, scope); }
+      try { return await this.getAttempt(options, deferWhileRunning, memo, scope, request); }
       catch (error) {
         // A run can begin after admission but before trajectory/CAS files are
         // published, so a read inside the preview can hit a file that is not on
@@ -156,15 +194,19 @@ export class ResearchExportPreviews {
         // Recompute once for a surviving scope after a sibling was deleted.
         // Repeated invalidation uses the existing pending HTTP/polling contract.
         if (!(error instanceof ExportPreviewInvalidatedError) || attempt >= 1) throw error;
+        // The request's revision snapshot predates the deletion; retrying with it
+        // would calculate the same obsolete evidence again.
+        request.invalidate();
       }
     }
   }
 
   private async getAttempt(options: ExportPreviewOptions, deferWhileRunning: boolean, memo?: WarmMemo,
-    scope?: Map<string, unknown>): Promise<ResearchExportPreview> {
-    const admitted = await this.assertCanCalculate(options, deferWhileRunning, memo);
+    scope?: Map<string, unknown>, request = new PreviewRevisionScope(this.revision)): Promise<ResearchExportPreview> {
+    const admitted = await this.assertCanCalculate(options, deferWhileRunning, memo, request);
     if (this.closed) throw serviceClosed();
-    const revision = admitted ?? await this.currentRevision(options.projectId, options.sessionId);
+    const requestScope = scope ?? new Map<string, unknown>();
+    const revision = admitted ?? await request.initial(options.projectId, options.sessionId);
     if (this.closed) throw serviceClosed();
     const key = this.key(options, revision);
     const cached = this.entries.get(key);
@@ -182,31 +224,54 @@ export class ResearchExportPreviews {
       for (let attempt = 0; attempt < 3; attempt++) {
         // A run may start after an idle poll queued all five profiles. Stop
         // those jobs here, rather than repeatedly exporting changing evidence.
-        await this.assertCanCalculate(options, deferWhileRunning, memo);
+        // Do not reuse the admission memo: it was keyed on the request snapshot,
+        // and a delayed profile must ask the store again before it starts work.
+        await this.assertCanCalculate(options, deferWhileRunning, undefined, request);
         signal.throwIfAborted();
-        const current = await this.currentRevision(options.projectId, options.sessionId);
-        signal.throwIfAborted();
+        // A sibling profile may already have adopted a newer snapshot while this
+        // one was queued; reuse it rather than calculating obsolete evidence.
+        const current = await request.initial(options.projectId, options.sessionId);
         // An older queued request may already have calculated this revision.
         // Only consume completed work here: awaiting later queue entries deadlocks.
-        const existing = this.entries.get(this.key(options, current));
+        const currentKey = this.key(options, current);
+        const existing = this.entries.get(currentKey);
         const ready = existing && this.completed.get(existing);
-        if (ready) return ready;
-        const result = await this.calculate(options, current, signal, scope);
+        if (ready) {
+          // A queued sibling may have adopted a newer revision while this work
+          // waited. Its pre-adoption key must not keep handing out that result.
+          if (currentKey !== key && this.entries.get(key) === work) this.entries.delete(key);
+          return ready;
+        }
+        requestScope.delete(PREVIEW_EVIDENCE_MUTATED);
+        const result = await this.calculate(options, current, signal, requestScope);
         signal.throwIfAborted();
-        await this.assertCanCalculate(options, deferWhileRunning, memo);
+        await this.assertCanCalculate(options, deferWhileRunning, undefined, request);
         signal.throwIfAborted();
         if (this.closed) throw serviceClosed();
-        const latest = await this.currentRevision(options.projectId, options.sessionId);
-        signal.throwIfAborted();
-        if (current === latest) {
-          // Work admitted for an older revision may finish at a newer one.
-          // Publish under that revision too so the next poll reuses it.
-          const currentKey = this.key(options, current);
-          this.completed.set(work, result);
-          this.remember(currentKey, work);
-          return result;
+        if (requestScope.get(PREVIEW_EVIDENCE_MUTATED) === true) {
+          // The build itself moved the revision (its workspace reconcile wrote
+          // provenance). That is the one case that needs a fresh walk: retry
+          // under the revision its own write produced.
+          const latest = await request.latest(options.projectId, options.sessionId);
+          signal.throwIfAborted();
+          // The old key must not survive adoption: it would hand a caller who
+          // asks for the old revision a result computed from the new evidence.
+          const obsoleteKey = this.key(options, current);
+          if (this.entries.get(obsoleteKey) === work) this.entries.delete(obsoleteKey);
+          request.adopt(latest);
+          await setImmediate();
+          continue;
         }
-        await setImmediate();
+        // The snapshot and the result agree: no post-build walk is needed. An
+        // external change during the build is picked up by the next poll, which
+        // asks for the new revision and does not hit this cache entry.
+        // If a sibling adopted a newer revision while this profile was queued,
+        // this work is published under the final key only; the pre-adoption key
+        // it registered at admission must not alias that result.
+        if (currentKey !== key && this.entries.get(key) === work) this.entries.delete(key);
+        this.completed.set(work, result);
+        this.remember(currentKey, work);
+        return result;
       }
       throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
     }).catch((error: unknown) => {
@@ -233,12 +298,16 @@ export class ResearchExportPreviews {
       // and it is the same request, so the scan and the catalog write happen once.
       // A retry gets a fresh scope.
       const scope = new Map<string, unknown>();
+      // One revision snapshot for the whole dialog request: five profiles ask
+      // about the same evidence, so re-walking the session tree per profile was
+      // pure repetition (#1365).
+      const request = new PreviewRevisionScope(this.revision);
       const [necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph] = await Promise.all([
-        this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope),
-        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope),
+        this.get({ projectId, sessionId, level: "necessary", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope, request),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope, request),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: false }, deferWhileRunning, memo, scope, request),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: false, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope, request),
+        this.get({ projectId, sessionId, level: "complete", includeFullTrajectory: true, includeFullMemoryGraph: true }, deferWhileRunning, memo, scope, request),
       ]);
       if ([complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph].every((preview) => preview.revision === necessary.revision))
         return { revision: necessary.revision, necessary, complete, completeWithTrajectory, completeWithMemoryGraph, completeWithTrajectoryAndMemoryGraph };
@@ -282,6 +351,6 @@ export class ResearchExportPreviews {
     this.closed = true; this.watching.clear(); this.entries.clear();
     for (const controller of this.controllers.keys()) controller.abort(serviceClosed());
     // Finish admitted work before its store or workspace can be disposed.
-    await Promise.allSettled([...this.queues.values(), ...this.revisions.values()]);
+    await Promise.allSettled([...this.queues.values()]);
   }
 }

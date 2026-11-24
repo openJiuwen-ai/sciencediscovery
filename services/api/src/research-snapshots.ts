@@ -39,12 +39,13 @@ function isExecutionLedgerPath(path: string): boolean {
   return /[\\/]execution-runs[\\/][^\\/]+\.json$/u.test(path);
 }
 import { SessionStoreHttpError } from "./store.js";
+import { apiLog } from "./logging.js";
 import type { createPlatformServices } from "./bootstrap/platform.js";
 import { createContinuationOperations } from "./research-continuations.js";
 import { buildConversationBranch } from "./conversation-branches.js";
 import { verifyResearchCopy } from "./research-snapshot-integrity.js";
 import { filterTrajectoryIndex, readTrajectoryDetail } from "./research-trajectory-detail.js";
-import { ResearchExportPreviews } from "./research-export-previews.js";
+import { PREVIEW_EVIDENCE_MUTATED, ResearchExportPreviews } from "./research-export-previews.js";
 import { ResearchPackageExports, type ResearchPackageExportOptions } from "./research-package-exports.js";
 import { sessionTrajectory } from "./trajectory.js";
 import { emptyPackageTrajectory, importedTrajectoryAccess, remapPackageTrajectory, validatePackageTrajectory, writePackageTrajectory, type PackageTrajectory } from "./research-package-trajectory.js";
@@ -84,6 +85,8 @@ type PreviewSizing = {
    * evidence revision moves.
    */
   workspaceListings?: PreviewWorkspaceListings;
+  /** Set when this preview's workspace reconcile actually wrote provenance. */
+  workspaceMutated?: boolean;
 };
 
 /**
@@ -99,10 +102,15 @@ type PreviewSizing = {
  */
 type PreviewWorkspaceListings = Map<string, Promise<WorkspaceListing>>;
 
-function previewWorkspaceListing(listings: PreviewWorkspaceListings, store: Ports["store"], sessionId: string): Promise<WorkspaceListing> {
+function previewWorkspaceListing(
+  listings: PreviewWorkspaceListings,
+  store: Ports["store"],
+  sessionId: string,
+  onMutation?: () => void,
+): Promise<WorkspaceListing> {
   const shared = listings.get(sessionId);
   if (shared) return shared;
-  const listing = listWorkspaceFiles(store, sessionId, true);
+  const listing = listWorkspaceFiles(store, sessionId, true, { onMutation });
   listings.set(sessionId, listing);
   void listing.catch(() => { if (listings.get(sessionId) === listing) listings.delete(sessionId); });
   return listing;
@@ -118,6 +126,8 @@ export type ExportSessionRecord = PackageHistory & {
   runs: SessionRun[];
   artifactAnnotations: ArtifactAnnotation[];
   runEvents?: Array<{ runId: string; streams: Array<{ streamId: string; events: SessionRunEvent[] }> }>;
+  /** Run-stream event count for profiles that do not materialise `runEvents`. */
+  runEventCount?: number;
   trajectory: PackageTrajectory;
   workspace: Array<{ path: string; objectPath: string; size?: number; modifiedAt?: string }>;
   workspaceProvenance: WorkspaceFileProvenance[];
@@ -125,6 +135,18 @@ export type ExportSessionRecord = PackageHistory & {
 };
 
 export type ExportArtifact = ScientificArtifact & { currentVersion: number; versions: Array<ScientificArtifactVersion & { objectPath?: string }> };
+
+/**
+ * Per-phase export timing. A regression in the export path used to be visible
+ * only as a slow dialog (#1365), so each stage reports its own milliseconds.
+ * Logging is best-effort: `apiLog` is a no-op facade until the service configures
+ * a logger.
+ */
+function packageStageLogger(base: Record<string, unknown>): (phase: string, started: number, fields?: Record<string, unknown>) => void {
+  return (phase, started, fields = {}) => apiLog.info("research-package.stage", {
+    ...base, phase, ms: Math.round((performance.now() - started) * 10) / 10, ...fields,
+  });
+}
 
 function idSet(values: Iterable<string>): Set<string> { return new Set(values); }
 
@@ -200,7 +222,9 @@ export function countExport(sessions: ExportSessionRecord[], artifacts: ExportAr
   return { sessions: sessions.length, messages: sum((row) => row.messages.length), artifacts: artifacts.length,
     artifactVersions: artifacts.reduce((total, row) => total + row.versions.length, 0), workspaceFiles: sum((row) => row.workspace.length),
     executionRuns: sum((row) => new Set([...(row.executionRuns ?? []).map((run) => run.id), ...(row.shellExecutions ?? []).map((run) => run.result?.executionId ?? run.id)]).size), runs: sum((row) => row.runs.length),
-    runEvents: sum((row) => (row.runEvents ?? []).reduce((total, run) => total + run.streams.reduce((count, stream) => count + stream.events.length, 0), 0)),
+    runEvents: sum((row) => row.runEvents
+      ? row.runEvents.reduce((total, run) => total + run.streams.reduce((count, stream) => count + stream.events.length, 0), 0)
+      : row.runEventCount ?? 0),
     trajectoryEvents: sum((row) => row.trajectory.index.entries.length + (row.trajectory.index.untimedEntries?.length ?? 0)),
     fileRevisions: sum((row) => row.workspaceProvenance.reduce((total, file) => total + file.revisions.length, 0)), memoryNodes: graph?.nodes.length ?? 0, memoryEdges: graph?.edges.length ?? 0 };
 }
@@ -410,6 +434,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
   const buildResearchPackageInput = async (projectId: string, sessionId?: string, level: "necessary" | "complete" = "necessary", selectedFiles?: Set<string>, cohort?: Set<string>, preview?: PreviewSizing, includeFullTrajectory = true, includeFullMemoryGraph = true, signal: AbortSignal = new AbortController().signal, options: { streamObjects?: boolean } = {}): Promise<ExportInput> => {
     signal.throwIfAborted();
     const previewObjectSizes = preview?.objectSizes;
+    const stage = packageStageLogger({ projectId, sessionId, level, mode: previewObjectSizes ? "preview" : "export" });
+    const preflightStarted = performance.now();
     const project = store.getProject(projectId);
     if (!project) throw new SessionStoreHttpError("Project not found", 404);
     const availableSessions = store.researchSessions(projectId);
@@ -509,6 +535,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       }
       return [{ ...artifact, currentVersion: Math.max(...versions.map((version) => version.version)), versions }];
     });
+    stage("enumerate", preflightStarted, { sessions: sessions.length, artifacts: artifacts.length });
     const sessionRecords: ExportSessionRecord[] = [];
     const trajectoryViews = new Map<string, Awaited<ReturnType<typeof sessionTrajectory>>>();
     const hydrateTrajectory = async (record: ExportSessionRecord, entries: TrajectoryEntry[], summarize = false) => {
@@ -581,12 +608,14 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       }
       return { ...record.trajectory, index: filterTrajectoryIndex(record.trajectory.index, retained), details };
     };
+    const recordsStarted = performance.now();
+    let trajectoryMs = 0;
     for (const session of sessions) {
       signal.throwIfAborted();
       const messages = await store.readMessages(session.id);
       const runs = await store.listSessionRuns(session.id);
       const workspaceFiles = await (preview?.workspaceListings
-        ? previewWorkspaceListing(preview.workspaceListings, store, session.id)
+        ? previewWorkspaceListing(preview.workspaceListings, store, session.id, () => { if (preview) preview.workspaceMutated = true; })
         : listWorkspaceFiles(store, session.id, true));
       const workspace = [];
       const workspaceProvenance = [];
@@ -617,16 +646,35 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         reviewFeedback: await store.listReviewFeedback(session.id),
       };
       const history = await exportHistory(store, session.id);
-      const runEvents = await Promise.all(runs.map(async (run) => ({ runId: run.id, streams: await store.exportRunStreams(session.id, run.id) })));
+      // `necessary` discards the streams at selection time and only needs their
+      // count for the receipt. Materialising every event first made a 189 KB
+      // package pay for the full run history twice (#1365); complete keeps them.
+      const runEvents = level === "complete"
+        ? await Promise.all(runs.map(async (run) => ({ runId: run.id, streams: await store.exportRunStreams(session.id, run.id) })))
+        : undefined;
+      const trajectoryStarted = performance.now();
       const view = await sessionTrajectory(store, session.id, signal);
+      trajectoryMs += performance.now() - trajectoryStarted;
+      // The necessary receipt needs the count the discarded streams would have
+      // had. The trajectory walk already read every stream, so reuse its counts;
+      // only streams it did not open — an archived Run, or an orphaned tool
+      // stream — need the lightweight counter. This keeps the count identical to
+      // what `complete` materialises without parsing those events.
+      const runEventCount = level === "complete" ? undefined : (await Promise.all(runs.map(async (run) => {
+        const seen = view.visitedStreams.get(run.id);
+        return (view.eventCounts.get(run.id) ?? 0) + await store.countRunStreamEvents(session.id, run.id, seen);
+      }))).reduce((total, count) => total + count, 0);
+      stage("trajectory", trajectoryStarted, { sessionId: session.id, runs: runs.length,
+        events: runEvents ? runEvents.reduce((total, run) => total + run.streams.reduce((count, stream) => count + stream.events.length, 0), 0) : runEventCount });
       trajectoryViews.set(session.id, view);
       const trajectory: PackageTrajectory = { index: view.index, details: [], runIds: runs.map((run) => run.id) };
       sessionRecords.push({
         ...history, session: { ...session, settingsOverrides: undefined }, messages, runs,
         artifactAnnotations: store.listArtifactAnnotations(session.id),
-        ...(runEvents ? { runEvents } : {}), trajectory, workspace, workspaceProvenance, validations,
+        ...(runEvents ? { runEvents } : {}), ...(runEventCount !== undefined ? { runEventCount } : {}), trajectory, workspace, workspaceProvenance, validations,
       });
     }
+    stage("records", recordsStarted, { sessions: sessions.length, trajectoryMs: Math.round(trajectoryMs * 10) / 10 });
     const artifactObjectPaths = new Map<string, string>();
     for (const artifact of artifacts) {
       for (const version of artifact.versions) {
@@ -754,7 +802,10 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       trajectory.index.untimedEntries = trajectory.index.untimedEntries?.filter((entry) => agentIds.has(entry.agentId));
       trajectory.index.historicalEntries = trajectory.index.untimedEntries;
       trajectory.details = trajectory.details.filter((detail) => agentIds.has(detail.entry.agentId));
-      selectedSessionRecords.push({ ...record, ...history, runs, workspace: selectedWorkspace.workspace, workspaceProvenance, validations, runEvents: [], trajectory });
+      // The count is a builder-side measurement, not package content: never let it
+      // change records.json or the package checksum.
+      const { runEventCount: _runEventCount, ...exportedRecord } = record;
+      selectedSessionRecords.push({ ...exportedRecord, ...history, runs, workspace: selectedWorkspace.workspace, workspaceProvenance, validations, runEvents: [], trajectory });
     }
     // Read retained workspace payload bytes only after selection: a deselected
     // file is never read or hashed, and each retained file is read exactly once.
@@ -775,6 +826,7 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         record.workspace = retained;
       }
     }
+    const summarizeStarted = performance.now();
     const filteredMemoryGraph = level === "complete" ? availableMemoryGraph : filterMemoryGraph(availableMemoryGraph, selectedArtifacts, new Set(selectedSessionRecords.flatMap((record) => (record.executionRuns ?? []).map((run) => run.id))));
     const packageMemoryGraph = level === "complete" && !includeFullMemoryGraph ? undefined : filteredMemoryGraph;
     const memoryGraphSummary = packageMemoryGraph ? undefined : summarizeScientificMemory(filteredMemoryGraph) ?? inheritedMemorySummary;
@@ -796,6 +848,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     if (level === "necessary") omissions.push("必要导出保留当前结果及依赖证据；不包含完整历史版本、思考分片和原始事件流。直接溯源引用的执行代码和日志保留原文，其余历史执行默认不带。继续研究仅复制本包已有内容。");
     const usedEnvironments = new Set(selectedSessionRecords.flatMap((record) => [...(record.executionRuns ?? []), ...(record.shellExecutions ?? []).flatMap((row) => row.result ? [row.result] : [])].flatMap((run) => run.environmentRevisionId ? [run.environmentRevisionId] : [])));
     const environmentRevisions = store.listEnvironmentRevisions().filter((revision) => usedEnvironments.has(revision.id));
+    stage("summarize", summarizeStarted, { includedEvents: included.runEvents, omittedEvents: omitted.runEvents, environmentRevisions: environmentRevisions.length });
+    const sizingStarted = performance.now();
     const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...evolveCandidateSources.map((source) => source.objectPath), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }), ...(preview?.hashes ?? [])]);
     for (const hash of objects.keys()) if (!needed.has(hash)) objects.delete(hash);
     for (const hash of needed) {
@@ -803,8 +857,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
       if (objects.has(hash)) continue;
       try {
         if (previewObjectSizes) {
-          let size = 0;
-          for await (const chunk of provenanceRecorder.cas.stream(hash)) { signal.throwIfAborted(); size += chunk.byteLength; }
+          // A preview needs the length, not the payload: `stream()` hashes the
+          // whole object before its first byte and hashes it again while copying
+          // (#1365). The writer still verifies every object it copies.
+          // `undefined` means missing or layouts disagree; a verified read answers
+          // the latter with the same intact copy the writer would choose.
+          const storedSize = await provenanceRecorder.cas.storedSize(hash);
+          const size = storedSize ?? (await provenanceRecorder.cas.read(hash)).byteLength;
           addPreviewObject(hash, size, "log");
         } else if (streamObjects) await addObjectSource(hash, "log");
         else await addObject(await provenanceRecorder.cas.read(hash), "log");
@@ -849,6 +908,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         omissions.push(`version:${key}:unavailable source object`);
       }
     }
+    stage("cas-sizing", sizingStarted, { objects: objects.size,
+      ...(previewObjectSizes ? { bytes: [...previewObjectSizes.values()].reduce((total, size) => total + size, 0) } : {}) });
     return {
       source: { projectId, title: project.name, sessionIds: sessions.map((item) => item.id) },
       packageKind: "evidence",
@@ -895,6 +956,10 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         trajectorySizing: includeFullTrajectory ? trajectorySizingFor(revision) : undefined,
         workspaceListings };
       const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles, undefined, preview, includeFullTrajectory, includeFullMemoryGraph, signal);
+      // Tell the preview cache whether this build moved the evidence it keyed on.
+      // Without this the request would walk the tree again on every profile just
+      // to discover its own reconcile write (#1365).
+      if (preview.workspaceMutated) scope?.set(PREVIEW_EVIDENCE_MUTATED, true);
       const records = input.records as { sessions?: Array<{ session: { id: string }; workspace?: Array<{ path: string }> }> };
       if (sessionId && level === "necessary" && !selectedFiles) {
         previewDependencies.set(sessionId, new Set(records.sessions?.map((record) => record.session.id)));

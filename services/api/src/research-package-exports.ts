@@ -5,6 +5,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Writable } from "node:stream";
+import { apiLog } from "./logging.js";
 
 export type ResearchPackageExportOptions = {
   projectId: string;
@@ -14,6 +15,12 @@ export type ResearchPackageExportOptions = {
   includeFullTrajectory: boolean;
   includeFullMemoryGraph: boolean;
   revision: string;
+  /**
+   * The revision the HTTP route just observed while sizing the request. Reusing
+   * it removes a duplicate whole-tree walk before packaging (#1365); the
+   * post-write check still re-reads the tree and refuses a stale archive.
+   */
+  observedRevision?: string;
   /** The user confirmed the over-cap warning; the task may then use the safe ceiling. */
   allowOverCap?: boolean;
 };
@@ -126,13 +133,27 @@ export class ResearchPackageExports {
       // not spend work on packaging: it was already answered "canceled".
       if (canceled()) return;
       task.status = "running"; task.updatedAt = this.timestamp(); await this.persist(task);
-      const before = await this.currentRevision(options.projectId, options.sessionId);
+      const revisionStarted = performance.now();
+      const before = options.observedRevision ?? await this.currentRevision(options.projectId, options.sessionId);
+      apiLog.info("research-package.stage", { projectId: options.projectId, sessionId: options.sessionId, level: options.level,
+        mode: "export-task", phase: "preflight", ms: Math.round((performance.now() - revisionStarted) * 10) / 10,
+        reusedObservedRevision: options.observedRevision !== undefined });
       if (canceled()) { stopCanceled(); return; }
       if (before !== options.revision) throw new Error("会话内容已更新，请使用最新大小预览重新导出。");
       // Stream straight into the task's own file: the archive is never held in memory,
       // so a cancellation drops a partial file instead of discarding a buffer.
       outputPath = resolve(this.root, `${task.id}.sdresearch`);
-      await this.createPackage(options, createWriteStream(outputPath, { flags: "wx" }));
+      const destination = createWriteStream(outputPath, { flags: "wx" });
+      const writeStarted = performance.now();
+      let writeOk = false;
+      try {
+        await this.createPackage(options, destination);
+        writeOk = true;
+      } finally {
+        apiLog.info("research-package.stage", { projectId: options.projectId, sessionId: options.sessionId, level: options.level,
+          mode: "export-task", phase: "write", ms: Math.round((performance.now() - writeStarted) * 10) / 10,
+          bytes: destination.bytesWritten, ok: writeOk });
+      }
       // Cancellation requested while createPackage was running: drop the produced
       // archive instead of persisting it.
       if (canceled()) { await rm(outputPath, { force: true }); stopCanceled(); return; }
