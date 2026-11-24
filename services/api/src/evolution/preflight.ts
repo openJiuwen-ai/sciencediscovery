@@ -132,7 +132,11 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       fix: `use at most ${EVOLVE_WORKERS_MAX} workers`,
       message: `${budget.workers} workers is above the ${EVOLVE_WORKERS_MAX}-worker maximum`,
     });
-  } else if (budget.expansions % budget.workers !== 0) {
+  } else if (budget.expansions <= EVOLVE_EXPANSIONS_MAX && budget.expansions % budget.workers !== 0) {
+    // A count above the cap is refused by the expansions chain below, so it is
+    // not also reported as uneven here: the multiple this branch would suggest
+    // (48 for 8 workers) is itself above the cap, and one bad value should be
+    // one line. A count inside the range keeps this check.
     issues.push({
       code: "expansions_not_divisible",
       fix: `make the expansion count a multiple of ${budget.workers}`,
