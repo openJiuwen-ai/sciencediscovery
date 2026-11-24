@@ -1398,3 +1398,141 @@ test.describe("模型", () => {
     expect(mock.calls.some((call) => call.method === "DELETE" && call.path === "/api/models/model-1")).toBe(true);
   });
 });
+
+/**
+ * The two heavy settings panes, read as first paints rather than as write
+ * paths: what they show while the read is outstanding, and what a revisit
+ * paints before the next read answers. The durations themselves (`/api/runners`
+ * probes the Runner, `/api/usage/analytics` aggregates) are endpoint work, so
+ * these cases hold the responses instead of measuring them.
+ */
+function localRunner(): JsonRecord {
+  return {
+    alias: "local",
+    connectionKind: "direct",
+    createdAt: "2026-10-01T08:00:00.000Z",
+    id: "local",
+    location: "local",
+    runnerCommand: "sciencediscovery-runner",
+    runnerStatus: { hostId: "local", state: "ready" },
+    status: "ready",
+    updatedAt: "2026-10-01T08:00:00.000Z",
+  };
+}
+
+function usageSummary(): JsonRecord {
+  const reporting = {
+    invocationCount: 1, reportedInputCount: 1, reportedOutputCount: 1, reportedTotalCount: 1,
+  };
+  return {
+    dailyByModel: [{
+      cacheReadTokens: 60, cacheWriteTokens: 0, date: "2026-11-18", estimatedCosts: [],
+      inputTokens: 80, model: "shared-model", modelProfileId: "profile-a",
+      modelProfileName: "Model A", outputTokens: 20, reporting, totalTokens: 100,
+    }],
+    filters: { timeZone: "Asia/Shanghai" },
+    generatedAt: "2026-11-18T04:05:00Z",
+    overview: {
+      cacheReadTokens: 60, cacheWriteTokens: 0, estimatedCosts: [], inputTokens: 80,
+      outputTokens: 20, reporting, totalTokens: 100,
+    },
+  };
+}
+
+/** A route gate the spec opens and closes itself; `undefined` passes through. */
+function routeGate() {
+  let release: () => void = () => {};
+  let gate: Promise<void> | undefined;
+  return {
+    hold: () => { gate = new Promise<void>((resolve) => { release = resolve; }); },
+    pass: () => { gate = undefined; },
+    wait: async () => {
+      const waiting = gate;
+      if (waiting) await waiting;
+    },
+    release: () => release(),
+  };
+}
+
+test.describe("the heavy settings panes' first paint", () => {
+  test("运行环境 paints Runner cards first, then the remembered catalog on a revisit", async ({ page }) => {
+    const mock = await installMockApi(page, { runners: [localRunner()] });
+    const gate = routeGate();
+    await page.route("**/api/runners", async (route) => {
+      await gate.wait();
+      await route.fallback();
+    });
+    gate.hold();
+
+    const dialog = await openSettings(page, "运行环境");
+    const skeleton = dialog.locator(".settings-skeleton");
+    const card = dialog.locator(".settings-card").filter({ hasText: "内置 Runner" });
+
+    // The header and the section around the Runner list are drawn while the
+    // catalog is still outstanding; only the values are missing.
+    await expect(skeleton).toBeVisible();
+    await expect(dialog.getByText("执行机器", { exact: true })).toBeVisible();
+    await expect(dialog.locator(".settings-card.settings-skeleton-card")).toHaveCount(2);
+    await expect(card).toHaveCount(0);
+
+    const reads = () => mock.calls.filter((call) => call.method === "GET" && call.path === "/api/runners").length;
+    const firstRead = reads();
+    gate.release();
+    gate.pass();
+    await expect(card).toBeVisible();
+    await expect(skeleton).toHaveCount(0);
+
+    // A revisit is not a first visit: the catalog is painted from the cache,
+    // the refresh still goes out, and the skeleton never returns.
+    gate.hold();
+    await dialog.getByRole("button", { name: "通用", exact: true }).click();
+    await dialog.getByRole("button", { name: "运行环境", exact: true }).click();
+    await expect(card).toBeVisible();
+    await expect(skeleton).toHaveCount(0);
+
+    gate.release();
+    await expect.poll(reads).toBeGreaterThan(firstRead);
+    await expect(card).toBeVisible();
+  });
+
+  test("模型用量 paints its metric and table skeleton first, then the remembered summary on a revisit", async ({ page }) => {
+    await installMockApi(page, { models: MODELS });
+    const gate = routeGate();
+    let reads = 0;
+    await page.route("**/api/usage/analytics*", async (route) => {
+      reads += 1;
+      await gate.wait();
+      await route.fulfill({
+        body: JSON.stringify(usageSummary()), contentType: "application/json", status: 200,
+      });
+    });
+    gate.hold();
+
+    const dialog = await openSettings(page, "模型用量");
+    const skeleton = dialog.locator(".settings-skeleton");
+
+    await expect(skeleton).toBeVisible();
+    await expect(dialog.locator(".settings-skeleton-block.is-usage-metric-label")).toHaveCount(3);
+    await expect(dialog.locator(".settings-skeleton-row")).toHaveCount(4);
+    // The pane no longer falls back to a one-line loading placeholder.
+    await expect(dialog.getByText("正在读取…", { exact: true })).toHaveCount(0);
+
+    const firstRead = reads;
+    gate.release();
+    gate.pass();
+    await expect(dialog.locator(".usage-settings-metric dd")).toHaveCount(3);
+    await expect(dialog.getByText("Model A", { exact: true })).toBeVisible();
+    await expect(skeleton).toHaveCount(0);
+
+    // A revisit paints the last summary while the next read is still held.
+    gate.hold();
+    await dialog.getByRole("button", { name: "通用", exact: true }).click();
+    await dialog.getByRole("button", { name: "模型用量", exact: true }).click();
+    await expect(dialog.getByText("Model A", { exact: true })).toBeVisible();
+    await expect(skeleton).toHaveCount(0);
+
+    gate.release();
+    await expect.poll(() => reads).toBeGreaterThan(firstRead);
+    await expect(dialog.getByText("Model A", { exact: true })).toBeVisible();
+  });
+});

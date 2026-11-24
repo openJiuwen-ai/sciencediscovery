@@ -14,8 +14,10 @@
 
 import React from "react";
 import assert from "node:assert/strict";
+import { renderToStaticMarkup } from "react-dom/server";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { ApiClient } from "../src/api/client.js";
+import { writeSettingsCache } from "../src/app/settings-cache.js";
 import { getModelUsage } from "../src/api/usage.js";
 import type { DailyModelUsageSummary, ModelUsageAnalyticsSummary, ModelUsageReporting } from "../src/api/types.js";
 import { knownTokenValue, modelUsageRows, usageFilters, usageIncomplete } from "../src/app/usage-format.js";
@@ -157,6 +159,29 @@ test("switching periods ignores late responses for the previous period", async (
     await act(async () => { finish?.(summary([daily({ modelProfileName: "late-model" })])); });
     assert.ok(text(view).includes("today-model")); assert.ok(!text(view).includes("late-model"));
   } finally { await close(view); }
+});
+
+test("a range with a remembered summary paints it before the refresh answers", async () => {
+  const client = new Client(() => new Promise<ModelUsageAnalyticsSummary>(() => {}));
+  writeSettingsCache(client, "model-usage:week", { client, summary: summary() });
+  const markup = renderToStaticMarkup(<ModelUsageSettings client={client} />);
+
+  assert.ok(markup.includes("Model A"), "the remembered summary is not on screen");
+  assert.ok(!markup.includes('aria-busy="true"'), "the skeleton is still drawn over a remembered summary");
+  assert.ok(!markup.includes(TEXT.settings.system.usage.skeleton), "the usage pane fell back to its first-paint skeleton");
+  assert.ok(!markup.includes(TEXT.settings.loading), "the single loading line is back");
+});
+
+test("a range that was never visited paints the usage skeleton, and another client's summary does not leak", async () => {
+  const visited = new Client(() => new Promise<ModelUsageAnalyticsSummary>(() => {}));
+  writeSettingsCache(visited, "model-usage:week", { client: visited, summary: summary() });
+  const fresh = new Client(() => new Promise<ModelUsageAnalyticsSummary>(() => {}));
+  const markup = renderToStaticMarkup(<ModelUsageSettings client={fresh} />);
+
+  assert.ok(markup.includes(TEXT.settings.system.usage.skeleton), "the usage skeleton is not on the first frame");
+  assert.ok(markup.includes('aria-busy="true"'), "the skeleton is not marked busy");
+  assert.ok(!markup.includes("Model A"), "another client's summary leaked into this one");
+  assert.ok(!markup.includes(TEXT.settings.loading), "the single loading line is still drawn");
 });
 
 test("read failures are retryable and refresh failures keep the last confirmed statistics", async () => {

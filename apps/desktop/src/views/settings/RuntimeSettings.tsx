@@ -20,7 +20,7 @@ import type { ConfirmRequest } from "../../app/use-workspace.js";
 import { TEXT } from "../../text.js";
 import { EnvironmentSources, RunnerEnvironmentPane } from "./EnvironmentSettings.js";
 import { RunnerSection } from "./RemoteHosts.js";
-import { Group, LoadGate } from "./rows.js";
+import { Group, LoadGate, SkeletonBlock, SkeletonRegion } from "./rows.js";
 
 interface Props {
   client: ApiClient;
@@ -29,7 +29,7 @@ interface Props {
 
 /** One catalog, with machine connections and environments scoped to a Runner's detail. */
 export function RuntimeSettings({ client, onConfirm }: Props) {
-  const loaded = useLoaded(() => listRunners(client));
+  const loaded = useLoaded(() => listRunners(client), { client, key: "runner-catalog" });
   const [runnerId, setRunnerId] = useState<string>();
   useEffect(() => {
     if (loaded.value && runnerId && !loaded.value.some(runner => runner.id === runnerId)) setRunnerId(undefined);
@@ -41,7 +41,21 @@ export function RuntimeSettings({ client, onConfirm }: Props) {
   const overview = !runnerId || (loaded.value !== undefined && !selected);
 
   return <>
-    <LoadGate loaded={loaded}>{runners => <>
+    <LoadGate loaded={loaded} skeleton={<SkeletonRegion label={text.skeleton}>
+      <Group heading={text.machinesHeading}>
+        <p className="settings-note">{text.overviewHint}</p>
+        <div className="settings-list">
+          {[0, 1].map(index => <div className="settings-card settings-skeleton-card" key={index}>
+            <SkeletonBlock className="is-runner-mark" />
+            <div className="settings-skeleton-card-main">
+              <SkeletonBlock className="is-runner-name" />
+              <SkeletonBlock className="is-runner-detail" />
+            </div>
+            <SkeletonBlock className="is-runner-action" />
+          </div>)}
+        </div>
+      </Group>
+    </SkeletonRegion>}>{runners => <>
       {selected ? <div className="runner-detail-heading">
         <button className="secondary-button" type="button" onClick={() => setRunnerId(undefined)}>{text.back}</button>
         <h3>{name}</h3>

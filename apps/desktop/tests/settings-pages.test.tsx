@@ -42,6 +42,7 @@ import { ListSelect } from "../src/views/settings/ListSelect.js";
 import { SystemSettingsDialog } from "../src/views/SystemSettingsDialog.js";
 import { RunnerSection } from "../src/views/settings/RemoteHosts.js";
 import { NetworkSettings } from "../src/views/settings/NetworkSettings.js";
+import { ModelUsageSettings } from "../src/views/settings/ModelUsageSettings.js";
 import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
@@ -979,8 +980,24 @@ describe("each settings page", () => {
     asksForItsData("网络", <NetworkSettings client={client} onConfirm={noConfirm} />);
   });
 
-  it("远程 renders and asks for its data", () => {
-    asksForItsData("运行环境", <RuntimeSettings client={client} onConfirm={noConfirm} />);
+  it("运行环境 renders its Runner skeleton before the catalog answers", () => {
+    const markup = renderToStaticMarkup(<RuntimeSettings client={client} onConfirm={noConfirm} />);
+
+    assert.ok(markup.includes("settings-section"), "运行环境 rendered no section");
+    assert.ok(markup.includes(TEXT.settings.system.migrated.environments.skeleton),
+      "运行环境 did not paint its first-paint skeleton");
+    assert.ok(markup.includes('aria-busy="true"'), "the runtime skeleton is not marked busy");
+    assert.ok(markup.includes("settings-skeleton-block"), "the runtime skeleton has no stand-in rows");
+  });
+
+  it("模型用量 renders its metrics and table skeleton before the summary answers", () => {
+    const markup = renderToStaticMarkup(<ModelUsageSettings client={client} />);
+
+    assert.ok(markup.includes(TEXT.settings.system.usage.skeleton),
+      "模型用量 did not paint its first-paint skeleton");
+    assert.ok(markup.includes('aria-busy="true"'), "the usage skeleton is not marked busy");
+    assert.equal((markup.match(/is-usage-metric-label/g) ?? []).length, 3, "the usage skeleton has no metric cards");
+    assert.equal((markup.match(/settings-skeleton-row/g) ?? []).length, 4, "the usage skeleton has no table rows");
   });
 
   it("专家 renders and asks for its data", () => {

@@ -18,7 +18,7 @@ import { getModelUsage } from "../../api/usage.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { knownTokenValue, modelUsageRows, usageFilters, usageIncomplete, type TokenField, type UsageRange } from "../../app/usage-format.js";
 import { getLanguage, TEXT } from "../../text.js";
-import { Group, LoadGate, Pills } from "./rows.js";
+import { Group, LoadGate, Pills, SkeletonBlock, SkeletonRegion } from "./rows.js";
 
 export function ModelUsageSettings({ client }: { client: ApiClient }) {
   const [range, setRange] = useState<UsageRange>("week");
@@ -46,7 +46,28 @@ function UsagePeriod({ client, range, onRangeChange }: {
         {loaded.loading ? text.refreshing : text.refresh}
       </button>
     </div></Group>
-    <LoadGate loaded={loaded}>{result => {
+    <LoadGate loaded={loaded} skeleton={<SkeletonRegion label={text.skeleton}>
+      <Group>
+        <div className="usage-settings-metrics">
+          {[0, 1, 2].map(index => <div className="usage-settings-metric" key={index}>
+            <SkeletonBlock className="is-usage-metric-label" />
+            <SkeletonBlock className="is-usage-metric-value" />
+          </div>)}
+        </div>
+      </Group>
+      <Group heading={text.byModel}>
+        <div className="usage-settings-table-scroll">
+          <div className="settings-skeleton-table">
+            {[0, 1, 2, 3].map(index => <div className="settings-skeleton-row" key={index}>
+              <SkeletonBlock className="is-name" />
+              <SkeletonBlock />
+              <SkeletonBlock />
+              <SkeletonBlock />
+            </div>)}
+          </div>
+        </div>
+      </Group>
+    </SkeletonRegion>}>{result => {
       if (result.client !== client) return <Group><p className="settings-empty">{TEXT.settings.loading}</p></Group>;
       const summary = result.summary;
       const rows = modelUsageRows(summary.dailyByModel);
