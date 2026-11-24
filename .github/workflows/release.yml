@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Pushing a version tag builds the release and creates a draft after the gate.
+# Manual runs validate the selected branch with the L5 release gate.
+# Pushing a version tag also creates a draft after the gate passes.
 #
 # The gate is the merge gate, called from ci.yml rather than restated, so what
 # ships is checked by the same UT, ST, mocked E2E, both native binary builds
@@ -39,6 +40,18 @@ on:
       # `*` admits a prerelease suffix such as 1.0.0-rc1.
       - "[0-9]+.[0-9]+.[0-9]+*"
       - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "Real E2E backend"
+        type: choice
+        options: [jiuwenswarm, legacy]
+        default: jiuwenswarm
+      max-parallel:
+        description: "Real E2E workers (allowed: 1, 2, 4)"
+        type: choice
+        options: ['1', '2', '4']
+        default: '2'
 
 permissions:
   contents: read
@@ -52,7 +65,12 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          persist-credentials: false
       - id: resolve
+        shell: bash
         # The tag names the release; the version names the files inside it.
         # They differ only by a `v`, which existing artifacts do not carry:
         # 0.2.0's assets are ScienceDiscovery-0.2.0-linux-<arch>, so stripping
@@ -62,15 +80,29 @@ jobs:
         # as prereleases is what keeps them off "Latest" for everyone who lands
         # on the releases page.
         run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { SEMVER, VERSION_FILE, versionOf } from './.ci/release-version.mjs';
+
+          const version = versionOf(readFileSync(VERSION_FILE, 'utf8'));
+          if (typeof version !== 'string' || !SEMVER.test(version)) {
+            console.error(`::error::${VERSION_FILE} must contain a SemVer version`);
+            process.exit(1);
+          }
+          console.log(version);
+          NODE
+            )"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           if [[ "${version}" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "Tag ${tag} releases version ${version}."
+          echo "Release gate for version ${version} on ${GITHUB_REF}."
 
   gate:
     name: Gate
@@ -81,11 +113,15 @@ jobs:
       # L5 contains L4 plus the existing eligible release cases; quality calibration is deferred.
       # Failure leaves the existing tag without creating a draft Release or its assets.
       profile: release
+      skip-coverage: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
       release-version: ${{ needs.version.outputs.version }}
+      backend: ${{ inputs.backend || '' }}
+      max-parallel: ${{ fromJSON(inputs.max-parallel || '2') }}
 
   publish:
     name: Publish the release
     needs: [version, gate]
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

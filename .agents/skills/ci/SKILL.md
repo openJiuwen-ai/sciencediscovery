@@ -49,7 +49,7 @@ reuse it through `workflow_call` with the profiles below.
 | L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; default manual dispatch | L1 + hermetic UT/ST, x86_64/aarch64 binary smoke and Docker deployment checks; no model credentials |
 | L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/UT/ST on the group SHA plus mocked browser E2E and basic real API journeys; distribution jobs are skipped; required before automatic merge |
 | L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging, Linux binary smoke, Windows installer, macOS ARM64 DMG/ZIP, and Docker deployment checks |
-| L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases, evaluation modes, and distribution gates as L4, including macOS ARM64 DMG/ZIP. Failure blocks creating the draft Release and its assets while leaving the pushed tag intact. A person publishes the draft from the Releases page |
+| L5 / `release` | Version tag push or manual **Release** dispatch, or manual **CI** dispatch with `profile=release` | L4 gates plus the active public BiomniBench-DA cases. A successful version tag run creates a draft Release for a maintainer to publish |
 | `package` | Actions → Package → Run workflow | L1 and builds for `linux-windows`, `macos`, or `all`; `package-gate` covers the selected builds; Actions retains their artifacts for seven days |
 
 `ci.yml` accepts `pr`, `merge`, `daily`, and `release` for direct dispatch.
@@ -57,9 +57,9 @@ Reusable callers can also select `package`, which selects workflow jobs
 without defining a new local test profile. [.ci/tier-policy.mjs](../../../.ci/tier-policy.mjs)
 forces PR events to `pr` and merge-group events to `merge`, including a queue
 with one PR. Post-merge pushes to `main` do not trigger `ci.yml`; Nightly and
-Release invoke it via `workflow_call`. UT and ST
-record coverage outside Release runs; Coverage merges those records and runs
-no tests.
+Release invoke it via `workflow_call`. UT and ST record coverage for both
+manual L5 entries. Version tag pushes skip recording and reporting. The
+Coverage job merges recorded data and runs no tests.
 
 The binary, desktop and Docker jobs are distribution gates and sit outside the plan. The
 four-entry smoke that proves a built binary boots is a job's exit code, not a
@@ -143,10 +143,10 @@ L3 real work waits for UT, ST and all mocked workers; its `real-plan`
 reconciles mocked results before freezing the real matrix. L4/L5 start after
 policy selection independently of L1/L2. The real matrix has one serialized
 basic worker and one worker per research case, with at most two concurrent
-workers by default. Manual **CI** dispatch accepts `max-parallel` choices
-1, 2 or 4; select `profile=release` and `max-parallel=4` for a full L5 run
-with four workers. Merge queue, nightly and release-tag runs keep the default
-of two. Invalid reusable-workflow inputs fail planning before workers start.
+workers by default. Both manual **CI** and **Release** dispatch accept
+`max-parallel` choices of 1, 2 or 4. Select `profile=release` when using
+**CI** for L5. Merge queue, scheduled nightly and release-tag runs use two
+workers. Invalid reusable-workflow inputs fail planning before workers start.
 `real-report` (displayed as **Account for real cases**)
 reconciles their identities and results; it does not run another journey or
 call a model. `merge-gate` requires the jobs selected by `.ci/tier-policy.mjs`;

@@ -39,12 +39,12 @@ function results(profile, event = 'workflow_dispatch') {
 // Evaluate actual workflow expressions, including GitHub's implicit success().
 // This suite uses the JS-compatible boolean/string subset; bracket access
 // preserves GitHub job IDs containing hyphens.
-function eligible(expression, needs, { event = 'workflow_dispatch', profile = 'daily', cancelled = false, success = true } = {}) {
+function eligible(expression, needs, { event = 'workflow_dispatch', refType = 'branch', profile = 'daily', cancelled = false, success = true } = {}) {
   if (!expression) return success;
   if (!/\b(?:always|cancelled|success|failure)\(/.test(expression) && !success) return false;
   const source = expression.replace(/needs\.([\w-]+)/g, (_, name) => `needs[${JSON.stringify(name)}]`);
   return runInNewContext(source, {
-    needs, inputs: { profile }, github: { event_name: event }, always: () => true,
+    needs, inputs: { profile }, github: { event_name: event, ref_type: refType }, always: () => true,
     cancelled: () => cancelled, success: () => success, failure: () => !success,
   }, { timeout: 100 });
 }
@@ -115,15 +115,36 @@ test('both entry points reuse the same suite, profile, backend and inherited sec
   assert.doesNotMatch(realWorkflow, /^  (push|schedule|workflow_dispatch|pull_request):/m);
 });
 
-test('real concurrency defaults to two and manual CI offers only 1, 2 or 4', () => {
-  const dispatch = workflow.split('  workflow_dispatch:\n')[1].split('  workflow_call:\n')[0];
-  assert.match(dispatch, /max-parallel:\n[^]*?type: choice\n\s+options: \['1', '2', '4'\]\n\s+default: '2'/);
+test('real concurrency defaults to two and manual CI and Release offer only 1, 2 or 4', () => {
+  const release = readWorkflow('release');
+  for (const text of [workflow, release]) {
+    const dispatch = text.split('  workflow_dispatch:\n')[1].split(/\n(?:  workflow_call:|permissions:)/)[0];
+    assert.match(dispatch, /max-parallel:\n[^]*?type: choice\n\s+options: \['1', '2', '4'\]\n\s+default: '2'/);
+  }
   for (const text of [workflow.split('  workflow_call:\n')[1].split('\njobs:\n')[0], realWorkflow]) {
     assert.match(text, /max-parallel:\n\s+description: .*\n\s+type: number\n\s+default: 2\n/);
   }
-  for (const name of ['nightly', 'release']) {
-    assert.doesNotMatch(readWorkflow(name), /max-parallel:/, `${name} keeps the reusable default`);
-  }
+  assert.doesNotMatch(readWorkflow('nightly'), /max-parallel:/, 'nightly keeps the reusable default');
+  assert.match(release, /max-parallel: \$\{\{ fromJSON\(inputs.max-parallel \|\| '2'\) \}\}/);
+});
+
+test('release profile has a separate concurrency group from branch CI', () => {
+  const group = workflow.match(/^  group: (.+)$/m)[1];
+  const cancel = workflow.match(/^  cancel-in-progress: (.+)$/m)[1];
+  const evaluate = (template, profile, event, name = 'CI', ref = 'refs/heads/main') => {
+    const context = {
+      inputs: { profile }, github: { workflow: name, event_name: event, ref },
+      format: (pattern, value) => pattern.replace('{0}', value),
+    };
+    return template.replace(/\$\{\{ (.*?) \}\}/g, (_, expression) => runInNewContext(expression, context, { timeout: 100 }));
+  };
+  const branch = evaluate(group, 'pr', 'workflow_dispatch');
+  assert.notEqual(evaluate(group, 'release', 'workflow_dispatch'), branch);
+  assert.notEqual(evaluate(group, 'release', 'workflow_dispatch', 'Release'), branch);
+  assert.notEqual(evaluate(group, 'release', 'workflow_dispatch', 'Release', 'refs/tags/v0.4.0'),
+    evaluate(group, 'release', 'push', 'Release', 'refs/tags/v0.4.0'));
+  assert.equal(evaluate(cancel, 'pr', 'workflow_dispatch'), 'true');
+  assert.equal(evaluate(cancel, 'release', 'workflow_dispatch'), 'false');
 });
 
 test('real plan rejects unsupported concurrency before any setup or worker runs', t => {
@@ -211,5 +232,9 @@ test('accounting and the final gate reject failures and unexpected paid jobs', (
   }
   const publish = readWorkflow('release').split('  publish:\n')[1];
   assert.match(publish, /^    needs: \[version, gate\]/m);
-  assert.doesNotMatch(publish, /^    if:/m, 'publication still requires the called workflow to succeed');
+  const tagPush = { event: 'push', refType: 'tag' };
+  assert.equal(eligible(condition(publish), {}, tagPush), true);
+  assert.equal(eligible(condition(publish), {}, { ...tagPush, success: false }), false);
+  assert.equal(eligible(condition(publish), {}, { ...tagPush, event: 'workflow_dispatch' }), false);
+  assert.equal(eligible(condition(publish), {}, { ...tagPush, refType: 'branch' }), false);
 });
