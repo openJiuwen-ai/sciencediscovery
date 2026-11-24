@@ -19,6 +19,11 @@
 #
 # Daily adds real-model E2E to the hermetic merge gate. The reusable workflow
 # owns both jobs; the daily profile selects paid journeys from source tags.
+#
+# The normal start is a workflow_dispatch from the project schedule shortly
+# after 16:00 UTC. The cron below is only a fallback: GitHub delays scheduled
+# runs by hours, so the guard skips a late cron run when a successful dispatch
+# already produced that night's build.
 
 name: Nightly
 
@@ -28,19 +33,70 @@ on:
     # overnight for the team that reads it and has finished by the working
     # morning. GitHub schedules cron only on the default branch, evaluates it
     # in UTC with no daylight-saving adjustment, and drops or delays runs when
-    # its queue is busy — treat a missing night as a scheduling miss and
-    # re-dispatch rather than as a build failure.
+    # its queue is busy — the guard below keeps a delayed run from duplicating
+    # the dispatch that already started the night.
     - cron: "0 16 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  # A delayed scheduled run waits behind a running dispatch run instead of
+  # cancelling it; once the dispatch succeeds, the guard skips the duplicate.
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Decides whether this run is the night's build at all. A dispatch always
+  # runs. A scheduled run is the fallback: it only runs when no successful
+  # dispatch has been created since the most recent 16:00 UTC boundary.
+  guard:
+    name: Check for a successful dispatch run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            # The most recent scheduled time: 16:00 UTC today, or yesterday
+            # when a delayed run is created before 16:00 UTC.
+            now=$(date -u +%s)
+            since=$(date -u -d '16:00 today' +%s)
+            if (( now < since )); then
+              since=$(date -u -d '16:00 yesterday' +%s)
+            fi
+            since=$(date -u -d "@${since}" +%Y-%m-%dT%H:%M:%SZ)
+            # Only a successful dispatch at or after that boundary suppresses
+            # the fallback. A failed, cancelled or absent dispatch leaves the
+            # scheduled run to do the work. A failing query fails the job: it
+            # must not be mistaken for "no dispatch exists". The branch is the
+            # current ref, matching the concurrency group above, so a dispatch
+            # elsewhere cannot suppress this ref's fallback.
+            count=$(gh run list -R "${GITHUB_REPOSITORY}" -b "${GITHUB_REF_NAME}" \
+              -w nightly.yml -e workflow_dispatch -s success --created ">=${since}" \
+              --limit 1 --json databaseId --jq 'length')
+            if (( count > 0 )); then
+              run=false
+            fi
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+
   # A separate job only because GitHub expressions cannot produce a date, and
   # the version has to be decided before the reusable workflow is called.
   stamp:
     name: Stamp the build
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -57,7 +113,8 @@ jobs:
 
   gate:
     name: Gate
-    needs: stamp
+    needs: [guard, stamp]
+    if: needs.guard.outputs.run == 'true'
     uses: ./.github/workflows/ci.yml
     secrets: inherit
     with:
@@ -70,8 +127,8 @@ jobs:
   # outcome of every gate job in the run summary.
   report:
     name: Report the outcome
-    needs: [stamp, gate]
-    if: always()
+    needs: [guard, stamp, gate]
+    if: always() && needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
