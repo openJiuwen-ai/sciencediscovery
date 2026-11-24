@@ -21,10 +21,10 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 // `standard` is three rounds of three candidates with three independent
 // assessors, so the waits are ordered under the 7200s case budget instead of
 // summing past it: 3 x 600s to create + (120s running + 480s paused + 300s
-// resumed) + 4200s terminal = 6900s, leaving ~300s for the composer command, the
-// reload and cleanup. Every cap below is below the case timeout, so a slow
-// research fails as "status never settled" rather than being killed inside
-// cleanup with a Session left behind.
+// resumed) + 4200s terminal = 6900s. That is the sum of the stage caps, not a
+// bound on the case: `openSession()` alone can spend about 340s per attempt, so
+// the real limit is the 7200s case timeout and the caps above only decide how
+// long each wait may take before it gives up by name.
 //
 // 600s to create is measured, not guessed, and raising it was measured too. The
 // agent sometimes explores the workspace and the skill directories instead of
@@ -167,6 +167,11 @@ for (const scenario of cases) {
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
+        // The Session title carries the timestamp as well: `openSession()` returns as
+        // soon as a heading with `fixture.session.title` is visible, so a second
+        // attempt that reused the same title would match the Session left by the
+        // first one, skip the navigation and then drive the wrong Session while the
+        // poll reads the new one. A unique title makes the heading check unambiguous.
         // The agent starts the research from the composer only about half the time,
         // and the failure is behavioural: it reads skill files instead of calling
         // `create_idea_research` (#1311). Each attempt therefore gets its own Project
@@ -186,7 +191,7 @@ for (const scenario of cases) {
           // own journeys (`journey-governed-download-approval`,
           // `journey-sandbox-network-consent`); this case exists to check research
           // results, so the Session allows the tools it needs.
-          fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
+          fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: `${scenario.title} ${Date.now()}` });
           startedSessions.push(fixture);
           // Session scope, not the deployment: the override dies with this Session,
           // so no restore step can be skipped by a killed worker and a shared stack
