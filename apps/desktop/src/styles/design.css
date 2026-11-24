@@ -314,6 +314,17 @@ body.is-resizing {
   transition: transform 0.15s ease;
 }
 
+/* A folded Project states its own rule — the newest six are shown — on a
+   quiet line above the page, so the size of the cut is visible before the
+   reader presses anything. It is a caption, not a row: it must not compete
+   with the Project's name or its `+`/`⋯` in the row above. */
+.side-project-rule {
+  padding: 2px 12px 4px 32px;
+  color: #a6a6a6;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .side-row.side-project.is-open .chev {
   transform: rotate(180deg);
 }
@@ -473,6 +484,9 @@ body.is-resizing {
   border-radius: 8px;
   color: #777;
   font-size: 13px;
+  /* The count is the point of this row: keep it on one line rather than
+     wrapping a second line out of a 34px row. */
+  white-space: nowrap;
   text-align: left;
 }
 
