@@ -760,16 +760,15 @@ test("a send that answers false keeps the draft, and the same send then goes out
 });
 
 test("the idea-tree row hands the composer draft to the parameters card", async () => {
-  // The card starts a research, and `create_idea_research` needs an objective.
-  // Carrying the draft through is what keeps a sentence the reader already wrote
-  // from being dropped when the card opens — the row used to be called with no
-  // text at all.
+  // The card's token carries the objective, and `create_idea_research` needs
+  // one, so a sentence the reader already wrote is handed to the card instead of
+  // being dropped when it opens — the row used to be called with no text at all.
   const received: string[] = [];
-  let view: { root: never; unmount: () => void };
   const originalDocument = (globalThis as { document?: unknown }).document;
   (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  const mounted: Array<ReturnType<typeof create>> = [];
   await act(async () => {
-    view = create(
+    mounted.push(create(
       <Composer
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
@@ -790,42 +789,41 @@ test("the idea-tree row hands the composer draft to the parameters card", async 
         selectedModelId="m1"
         uploading={false}
       />,
-    ) as never;
+    ));
   });
+  const view = mounted[0];
+  assert.ok(view, "the composer mounted");
   try {
-    const textarea = (view!.root as unknown as { findByType: (type: string) => { props: { onChange?: (event: { target: { value: string } }) => void } } })
-      .findByType("textarea");
+    const textarea = view.root.findByType("textarea");
     await act(async () => { textarea.props.onChange?.({ target: { value: "研究钙钛矿带隙" } }); });
 
-    const trigger = (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onClick?: (event: { stopPropagation: () => void }) => void } }[] })
-      .findAllByType("button")
-      .find((node) => node.props["aria-label"] === "会话设置");
+    const trigger = view.root.findAllByType("button").find((node) => node.props["aria-label"] === "会话设置");
     assert.ok(trigger, "会话设置 is drawn");
-    await act(async () => { trigger!.props.onClick?.({ stopPropagation() {} }); });
+    await act(async () => { trigger.props.onClick?.({ stopPropagation() {} }); });
 
-    const row = (view!.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; onClick?: () => void } }[] })
-      .findAllByType("span")
+    const row = view.root.findAllByType("span")
       .find((node) => node.props.className === "session-menu-label" && node.props.children === TEXT.composer.ideaTree)?.parent;
     assert.ok(row, "the idea-tree row is drawn");
-    await act(async () => { (row!.props.onClick as () => void)(); });
+    await act(async () => { row.props.onClick?.(); });
 
     assert.deepEqual(received, ["研究钙钛矿带隙"], "the draft rides with the row");
   } finally {
-    await act(async () => { view!.unmount(); });
+    await act(async () => { view.unmount(); });
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
     else (globalThis as { document?: unknown }).document = originalDocument;
   }
 });
+
 test("a seeded idea-tree token sends the command with the task written under it", async () => {
   // The parameters card seeds this token instead of sending anything, so the
-  // send is the reader's: the composer has to hand the shell the command and the
+  // send is the reader's: the composer hands the shell the command and the
   // sentence as the two halves of one message.
   const sent: { content: string; command?: string }[] = [];
-  let view: { root: never; unmount: () => void };
   const originalDocument = (globalThis as { document?: unknown }).document;
   (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  const mounted: Array<ReturnType<typeof create>> = [];
   await act(async () => {
-    view = create(
+    mounted.push(create(
       <Composer
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
@@ -847,31 +845,32 @@ test("a seeded idea-tree token sends the command with the task written under it"
         selectedModelId="m1"
         uploading={false}
       />,
-    ) as never;
+    ));
   });
+  const view = mounted[0];
+  assert.ok(view, "the composer mounted");
   try {
-    const send = (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; onClick?: () => void } }[] })
-      .findAllByType("button")
-      .find((node) => node.props["aria-label"] === TEXT.composer.send);
+    const send = view.root.findAllByType("button").find((node) => node.props["aria-label"] === TEXT.composer.send);
     assert.ok(send, "the send button is drawn");
-    await act(async () => { send!.props.onClick?.(); });
+    await act(async () => { send.props.onClick?.(); });
     assert.deepEqual(sent, [{ command: "/idea-tree-team", content: "研究钙钛矿带隙" }],
       "the token and its task leave as one message");
   } finally {
-    await act(async () => { view!.unmount(); });
+    await act(async () => { view.unmount(); });
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
     else (globalThis as { document?: unknown }).document = originalDocument;
   }
 });
+
 test("an idea-tree token without a task cannot be sent, and asks for a research task", async () => {
   // The parameters card seeds the token with an empty box; the reader has to
   // write the question before anything can leave, and the box has to ask for a
   // research task rather than a design goal.
-  let view: { root: never; unmount: () => void };
   const originalDocument = (globalThis as { document?: unknown }).document;
   (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  const mounted: Array<ReturnType<typeof create>> = [];
   await act(async () => {
-    view = create(
+    mounted.push(create(
       <Composer
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
@@ -893,23 +892,26 @@ test("an idea-tree token without a task cannot be sent, and asks for a research 
         selectedModelId="m1"
         uploading={false}
       />,
-    ) as never;
+    ));
   });
+  const view = mounted[0];
+  assert.ok(view, "the composer mounted");
   try {
-    const send = () => (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; disabled?: boolean } }[] })
-      .findAllByType("button")
-      .find((node) => node.props["aria-label"] === TEXT.composer.send);
-    const textarea = (view!.root as unknown as { findByType: (type: string) => { props: { onChange?: (event: { target: { value: string } }) => void; placeholder?: string } } })
-      .findByType("textarea");
+    const send = () => view.root.findAllByType("button").find((node) => node.props["aria-label"] === TEXT.composer.send);
+    const button = send();
+    assert.ok(button, "the send button is drawn");
+    const textarea = view.root.findByType("textarea");
 
-    assert.equal(send()!.props.disabled, true, "an empty task cannot be sent");
+    assert.equal(button.props.disabled, true, "an empty task cannot be sent");
     assert.equal(textarea.props.placeholder, TEXT.composer.ideaTreePlaceholder,
       "the token asks for a research task, not a design goal");
 
     await act(async () => { textarea.props.onChange?.({ target: { value: "研究钙钛矿带隙" } }); });
-    assert.equal(send()!.props.disabled, false, "writing the task enables the send");
+    const enabled = send();
+    assert.ok(enabled, "the send button is drawn");
+    assert.equal(enabled.props.disabled, false, "writing the task enables the send");
   } finally {
-    await act(async () => { view!.unmount(); });
+    await act(async () => { view.unmount(); });
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
     else (globalThis as { document?: unknown }).document = originalDocument;
   }

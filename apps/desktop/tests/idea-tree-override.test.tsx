@@ -127,9 +127,7 @@ test("the card offers exactly 确认, 取消 and 覆盖全局设置", async () =
   const { client } = stubClient();
   const { markup, view } = await mount(client, "s1");
   try {
-    const labels = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown } }[] })
-      .findAllByType("button")
-      .map((node) => String(node.props.children));
+    const labels = view.root.findAllByType("button").map((node) => String(node.props.children));
     // 跟随全局设置 is gone on purpose: an override is released by putting every
     // field back to the deployment value and confirming, which the empty-diff
     // path writes as `{}`.
@@ -441,20 +439,18 @@ test("each row shows the deployment value it inherits, and marks what it overrid
 
 test("seeding the command needs a conversation and a read, so 确认 is refused without one", async () => {
   // The settings row supplies onConfirm, so the old "no command waiting" rule
-  // would let this press through: it writes nothing (no Session) and would send
-  // `/idea-tree-team`, spending the deployment values while the hint promises
-  // "these values".
+  // would let this press through: it writes nothing (no Session) and would place
+  // a token that runs on the deployment values while the hint promises "these
+  // values".
   const { calls, client } = stubClient();
   const confirmed: number[] = [];
   const { markup, view } = await mountTo(client, undefined, () => { confirmed.push(1); }, true);
   try {
     assert.match(markup(), /打开一个会话后/);
-    const confirm = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
-      .findAllByType("button")
-      .find((node) => String(node.props.children) === "确认");
+    const confirm = view.root.findAllByType("button").find((node) => String(node.props.children) === "确认");
     assert.ok(confirm, "the confirm action is drawn");
-    assert.equal(confirm!.props.disabled, true, "it must not be pressable without a conversation");
-    await act(async () => { confirm!.props.onClick?.(); });
+    assert.equal(confirm.props.disabled, true, "it must not be pressable without a conversation");
+    await act(async () => { confirm.props.onClick?.(); });
     await flush();
     assert.equal(confirmed.length, 0, "nothing was started");
     assert.equal(calls.filter((call) => call.method !== "GET").length, 0, "and nothing was written");
@@ -465,19 +461,17 @@ test("seeding the command needs a conversation and a read, so 确认 is refused 
 
 test("seeding the command is refused when the settings could not be read", async () => {
   // Same guarantee from the other direction: with no draft there is nothing to
-  // write, so the research would run on whatever is in force while the reader
-  // believes they just set it.
+  // write, so a token placed here would run on whatever is in force while the
+  // reader believes they just set it.
   const { client } = failingClient();
   const confirmed: number[] = [];
   const { view } = await mountTo(client, "s1", () => { confirmed.push(1); }, true);
   try {
     assert.match(JSON.stringify(view.toJSON()), /settings unavailable/);
-    const confirm = (view.root as unknown as { findAllByType: (type: string) => { props: { children?: unknown; disabled?: boolean; onClick?: () => void } }[] })
-      .findAllByType("button")
-      .find((node) => String(node.props.children) === "确认");
+    const confirm = view.root.findAllByType("button").find((node) => String(node.props.children) === "确认");
     assert.ok(confirm, "the confirm action is drawn");
-    assert.equal(confirm!.props.disabled, true, "a failed read cannot start a research");
-    await act(async () => { confirm!.props.onClick?.(); });
+    assert.equal(confirm.props.disabled, true, "a failed read cannot place the token");
+    await act(async () => { confirm.props.onClick?.(); });
     await flush();
     assert.equal(confirmed.length, 0);
   } finally {
@@ -487,9 +481,9 @@ test("seeding the command is refused when the settings could not be read", async
 
 /** Mount with the settings-row shape: an onConfirm, and seedsCommand set. */
 async function mountTo(client: unknown, sessionId: string | undefined, onConfirm: () => void, seedsCommand: boolean) {
-  let view: { toJSON: () => unknown; root: never; unmount: () => void };
+  const mounted: Array<ReturnType<typeof create>> = [];
   await act(async () => {
-    view = create(
+    mounted.push(create(
       <IdeaTreeOverrideDialog
         client={client as never}
         onClose={() => {}}
@@ -497,10 +491,12 @@ async function mountTo(client: unknown, sessionId: string | undefined, onConfirm
         sessionId={sessionId}
         seedsCommand={seedsCommand}
       />,
-    ) as never;
+    ));
   });
   await flush();
-  return { markup: () => JSON.stringify(view!.toJSON()), view: view! };
+  const view = mounted[0];
+  assert.ok(view, "the dialog mounted");
+  return { markup: () => JSON.stringify(view.toJSON()), view };
 }
 
 /** A client whose Idea Tree settings read fails, for the states below. */
