@@ -69,6 +69,11 @@ export const APPROVAL_MODE_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:approval-mod
  *  from it (#1205). Only an explicit pick writes it. */
 export const REMEMBERED_MODEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:last-model`;
 
+/** How the sidebar list is narrowed (#1251). The issue asks for the choice to
+ *  survive a reload, so the four chips are written on every change and read
+ *  before the first paint. */
+export const LIST_FILTERS_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:list-filters`;
+
 function safeRead(storage: ReadableStorage, key: string): string | null {
   try {
     return storage.getItem(key);
