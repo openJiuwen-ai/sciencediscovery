@@ -5482,6 +5482,18 @@ body.is-resizing {
 }
 .side-search-note { margin: 4px 0; color: var(--muted); font-size: 11px; line-height: 16px; }
 .side-search-note.is-error { color: var(--danger, #d4380d); }
+/* The retry inside that line: text, not a control with its own chrome — the same
+   treatment .attach-retry gives the composer's refused upload. */
+.side-search-retry {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.side-search-retry:hover { text-decoration: underline; }
 
 /* The list's narrowing row: chips that toggle, one of which cycles its value. */
 .side-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 6px; }
