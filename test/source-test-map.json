@@ -3979,6 +3979,59 @@
           "complexity": "C2"
         }
       ]
+    },
+    {
+      "source": "apps/desktop/src/api/workbench.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-search.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/session-read-only.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-read-only.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/session-search.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-search.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "owner": "desktop",
+      "risk": "P1",
+      "source": "apps/desktop/src/views/SearchDialog.tsx",
+      "tests": [
+        {
+          "complexity": "C2",
+          "layer": "ut",
+          "source": "apps/desktop/tests/search-dialog.test.tsx"
+        },
+        {
+          "complexity": "C3",
+          "layer": "st",
+          "source": "apps/desktop/e2e/search-dialog.spec.ts"
+        }
+      ]
     }
   ]
 }
