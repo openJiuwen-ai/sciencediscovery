@@ -33,6 +33,7 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 // and costs ten times the tokens, so the budget stays at 600s; a run that never
 // calls the tool still fails, and the settled-run branch reports it with status
 // and cards rather than waiting out the case.
+const startAttempts = 3;
 const createBudget = 600_000;
 const runningBudget = 120_000;
 const pausedBudget = 480_000;
@@ -73,6 +74,7 @@ for (const scenario of cases) {
     await requireRealStack(info);
     const headers = authorizationHeader();
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
+    const startedSessions: Array<Awaited<ReturnType<typeof createProjectAndSession>>> = [];
     let researchId = "";
     const base = () => apiBaseUrl();
     const researchUrl = () => `${base()}/api/sessions/${fixture!.session.id}/idea-tree/research`;
@@ -151,48 +153,70 @@ for (const scenario of cases) {
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
-        // A three-round standard research prepares inputs with governed tools, and
-        // the default approval mode parks the run as `blocked` on the first one
-        // with nobody to answer the card — measured: two runs sat blocked for
-        // ~10 min without ever creating a research. Approval surfaces have their
-        // own journeys (`journey-governed-download-approval`,
-        // `journey-sandbox-network-consent`); this case exists to check research
-        // results, so the Session allows the tools it needs.
-        fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
-        // Session scope, not the deployment: the override dies with this Session,
-        // so no restore step can be skipped by a killed worker and a shared stack
-        // keeps its own Idea Tree settings.
-        const override = await page.request.patch(`${base()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
-        expect(override.ok()).toBe(true);
-        const existingIds = new Set((await read()).map((item) => item.research.id));
-        await openSession();
-        await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
-        await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
-        // Identify this run by the id that was not there before the command was
-        // sent: the list is shared by every research in the Session. A run that
-        // reports a terminal status without a research cannot recover, so it
-        // fails here with that status — `expect.poll` retries any other value, so
-        // the terminal case has to throw. `blocked` keeps waiting unless a card
-        // actually needs a person.
-        await expect.poll(async () => {
-          if ((await read()).some((item) => !existingIds.has(item.research.id))) return "created";
-          const runs = await readRuns();
-          const newest = runs[runs.length - 1];
-          if (!newest) return "waiting";
-          if (newest.status === "blocked") {
-            // No card yet means the engine is still preparing; a card means a
-            // person has to act, and nobody will in a journey.
-            const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
-            if (cards && !cards.startsWith("cards unavailable")) throw new Error(`the /idea-tree run is blocked on ${cards} and cannot continue until it is answered`);
-            return "waiting";
+        // The agent starts the research from the composer only about half the time,
+        // and the failure is behavioural: it reads skill files instead of calling
+        // `create_idea_research` (#1311). Each attempt therefore gets its own Project
+        // and Session so a stuck run cannot leak into the next one, and the command is
+        // re-sent up to `startAttempts` times before this step reports a failure.
+        // Whole-case retries would be simpler, but four attempts at ~105 minutes do
+        // not fit the 240-minute research-worker ceiling; retrying only the creating
+        // stage keeps the worst case near 125 minutes and still fails honestly after
+        // the third miss. Assertions after this step are never retried.
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= startAttempts; attempt += 1) {
+          // A three-round standard research prepares inputs with governed tools, and
+          // the default approval mode parks the run as `blocked` on the first one
+          // with nobody to answer the card — measured: two runs sat blocked for
+          // ~10 min without ever creating a research. Approval surfaces have their
+          // own journeys (`journey-governed-download-approval`,
+          // `journey-sandbox-network-consent`); this case exists to check research
+          // results, so the Session allows the tools it needs.
+          fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `L5 Idea Tree ${scenario.id} ${Date.now()}` }, projectName: `L5 Idea Tree ${scenario.id} ${Date.now()}`, sessionTitle: scenario.title });
+          startedSessions.push(fixture);
+          // Session scope, not the deployment: the override dies with this Session,
+          // so no restore step can be skipped by a killed worker and a shared stack
+          // keeps its own Idea Tree settings.
+          const override = await page.request.patch(`${base()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: scenario.template, explorationIntensity: "standard" } } });
+          expect(override.ok()).toBe(true);
+          const existingIds = new Set((await read()).map((item) => item.research.id));
+          await openSession();
+          await page.locator("form.composer").getByRole("textbox").fill(`/idea-tree ${scenario.prompt}`);
+          await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
+          // Identify this run by the id that was not there before the command was
+          // sent: the list is shared by every research in the Session. A run that
+          // reports a terminal status without a research cannot recover, so it
+          // fails here with that status — `expect.poll` retries any other value, so
+          // the terminal case has to throw. `blocked` keeps waiting unless a card
+          // actually needs a person.
+          try {
+            await expect.poll(async () => {
+              if ((await read()).some((item) => !existingIds.has(item.research.id))) return "created";
+              const runs = await readRuns();
+              const newest = runs[runs.length - 1];
+              if (!newest) return "waiting";
+              if (newest.status === "blocked") {
+                // No card yet means the engine is still preparing; a card means a
+                // person has to act, and nobody will in a journey.
+                const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                if (cards && !cards.startsWith("cards unavailable")) throw new Error(`the /idea-tree run is blocked on ${cards} and cannot continue until it is answered`);
+                return "waiting";
+              }
+              if (settledRunStatuses.includes(newest.status)) {
+                const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research (${cards || "no pending card"})`);
+              }
+              return "waiting";
+            }, { timeout: createBudget, message: "the /idea-tree command should create one research before its run settles" }).toBe("created");
+            researchId = (await read()).find((item) => !existingIds.has(item.research.id))!.research.id;
+            if (attempt > 1) console.warn(`[l5-start] created on attempt ${attempt}/${startAttempts}`);
+            return;
+          } catch (error) {
+            lastError = error;
+            if (attempt === startAttempts) break;
+            console.warn(`[l5-start] attempt ${attempt}/${startAttempts} did not create a research: ${error instanceof Error ? error.message : String(error)}`);
           }
-          if (settledRunStatuses.includes(newest.status)) {
-            const cards = await pendingCards().catch((error) => `cards unavailable: ${error instanceof Error ? error.message : String(error)}`);
-            throw new Error(`the /idea-tree run settled as "${newest.status}"${newest.error ? `: ${newest.error}` : ""} without creating a research (${cards || "no pending card"})`);
-          }
-          return "waiting";
-        }, { timeout: createBudget, message: "the /idea-tree command should create one research before its run settles" }).toBe("created");
-        researchId = (await read()).find((item) => !existingIds.has(item.research.id))!.research.id;
+        }
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
       });
       if (scenario.pause) {
         await journey.step("Pause and resume", "Research reaches paused state and can continue without losing its identity", async () => {
@@ -249,7 +273,7 @@ for (const scenario of cases) {
         expect(saved?.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
     } finally {
-      if (fixture) await cleanupJourney(page, fixture);
+      for (const started of startedSessions) await cleanupJourney(page, started).catch(() => undefined);
     }
   });
 }
