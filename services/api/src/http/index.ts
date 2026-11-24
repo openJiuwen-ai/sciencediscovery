@@ -3992,8 +3992,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // without serialising the whole subgraph.
           const { contentHash, reason } =
             await memoryGraphClient.getWebPageContentHash(sessionId, webPageId);
-          if (reason === "memory_graph_unreachable") {
-            return sendError(response, 502, "memory graph unreachable");
+          // A reason means the graph could not answer: unreachable, busy, or
+          // refusing this installation's credential. None of those mean the
+          // WebPage is gone, so every reason must stay a 502 — folding an auth
+          // rejection into the 404 would tell the reader their page no longer
+          // exists. The client maps 401/403 to `memory_graph_unauthorized`.
+          if (reason) {
+            return sendError(response, 502, reason === "memory_graph_unauthorized"
+              ? "memory graph rejected the internal token"
+              : "memory graph unreachable");
           }
           if (typeof contentHash !== "string" || !/^[a-f0-9]{64}$/.test(contentHash)) {
             return sendError(response, 404, "WebPage not found or has no content_hash");

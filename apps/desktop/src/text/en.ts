@@ -703,6 +703,8 @@ export const EN: Text = {
     disabledBody: "Turn it on in Settings → Scientific memory and a report's citations expand into their evidence and artifacts.",
     unreachableTitle: "Scientific memory is unavailable",
     unreachableBody: "The memory service did not answer. Try again in a moment.",
+    authTitle: "Scientific memory rejected the access token",
+    authBody: "The memory service answered but rejected the internal token this API uses. Make sure the API and the memory service share the same internal token, then check again.",
     errorTitle: "Could not read memory",
     retry: "Retry",
     previewTab: "Preview",
@@ -719,6 +721,7 @@ export const EN: Text = {
     },
     status: {
       healthy: "Running",
+      unauthorized: "Credentials rejected",
       degraded: "Cannot connect",
       checking: "Checking",
       unknown: "Status unknown",

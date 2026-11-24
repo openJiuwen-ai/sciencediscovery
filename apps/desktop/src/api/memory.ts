@@ -32,9 +32,18 @@ import type {
 /** Whether a `reason` means the graph could not answer *this* query, so the
  *  card must offer a retry rather than claim the reference does not exist.
  *  `memory_graph_query_limit` is the sidecar's HTTP 503 budget refusal; it is
- *  not a missing node and must not render as one. */
+ *  not a missing node and must not render as one. An auth rejection is
+ *  deliberately absent: retrying with the same token cannot help, and telling
+ *  the reader the service is down would point at the wrong thing. */
 export function graphTemporarilyUnavailable(reason?: string): boolean {
   return reason === "memory_graph_unreachable" || reason === "memory_graph_query_limit";
+}
+
+/** Whether the memory service answered but refused this installation's
+ *  credentials (HTTP 401/403). The service is up; the internal token does not
+ *  match. The card says so instead of "the memory service did not answer". */
+export function graphCredentialsRejected(reason?: string): boolean {
+  return reason === "memory_graph_unauthorized";
 }
 
 /** `POST /api/memory/query/by-node-type` — the card list. A `sessionId` of

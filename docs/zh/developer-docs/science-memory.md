@@ -187,7 +187,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 
 | 方法 + 路径 | 作用 |
 |-------------|------|
-| `GET /health` | 状态：`needs-password`/`degraded`/`healthy`（无鉴权）。`disabled` 是 API 侧概念（toggle 关），不是 sidecar 状态——sidecar 始终在跑，只报图可达性 |
+| `GET /health` | 状态：`needs-password`/`degraded`/`healthy`（无鉴权）。`disabled` 与 `unauthorized` 是 API 侧概念：开关关着，或已鉴权的 by-node-type 探测被拒（HTTP 401/403）——sidecar 本身只报图可达性 |
 | `GET /subgraph?session_id=` | 全节点 + 全"有意义的"边（白名单：produces/next/extracts/supports/stated_in/supersedes/input/contains；前端绘制时过滤掉 `supersedes`，版本谱系不入链路视图） |
 | `POST /query/match` | 跨会话子串搜索（按命中数+字段优先排序）；`mode=all_terms` term-AND（前端搜索框用，输入论文标题只回该论文），`mode=any_term` OR（默认，agent `query_graph` 工具用，宽松召回避免零结果）；`session_id=null` 跨会话 |
 | `POST /query/by-node-type` | 按 label 过滤节点 |
@@ -208,7 +208,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 
 ### 3.2 Node API 反向代理路由（`services/api/src/http/`，浏览器入口）
 
-浏览器只读，全部反向代理到 sidecar；功能关闭（client=null）返回空结果 + `reason:"memory_graph_disabled"`，sidecar 不可达返回 `reason:"memory_graph_unreachable"`：
+浏览器只读，全部反向代理到 sidecar；功能关闭（client=null）返回空结果 + `reason:"memory_graph_disabled"`；传输失败返回 `reason:"memory_graph_unreachable"`；内部令牌被拒返回 `reason:"memory_graph_unauthorized"`：
 
 | 方法 + 路径 | 客户端方法（`apps/web/src/api/`） |
 |-------------|--------------------------------------|

@@ -9603,6 +9603,66 @@ test("memory query and provenance routes forward complete success contracts", { 
   assert.equal(calls.some((call) => call.path === "/query/artifact-provenance"), true);
 });
 
+test("a memory sidecar that answers health but refuses authenticated queries reports unauthorized, not healthy", { id: "memory-graph-auth-rejection" }, async (context) => {
+  // Issue #1352. The sidecar's `/health` does not need the internal token, so
+  // a token mismatch leaves it saying healthy while every `/query/*` answers
+  // 401. The status the settings page reads must say unauthorized, and the
+  // citation read must carry a reason that is not a transport failure.
+  const tempRoot = resolve(process.cwd(), ".tmp", `memory-auth-${randomUUID()}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const calls: Array<{ authorization: string | undefined; path: string }> = [];
+  const sidecar = createHttpServer((request, response) => {
+    const path = (request.url ?? "/").split("?")[0] ?? "/";
+    calls.push({ authorization: request.headers.authorization, path });
+    response.writeHead(path === "/health" ? 200 : 401, { "content-type": "application/json" });
+    response.end(path === "/health"
+      ? JSON.stringify({ status: "healthy", backend: "local" })
+      : JSON.stringify({ detail: "invalid internal token" }));
+  });
+  let sidecarClosed = false;
+  await new Promise<void>((done) => sidecar.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => {
+    if (sidecarClosed) { done(); return; }
+    sidecar.close(() => done());
+  }));
+  const api = createProductionApiServer({
+    ...testConfig(tempRoot),
+    memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "wrong-internal-token" },
+  });
+  await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  context.after(() => closeApiServer(api));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const headers = { ...authorization, "content-type": "application/json" };
+  const enabled = await fetch(`${origin}/api/memory/settings`, {
+    method: "PUT", headers, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(enabled.status, 200);
+
+  const health = await jsonRequest<{ memoryGraph: string }>(`${origin}/api/health`, { headers: authorization });
+  assert.equal(health.body.memoryGraph, "unauthorized");
+
+  const read = async () => jsonRequest<Record<string, unknown>>(`${origin}/api/memory/query/by-node-type`, {
+    method: "POST", headers, body: JSON.stringify({ node_types: ["Evidence"] }),
+  });
+  const refused = await read();
+  assert.equal(refused.response.status, 200);
+  assert.equal(refused.body.reason, "memory_graph_unauthorized");
+  assert.deepEqual(refused.body.hits, []);
+  // The status probe and the card read both used the configured token: this
+  // is the path whose answer the status is meant to reflect. (The settings
+  // write above also probes, hence the lower bound rather than a count.)
+  const probes = calls.filter((call) => call.path === "/query/by-node-type");
+  assert.ok(probes.length >= 2);
+  assert.ok(probes.every((call) => call.authorization === "Bearer wrong-internal-token"));
+
+  // A service that is not there is still a different reading.
+  sidecarClosed = true;
+  await new Promise<void>((done) => sidecar.close(() => done()));
+  const offline = await read();
+  assert.equal(offline.body.reason, "memory_graph_unreachable");
+});
+
 test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", async (context) => {
   // The sidecar is reachable (HTTP 200) but its Neo4j is unreachable, so it
   // answers { content_hash: null, reason: "memory_graph_unreachable" }. The API
@@ -9645,6 +9705,50 @@ test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", asy
   const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-anything/content`, { headers: authorization });
   assert.equal(response.status, 502);
   assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
+});
+
+test("WPC-006 a sidecar that rejects the credential returns 502, not 404", async (context) => {
+  // The WebPage lookup now distinguishes a rejected internal token from an
+  // absent node. The content endpoint must keep that distinction: a 401 is a
+  // reason the graph could not answer, so it is a 502, never the 404 the UI
+  // reads as "this page is gone".
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-unauthorized-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const sidecar = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://sidecar.test");
+    if (url.pathname === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ status: "healthy", backend: "local" })}\n`);
+      return;
+    }
+    // Any authenticated read, including the content-hash lookup, is refused.
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(`${JSON.stringify({ detail: "invalid internal token" })}\n`);
+  });
+  await new Promise<void>((resolveListen) => sidecar.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => sidecar.close(() => resolveClose())));
+  const sidecarUrl = `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`;
+
+  const api = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: sidecarUrl, internalToken: "wrong-token" } });
+  await new Promise<void>((resolveListen) => api.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { api.close(() => resolveClose()); api.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const project = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "WebPage content rejected" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = project.body.firstSession.id;
+  await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+
+  const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-anything/content`, { headers: authorization });
+  assert.equal(response.status, 502);
+  assert.match((await response.json() as { error?: string }).error ?? "", /rejected the internal token/);
 });
 
 test("deep checkpoint forwards selected MCP readiness without duplicating main notices", async (context) => {

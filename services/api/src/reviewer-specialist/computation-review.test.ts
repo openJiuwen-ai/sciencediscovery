@@ -242,6 +242,22 @@ test("Quick computation review treats graph unavailability as inconclusive", asy
   assert.equal(busy.inconclusive, true);
 });
 
+test("Quick computation review treats a rejected memory credential as inconclusive", async () => {
+  // The sidecar answered 401: it is up, and this installation's internal token
+  // is wrong. That limits the check; it is not a missing provenance marker.
+  const rejected = await quickComputationReview(
+    version(),
+    async () => completeTrace({
+      broken: true,
+      chain: [],
+      reason: "memory_graph_unauthorized",
+      startNode: null,
+    }),
+  );
+  assert.deepEqual(rejected.findings, []);
+  assert.equal(rejected.inconclusive, true);
+});
+
 test("Quick computation review accepts an older node from the same Artifact version lineage", async () => {
   const result = await quickComputationReview(
     version(),

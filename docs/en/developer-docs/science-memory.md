@@ -187,7 +187,7 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 
 | Method + path | Purpose |
 |-------------|------|
-| `GET /health` | State: `needs-password`/`degraded`/`healthy` (no auth). The `disabled` state is an API-side concept (the toggle is off), not a sidecar status — the sidecar always runs and reports graph reachability only |
+| `GET /health` | State: `needs-password`/`degraded`/`healthy` (no auth). `disabled` and `unauthorized` are API-side concepts: the toggle is off, or the authenticated by-node-type probe was refused (HTTP 401/403) — the sidecar itself reports graph reachability only |
 | `GET /subgraph?session_id=` | All nodes + all "meaningful" edges (whitelist: produces/next/extracts/supports/stated_in/supersedes/input/contains; the frontend filters out `supersedes` when drawing, version lineage not in the chain view) |
 | `POST /query/match` | Cross-session substring search (ranked by hit count + field priority); `mode=all_terms` term-AND (frontend search box — typing a paper's full title returns just that paper), `mode=any_term` OR (default, the agent `query_graph` tool — loose recall to avoid zero results); `session_id=null` crosses sessions |
 | `POST /query/by-node-type` | Filter nodes by label |
@@ -208,7 +208,7 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 
 ### 3.2 Node API reverse-proxy routes (`services/api/src/http/`, browser entry)
 
-Browser is read-only, all reverse-proxied to the sidecar; feature off (client=null) returns an empty result + `reason:"memory_graph_disabled"`, sidecar unreachable returns `reason:"memory_graph_unreachable"`:
+Browser is read-only, all reverse-proxied to the sidecar; feature off (client=null) returns an empty result + `reason:"memory_graph_disabled"`; a transport failure returns `reason:"memory_graph_unreachable"`; a refused internal token returns `reason:"memory_graph_unauthorized"`:
 
 | Method + path | Client method (`apps/web/src/api/`) |
 |-------------|--------------------------------------|

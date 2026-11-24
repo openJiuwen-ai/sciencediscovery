@@ -33,7 +33,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../api/client.js";
-import { graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../api/memory.js";
+import { graphCredentialsRejected, graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../api/memory.js";
 import {
   listArtifacts,
   listArtifactVersions,
@@ -75,7 +75,7 @@ type DetailTab = "preview" | "provenance";
 /** What an error state can offer. A transient failure is answered by re-reading
  *  the citation in place; only memory being switched off is answered by the
  *  switch, because a settings page cannot bring a restarting sidecar back. */
-type ErrorRecovery = "retry" | "settings";
+export type ErrorRecovery = "retry" | "settings";
 
 type LoadState =
   | { status: "loading" }
@@ -145,6 +145,31 @@ function fileNameOf(node: MemoryGraphNode): string {
   return node.id.includes(":") ? node.id.slice(node.id.lastIndexOf(":") + 1) : node.id;
 }
 
+/** The card's reading of the `reason` a 200 memory read carries.
+ *
+ *  Every non-answer is classified in one place so the list and the provenance
+ *  chain cannot disagree, and so the reason→copy mapping can be asserted
+ *  without rendering. `undefined` means the read answered (the empty body may
+ *  still mean "nothing recorded"). An auth rejection is separate from a
+ *  transport failure on purpose: it is the one case where retrying cannot
+ *  help and where telling the reader the service is down is false. */
+export function memoryCardFailure(reason: string | undefined): {
+  message: string;
+  recovery: ErrorRecovery;
+  title: string;
+} | undefined {
+  if (graphCredentialsRejected(reason)) {
+    return { message: TEXT.memory.authBody, recovery: "settings", title: TEXT.memory.authTitle };
+  }
+  if (graphTemporarilyUnavailable(reason)) {
+    return { message: TEXT.memory.unreachableBody, recovery: "retry", title: TEXT.memory.unreachableTitle };
+  }
+  if (reason === "memory_graph_disabled") {
+    return { message: TEXT.memory.disabledBody, recovery: "settings", title: TEXT.memory.disabledTitle };
+  }
+  return undefined;
+}
+
 export function MemoryCardDialog({
   client,
   onClose,
@@ -174,28 +199,14 @@ export function MemoryCardDialog({
     listMemoryNodes(client, [nodeLabel], targetSession).then(
       (result) => {
         if (!alive) return;
-        if (result.reason === "memory_graph_disabled") {
-          setState({
-            message: TEXT.memory.disabledBody,
-            recovery: "settings",
-            status: "error",
-            title: TEXT.memory.disabledTitle,
-          });
-          return;
-        }
-        // A budget refusal (HTTP 503 memory_graph_query_limit) is a temporary
-        // failure to answer, not proof that the reference has no node. Report
-        // it like an unreachable service instead of falling through to
-        // ``missing``, which would tell the reader the reference does not exist.
-        // The same goes for the action: both are worth another read, and the
-        // card's own sentence already asks the reader to try again.
-        if (graphTemporarilyUnavailable(result.reason)) {
-          setState({
-            message: TEXT.memory.unreachableBody,
-            recovery: "retry",
-            status: "error",
-            title: TEXT.memory.unreachableTitle,
-          });
+        // A reason is the service saying it could not answer this read — only
+        // the copy can tell the reader which kind of non-answer it was. A
+        // credentials rejection must not read as a timeout, and a budget
+        // refusal (HTTP 503 memory_graph_query_limit) must not read as "this
+        // reference does not exist".
+        const failure = memoryCardFailure(result.reason);
+        if (failure) {
+          setState({ ...failure, status: "error" });
           return;
         }
         const hit = matchReferenceHit(result.hits ?? [], reference);
@@ -287,6 +298,7 @@ export function MemoryCardDialog({
             <MemoryProvenance
               client={client}
               hit={state.hit}
+              onOpenSettings={onOpenSettings}
               sessionId={targetSession}
             />
           ) : state.hit.label === "Evidence" ? (
@@ -403,26 +415,16 @@ function MemoryFacts({ hit }: { hit: MemoryGraphHit }) {
 
 type ProvenanceState =
   | { status: "loading" }
-  | { message: string; status: "error" }
+  | { message: string; recovery: ErrorRecovery; status: "error"; title: string }
   /** Evidence follows the old web UI's 溯源 tab: what the evidence was
    *  extracted from, and nothing else. The claims that cite it belong to the
    *  report, not to the evidence. */
   | { sources: MemoryGraphNode[]; status: "ready" };
 
-/** A chain answers 200 with a reason when the graph is off or gone. Treating
- *  that as "nothing recorded" would print a trace full of empty steps for a
- *  service that never answered. */
-function chainProblem(reason: string | undefined): string | undefined {
-  // A budget refusal means the graph could not answer, not that nothing was
-  // recorded; ``undefined`` here would render a "ready" trace with no sources.
-  if (graphTemporarilyUnavailable(reason)) return TEXT.memory.unreachableBody;
-  if (reason === "memory_graph_disabled") return TEXT.memory.disabledBody;
-  return undefined;
-}
-
-function MemoryProvenance({ client, hit, sessionId }: {
+function MemoryProvenance({ client, hit, onOpenSettings, sessionId }: {
   client: ApiClient;
   hit: MemoryGraphHit;
+  onOpenSettings: () => void;
   sessionId?: string;
 }) {
   const [state, setState] = useState<ProvenanceState>({ status: "loading" });
@@ -435,9 +437,13 @@ function MemoryProvenance({ client, hit, sessionId }: {
     const read = async (): Promise<void> => {
       const sources = await memoryChain(client, hit.id, readSession, "viewSourcePaper");
       if (!alive) return;
-      const problem = chainProblem(sources.reason);
-      if (problem !== undefined) {
-        setState({ message: problem, status: "error" });
+      // A chain answers 200 with a reason when the graph is off, gone, or
+      // refusing this installation. The same classification as the list step
+      // keeps the two tabs from disagreeing: in particular an auth rejection
+      // must offer the settings route, not a Retry that resends the same token.
+      const failure = memoryCardFailure(sources.reason);
+      if (failure) {
+        setState({ ...failure, status: "error" });
         return;
       }
       setState({
@@ -449,7 +455,9 @@ function MemoryProvenance({ client, hit, sessionId }: {
       if (alive) {
         setState({
           message: failure instanceof Error ? failure.message : TEXT.memory.provenance.error,
+          recovery: "retry",
           status: "error",
+          title: TEXT.memory.provenance.error,
         });
       }
     });
@@ -469,10 +477,12 @@ function MemoryProvenance({ client, hit, sessionId }: {
   if (state.status === "error") {
     return (
       <MemoryState
-        action={TEXT.memory.provenance.retry}
+        action={state.recovery === "retry" ? TEXT.memory.provenance.retry : TEXT.memory.openSettings}
         body={state.message}
-        onAction={() => setAttempt((value) => value + 1)}
-        title={TEXT.memory.provenance.error}
+        onAction={state.recovery === "retry"
+          ? () => setAttempt((value) => value + 1)
+          : onOpenSettings}
+        title={state.title}
       />
     );
   }
