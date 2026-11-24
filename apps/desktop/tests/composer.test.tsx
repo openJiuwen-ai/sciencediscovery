@@ -863,3 +863,54 @@ test("a seeded idea-tree token sends the command with the task written under it"
     else (globalThis as { document?: unknown }).document = originalDocument;
   }
 });
+test("an idea-tree token without a task cannot be sent, and asks for a research task", async () => {
+  // The parameters card seeds the token with an empty box; the reader has to
+  // write the question before anything can leave, and the box has to ask for a
+  // research task rather than a design goal.
+  let view: { root: never; unmount: () => void };
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onClearCommand={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={() => true}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "" }}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    ) as never;
+  });
+  try {
+    const send = () => (view!.root as unknown as { findAllByType: (type: string) => { props: { "aria-label"?: string; disabled?: boolean } }[] })
+      .findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.composer.send);
+    const textarea = (view!.root as unknown as { findByType: (type: string) => { props: { onChange?: (event: { target: { value: string } }) => void; placeholder?: string } } })
+      .findByType("textarea");
+
+    assert.equal(send()!.props.disabled, true, "an empty task cannot be sent");
+    assert.equal(textarea.props.placeholder, TEXT.composer.ideaTreePlaceholder,
+      "the token asks for a research task, not a design goal");
+
+    await act(async () => { textarea.props.onChange?.({ target: { value: "研究钙钛矿带隙" } }); });
+    assert.equal(send()!.props.disabled, false, "writing the task enables the send");
+  } finally {
+    await act(async () => { view!.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
+});
