@@ -132,9 +132,18 @@ for (const scenario of cases) {
     const openSession = async () => {
       const heading = page.getByRole("heading", { name: fixture!.session.title });
       for (let attempt = 1; attempt <= 2; attempt += 1) {
+        // A reload can restore the Session by itself; when it did, the clicks below
+        // would only navigate away from it.
+        if (await heading.waitFor({ state: "visible", timeout: 5_000 }).then(() => true).catch(() => false)) return;
         await page.goto("/");
         const project = page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture!.project.name });
         await project.first().click({ timeout: 30_000 });
+        // `#sessions-panel-content` only exists while the sessions panel is expanded,
+        // and a previous interaction can leave it collapsed: measured, two 30s waits
+        // for a row that the DOM had no place for. Expand the panel first.
+        if (!(await page.locator("#sessions-panel-content").isVisible().catch(() => false))) {
+          await page.getByRole("button", { name: /^(会话|Sessions)$/ }).first().click({ timeout: 15_000 }).catch(() => undefined);
+        }
         const session = page.locator("#sessions-panel-content button.nav-item").filter({ hasText: fixture!.session.title });
         const listed = await session.first().waitFor({ state: "visible", timeout: 30_000 }).then(() => true).catch(() => false);
         if (!listed) {
