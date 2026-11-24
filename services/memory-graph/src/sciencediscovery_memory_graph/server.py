@@ -17,6 +17,8 @@
 Routes:
 
 - ``GET /health`` → ``{status}`` (healthy/degraded/disabled/needs-password) + ``backend`` (local/neo4j)
+- ``GET /internal/ping`` (Bearer) → ``{status: "ok"}``; authenticated liveness that
+  touches no graph data, for the API's status line
 - ``POST /observe/execution`` (Bearer) → upsert one execution's nodes + edges
 - ``POST /observe/tool-call`` (Bearer) → unified upsert ticket for any tool
   call's ToolCall + Paper/WebPage/DbRecord products (broker/recorder are the
@@ -215,6 +217,21 @@ def health() -> dict[str, str]:
     log.info("health: Neo4j %s, memory graph %s",
              "reachable" if reachable else "unreachable", status)
     return {"status": status, "backend": "neo4j"}
+
+
+@app.get("/internal/ping", dependencies=[Depends(require_internal_token)])
+def internal_ping() -> dict[str, str]:
+    """Authenticated liveness for the API's status line.
+
+    The status row has to answer two different questions: is the store healthy
+    (``/health``), and can this installation authenticate (this route). It must
+    not ask them with a graph query: ``by_node_type`` scans the whole node set,
+    so on the local backend a large graph exceeds the interpreter's query work
+    budget and answers HTTP 503 ``memory_graph_query_limit`` — a healthy,
+    authenticated service would then look unreachable. This route touches no
+    graph data and is O(1), so the verdict depends only on the internal token.
+    """
+    return {"status": "ok"}
 
 
 # --- Write: observeExecution ------------------------------------------------

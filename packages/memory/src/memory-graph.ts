@@ -63,15 +63,25 @@ import { mgLog } from "./log.js";
 // degraded fallback (1.5 s in services/api/src/http/index.ts).
 const HEALTH_REQUEST_TIMEOUT_MS = 1_500;
 
-/** The token `/health` is deliberately unauthenticated, so on its own it says
- *  nothing about whether this process can read the graph: /query/* needs the
- *  Bearer token, and a mismatched internal token answers 401 to every query
- *  while /health keeps saying healthy. The probe therefore repeats the read
- *  the citation card will do — a by-node-type for one valid label, scoped to a
- *  Session id that cannot exist, so it cannot pull real rows. The sidecar
- *  refuses an empty node_types list with 400, hence the label below. */
-const HEALTH_PROBE_SESSION_ID = "__sciencediscovery_health_probe__";
-const HEALTH_PROBE_NODE_TYPE: MemoryGraphNodeLabel = "Evidence";
+/** `/health` is deliberately unauthenticated, so on its own it says nothing
+ *  about whether this process can read the graph: /query/* needs the Bearer
+ *  token, and a mismatched internal token answers 401 to every query while
+ *  /health keeps saying healthy. The probe therefore asks the sidecar's O(1)
+ *  authenticated ping, which touches no graph data. A graph query (the first
+ *  attempt was by-node-type) would make the status depend on graph size and
+ *  on the query work budget: a large local graph exceeds the interpreter's
+ *  budget and answers 503 memory_graph_query_limit, which would report a
+ *  healthy, authenticated service as unreachable. */
+const HEALTH_AUTH_PROBE_PATH = "/internal/ping";
+
+/** A sidecar older than the O(1) ping has no such route (404/405). In that
+ *  mixed-version case the only way to test the credential is the read the
+ *  citation card uses; without this fallback a 404 would be read as "token
+ *  accepted" and #1352 would come back. */
+const LEGACY_HEALTH_PROBE_PATH = "/query/by-node-type";
+const LEGACY_HEALTH_PROBE_SESSION_ID = "__sciencediscovery_health_probe__";
+const LEGACY_HEALTH_PROBE_NODE_TYPE: MemoryGraphNodeLabel = "Evidence";
+const QUERY_BUDGET_REASON = "memory_graph_query_limit";
 
 /** The reason a read carries when the sidecar answered but refused this
  *  client's credentials. Distinct from `memory_graph_unreachable` because the
@@ -80,6 +90,18 @@ export const MEMORY_GRAPH_UNAUTHORIZED = "memory_graph_unauthorized";
 
 function isAuthRejection(status: number): boolean {
   return status === 401 || status === 403;
+}
+
+/** The sidecar's budget refusal, which proves the token was accepted even when
+ *  the status is 503. Only this known shape may keep a healthy reading. */
+async function isQueryBudgetRefusal(response: Response): Promise<boolean> {
+  if (response.status !== 503) return false;
+  const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  const detail = body?.detail;
+  const code = detail !== null && typeof detail === "object"
+    ? (detail as Record<string, unknown>).code
+    : undefined;
+  return code === QUERY_BUDGET_REASON;
 }
 
 /** Aggregated provenance addressing info for one Artifact version, returned
@@ -415,13 +437,18 @@ export class MemoryGraphClient {
   /** The sidecar's health, plus whether this client is allowed to query it.
    *
    *  `/health` is unauthenticated and only reports the store, so a healthy
-   *  answer followed by an authenticated by-node-type probe is the smallest
-   *  pair that answers the question the settings line is actually asked:
-   *  "can this installation read scientific memory?". A reachable sidecar that
-   *  refuses the probe's Bearer token returns `unauthorized` — never
-   *  `healthy`, which is what let a token mismatch look like a working
-   *  installation. A transport failure or an unusable store stays
-   *  `degraded`, and `disabled` / `needs-password` keep their meaning. */
+   *  answer followed by the O(1) authenticated ping is the smallest pair that
+   *  answers the question the settings line is actually asked: "can this
+   *  installation read scientific memory?". The ping deliberately touches no
+   *  graph data, so the answer does not depend on graph size or on the query
+   *  work budget. A reachable sidecar that refuses the ping's Bearer token
+   *  returns `unauthorized` — never `healthy`, which is what let a token
+   *  mismatch look like a working installation. An older sidecar without the
+   *  ping (404/405) falls back to the authenticated read, so a mixed-version
+   *  deployment keeps that verdict; only that path's known budget refusal may
+   *  keep the `/health` reading. Any other probe failure is `degraded`. A
+   *  transport failure or an unusable store stays `degraded`, and `disabled` /
+   *  `needs-password` keep their meaning. */
   async health(): Promise<string> {
     const deadline = Date.now() + HEALTH_REQUEST_TIMEOUT_MS;
     let status: string;
@@ -453,38 +480,76 @@ export class MemoryGraphClient {
       return "degraded";
     }
     try {
-      const response = await fetch(`${this.baseUrl}/query/by-node-type`, {
-        method: "POST",
-        headers: this.initHeaders(true),
-        body: JSON.stringify({
-          node_types: [HEALTH_PROBE_NODE_TYPE],
-          session_id: HEALTH_PROBE_SESSION_ID,
-        }),
+      const response = await fetch(`${this.baseUrl}${HEALTH_AUTH_PROBE_PATH}`, {
+        headers: this.initHeaders(),
         signal: AbortSignal.timeout(remaining),
       });
       if (isAuthRejection(response.status)) {
         mgLog.warn("health check: memory-graph refused this client's credentials (HTTP %s)", response.status);
         return "unauthorized";
       }
-      if (!response.ok) {
-        mgLog.warn("health check: authenticated probe returned HTTP %s", response.status);
-        return "degraded";
+      if (response.ok) {
+        mgLog.info("health check: memory-graph status is %s", status);
+        return status;
       }
-      // A 200 can still carry a failure reason: the sidecar reports a
-      // reachable-but-unusable store (and an intermediary a rejected
-      // credential) in the body, not in the status. Inspecting only the HTTP
-      // status would call that healthy — the same class of false assurance
-      // that let the original 401 look like a working installation.
-      const probeBody = (await response.json().catch(() => null)) as { reason?: unknown } | null;
-      const probeReason = typeof probeBody?.reason === "string" ? probeBody.reason : undefined;
-      if (probeReason) {
-        mgLog.warn("health check: authenticated probe answered with reason=%s", probeReason);
-        return probeReason === MEMORY_GRAPH_UNAUTHORIZED ? "unauthorized" : "degraded";
+      if (response.status === 404 || response.status === 405) {
+        // An older sidecar has no ping route. Fall back to the authenticated
+        // read the card uses, so a token mismatch still reads as
+        // unauthorized instead of "healthy" on a mixed-version deployment.
+        mgLog.warn("health check: O(1) probe unavailable (HTTP %s); falling back to the authenticated read probe",
+          response.status);
+        return this.legacyAuthProbe(deadline, status);
       }
-      mgLog.info("health check: memory-graph status is %s", status);
-      return status;
+      if (await isQueryBudgetRefusal(response)) {
+        // A budget refusal proves the token was accepted; it says nothing
+        // about the store, so keep the `/health` reading instead of reporting
+        // "Cannot connect".
+        mgLog.warn("health check: authenticated probe budget refusal; keeping /health status %s", status);
+        return status;
+      }
+      // Any other non-2xx (a 500, for instance) is a failure of the probe
+      // itself, not proof that the token was accepted.
+      mgLog.warn("health check: authenticated probe failed with HTTP %s", response.status);
+      return "degraded";
     } catch (error) {
       mgLog.warn("health check: authenticated probe failed: %s",
+        error instanceof Error ? error.message : String(error));
+      return "degraded";
+    }
+  }
+
+  /** The pre-ping authenticated probe, used only when the sidecar lacks the
+   *  O(1) route. Its budget refusal keeps the `/health` reading; a 401/403 is
+   *  still a credential rejection. */
+  private async legacyAuthProbe(deadline: number, healthStatus: string): Promise<string> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      mgLog.warn("health check: no time left for the fallback probe");
+      return "degraded";
+    }
+    try {
+      const response = await fetch(`${this.baseUrl}${LEGACY_HEALTH_PROBE_PATH}`, {
+        method: "POST",
+        headers: this.initHeaders(true),
+        body: JSON.stringify({
+          node_types: [LEGACY_HEALTH_PROBE_NODE_TYPE],
+          session_id: LEGACY_HEALTH_PROBE_SESSION_ID,
+        }),
+        signal: AbortSignal.timeout(remaining),
+      });
+      if (isAuthRejection(response.status)) {
+        mgLog.warn("health check: fallback probe refused this client's credentials (HTTP %s)", response.status);
+        return "unauthorized";
+      }
+      if (response.ok) return healthStatus;
+      if (await isQueryBudgetRefusal(response)) {
+        mgLog.warn("health check: fallback probe budget refusal; keeping /health status %s", healthStatus);
+        return healthStatus;
+      }
+      mgLog.warn("health check: fallback probe failed with HTTP %s", response.status);
+      return "degraded";
+    } catch (error) {
+      mgLog.warn("health check: fallback probe failed: %s",
         error instanceof Error ? error.message : String(error));
       return "degraded";
     }
