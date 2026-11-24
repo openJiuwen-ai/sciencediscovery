@@ -50,7 +50,32 @@ def parse_json(raw: str) -> Any:
         first, _, rest = body.partition('\n')
         if rest.rstrip().endswith('```') and first.strip('`').strip().lower() in ('', 'json'):
             body = rest.rstrip()[:-3].strip()
-    return json.loads(body, strict=False)
+    try:
+        return json.loads(body, strict=False)
+    except json.JSONDecodeError as error:
+        # A model sometimes emits two consecutive JSON objects and `json.loads`
+        # stops with "Extra data: line N column 1". Every trailing chunk has to
+        # parse as JSON for that reading to be accepted; objects are merged, and
+        # anything else re-raises the original error so genuine garbage still fails.
+        if 'Extra data' not in str(error):
+            raise
+        decoder = json.JSONDecoder(strict=False)
+        try:
+            value, index = decoder.raw_decode(body)
+            # `raw_decode` reports an offset relative to the slice it was given, so
+            # the next slice starts where that chunk ended inside the whole body.
+            for _ in range(8):
+                rest = body[index:].lstrip(" \t\r\n,")
+                if not rest:
+                    return value
+                extra, end = decoder.raw_decode(rest)
+                if not (isinstance(value, dict) and isinstance(extra, dict)):
+                    raise error
+                value = {**value, **extra}
+                index = len(body) - len(rest) + end
+        except json.JSONDecodeError:
+            raise error
+        raise error
 
 
 def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
