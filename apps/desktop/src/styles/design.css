@@ -5433,10 +5433,12 @@ body.is-resizing {
    be extra air on top of that rhythm) and no horizontal padding (any would push
    the box 12 px right of the rows it sits between). Its box lines up with a row's
    box, and its 12 px text inset lines up with a row's name. */
-.side-search { padding: 0; }
+.side-search { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 10px 6px; }
 .side-search-field {
   box-sizing: border-box;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -5496,7 +5498,7 @@ body.is-resizing {
 .side-search-retry:hover { text-decoration: underline; }
 /* The entry is a row like 新建会话: the field only exists once it is asked for. */
 .side-search-entry { margin: 0 10px 6px; }
-.side-search-glyph { flex: 0 0 auto; margin-right: 6px; color: var(--muted); }
+.side-search-glyph { flex: 0 0 auto; color: var(--muted); }
 .side-search-control {
   display: inline-flex;
   align-items: center;
@@ -5513,6 +5515,7 @@ body.is-resizing {
 }
 .side-search-control:hover, .side-search-control.is-on { background: var(--hover, #eceff3); color: var(--ink, #1f2328); }
 .side-search-menu {
+  flex: 1 1 100%;
   display: flex;
   flex-direction: column;
   gap: 2px;
