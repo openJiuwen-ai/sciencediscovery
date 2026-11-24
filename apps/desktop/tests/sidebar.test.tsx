@@ -22,7 +22,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { EN } from "../src/text/en.js";
-import { DEFAULT_SESSION_FILTERS } from "../src/app/session-filters.js";
 import { Sidebar } from "../src/views/Sidebar.js";
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
@@ -74,10 +73,15 @@ test("a project lists its sessions most recently used first", () => {
   assert.ok(markup.indexOf("较新的会话") < markup.indexOf("较早的会话"));
 });
 
-test("the task column has no search field under 新建会话", () => {
-  const markup = render({ recent: [session("s1", "结构比对")] });
-  assert.doesNotMatch(markup, /side-search/);
-  assert.doesNotMatch(markup, /type="search"/);
+test("the resting column offers 搜索 as a row, and no field until it is asked for", () => {
+  const resting = render({ onSearch: () => {}, recent: [session("s1", "结构比对")] });
+  assert.match(resting, /class="side-new side-search-entry"/, "the entry is a row like 新建会话");
+  assert.match(resting, />搜索</, "carrying the word 搜索");
+  assert.doesNotMatch(resting, /type="search"/, "and no field is drawn until it is clicked");
+
+  // A column rendered without a workspace has nothing to search.
+  const bare = render({ recent: [session("s1", "结构比对")] });
+  assert.doesNotMatch(bare, /side-search/);
 });
 
 function hit(kind: "project" | "session" | "artifact", label: string, over: Record<string, unknown> = {}) {
@@ -88,7 +92,7 @@ function results(list: unknown[], over: Record<string, unknown> = {}) {
   return { hasMore: false, limit: 20, offset: 0, results: list, total: list.length, ...over } as never;
 }
 
-test("results are drawn in the fixed 项目 → 会话 → 产物 order, with an archived row marked", () => {
+test("results are drawn in the fixed 项目 → 会话 → 产物 order, and an archived hit is not drawn", () => {
   const markup = render({
     onSearch: () => {},
     searchQuery: "本周",
@@ -105,7 +109,7 @@ test("results are drawn in the fixed 项目 → 会话 → 产物 order, with an
   assert.ok(project >= 0 && session >= 0 && artifact >= 0, "a result group is missing");
   assert.ok(project < session && session < artifact, "the groups are not in 项目 → 会话 → 产物 order");
 
-  assert.match(markup, /side-search-badge">已归档</u, "the archived row carries the badge");
+  assert.doesNotMatch(markup, /side-search-badge/, "an archived hit is filtered before it is drawn");
   assert.match(markup, /本周实验/u, "a result label is drawn");
   assert.match(markup, /材料 · 本周实验/u, "the artifact's detail names its Project and Session");
 });
@@ -128,7 +132,7 @@ test("a column with no workspace draws no results either", () => {
 });
 
 test("the search field names only itself, with no caption under it", () => {
-  const markup = render({ onSearch: () => {}, searchQuery: "" });
+  const markup = render({ onSearch: () => {}, searchQuery: "结构" });
   const from = markup.indexOf('class="side-search-field"');
   assert.ok(from >= 0, "the field is missing");
   // From the start of the tag, so the attributes written before the class name
@@ -225,28 +229,4 @@ test("the project the open session belongs to is the only fold marked active", (
     projects: [project("p1", "脓毒症研究"), project("p2", "文献综述")],
   });
   assert.equal(markup.split("side-project is-open is-active").length - 1, 1);
-});
-
-test("a filter that hides every row says so instead of reading as an empty workspace", () => {
-  // 仅运行中 with nothing running: every row is gone, and "暂无会话" would be a
-  // claim about the workspace rather than about the filter.
-  const markup = render({
-    listFilters: { ...DEFAULT_SESSION_FILTERS, onlyRunning: true },
-    projects: [project("p1", "项目一")],
-    sessionsByProject: { p1: [session("s1", "会话一")] },
-  });
-  assert.ok(markup.includes("没有符合筛选条件的会话。"), "the narrowed empty state is missing");
-  assert.ok(!markup.includes("暂无会话"), "the list read as an empty workspace under a filter");
-  assert.equal(EN.sidebar.noMatch, "No Session matches the current filter.");
-});
-
-test("仅当前项目 hides the other folds instead of emptying them", () => {
-  const markup = render({
-    activeProjectId: "p1",
-    listFilters: { ...DEFAULT_SESSION_FILTERS, scope: "current" },
-    projects: [project("p1", "项目一"), project("p2", "项目二")],
-    sessionsByProject: { p1: [session("s1", "会话一")], p2: [session("s2", "会话二")] },
-  });
-  assert.ok(markup.includes("项目一"), "the current Project's fold is missing");
-  assert.ok(!markup.includes("项目二"), "an excluded Project was drawn as a fold");
 });

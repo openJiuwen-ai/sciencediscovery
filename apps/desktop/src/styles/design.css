@@ -5494,6 +5494,50 @@ body.is-resizing {
   cursor: pointer;
 }
 .side-search-retry:hover { text-decoration: underline; }
+/* The entry is a row like 新建会话: the field only exists once it is asked for. */
+.side-search-entry { margin: 0 10px 6px; }
+.side-search-glyph { flex: 0 0 auto; margin-right: 6px; color: var(--muted); }
+.side-search-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.side-search-control:hover, .side-search-control.is-on { background: var(--hover, #eceff3); color: var(--ink, #1f2328); }
+.side-search-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card, #fff);
+}
+.side-search-menu-label { padding: 4px 6px 2px; color: var(--muted); font-size: 11px; }
+.side-search-option {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.side-search-option:hover { background: var(--hover, #eceff3); }
+.side-search-option.is-on { background: var(--hover, #eceff3); font-weight: 600; }
+.side-search-range { display: flex; gap: 6px; padding: 4px 6px; }
+.side-search-range label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.side-search-range input { font: inherit; font-size: 11px; }
 
 /* The list's narrowing row: chips that toggle, one of which cycles its value. */
 .side-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 6px; }
