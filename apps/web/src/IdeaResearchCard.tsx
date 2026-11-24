@@ -6,6 +6,11 @@ import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
 import { useLocale } from "./i18n/index.js";
 import { ideaResearchActivityStatusLabel, ideaResearchPhaseLabel, ideaResearchStatusLabel } from "./IdeaResearchLabels.js";
 
+/** How often an empty list is re-read while a research is expected. */
+const EMPTY_POLL_MS = 5_000;
+/** How long that re-read keeps going before the card accepts "nothing started". */
+const EMPTY_POLL_WINDOW_MS = 5 * 60_000;
+
 export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
   const { t } = useLocale();
   const element = useRef<HTMLElement>(null);
@@ -35,6 +40,35 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     const tick = setInterval(() => setClock(Date.now()), 1000);
     return () => { controller.abort(); clearInterval(tick); };
   }, [activeId, client, sessionId, reconnect]);
+  /**
+   * While this Session has no research at all, re-read the list on a slow timer.
+   *
+   * The created event only reaches a client that is listening at that moment: a
+   * reload, a reconnect, or a stream that attached late all miss it, and the run
+   * stream does not replay it. Without this the card for the research the
+   * command started would never appear until something else refreshed the
+   * Session — which is exactly how the real L4 journey failed: the command ran,
+   * the research existed, and the card stayed absent for its whole wait.
+   *
+   * Bounded, so an idle Session that never starts a research makes no requests
+   * for long: the timer stops once an item appears or the window is spent.
+   */
+  useEffect(() => {
+    if (items.length > 0) return undefined;
+    const started = Date.now();
+    // Bare `setInterval`, like the SSE clock above: this file is a browser
+    // component, and a test harness that stubs `window` should not have to stub
+    // its timers as well.
+    const timer = setInterval(() => {
+      if (Date.now() - started > EMPTY_POLL_WINDOW_MS) {
+        clearInterval(timer);
+        return;
+      }
+      void load();
+    }, EMPTY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [items.length, load]);
+
   useEffect(() => {
     const refresh = (event: Event) => {
       if ((event as CustomEvent<{sessionId: string}>).detail.sessionId === sessionId) {
