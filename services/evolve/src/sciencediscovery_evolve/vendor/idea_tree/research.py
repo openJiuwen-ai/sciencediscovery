@@ -630,7 +630,10 @@ class IdeaTreeEngine:
                         s['round'] += 1
                         s['batch'] = []
                         s['batchCompleted'] = 0
-                        s['reason'] = f'Skipped an ideation round: {error}'
+                        # The skip stays visible in `activities` (the stage records its
+                        # own failure); the research-level `reason` keeps meaning "why
+                        # the run ended", which for a recovered run is still the round
+                        # limit rather than one recovered hiccup.
                         self.save()
                         # A research that never produced a candidate still ends as
                         # `interrupted` with the model's error: skipping is a second

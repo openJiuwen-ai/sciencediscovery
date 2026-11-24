@@ -20,10 +20,11 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 
 // `standard` is three rounds of three candidates with three independent
 // assessors, so the waits are ordered under the 7200s case budget instead of
-// summing past it: 600s to create + (120s running + 480s paused + 300s resumed)
-// + 4800s terminal = 6300s, leaving ~900s for the composer command, the reload
-// and cleanup. Every cap below is below the case timeout, so a slow research
-// fails as "status never settled" rather than being killed inside cleanup.
+// summing past it: 3 x 600s to create + (120s running + 480s paused + 300s
+// resumed) + 4200s terminal = 6900s, leaving ~300s for the composer command, the
+// reload and cleanup. Every cap below is below the case timeout, so a slow
+// research fails as "status never settled" rather than being killed inside
+// cleanup with a Session left behind.
 //
 // 600s to create is measured, not guessed, and raising it was measured too. The
 // agent sometimes explores the workspace and the skill directories instead of
@@ -38,7 +39,7 @@ const createBudget = 600_000;
 const runningBudget = 120_000;
 const pausedBudget = 480_000;
 const resumedBudget = 300_000;
-const terminalBudget = 4_800_000;
+const terminalBudget = 4_200_000;
 
 // A run reports one of these when it can no longer produce a research on its
 // own. `blocked` is deliberately absent: it is a wait for a person, and
@@ -138,12 +139,16 @@ for (const scenario of cases) {
         await page.goto("/");
         const project = page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture!.project.name });
         await project.first().click({ timeout: 30_000 });
-        // `#sessions-panel-content` only exists while the sessions panel is expanded,
-        // and a previous interaction can leave it collapsed: measured, two 30s waits
-        // for a row that the DOM had no place for. Expand the panel first.
-        if (!(await page.locator("#sessions-panel-content").isVisible().catch(() => false))) {
-          await page.getByRole("button", { name: /^(会话|Sessions)$/ }).first().click({ timeout: 15_000 }).catch(() => undefined);
+        // `#sessions-panel-content` and its toggle are rendered by the same
+        // `sessionsExpanded` flag, so visibility of the panel cannot tell "collapsed"
+        // from "not mounted yet" — clicking on that guess would collapse a panel that
+        // had just appeared. The toggle carries `aria-expanded`
+        // (`ManagementControls.tsx:100`), so read its state instead of inferring.
+        const sessionsToggle = page.getByRole("button", { name: /^(会话|Sessions)$/ }).first();
+        if ((await sessionsToggle.getAttribute("aria-expanded").catch(() => null)) === "false") {
+          await sessionsToggle.click({ timeout: 15_000 });
         }
+        await expect(page.locator("#sessions-panel-content")).toBeVisible({ timeout: 15_000 });
         const session = page.locator("#sessions-panel-content button.nav-item").filter({ hasText: fixture!.session.title });
         const listed = await session.first().waitFor({ state: "visible", timeout: 30_000 }).then(() => true).catch(() => false);
         if (!listed) {
@@ -168,9 +173,10 @@ for (const scenario of cases) {
         // and Session so a stuck run cannot leak into the next one, and the command is
         // re-sent up to `startAttempts` times before this step reports a failure.
         // Whole-case retries would be simpler, but four attempts at ~105 minutes do
-        // not fit the 240-minute research-worker ceiling; retrying only the creating
-        // stage keeps the worst case near 125 minutes and still fails honestly after
-        // the third miss. Assertions after this step are never retried.
+        // not fit the 240-minute research-worker ceiling. Three create attempts plus
+        // the terminal wait come to 6900s inside the 7200s case budget, so the
+        // terminal cap can still be reached before the test is killed and the third
+        // miss still fails honestly. Assertions after this step are never retried.
         let lastError: unknown;
         for (let attempt = 1; attempt <= startAttempts; attempt += 1) {
           // A three-round standard research prepares inputs with governed tools, and
