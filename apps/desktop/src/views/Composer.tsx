@@ -31,6 +31,7 @@ import { commitsOnEnter } from "../app/ime-enter.js";
 import type { LandingCategory, LandingSeed } from "../app/landing.js";
 import { skillChoices, skillDraft, skillMark, slashQuery } from "../app/slash.js";
 import { useLoaded } from "../app/use-loaded.js";
+import { isIdeaTreeCommand } from "../idea/command.js";
 import { TEXT } from "../text.js";
 import type { EvolveDirectionInput } from "@sciencediscovery/schema";
 import { AttachmentTray } from "./AttachmentTray.js";
@@ -1242,8 +1243,12 @@ export function Composer({
               `${-event.currentTarget.scrollTop}px`,
             );
           }}
-          placeholder={readOnlyReason ?? jwBlocked ?? (command !== undefined ? TEXT.composer.evolvePlaceholder
-            : landing ? TEXT.landing.placeholder : TEXT.composer.placeholder)}
+          // The token decides what the box is asking for: a design token wants an
+          // optimization target and its scoring, an Idea Tree token wants a
+          // research task, and no token falls back to the ordinary invitation.
+          placeholder={readOnlyReason ?? jwBlocked ?? (command === undefined
+            ? landing ? TEXT.landing.placeholder : TEXT.composer.placeholder
+            : isIdeaTreeCommand(command) ? TEXT.composer.ideaTreePlaceholder : TEXT.composer.evolvePlaceholder)}
           ref={area}
           rows={1}
           value={text}

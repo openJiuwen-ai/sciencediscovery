@@ -967,23 +967,23 @@ export function App({ initialToken }: Props) {
     setAwaitingIdea(true);
   };
 
-  const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput, ideaConfirmed = false): boolean => {
+  const sendMessage = (content: string, command?: string, direction?: EvolveDirectionInput): boolean => {
     if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return true; }
-      // An archived Session is read-only on the server, and the composer alone is
-      // not enough: a Session with no transcript opens on the welcome page, whose
-      // composer had no reason to show. The refusal belongs at the send, where it
-      // is one rule for both surfaces.
-      if (state.detail?.archivedAt !== undefined) { actions.toast(TEXT.errors.archivedComposer, "error"); return true; }
-      // The Idea Tree token the parameters card seeded: the parameters are already
-      // chosen, so this is the confirmed pass and the command is the token itself.
-      // Composing it here — rather than deferring it back into the card — is what
-      // makes "the card never sends anything" true.
-      if (command !== undefined && isIdeaTreeCommand(command)) {
-        setSeededCommand(undefined);
-        rememberAwaitingIdea();
-        void actions.send(composeIdeaMessage(command, content));
-        return true;
-      }    // The token came from the design dialog, which collected the goal, the
+    // An archived Session is read-only on the server, and the composer alone is
+    // not enough: a Session with no transcript opens on the welcome page, whose
+    // composer had no reason to show. The refusal belongs at the send, where it
+    // is one rule for both surfaces.
+    if (state.detail?.archivedAt !== undefined) { actions.toast(TEXT.errors.archivedComposer, "error"); return true; }
+    // The Idea Tree token the parameters card seeded. The composer will not send
+    // it without a task, so a task is always here; composing rather than
+    // deferring is what keeps the card out of the send path.
+    if (command !== undefined && isIdeaTreeCommand(command)) {
+      setSeededCommand(undefined);
+      rememberAwaitingIdea();
+      void actions.send(composeIdeaMessage(command, content));
+      return true;
+    }
+    // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
     // question about the sentence only, so the detour below — which is for
     // commands typed by hand — does not apply.
@@ -1008,7 +1008,7 @@ export function App({ initialToken }: Props) {
     // confirm is disabled by construction, so deferring there would hold the
     // command behind a button nobody can press: the welcome page sends it as it
     // always did, and `send()` creates the Session on the way.
-    if (defersIdeaSend(content, ideaConfirmed) && state.detail?.id !== undefined) {
+    if (defersIdeaSend(content) && state.detail?.id !== undefined) {
       // #1277: the parameters card opens before an Idea Tree command leaves, but
       // the command is not intercepted — `confirmIdeaSend` sends the same draft
       // unchanged once the card is confirmed. The composer keeps it meanwhile,

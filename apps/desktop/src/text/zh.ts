@@ -311,6 +311,9 @@ export const ZH = {
     /** After a design command is seeded the composer is no longer waiting for
      *  any request: the only useful next line is the goal itself. */
     evolvePlaceholder: "请描述你想要优化的对象和评估标准",
+    /** Shown under an Idea Tree token, which asks for a research task rather
+     *  than a design goal. */
+    ideaTreePlaceholder: "请描述要研究的问题和判断依据",
     send: "发送",
     stop: "停止",
     /** 设计命令上的 ✕：对话框给的是建议，改主意的人要能把它去掉再说话。 */

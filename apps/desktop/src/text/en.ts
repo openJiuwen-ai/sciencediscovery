@@ -312,6 +312,9 @@ export const EN: Text = {
     /** After a design command is seeded the composer is no longer waiting for
      *  any request: the only useful next line is the goal itself. */
     evolvePlaceholder: "Describe what you want to optimize and how it should be scored",
+    /** Shown under an Idea Tree token, which asks for a research task rather
+     *  than a design goal. */
+    ideaTreePlaceholder: "Describe the question to research and how to judge it",
     send: "Send",
     stop: "Stop",
     /** The ✕ on the design command token; the dialog only suggested it. */

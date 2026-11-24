@@ -14,8 +14,7 @@ test("the token 会话设置 seeds is the command the rest of the surface knows"
   assert.equal(isIdeaTreeCommand(IDEA_TREE_TEAM_COMMAND), true);
   // Typed by hand it still opens the card once; the seeded send is the pass that
   // does not come back into it.
-  assert.equal(defersIdeaSend(IDEA_TREE_TEAM_COMMAND, false), true);
-  assert.equal(defersIdeaSend(IDEA_TREE_TEAM_COMMAND, true), false);
+  assert.equal(defersIdeaSend(IDEA_TREE_TEAM_COMMAND), true);
 });
 
 test("a draft keeps the command it started with, and the task under it", () => {
@@ -42,29 +41,28 @@ test("a draft that is only the command contributes no task", () => {
   assert.equal(composeIdeaMessage("/idea-tree-team", ideaTaskOf("/idea-tree-team")), "/idea-tree-team");
 });
 
-test("the token and the task are one message, and an empty task sends the bare command", () => {
+test("the token and the task are one message, and an empty task cannot be sent at all", () => {
   assert.equal(composeIdeaMessage("/idea-tree-team", "研究钙钛矿带隙"), "/idea-tree-team 研究钙钛矿带隙");
   assert.equal(composeIdeaMessage("/idea-tree-team", "  研究钙钛矿带隙  "), "/idea-tree-team 研究钙钛矿带隙");
-  // The reader wrote nothing: the agent asks for the objective, which is the
-  // only honest option left.
+  // The helper is total — it composes a bare command if it is ever handed an
+  // empty task — but the composer never hands it one: the send button and Enter
+  // both require a non-empty task (see `composer.test.tsx`), so an empty task
+  // never leaves the box. Keeping the helper total is what lets the caller
+  // stay a one-liner.
   assert.equal(composeIdeaMessage("/idea-tree-team", ""), "/idea-tree-team");
   assert.equal(composeIdeaMessage("/idea-tree-team", "   "), "/idea-tree-team");
-  // Either way it is still the command, so the panel opens and the send is not
-  // deferred a second time.
   assert.equal(isIdeaTreeCommand(composeIdeaMessage("/idea-tree-team", "研究钙钛矿带隙")), true);
 });
 
 test("an Idea Tree command opens the card before it leaves", () => {
-  assert.equal(defersIdeaSend("/idea-tree-team", false), true);
-  assert.equal(defersIdeaSend("/idea-tree", false), true);
-  assert.equal(defersIdeaSend("/idea-tree-team 分析钙钛矿带隙", false), true);
-  // The confirmed pass is what actually sends, so it must not defer again.
-  assert.equal(defersIdeaSend("/idea-tree-team", true), false);
+  assert.equal(defersIdeaSend("/idea-tree-team"), true);
+  assert.equal(defersIdeaSend("/idea-tree"), true);
+  assert.equal(defersIdeaSend("/idea-tree-team 分析钙钛矿带隙"), true);
 });
 
 test("every other draft leaves without the card", () => {
-  assert.equal(defersIdeaSend("分析一下这个结构", false), false);
+  assert.equal(defersIdeaSend("分析一下这个结构"), false);
   // A command that merely starts with the letters is not the command.
-  assert.equal(defersIdeaSend("/idea-tree-teams", false), false);
-  assert.equal(defersIdeaSend("/evolve-design 优化", false), false);
+  assert.equal(defersIdeaSend("/idea-tree-teams"), false);
+  assert.equal(defersIdeaSend("/evolve-design 优化"), false);
 });

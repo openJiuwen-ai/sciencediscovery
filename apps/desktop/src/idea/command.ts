@@ -65,9 +65,13 @@ export function ideaTaskOf(text: string): string {
   return trimmed.slice(command.length).trim();
 }
 
-/** The message a seeded token sends: the command, then the task the reader
- *  wrote under it. With no task the bare command goes out and the agent asks for
- *  the objective, which is the only honest option left. */
+/** The message a seeded token sends: the command, then the task the reader wrote
+ *  under it.
+ *
+ *  Total by design, but the composer never calls it with an empty task: its send
+ *  button and Enter both require one, so an Idea Tree message always carries the
+ *  question the reader typed. A bare command would leave the agent asking for
+ *  the objective the reader could have written in the same box. */
 export function composeIdeaMessage(command: string, task: string): string {
   const trimmed = task.trim();
   return trimmed === "" ? command : `${command} ${trimmed}`;
