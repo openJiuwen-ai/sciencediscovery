@@ -69,8 +69,13 @@ test.describe("entering the workspace", () => {
 
     // The local token is the hard credential: a browser without one can only
     // reach the HUAWEI sign-in page, and the shell does not exist behind it.
-    await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
     await expect(page.getByRole("button", { name: "使用华为账号登录" })).toBeVisible();
+    // Step one names its benefit (credits → the free model) and carries no
+    // terms/privacy reminder, because those documents do not exist yet.
+    await expect(page.getByText("通过积分免费使用模型", { exact: false })).toBeVisible();
+    await expect(page.getByText("服务条款", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("隐私政策", { exact: false })).toHaveCount(0);
     await expect(page.locator(".app-shell")).toHaveCount(0);
 
     await page.evaluate(
@@ -139,7 +144,7 @@ test.describe("when boot cannot finish", () => {
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "登录后继续" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
     // The rejected token must not be retried on the next reload.
     await expect
       .poll(() => page.evaluate((key) => localStorage.getItem(key), TOKEN_STORAGE_KEY))

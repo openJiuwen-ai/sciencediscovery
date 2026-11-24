@@ -29,6 +29,11 @@
 
 import type { Queryable } from "./db.js";
 
+/** How many rows of each kind one user keeps. Spending history grows with every
+ *  model call, so it needs a ceiling; earning rows are kept to the same number
+ *  for symmetry, and the account page reads at most this many rows. */
+export const LEDGER_MAX_ROWS_PER_KIND = 1000;
+
 export interface LedgerEntry {
   userId: number;
   delta: number;
@@ -80,5 +85,45 @@ export async function appendLedger(tx: Queryable, entry: LedgerEntry): Promise<L
      RETURNING *`,
     [entry.userId, entry.delta, balanceAfter, entry.bizType, entry.bizId, entry.remark],
   );
+  if (inserted[0]) await pruneLedger(tx, entry.userId);
   return inserted[0];
+}
+
+/**
+ * Drops the rows past the per-kind ceiling, newest first.
+ *
+ * Earned and spent histories are capped separately, so a user with a long
+ * spending history still keeps their sign-in/reward rows. The cut is by id
+ * (the order the page reads), and the subquery yields NULL while the kind is
+ * still under the ceiling, which makes `id <= NULL` prune nothing.
+ *
+ * The earned side is `delta >= 0`: an admin adjustment records a delta of 0,
+ * and a zero row belongs to neither history, so excluding it from both would
+ * leave it unbounded.
+ *
+ * Check-in counting moved to the `checkins` table before this pruning existed:
+ * a CHECKIN row is a receipt, not the count, so deleting an old one cannot
+ * change the seven-day cycle.
+ */
+async function pruneLedger(tx: Queryable, userId: number): Promise<void> {
+  await tx.query(
+    `DELETE FROM credit_ledger
+      WHERE user_id = $1 AND delta < 0
+        AND id <= (
+          SELECT id FROM credit_ledger
+           WHERE user_id = $1 AND delta < 0
+           ORDER BY id DESC OFFSET $2 LIMIT 1
+        )`,
+    [userId, LEDGER_MAX_ROWS_PER_KIND],
+  );
+  await tx.query(
+    `DELETE FROM credit_ledger
+      WHERE user_id = $1 AND delta >= 0
+        AND id <= (
+          SELECT id FROM credit_ledger
+           WHERE user_id = $1 AND delta >= 0
+           ORDER BY id DESC OFFSET $2 LIMIT 1
+        )`,
+    [userId, LEDGER_MAX_ROWS_PER_KIND],
+  );
 }

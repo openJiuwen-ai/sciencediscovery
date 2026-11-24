@@ -22,8 +22,9 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ModelProfile } from "../src/api/types.js";
+import type { ModelProfile, ModelProvider } from "../src/api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../src/app/use-workspace.js";
+import { CREDITS_PROVIDER_NAME } from "../src/auth/credits-model.js";
 import { TEXT } from "../src/text.js";
 import { SystemSettingsDialog } from "../src/views/SystemSettingsDialog.js";
 import { ModelSettings } from "../src/views/settings/ModelSettings.js";
@@ -62,6 +63,7 @@ describe("the model list", () => {
         adding={false}
         client={client}
         onAddingChange={noop}
+        signedIn
         state={state({
           defaultModelId: "m1",
           models: [
@@ -88,6 +90,7 @@ describe("the model list", () => {
         adding={false}
         client={client}
         onAddingChange={noop}
+        signedIn
         state={state({ models: [profile("m1", "Qwen", "qwen-max")] })}
       />,
     );
@@ -99,6 +102,39 @@ describe("the model list", () => {
     assert.doesNotMatch(markup, /aria-label="删除"[^>]*disabled=""/);
   });
 
+  it("reads the credits model as unavailable while no account is signed in", () => {
+    const creditsProvider = { id: "p-credits", name: CREDITS_PROVIDER_NAME } as unknown as ModelProvider;
+    const creditsProfile = {
+      id: "m-credits",
+      model: "credits-free",
+      name: "华为账号积分模型",
+      providerId: "p-credits",
+    } as unknown as ModelProfile;
+    const renderCredits = (signedIn: boolean) =>
+      renderToStaticMarkup(
+        <ModelSettings
+          actions={actions}
+          adding={false}
+          client={client}
+          onAddingChange={noop}
+          signedIn={signedIn}
+          state={state({ models: [creditsProfile], providers: [creditsProvider] })}
+        />,
+      );
+
+    const signedOut = renderCredits(false);
+    assert.ok(signedOut.includes("is-unavailable"));
+    assert.ok(signedOut.includes(TEXT.settings.model.requiresSignIn));
+    // Greyed and inert: no test, no default switch on a model that cannot answer.
+    assert.ok(!signedOut.includes(`aria-label="${TEXT.settings.model.test}"`));
+    assert.ok(!signedOut.includes(TEXT.settings.model.setDefault));
+
+    const signedIn = renderCredits(true);
+    assert.ok(!signedIn.includes("is-unavailable"));
+    assert.ok(!signedIn.includes(TEXT.settings.model.requiresSignIn));
+    assert.ok(signedIn.includes(`aria-label="${TEXT.settings.model.test}"`));
+  });
+
   it("explains an empty catalog instead of showing an empty list", () => {
     const markup = renderToStaticMarkup(
       <ModelSettings
@@ -106,6 +142,7 @@ describe("the model list", () => {
         adding={false}
         client={client}
         onAddingChange={noop}
+        signedIn
         state={state()}
       />,
     );
@@ -121,6 +158,7 @@ describe("the model list", () => {
         adding
         client={client}
         onAddingChange={noop}
+        signedIn
         state={state()}
       />,
     );
@@ -143,6 +181,7 @@ describe("the settings dialog", () => {
         onClose={noop}
         onGroupChange={noop}
         onShowGuide={noop}
+        signedIn
         state={state()}
       />,
     );

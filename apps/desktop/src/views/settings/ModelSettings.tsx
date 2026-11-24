@@ -39,6 +39,10 @@ interface Props {
   adding: boolean;
   client: ApiClient;
   onAddingChange: (next: boolean) => void;
+  /** Whether a HUAWEI account is signed in. The credits model belongs to the
+   *  account, so without one it stays listed — it comes back with the next
+   *  sign-in — but reads as unavailable rather than as a working model. */
+  signedIn: boolean;
   state: WorkspaceState;
 }
 
@@ -61,7 +65,7 @@ const TONES = ["tone-1", "tone-2", "tone-3", "tone-4", "tone-5", "tone-6"];
  * so switching models never means retyping an id. A standalone profile has no
  * provider to ask, and keeps a free-text name.
  */
-export function ModelSettings({ actions, adding, client, onAddingChange, state }: Props) {
+export function ModelSettings({ actions, adding, client, onAddingChange, signedIn, state }: Props) {
   const [probing, setProbing] = useState<string>();
   const [probe, setProbe] = useState<Record<string, { ok: boolean; text: string }>>({});
   /** Which row is open, and the name being typed into it. */
@@ -158,24 +162,32 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
         <div className="model-list">
           {state.models.map((profile, index) => {
             const name = providerName(profile.name);
-            const open = openId === profile.id;
             // A provider-backed profile gets the provider's listing to choose
             // from. Without one there is nothing to list, and the name stays a
             // free-text field.
             const provider = profile.providerId === undefined
               ? undefined
               : state.providers.find((candidate) => candidate.id === profile.providerId);
+            // The credits model is owned by the signed-in account: signed out,
+            // it stays on the list so the user knows it exists, but none of its
+            // actions work until the next sign-in.
+            const unavailable = !signedIn && provider?.name === CREDITS_PROVIDER_NAME;
+            const open = openId === profile.id && !unavailable;
             // Extracted so JSX narrowing survives: repeated indexed access
             // (`probe[profile.id]`) does not narrow under noUncheckedIndexedAccess.
             const probeResult = probe[profile.id];
             return (
-              <article className={`model-row${open ? " is-open" : ""}`} key={profile.id}>
+              <article
+                className={`model-row${open ? " is-open" : ""}${unavailable ? " is-unavailable" : ""}`}
+                key={profile.id}
+              >
                 <span className={`model-row-mark ${TONES[index % TONES.length]}`} aria-hidden="true">
                   {name.trim().slice(0, 1).toUpperCase()}
                 </span>
                 <button
                   aria-expanded={open}
                   className="model-row-main"
+                  disabled={unavailable}
                   onClick={() => toggleRow(profile)}
                   title={TEXT.settings.model.expand}
                   type="button"
@@ -183,6 +195,7 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
                   <span className="model-row-title">
                     <strong>{name}</strong>
                     {isDefault(profile) ? <Tag tone="primary">{TEXT.settings.model.default}</Tag> : null}
+                    {unavailable ? <Tag tone="off">{TEXT.settings.model.requiresSignIn}</Tag> : null}
                   </span>
                   <small>
                     {profile.model}
@@ -202,47 +215,51 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
                   </small>
                 </button>
                 <div className="model-row-actions">
-                  {isDefault(profile) ? null : (
+                  {unavailable ? null : (
                     <>
+                      {isDefault(profile) ? null : (
+                        <>
+                          <button
+                            className="link-button"
+                            onClick={() => void actions.setDefaultModel(profile.id)}
+                            type="button"
+                          >
+                            {TEXT.settings.model.setDefault}
+                          </button>
+                          <span aria-hidden="true" className="sep" />
+                        </>
+                      )}
                       <button
-                        className="link-button"
-                        onClick={() => void actions.setDefaultModel(profile.id)}
+                        aria-label={TEXT.settings.model.test}
+                        className="model-icon-button"
+                        disabled={probing === profile.id}
+                        onClick={() => void probeModel(profile)}
+                        title={TEXT.settings.model.test}
                         type="button"
                       >
-                        {TEXT.settings.model.setDefault}
+                        {probing === profile.id ? <span className="spinner" /> : (
+                          <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
+                            <path d="M3 12h3l2.2-5 3.4 10 2.6-7 1.8 4H21" />
+                          </svg>
+                        )}
                       </button>
-                      <span aria-hidden="true" className="sep" />
+                      {/* The credits model is recreated by the app on every sign-in,
+                          so deleting it only produces a confusing gap until the
+                          next reload: it has no delete action. */}
+                      {provider?.name === CREDITS_PROVIDER_NAME ? null : (
+                        <button
+                          aria-label={TEXT.settings.model.delete}
+                          className="model-icon-button"
+                          onClick={() => removeProfile(profile, name)}
+                          title={TEXT.settings.model.delete}
+                          type="button"
+                        >
+                          <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
+                            <path d="M4.5 6.5h15M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7M6.5 6.5l.8 12.2c0 .9.8 1.6 1.7 1.6h6c.9 0 1.7-.7 1.7-1.6l.8-12.2" />
+                          </svg>
+                        </button>
+                      )}
                     </>
-                  )}
-                  <button
-                    aria-label={TEXT.settings.model.test}
-                    className="model-icon-button"
-                    disabled={probing === profile.id}
-                    onClick={() => void probeModel(profile)}
-                    title={TEXT.settings.model.test}
-                    type="button"
-                  >
-                    {probing === profile.id ? <span className="spinner" /> : (
-                      <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
-                        <path d="M3 12h3l2.2-5 3.4 10 2.6-7 1.8 4H21" />
-                      </svg>
-                    )}
-                  </button>
-                  {/* The credits model is recreated by the app on every sign-in,
-                      so deleting it only produces a confusing gap until the
-                      next reload: it has no delete action. */}
-                  {provider?.name === CREDITS_PROVIDER_NAME ? null : (
-                    <button
-                      aria-label={TEXT.settings.model.delete}
-                      className="model-icon-button"
-                      onClick={() => removeProfile(profile, name)}
-                      title={TEXT.settings.model.delete}
-                      type="button"
-                    >
-                      <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
-                        <path d="M4.5 6.5h15M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7M6.5 6.5l.8 12.2c0 .9.8 1.6 1.7 1.6h6c.9 0 1.7-.7 1.7-1.6l.8-12.2" />
-                      </svg>
-                    </button>
                   )}
                 </div>
                 {open ? (

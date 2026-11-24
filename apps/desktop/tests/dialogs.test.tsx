@@ -83,6 +83,22 @@ describe("the confirmation dialog", () => {
     assert.ok(markup.includes("归档"));
     assert.ok(!markup.includes(`>${TEXT.menu.confirm}</span>`));
   });
+
+  it("can drop the eyebrow and lead with a warning triangle", () => {
+    const markup = renderToStaticMarkup(
+      <ConfirmDialog
+        onDismiss={noop}
+        request={{ ...request, body: "退出后，模型将不可用", eyebrow: "", title: "确认退出", warning: true }}
+      />,
+    );
+
+    // No chip at all — not even the default 确认.
+    assert.ok(!markup.includes("modal-eyebrow"));
+    assert.ok(markup.includes("确认退出"));
+    assert.ok(markup.includes("modal-body-warning"));
+    assert.ok(markup.includes("<svg"));
+    assert.ok(markup.includes("退出后，模型将不可用"));
+  });
 });
 
 describe("the one-field prompt", () => {
