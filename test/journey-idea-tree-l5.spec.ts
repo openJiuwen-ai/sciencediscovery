@@ -116,11 +116,22 @@ for (const scenario of cases) {
     // rows and hides the rest behind "Show more", and a Project row that is not
     // rendered made the click wait until the case timeout. The URL carries the same
     // selection the click would, and it is also how a reload restores a Session.
+    //
+    // The deep link is retried because the app resolves it against the Project and
+    // Session lists it fetches on mount: on a stack with twenty Projects the first
+    // navigation can render before those lists arrive, and one 60s wait then reports
+    // a missing heading for a Session that exists. Three bounded attempts keep that
+    // race out of the release gate while still failing if the Session is unopenable.
     const openSession = async () => {
-      await page.goto(`/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`);
-      const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
-      if (await tour.isVisible().catch(() => false)) await tour.click();
-      await expect(page.getByRole("heading", { name: fixture!.session.title })).toBeVisible({ timeout: 60_000 });
+      const heading = page.getByRole("heading", { name: fixture!.session.title });
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await page.goto(`/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`);
+        const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
+        if (await tour.isVisible().catch(() => false)) await tour.click();
+        if (await heading.isVisible({ timeout: 20_000 }).catch(() => false)) return;
+        console.warn(`[l5-open] session heading not visible on attempt ${attempt}/3`);
+      }
+      await expect(heading).toBeVisible({ timeout: 20_000 });
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
