@@ -2359,6 +2359,80 @@
 .evolve-json-footer { margin-top: 10px; }
 .evolve-json-file { overflow-wrap: anywhere; }
 .evolve-json-error { color: var(--danger, #b42318); }
+/* The run budget is a different object from the starting values, and the
+   dialog states its rules before a run exists (#1346). Read-only on purpose:
+   every line here is what the server fixes, not a field of this form. It is
+   folded by default so its rules cannot push the editor off the first screen;
+   the summary line keeps the bounds readable while closed. */
+.evolve-json-budget {
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #d9e0eb);
+  border-radius: 10px;
+  background: var(--surface-soft, #f6f8fc);
+}
+/* The marker is drawn by hand: `display: grid` removes the native one, and a
+   reference that looks like static copy hides the rules it holds. */
+.evolve-json-budget > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 2px 8px;
+  list-style: none;
+  cursor: pointer;
+}
+.evolve-json-budget > summary::-webkit-details-marker { display: none; }
+.evolve-json-budget > summary h4 {
+  grid-column: 1;
+  display: inline;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.evolve-json-budget-peek {
+  grid-column: 1;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.evolve-json-budget > summary::after {
+  content: "";
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-right: 1.6px solid var(--text-secondary);
+  border-bottom: 1.6px solid var(--text-secondary);
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.evolve-json-budget[open] > summary::after { transform: rotate(-135deg); }
+.evolve-json-budget-body { display: grid; gap: 6px; margin-top: 8px; }
+.evolve-json-budget-body p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
+.evolve-json-budget-body ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
+.evolve-json-budget-body li { color: var(--text-secondary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+/* The arithmetic is the sentence a reader needs; it keeps its own type and
+   ink. The selector is more specific than `.evolve-json-budget-body p`, which
+   used to win and left it muted at 4.11:1 — below AA. */
+.evolve-json-budget-body .evolve-json-budget-derivation {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.evolve-json-budget-body .evolve-json-budget-defaults { color: var(--text-secondary); }
+/* A program field that shares a run-budget name says so. The line spans the
+   row so a long sentence never fights the value editor for width. */
+.evolve-json-row > .evolve-json-param-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
 .evolve-json-nested > summary { cursor: pointer; padding: 5px 0; }
 .evolve-json-children { display: grid; gap: 6px; padding-left: 6px; border-left: 1px solid var(--border, #d9e0eb); }
 .evolve-json-child { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -2370,6 +2444,9 @@
   .evolve-json-row { grid-template-columns: 24px minmax(0, 1fr) 30px; }
   .evolve-json-row > .evolve-json-value { grid-column: 2; grid-row: 2; }
   .evolve-json-row > .evolve-json-remove { grid-column: 3; grid-row: 1; }
+  /* The hint follows the value editor instead of sharing its row, so the
+     narrow layout keeps one field per line. */
+  .evolve-json-row > .evolve-json-param-hint { grid-row: 3; }
 }
 
 /* The band's one warning: the client carried this step once and stopped. It
