@@ -28,6 +28,7 @@ import {
   splitSessions,
   sessionKind,
   componentDurations,
+  COMPONENT_NAMES,
 } from "../scripts/lib/parse-perf-timeline.mjs";
 import {
   BUDGETS,
@@ -324,4 +325,63 @@ test("agent-ready hang budget equals the shell's AGENT_READY_TIMEOUT_MS", () => 
   const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
   assert.equal(budget.sessions.first["agent-ready"].hangMs, 180000);
   assert.equal(budget.sessions.warm["agent-ready"].hangMs, 180000);
+});
+
+// ---------------------------------------------------------------------------
+// budget file sanity (fool-proofing the JSON against bad edits)
+
+test("every hang line sits strictly above its regression line", () => {
+  // A hangMs at or below baseline x tolerance would be self-contradictory:
+  // a run could regress (warn) and hang (fail) on the same number, and a
+  // slightly-too-tight hang would fail runs the two-strike rule was
+  // supposed to warn on first. Any budget that violates this ordering is
+  // a mis-edit, caught here by name.
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  for (const [kind, table] of Object.entries(budget.sessions)) {
+    for (const [component, line] of Object.entries(table)) {
+      const regression = Math.round(line.baselineMs * budget.toleranceRatio);
+      assert.ok(
+        line.hangMs > regression,
+        `${kind}/${component}: hangMs ${line.hangMs} must be > regression line ${regression}`,
+      );
+    }
+  }
+});
+
+test("tolerance ratio stays inside the designed 1.2-2.0 band", () => {
+  // 1.4 is the design value (sec2). Below 1.2 the gate cries wolf on
+  // machine jitter; above 2.0 it stops catching the slow drift it exists
+  // to catch (the frog-boiling failure mode, problems RP2). A fat-finger
+  // 14 (missing dot) or 0.14 turns this red.
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  assert.ok(
+    budget.toleranceRatio >= 1.2 && budget.toleranceRatio <= 2.0,
+    `toleranceRatio ${budget.toleranceRatio} outside the 1.2-2.0 band`,
+  );
+  // and BUDGETS in perf-verdict.mjs must be loaded from the same file
+  // (a stale or divergent copy defeats the single-source rule).
+  assert.deepEqual(Object.keys(BUDGETS), Object.keys(budget.sessions), "BUDGETS keys must match the json sessions");
+  for (const kind of Object.keys(budget.sessions)) {
+    assert.deepEqual(
+      Object.keys(BUDGETS[kind]),
+      Object.keys(budget.sessions[kind]),
+      `BUDGETS[${kind}] keys must match the json`,
+    );
+  }
+});
+
+test("every budget component exists in the parser's pair table", () => {
+  // A budget entry whose component name the parser never produces is a
+  // silently-dead line (it judges nothing) — same shape as the W25
+  // lesson: a gate that looks present but measures nothing. The parser
+  // exports COMPONENT_NAMES for exactly this cross-check.
+  const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
+  for (const [kind, table] of Object.entries(budget.sessions)) {
+    for (const component of Object.keys(table)) {
+      assert.ok(
+        COMPONENT_NAMES.includes(component),
+        `${kind}/${component}: no parser pair produces this component — dead budget line`,
+      );
+    }
+  }
 });
