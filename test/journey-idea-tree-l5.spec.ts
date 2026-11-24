@@ -119,18 +119,33 @@ for (const scenario of cases) {
     // on this shared stack it is not deterministic — measured, it left the app on its
     // start-up shell (Project count rendered, no Session selected) six times in one
     // campaign and three times in the next, while the same two clicks opened the
-    // Session in 0.68-0.93 s on five out of five fresh Projects. Each click carries an
-    // explicit timeout, so a row that never renders fails this step by name instead of
-    // waiting out the case budget the way the old helper did.
+    // Session in 0.68-0.93 s on five out of five fresh Projects.
+    //
+    // Two details make the click path dependable, both measured. The Session rows are
+    // filled after the Project selection request returns, so the row is awaited before
+    // it is clicked rather than assumed present — after a reload that panel did not
+    // render within 30s once. And the whole open is attempted twice, because a single
+    // miss there used to fail a case whose research had already completed; a Session
+    // that cannot be opened still fails, now by name.
     const openSession = async () => {
-      await page.goto("/");
-      const project = page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture!.project.name });
-      await project.first().click({ timeout: 30_000 });
-      const session = page.locator("#sessions-panel-content button.nav-item").filter({ hasText: fixture!.session.title });
-      await session.first().click({ timeout: 30_000 });
-      const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
-      if (await tour.isVisible().catch(() => false)) await tour.click();
-      await expect(page.getByRole("heading", { name: fixture!.session.title })).toBeVisible({ timeout: 30_000 });
+      const heading = page.getByRole("heading", { name: fixture!.session.title });
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await page.goto("/");
+        const project = page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture!.project.name });
+        await project.first().click({ timeout: 30_000 });
+        const session = page.locator("#sessions-panel-content button.nav-item").filter({ hasText: fixture!.session.title });
+        const listed = await session.first().waitFor({ state: "visible", timeout: 30_000 }).then(() => true).catch(() => false);
+        if (!listed) {
+          console.warn(`[l5-open] session row not listed after selecting the Project (attempt ${attempt}/2)`);
+          continue;
+        }
+        await session.first().click({ timeout: 30_000 });
+        const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
+        if (await tour.isVisible().catch(() => false)) await tour.click();
+        if (await heading.isVisible({ timeout: 30_000 }).catch(() => false)) return;
+        console.warn(`[l5-open] session heading not visible after the click (attempt ${attempt}/2)`);
+      }
+      await expect(heading).toBeVisible({ timeout: 30_000 });
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
