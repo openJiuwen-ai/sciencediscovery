@@ -230,6 +230,61 @@ test.describe("确认框", () => {
     // `defaultPrevented` rather than closing on any Escape it sees.
     await expect(settings).toBeVisible();
   });
+
+  test("开放网络 asks before it is written, and cancelling keeps the mode", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      sandboxNetwork: { allowedDomains: [], mode: "none" },
+      sessions: [makeSession()],
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "设置" });
+    await settings.getByRole("button", { name: "沙箱网络", exact: true }).click();
+    const none = settings.getByRole("button", { name: "无网络", exact: true });
+    const open = settings.getByRole("button", { name: "开放网络", exact: true });
+    const writes = () => mock.calls.filter((call) => call.method === "PUT" && call.path === "/api/sandbox-network-settings");
+    await expect(none).toHaveAttribute("aria-pressed", "true");
+
+    // The warning question comes first, and cancelling it writes nothing.
+    await open.click();
+    const confirm = page.getByRole("dialog", { name: "开放网络" });
+    await expect(confirm).toContainText("确定要这样吗？");
+    expect(writes()).toHaveLength(0);
+    await confirm.locator(".modal-footer").getByRole("button", { name: "取消", exact: true }).click();
+    await expect(confirm).toHaveCount(0);
+    await expect(none).toHaveAttribute("aria-pressed", "true");
+    expect(writes()).toHaveLength(0);
+
+    // Accepting writes the open mode once and says it landed.
+    await open.click();
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole("button", { name: "开放网络", exact: true }).click();
+    await expect(open).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".toast.toast-info")).toContainText("沙箱网络已保存");
+    expect(writes()).toHaveLength(1);
+    expect(JSON.parse(writes()[0]!.body ?? "{}")).toMatchObject({ allowedDomains: [], mode: "open" });
+  });
+
+  test("pressing the mode that is already active asks nothing and writes nothing", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      sandboxNetwork: { allowedDomains: [], mode: "open" },
+      sessions: [makeSession()],
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "设置" });
+    await settings.getByRole("button", { name: "沙箱网络", exact: true }).click();
+    const open = settings.getByRole("button", { name: "开放网络", exact: true });
+    await expect(open).toHaveAttribute("aria-pressed", "true");
+
+    await open.click();
+
+    // Before the fix this raised the confirmation anyway; accepting it then
+    // wrote nothing and said nothing. Neither the question nor a write belongs
+    // to a press on the mode the page already shows.
+    await expect(page.getByRole("dialog", { name: "开放网络" })).toHaveCount(0);
+    expect(mock.calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+  });
 });
 
 test.describe("GitHub star", () => {

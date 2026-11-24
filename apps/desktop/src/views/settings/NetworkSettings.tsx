@@ -61,6 +61,11 @@ function modeLabel(mode: SandboxNetworkMode): string {
  * permission epoch and drops every persistent kernel, so the toast says it
  * landed.
  *
+ * A press that cannot change anything never asks and never goes quiet: the
+ * pills are disabled with the reason under them while the page is saving or
+ * has lost the current value, and a press on the mode that is already active
+ * is already the requested state.
+ *
  * 域名白名单 is the exception, and the reason the box carries a 保存 of its
  * own. The service refuses an allowlist with no domains, and the box that takes
  * them is disabled until that mode is picked — so picking the mode only stages
@@ -89,6 +94,14 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
   const mode = drafts?.mode ?? current?.mode;
   const allowlist = mode === "domain-allowlist";
 
+  /** Why the mode cannot change right now. `undefined` means it can: the pills
+   *  are only disabled for a reason the page can name and show. */
+  const blockedReason = busy
+    ? TEXT.settings.network.sandbox.switching
+    : loaded.error
+      ? TEXT.settings.network.sandbox.staleMode
+      : undefined;
+
   const write = async (body: SandboxNetworkSettings): Promise<boolean> => {
     setBusy(true);
     setFailure(undefined);
@@ -106,7 +119,19 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
   };
 
   const choose = async (next: SandboxNetworkMode) => {
-    if (current === undefined || busy || mode === next) return;
+    // The same mode is already what the press asked for; the handlers below
+    // keep the confirmation from being raised for it at all.
+    if (current === undefined || mode === next) return;
+    // A press that gets this far anyway (a confirmation accepted while a
+    // write started, or a stale page) must not end in silence.
+    if (busy) {
+      setFailure(TEXT.settings.network.sandbox.switching);
+      return;
+    }
+    if (loaded.error) {
+      setFailure(TEXT.settings.network.sandbox.staleMode);
+      return;
+    }
     if (next === "domain-allowlist") {
       // Nothing to write yet: the service refuses an allowlist with no
       // domains, and the box that takes them is disabled until this mode is
@@ -144,9 +169,14 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
             <Group heading={TEXT.settings.network.sandbox.heading}>
               <Row hint={TEXT.settings.network.sandbox.scope} title={TEXT.settings.network.sandbox.mode}>
                 <Pills
+                  disabled={Boolean(blockedReason)}
+                  disabledReason={blockedReason}
                   label={TEXT.settings.network.sandbox.mode}
                   onChange={(value) => {
                     const next = value as SandboxNetworkMode;
+                    // Already the requested mode: there is nothing to confirm
+                    // and nothing to write, so no dialog and no silent no-op.
+                    if (next === mode || blockedReason) return;
                     if (next === "open") {
                       onConfirm({
                         accept: TEXT.settings.network.sandbox.modeOpen,
