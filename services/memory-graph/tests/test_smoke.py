@@ -133,6 +133,27 @@ def test_health_needs_password(client: TestClient) -> None:
     assert response.json()["status"] in {"needs-password", "degraded"}
 
 
+def test_internal_ping_requires_token_and_touches_no_graph(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The status probe must cost the same on an empty and a huge graph.
+
+    It is the authenticated liveness route, so a missing token is a 401 and a
+    correct one is a 200 without consulting the store.
+    """
+    assert client.get("/internal/ping").status_code == 401
+
+    from sciencediscovery_memory_graph import server
+
+    def explode():
+        raise AssertionError("internal/ping must not touch the graph")
+
+    monkeypatch.setattr(server, "handle", explode)
+    response = client.get("/internal/ping", headers={"authorization": "Bearer test-token"})
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_observe_execution_degrades_without_neo4j(client: TestClient) -> None:
     payload = {
         "execution_id": "exec-1",

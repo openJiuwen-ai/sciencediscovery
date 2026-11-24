@@ -9768,12 +9768,15 @@ test("a memory sidecar that answers health but refuses authenticated queries rep
   assert.equal(refused.response.status, 200);
   assert.equal(refused.body.reason, "memory_graph_unauthorized");
   assert.deepEqual(refused.body.hits, []);
-  // The status probe and the card read both used the configured token: this
-  // is the path whose answer the status is meant to reflect. (The settings
-  // write above also probes, hence the lower bound rather than a count.)
-  const probes = calls.filter((call) => call.path === "/query/by-node-type");
+  // The status probe and the card read both used the configured token. The
+  // probe is the O(1) ping, never a graph query: a by-node-type probe would
+  // depend on graph size and the query work budget. (The settings write above
+  // also probes, hence the lower bound rather than a count.)
+  const probes = calls.filter((call) => call.path === "/internal/ping");
   assert.ok(probes.length >= 2);
   assert.ok(probes.every((call) => call.authorization === "Bearer wrong-internal-token"));
+  assert.equal(calls.filter((call) => call.path === "/query/by-node-type").length, 1,
+    "health must not probe with a graph query");
 
   // A service that is not there is still a different reading.
   sidecarClosed = true;
