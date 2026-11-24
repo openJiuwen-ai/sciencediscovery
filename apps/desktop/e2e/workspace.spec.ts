@@ -157,18 +157,35 @@ test("a dropped file with path segments uploads only its basename", async ({ pag
   });
 });
 
-test("an archived session refuses the drop and says why", async ({ page }) => {
+test("an archived session opens from 会话管理 read-only and refuses the drop", async ({ page }) => {
+  // 归档 takes the Session out of 会话 and parks it in 设置 → 会话管理, so this
+  // scenario no longer starts from the sidebar: the active list holds running
+  // conversations only, and nothing is resumed on boot. The guard the drop card
+  // shows is still reachable — through the one place an archived Session can be
+  // opened from.
   const mock = await installMockApi(page, {
     sessions: [makeSession({ archivedAt: "2026-10-02T00:00:00.000Z" })],
   });
   await page.goto("/");
+  await expect(page.locator(".side-row")).toHaveCount(0);
 
-  const dragged = await transfer(page, "dropped.csv");
-  await page.dispatchEvent("body", "dragenter", { dataTransfer: dragged });
+  await test.step("1. Open it from 设置 → 会话管理", async () => {
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "设置" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "会话管理", exact: true }).click();
+    await expect(dialog.getByText("归档期间只读：恢复后可以继续对话")).toBeVisible();
+    await dialog.getByRole("button", { name: "打开", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
+  });
 
-  await expect(page.locator(".drop-card.is-blocked")).toBeVisible();
-  await expect(page.getByText("这个会话已经归档，不能再写入。")).toBeVisible();
-
-  await page.dispatchEvent("body", "drop", { dataTransfer: dragged });
-  expect(mock.state.files).toHaveLength(0);
+  await test.step("2. The drop is refused and says why", async () => {
+    const dragged = await transfer(page, "dropped.csv");
+    await page.dispatchEvent("body", "dragenter", { dataTransfer: dragged });
+    await expect(page.locator(".drop-card.is-blocked")).toBeVisible();
+    await expect(page.getByText("这个会话已经归档，不能再写入。")).toBeVisible();
+    await page.dispatchEvent("body", "drop", { dataTransfer: dragged });
+    expect(mock.state.files).toHaveLength(0);
+  });
 });
