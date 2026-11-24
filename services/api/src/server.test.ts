@@ -9646,10 +9646,19 @@ test("memory query and provenance routes forward complete success contracts", { 
     memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "test" },
   });
   await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  // One hook, in teardown order: node:test skips the remaining `after` hooks of
+  // a test once one of them throws, so a failed rm used to leave the API
+  // listening and hang the group. Stop the API first (it owns the fire-and-forget
+  // evolution-store writes into `root`), then the sidecar, then retry the rm —
+  // and keep the last two in `finally`, so a server that refuses to close still
+  // cannot leave the sidecar and the data root behind.
   context.after(async () => {
-    await closeApiServer(api);
-    await new Promise<void>((done) => sidecar.close(() => done()));
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    try {
+      await closeApiServer(api);
+    } finally {
+      if (sidecar.listening) await new Promise<void>((done) => sidecar.close(() => done()));
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
   });
   const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
   const headers = { ...authorization, "content-type": "application/json" };
@@ -9721,6 +9730,117 @@ test("memory query and provenance routes forward complete success contracts", { 
     node_id: "node-1", target_label: "Artifact", max_hops: 4, session_id: "session-1",
   });
   assert.equal(calls.some((call) => call.path === "/query/artifact-provenance"), true);
+});
+
+test("memory delete route deletes one named record without invoking cleanup", { id: "memory-delete-http-contract" }, async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `memory-delete-contract-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const calls: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+  const sidecar = createHttpServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      const url = new URL(request.url ?? "/", "http://sidecar.test");
+      let body: Record<string, unknown> | undefined;
+      if (raw) {
+        try { body = JSON.parse(raw) as Record<string, unknown>; } catch { body = undefined; }
+      }
+      calls.push({ method: request.method ?? "", path: url.pathname, ...(body ? { body } : {}) });
+      if (url.pathname === "/delete/node" && body?.node_id === "missing") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ detail: { code: "node_not_found", message: "absent" } }));
+        return;
+      }
+      if (url.pathname === "/delete/node" && body?.node_id === "refused") {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ detail: { code: "node_type_not_deletable", message: "no" } }));
+        return;
+      }
+      // Issue #1352's split on the write path: the sidecar answered, it just
+      // would not take this API's internal token.
+      if (url.pathname === "/delete/node" && body?.node_id === "tokenless") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ detail: "invalid internal token" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ status: "healthy", deleted: 1 })}\n`);
+    });
+  });
+  await new Promise<void>((done) => sidecar.listen(0, "127.0.0.1", done));
+  const api = createProductionApiServer({
+    ...testConfig(root),
+    memoryGraph: { url: `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`, internalToken: "test" },
+  });
+  await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  context.after(async () => {
+    await closeApiServer(api);
+    if (sidecar.listening) await new Promise<void>((done) => sidecar.close(() => done()));
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const headers = { ...authorization, "content-type": "application/json" };
+  const post = (body: unknown, auth: boolean) => fetch(`${origin}/api/memory/delete/node`, {
+    method: "POST",
+    headers: auth ? headers : { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const setting = await fetch(`${origin}/api/memory/settings`, {
+    method: "PUT", headers, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(setting.status, 200);
+
+  assert.equal((await post({ node_id: "evidence-1", node_type: "Evidence" }, false)).status, 401);
+  for (const body of [
+    {},
+    { node_id: "", node_type: "Evidence" },
+    { node_id: 42, node_type: "Evidence" },
+    { node_id: "evidence-1", node_type: "Claim" },
+    { node_id: "evidence-1", node_type: "Evidence", session_id: "" },
+    { node_id: "evidence-1", node_type: "Evidence", session_id: 42 },
+  ]) {
+    const rejected = await post(body, true);
+    assert.equal(rejected.status, 400, JSON.stringify(body));
+    assert.match((await rejected.json() as { error: string }).error, /must be|must be a/);
+  }
+  assert.equal(calls.some((call) => call.path === "/delete/node" || call.path.startsWith("/cleanup/")), false,
+    "invalid and unauthenticated requests must not reach the sidecar");
+
+  calls.length = 0;
+  const deleted = await post({ node_id: "evidence-1", node_type: "Evidence", session_id: "session-1" }, true);
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { status: "healthy", deleted: 1 });
+  assert.deepEqual(calls, [{
+    method: "POST",
+    path: "/delete/node",
+    body: { node_id: "evidence-1", node_type: "Evidence", session_id: "session-1" },
+  }], "one targeted delete, no bulk cleanup");
+  assert.equal(calls.some((call) => call.path.startsWith("/cleanup/")), false);
+
+  const missing = await post({ node_id: "missing", node_type: "Evidence" }, true);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { code: "node_not_found", error: "Memory node not found" });
+  const refused = await post({ node_id: "refused", node_type: "Evidence" }, true);
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json() as { code?: string }).code, "node_type_not_deletable");
+
+  // A refused token is not an unreachable service: the write still fails (502,
+  // nothing deleted) but the code and message say which of the two it is.
+  const tokenless = await post({ node_id: "tokenless", node_type: "Evidence" }, true);
+  assert.equal(tokenless.status, 502);
+  assert.deepEqual(await tokenless.json(), {
+    code: "memory_graph_unauthorized",
+    error: "memory graph rejected the internal token",
+  });
+
+  await new Promise<void>((done) => sidecar.close(() => done()));
+  const unreachable = await post({ node_id: "evidence-1", node_type: "Evidence" }, true);
+  assert.equal(unreachable.status, 502);
+  assert.deepEqual(await unreachable.json(), {
+    code: "memory_graph_unreachable",
+    error: "memory graph unreachable",
+  });
 });
 
 test("a memory sidecar that answers health but refuses authenticated queries reports unauthorized, not healthy", { id: "memory-graph-auth-rejection" }, async (context) => {

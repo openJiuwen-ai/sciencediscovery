@@ -180,6 +180,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper（Paper 不存在 → 422 `source_paper_not_found`） |
 | `POST /persist/claim` | CREATE Claim + supports（Evidence/Artifact→Claim）+ 可选 produces + 可选 stated_in；返回 `chip_map`。无支撑目标 → 422 `no_cites_target`（在降级分支前触发，图挂了也报） |
 | `POST /persist/stated_in` | MERGE stated_in（Claim→报告 Artifact）；Artifact 可能尚未镜像，轮询等待最多 10×0.3s |
+| `POST /delete/node` | 物理删除一个白名单节点（当前仅 `Evidence`）及其全部边；可选 `session_id` 限定归属。节点不存在 → HTTP 404 `node_not_found`；类型不在白名单 → HTTP 400 `node_type_not_deletable`；图不可达 → HTTP 200 `{status:"degraded",reason:"memory_graph_unreachable"}`。同一 Session / project 的其他节点与边保持不变 |
 | `POST /internal/backend` | 选择存储后端（`local` 或 `neo4j`） |
 | `POST /internal/neo4j-password` | 推送 Neo4j 密码 + ensure_schema |
 
@@ -209,7 +210,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 
 ### 3.2 Node API 反向代理路由（`services/api/src/http/`，浏览器入口）
 
-浏览器只读，全部反向代理到 sidecar；功能关闭（client=null）返回空结果 + `reason:"memory_graph_disabled"`；传输失败返回 `reason:"memory_graph_unreachable"`；内部令牌被拒返回 `reason:"memory_graph_unauthorized"`：
+浏览器只读，全部反向代理到 sidecar；功能关闭（client=null）返回空结果 + `reason:"memory_graph_disabled"`；传输失败返回 `reason:"memory_graph_unreachable"`；内部令牌被拒返回 `reason:"memory_graph_unauthorized"`。桌面端记忆卡片额外提供一条写路径——删除单条 Evidence 记录——经已鉴权路由完成，并以明确状态拒绝而不是返回空载荷：
 
 | 方法 + 路径 | 客户端方法（`apps/web/src/api/`） |
 |-------------|--------------------------------------|
@@ -223,9 +224,12 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 | `POST /api/memory/query/group-expansion` | `getGroupExpansion` |
 | `POST /api/memory/trace/provenance` | `traceProvenance`（reviewer 真实性溯源；返回 `broken`/`truncated`/`reason`） |
 | `GET /api/memory/query/artifact-provenance` | `getMemoryArtifactProvenance` |
+| `POST /api/memory/delete/node` | `deleteMemoryNode`（桌面卡片；仅 Evidence——404 未知节点、400 类型被拒、409 记忆未开启、502 sidecar 不可达） |
 | `GET /health`（含 `memoryGraph` 字段） | `getMemoryHealth` |
 
 > declare/persist 类**不在浏览器客户端上**：`declareEvidence`/`declareClaim`/`linkClaimsToReport` 是 Node 内 LLM 工具回调（见 4.3），经 `MemoryGraphClient` 直接打 sidecar `/persist/*`。
+>
+> `cleanup/session` 与 `cleanup/project` 保持原有批量语义，卡片不使用它们。单条删除只摘除指定节点；引用它的报告仍可打开，chip 落到既有的 `missing` 卡片状态。
 
 ### 3.3 LLM 工具（`packages/workspace/src/workspace.ts`，功能开启时注册）
 

@@ -18,7 +18,13 @@ const { describe, it } = createTest(import.meta.url, {
 });
 import assert from "node:assert/strict";
 
-import { graphCredentialsRejected, graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../src/api/memory.js";
+import {
+  deleteMemoryNode,
+  graphCredentialsRejected,
+  graphTemporarilyUnavailable,
+  listMemoryNodes,
+  memoryChain,
+} from "../src/api/memory.js";
 import { StubClient, json } from "./api-stub.js";
 
 describe("a graph that could not answer", () => {
@@ -99,5 +105,30 @@ describe("one provenance hop", () => {
       session_id: "session/one",
       kind: "viewSourcePaper",
     });
+  });
+});
+
+describe("deleting one memory record", () => {
+  it("posts the record, its type and its session to the authenticated route", async () => {
+    const stub = new StubClient().reply({ status: "healthy", deleted: 1 });
+
+    const result = await deleteMemoryNode(stub.asClient(), "evidence-1", "session/one");
+
+    assert.deepEqual(result, { status: "healthy", deleted: 1 });
+    assert.equal(stub.calls[0]!.path, "/api/memory/delete/node");
+    assert.equal(stub.calls[0]!.init.method, "POST");
+    assert.deepEqual(json(stub.calls[0]!), {
+      node_id: "evidence-1",
+      node_type: "Evidence",
+      session_id: "session/one",
+    });
+  });
+
+  it("leaves the session out when the card has none", async () => {
+    const stub = new StubClient().reply({ status: "healthy", deleted: 1 });
+
+    await deleteMemoryNode(stub.asClient(), "evidence-1");
+
+    assert.deepEqual(json(stub.calls[0]!), { node_id: "evidence-1", node_type: "Evidence" });
   });
 });

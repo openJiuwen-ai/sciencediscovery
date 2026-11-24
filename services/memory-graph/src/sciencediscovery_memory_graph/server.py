@@ -38,6 +38,8 @@ Routes:
   versions + physically delete its private nodes (called after deleteSession)
 - ``POST /cleanup/project`` (Bearer) → physically delete all of a project's
   nodes, keyed by its session-id snapshot (called after deleteProject)
+- ``POST /delete/node`` (Bearer) → physically delete one whitelisted node
+  (currently Evidence) and its edges, scoped by an optional ``session_id``
 - ``POST /internal/neo4j-password`` (Bearer) → push plaintext password, run
   ``ensure_schema()`` if reachable
 
@@ -61,9 +63,11 @@ from .constraints import ensure_schema
 from .logging_config import get_logger
 from .backend import handle
 from .persistence import (
+    DELETABLE_NODE_TYPE_KEYS,
     _normalize_link,
     declare_claim,
     declare_evidence,
+    delete_node_graph,
     delete_project_graph,
     delete_session_graph,
     link_claims_to_report,
@@ -1465,6 +1469,52 @@ def cleanup_session(req: CleanupSessionRequest) -> dict[str, Any]:
 class CleanupProjectRequest(BaseModel):
     project_id: str
     session_ids: list[str] = Field(default_factory=list)
+
+
+# --- Delete: one explicitly named record ------------------------------------
+#
+# A person removing one Evidence from the desktop's citation card, not a
+# session/project teardown. The whitelist lives in persistence so the Cypher
+# label/field are constants; a type outside it is refused before any write.
+
+class DeleteNodeRequest(BaseModel):
+    node_type: str
+    node_id: str
+    session_id: str | None = None
+
+
+@app.post("/delete/node", dependencies=[Depends(require_internal_token)])
+def delete_node(req: DeleteNodeRequest) -> dict[str, Any]:
+    if req.node_type not in DELETABLE_NODE_TYPE_KEYS:
+        _error("node_type_not_deletable", 400, f"node type is not deletable: {req.node_type}")
+    if not req.node_id.strip():
+        _error("bad_request", 400, "node_id must be non-empty")
+    if req.session_id is not None and not req.session_id.strip():
+        _error("bad_request", 400, "session_id must be non-empty")
+    driver = handle()
+    log.info("delete/node in: type=%s id=%s session=%s",
+             req.node_type, req.node_id, req.session_id or "-")
+    if not driver.is_reachable():
+        log.warning("delete/node skipped: Neo4j not reachable (type=%s id=%s)", req.node_type, req.node_id)
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "deleted": 0}
+    try:
+        result = delete_node_graph(
+            node_type=req.node_type,
+            node_id=req.node_id,
+            session_id=req.session_id,
+        )
+    except CypherBudgetExceeded:
+        raise
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("delete/node failed: type=%s id=%s: %s", req.node_type, req.node_id, exc)
+        raise HTTPException(status_code=500, detail=f"delete failed: {exc}")
+    if result.get("status") == "not_found":
+        _error("node_not_found", 404, f"{req.node_type} node not found: {req.node_id}")
+    if result.get("status") == "rejected":
+        _error("node_type_not_deletable", 400, f"node type is not deletable: {req.node_type}")
+    log.info("delete/node done: type=%s id=%s deleted=%s",
+             req.node_type, req.node_id, result.get("deleted"))
+    return result
 
 
 @app.post("/cleanup/project", dependencies=[Depends(require_internal_token)])

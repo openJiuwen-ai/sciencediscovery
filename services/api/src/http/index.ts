@@ -286,7 +286,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
+import { MEMORY_GRAPH_UNAUTHORIZED, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { draftEvolveDirection } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
@@ -655,6 +655,12 @@ async function readSpecialistBody<T>(request: IncomingMessage): Promise<T> {
   }
   return body as T;
 }
+
+/** The only graph labels a person may delete one record of from the desktop
+ *  citation card. Evidence is a declaration with no shared identity; Artifact
+ *  version lineage and SourceFile/DbRecord citation inputs stay immutable.
+ *  Keep this list in step with the sidecar's DELETABLE_NODE_TYPE_KEYS. */
+const DELETABLE_MEMORY_NODE_TYPES = new Set<string>(["Evidence"]);
 
 /** A startup component that never became available. Routes must report this as
  *  a service fault (503), not as the code of the validation that stopped the
@@ -4709,6 +4715,58 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             })
           : { nodes: [], edges: [], total: 0, truncated: false, reason: "memory_graph_disabled" as const };
         sendJson(response, 200, subgraph);
+        return;
+      }
+      // A person deleting one Evidence record from the desktop's citation
+      // card. This is a write, so it cannot use the read routes' empty-payload
+      // degradation: the card must know whether the record is gone. Refusals
+      // are explicit HTTP statuses instead — 404 for an unknown node, 400 for
+      // a non-whitelisted type, 409 when memory is off, 502 when the sidecar
+      // cannot be reached. cleanup/session|project keep their bulk semantics.
+      if (request.method === "POST" && url.pathname === "/api/memory/delete/node") {
+        const body = await readJson<{
+          node_id?: unknown;
+          node_type?: unknown;
+          session_id?: unknown;
+        }>(request);
+        if (typeof body.node_id !== "string" || !body.node_id.trim()) {
+          return sendError(response, 400, "node_id must be non-empty");
+        }
+        if (typeof body.node_type !== "string" || !DELETABLE_MEMORY_NODE_TYPES.has(body.node_type)) {
+          return sendError(response, 400, "node_type must be Evidence", "node_type_not_deletable");
+        }
+        if (body.session_id !== undefined
+          && (typeof body.session_id !== "string" || !body.session_id.trim())) {
+          return sendError(response, 400, "session_id must be a non-empty string");
+        }
+        if (!memoryGraphEnabled()) {
+          return sendError(response, 409, "Scientific memory is not enabled", "memory_graph_disabled");
+        }
+        const result = await memoryGraphClient.deleteNode(
+          body.node_id.trim(),
+          body.node_type as MemoryGraphNodeLabel,
+          body.session_id as string | undefined,
+        );
+        if (result.status === "not_found") {
+          return sendError(response, 404, "Memory node not found", "node_not_found");
+        }
+        if (result.status === "rejected") {
+          return sendError(response, 400, "Memory node type is not deletable", "node_type_not_deletable");
+        }
+        if (result.status === "degraded") {
+          // A refused internal token is not a service that never answered. The
+          // status stays 502 (the write did not happen) but the message and
+          // code carry the real reason, matching the read routes.
+          return sendError(
+            response,
+            502,
+            result.reason === MEMORY_GRAPH_UNAUTHORIZED
+              ? "memory graph rejected the internal token"
+              : "memory graph unreachable",
+            result.reason ?? "memory_graph_unreachable",
+          );
+        }
+        sendJson(response, 200, result);
         return;
       }
       // --- Memory-graph cross-session read endpoints --------------------------

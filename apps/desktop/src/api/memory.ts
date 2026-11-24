@@ -13,18 +13,22 @@
 // limitations under the License.
 
 /**
- * The read-only half of 科学记忆: the two reads behind a citation card.
+ * 科学记忆's browser client: the reads behind a citation card, plus the one
+ * write the card offers — deleting a single Evidence record.
  *
- * Both are reverse-proxied by the control plane, and both answer 200 with an
- * empty payload plus a `reason` when the feature is off or the graph is
- * unreachable — the card decides between "not enabled", "temporarily
- * unavailable" and "nothing recorded yet" from that reason, never from an
- * exception.
+ * The reads are reverse-proxied by the control plane and answer 200 with an
+ * empty payload plus a `reason` when the feature is off or the graph cannot
+ * answer, so the card decides between "not enabled", "unavailable" and
+ * "nothing recorded yet" from that reason. The delete is a write and cannot
+ * degrade silently: it rejects with an `ApiRequestError` whose status and code
+ * say whether the record was unknown, the type refused, memory off, the token
+ * rejected or the sidecar unreachable.
  */
 
 import type { ApiClient } from "./client.js";
 import type {
   MemoryGraphChainResult,
+  MemoryGraphDeleteResult,
   MemoryGraphMatchResponse,
   MemoryGraphNodeLabel,
 } from "./types.js";
@@ -74,6 +78,26 @@ export function memoryChain(
       session_id: sessionId,
       version,
       kind,
+    }),
+    method: "POST",
+  });
+}
+
+/** `POST /api/memory/delete/node` — remove one Evidence record and its edges.
+ *  The control plane answers explicit statuses: 404 unknown node, 400 refused
+ *  type, 409 memory off, 502 sidecar unreachable. A rejection (including
+ *  unreachable) therefore reaches the card as an `ApiRequestError`, never as
+ *  the read routes' "missing" payload. */
+export function deleteMemoryNode(
+  client: ApiClient,
+  nodeId: string,
+  sessionId?: string,
+): Promise<MemoryGraphDeleteResult> {
+  return client.request<MemoryGraphDeleteResult>("/api/memory/delete/node", {
+    body: JSON.stringify({
+      node_id: nodeId,
+      node_type: "Evidence",
+      ...(sessionId === undefined ? {} : { session_id: sessionId }),
     }),
     method: "POST",
   });

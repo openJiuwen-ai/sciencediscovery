@@ -96,6 +96,7 @@ export type {
   McpProxyPolicies,
   MemoryGraphBackend,
   MemoryGraphChainResult,
+  MemoryGraphDeleteResult,
   MemoryGraphEdge,
   MemoryGraphHit,
   MemoryGraphMatchResponse,
