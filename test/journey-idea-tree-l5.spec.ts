@@ -20,24 +20,24 @@ const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
 
 // `standard` is three rounds of three candidates with three independent
 // assessors, so the waits are ordered under the 7200s case budget instead of
-// summing past it: 1200s to create + (120s running + 480s paused + 300s resumed)
-// + 4200s terminal = 6300s, leaving ~900s for the composer command, the reload
+// summing past it: 600s to create + (120s running + 480s paused + 300s resumed)
+// + 4800s terminal = 6300s, leaving ~900s for the composer command, the reload
 // and cleanup. Every cap below is below the case timeout, so a slow research
 // fails as "status never settled" rather than being killed inside cleanup.
 //
-// 1200s to create is measured, not guessed. The agent sometimes explores the
-// workspace and the skill directories for several turns before it calls
-// `create_idea_research`: two runs were cut off by a 600s budget while still
-// preparing, one on turn 5 with 142K input tokens, another with 179K in / 9.7K
-// out across six turns and no tool call. The same prompt has also created the
-// research in 71s. Raising the budget does not weaken the assertion — a run that
-// never calls the tool still fails, and the settled-run branch still reports it
-// with its status and cards.
-const createBudget = 1_200_000;
+// 600s to create is measured, not guessed, and raising it was measured too. The
+// agent sometimes explores the workspace and the skill directories instead of
+// calling `create_idea_research`: a 600s budget cut two runs off mid-preparation
+// (142K and 179K input tokens), and a 1200s budget let one run go 50 turns and
+// 1.9M tokens without ever calling the tool. A longer wait therefore buys nothing
+// and costs ten times the tokens, so the budget stays at 600s; a run that never
+// calls the tool still fails, and the settled-run branch reports it with status
+// and cards rather than waiting out the case.
+const createBudget = 600_000;
 const runningBudget = 120_000;
 const pausedBudget = 480_000;
 const resumedBudget = 300_000;
-const terminalBudget = 4_200_000;
+const terminalBudget = 4_800_000;
 
 // A run reports one of these when it can no longer produce a research on its
 // own. `blocked` is deliberately absent: it is a wait for a person, and
