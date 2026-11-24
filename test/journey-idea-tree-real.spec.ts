@@ -53,7 +53,13 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
     const researchById = async () => (await read()).find((entry: any) => entry.research.id === researchId);
     try {
       await journey.step("Start a small research", "Quick research starts from the session", async () => {
-        fixture = await createProjectAndSession(page, { model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `Idea Tree real ${Date.now()}` }, projectName: `Idea Tree real ${Date.now()}`, sessionTitle: "Catalyst research" });
+        // `always_allow` is load-bearing, not convenience: the agent's preparation
+        // can reach a tool that raises an approval card, and nothing in a headless
+        // journey answers one. Measured on a live stack, the run went `running`
+        // then `blocked` after 40s and never created a research at all, so the
+        // case failed on a card no one could press. Every other real journey on
+        // this stack asks for the same mode for the same reason.
+        fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { apiToken: real.E2E_LLM_TOKEN, baseUrl: real.E2E_LLM_BASE_URL, model: real.E2E_LLM_MODEL, name: `Idea Tree real ${Date.now()}` }, projectName: `Idea Tree real ${Date.now()}`, sessionTitle: "Catalyst research" });
         // Session scope, not the deployment: the override dies with this Session
         // and no restore step can be skipped by a killed worker.
         const settings = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers, data: { ideaTreeOverride: { templateId: "water-treatment-materials/v1", explorationIntensity: "quick" } } });
