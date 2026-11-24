@@ -617,7 +617,27 @@ class IdeaTreeEngine:
                             raise ValueError('Proposed parent does not exist')
                         for proposal in ideas['candidates'][:count]:
                             self.validate_proposal(proposal, s['selectedDirectionIds'])
-                    ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']}, check_proposals)
+                    # One unusable proposal must not end the research. The stage gets
+                    # its single correction inside `ask`; if the answer is still
+                    # invalid the round is skipped and the next ideation tries again,
+                    # because the failure mode measured in practice is a single bad
+                    # field (`targetedWeakness`, an over-deep path, trailing JSON) on an
+                    # otherwise healthy run. `round` still advances, so skipping cannot
+                    # loop forever, and the activity record keeps the failure visible.
+                    try:
+                        ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']}, check_proposals)
+                    except ValueError as error:
+                        s['round'] += 1
+                        s['batch'] = []
+                        s['batchCompleted'] = 0
+                        s['reason'] = f'Skipped an ideation round: {error}'
+                        self.save()
+                        # A research that never produced a candidate still ends as
+                        # `interrupted` with the model's error: skipping is a second
+                        # chance for a healthy run, not a way to finish empty.
+                        if s['round'] >= s['settings']['maxRounds'] and not any(n['kind'] == 'candidate' for n in s['nodes']):
+                            raise
+                        continue
                     batch = []
                     existing = {n['hypothesis'].strip().casefold() for n in s['nodes']}
                     for proposal in ideas['candidates'][:count]:

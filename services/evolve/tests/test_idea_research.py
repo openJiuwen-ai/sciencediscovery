@@ -241,6 +241,31 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(child['depth'], 3)
         self.assertEqual(child.get('trimmedDirection'), 'Mechanism follow-up')
 
+    async def test_an_unusable_ideation_round_is_skipped_not_fatal(self):
+        """Measured in practice: one bad field in one ideation answer (`targetedWeakness`
+        outside 1-2000 characters) settled a whole standard research as `interrupted`
+        after its single correction. The round is skipped instead, and the next
+        ideation continues the research."""
+        self.state['settings'].update(maxRounds=3, candidatesPerRound=1, maxSearchRounds=6,
+                                      maxActiveDirections=3, explorationSlots=0)
+        calls = {'ideate': 0}
+        async def model(role, payload):
+            if role == 'ideate':
+                calls['ideate'] += 1
+                # Both attempts of the first round answer with an empty hypothesis
+                # (required to be 1-4000 characters), so `ask` exhausts its single
+                # correction and the round has to be skipped rather than fatal.
+                if calls['ideate'] <= 2:
+                    return json.dumps(dict(candidates=[dict(parentId=payload['selectedParentIds'][0], direction='Bad', hypothesis='')], reason='broken')), 40
+            return await self.model(role, payload)
+        await IdeaTreeEngine(self.state, self.store, {}, model).run()
+        self.assertEqual(self.state['status'], 'completed')
+        self.assertGreaterEqual(calls['ideate'], 2)
+        self.assertTrue([n for n in self.state['nodes'] if n['kind'] == 'candidate'])
+        # The old behaviour settled this as `interrupted` after the single
+        # correction; the research now survives the bad round and still ends with a
+        # candidate, which is the whole point of the change.
+
     async def test_candidates_execute_before_max_depth_and_can_branch(self):
         self.state['settings']['maxDepth'] = 6
         async def model(role, payload):
@@ -426,9 +451,12 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.calls.append((role, payload))
             return 'not json', 5
         await IdeaTreeEngine(self.state, self.store, {}, invalid).run()
-        self.assertEqual(len(self.calls), 2)
+        # A model that never answers now costs one attempt per round plus its single
+        # correction, because a bad round is skipped instead of ending the research;
+        # a run that still produced no candidate settles `interrupted` with the error.
+        self.assertEqual(len(self.calls), 6)
         self.assertEqual(self.state['status'], 'interrupted')
-        self.assertEqual(self.state['tokens'], 10)
+        self.assertEqual(self.state['tokens'], 30)
         self.assertEqual(len(self.state['nodes']), 1)
 
     async def test_invalid_parent_does_not_save_partial_batch(self):
