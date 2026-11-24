@@ -408,6 +408,21 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** How the search results are narrowed; read before the first paint, because
    *  #1251 asks for the choice to survive a reload. */
   const [narrowing, setNarrowingState] = useState<SearchNarrowing>(() => readSearchNarrowing());
+
+  // A stored selection can outlive the Project it named. The picker only lists the
+  // Projects that still exist, so a stale id would keep filtering everything out
+  // with the folder control lit and no visible way to clear it — prune instead,
+  // and write the pruned choice back so a reload does not resurrect it.
+  useEffect(() => {
+    if (narrowing.projectIds.length === 0) return;
+    const known = new Set(projects.map((project) => project.id));
+    const kept = narrowing.projectIds.filter((id) => known.has(id));
+    if (kept.length === narrowing.projectIds.length) return;
+    const updated = { ...narrowing, projectIds: kept };
+    rememberSearchNarrowing(updated);
+    setNarrowingState(updated);
+  }, [narrowing, projects]);
+
   /** The query the field holds, the answer it produced and why it failed. */
   const [searchQuery, setSearchQuery] = useState("");
   const [searchAnswer, setSearchResults] = useState<WorkbenchSearchResponse>();
@@ -2613,7 +2628,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     // The route keeps `total` and `hasMore`: a client-side narrowing cannot count
     // what the route did not send, and a narrowed page is not an empty answer.
     return { ...searchAnswer, results };
-  }, [filterNow, narrowing, running, searchAnswer, sessionId, sessionsByProject]);
+  }, [filterNow, narrowing, outputs, running, searchAnswer, sessionId, sessionsByProject]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
