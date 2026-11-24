@@ -74,10 +74,6 @@ export const REMEMBERED_MODEL_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:last-mode
  *  before the first paint. */
 export const SEARCH_NARROWING_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:search-narrowing`;
 
-/** Superseded by `SEARCH_NARROWING_STORAGE_KEY`; kept until the column that read
- *  it is gone, so a tree mid-migration still compiles. */
-export const LIST_FILTERS_STORAGE_KEY = `${CURRENT_PREFIX}-desktop:list-filters`;
-
 function safeRead(storage: ReadableStorage, key: string): string | null {
   try {
     return storage.getItem(key);
