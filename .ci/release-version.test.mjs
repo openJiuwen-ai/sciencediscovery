@@ -133,10 +133,12 @@ test('a functional change that bumps the version is rejected, like #1197 was', (
   assert.match(result.reason, /does not start with "chore\(release\):"/u);
 });
 
-test('the title alone is not enough', () => {
+test('a release title needs only the prefix, not a matching number', () => {
+  // The title says "ship 0.4.0" while the version moves to 0.4.1. The gate asks
+  // for the release prefix and a SemVer-shaped version, not a number repeated in
+  // the title, so this is still a valid release change.
   const result = verdict({ baseVersion: '0.4.0', headVersion: '0.4.1' });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /does not start with "chore\(release\):"/u);
+  assert.equal(result.ok, true);
 });
 
 test('the release prefix has to start the title', () => {
@@ -183,6 +185,14 @@ test('SemVer shapes the field may take', () => {
 
 test('the version is read from the field, not from the text around it', () => {
   assert.equal(versionOf('{"name":"sd-shell","version":"0.4.0-rc1"}'), '0.4.0-rc1');
+});
+
+test('the installer name still derives from the version field', () => {
+  // The ${version} macro is the whole single-source property: a future edit
+  // pinning a literal artifact name here would pass the gate and reintroduce
+  // the #1197 drift, so pin the macro directly.
+  const eb = readFileSync(join(REPOSITORY, 'application/electron-builder.yml'), 'utf8');
+  assert.match(eb, /artifactName: ScienceDiscovery-\$\{version\}-win-x64-setup\.\$\{ext\}/u);
 });
 
 // ---- the policy job's own half of the rule --------------------------------

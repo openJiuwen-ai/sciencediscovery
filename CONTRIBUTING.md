@@ -333,10 +333,10 @@ without Environment approval or a final approval job.
 The `policy` job also enforces one content rule, and it is the only thing that
 can fail a pull request before L1: a change to `application/package.json`'s
 `version` must be a release change — the title starts with `chore(release):` and
-every place the release is spelled carries the new number (the NSIS stub and both
-READMEs, plus the Windows artifact name in `electron-builder.yml`). See
-[.ci/README.md](.ci/README.md) for the exact spellings. A functional change must
-not touch the version at all.
+the new value is a SemVer shape. The version field is the single source of
+truth: the installer name expands `${version}` from it and the README badge is
+dynamic, so nothing else is edited by hand. A functional change must not touch
+the version at all.
 
 Configure branch rules and scoped Environments as
 specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).

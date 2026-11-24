@@ -97,7 +97,7 @@ export function assessVersionChange({ baseVersion, headVersion, title }) {
     return {
       ok: false,
       reason: `${VERSION_FILE} moves to "${headVersion}", which is not a SemVer version. `
-        + `Write it "${semverSuggestion(headVersion)}" instead.`,
+        + `write it "${semverSuggestion(headVersion)}" instead.`,
     };
   }
   if (!RELEASE_TITLE.test(trimmed)) {
