@@ -506,15 +506,19 @@ visible without changing the final gate semantics for cases that remain failed.
 
 ### L5 active-public benchmark and baseline candidate
 
-For a full L5 CI run, manually dispatch **CI** (`ci.yml`) on the desired
-branch with `profile=release`. This runs the cumulative CI gates and the
-complete real E2E suite, including the L3/L4 cases and all 45 active public
-BiomniBench-DA tasks.
+For a full L5 CI run, open **Actions → Release → Run workflow** and select
+the branch to validate. The workflow uses `application/package.json` from
+that branch to stamp the binary artifacts. **Actions → CI → Run workflow**
+with `profile=release` runs the same L5 test plan. Version tag pushes also create a
+draft Release after the gate passes. Release validation uses its own
+concurrency group, independent of the branch's ordinary CI.
+
+The release profile runs the cumulative CI gates and complete real E2E suite,
+including the L3/L4 cases and all 45 active public BiomniBench-DA tasks.
 The shared real E2E workflow defaults to two concurrent workers across the
-whole matrix. To use four workers, select `max-parallel=4` in the manual
-**CI** dispatch alongside `profile=release`. The input accepts only 1, 2 or 4;
-invalid reusable-workflow inputs fail planning before any worker starts.
-Merge queue, nightly and release-tag runs keep the default of two workers.
+whole matrix. Both manual entries accept `max-parallel` values of 1, 2 or 4.
+Invalid reusable-workflow inputs fail planning before any worker starts.
+Merge queue, nightly and release-tag runs use two workers.
 
 The real case counts are L3 **9**, L4 **20**, L5 **64**. L5 includes 45 active
 public BiomniBench-DA tasks, with one task per isolated worker, sharing the
@@ -673,9 +677,9 @@ Built output, installed dependencies, the test harness and the tests
 themselves are not attributed. The run page shows the merged figure for Node.js
 and Python, then what each layer contributed on its own, its job result and
 counts, and any Python process that could not be measured. There is no
-diff-based selection: pull requests, pushes and the nightly run all report on
-the whole plan the gate ran. The mocked browser E2E is not measured. Release
-calls skip both the recording and the job.
+diff-based selection: pull requests, nightly runs and both manual L5 entries
+report on the whole plan the gate ran. The mocked browser E2E is not measured.
+Tag-triggered release validation skips both coverage recording and reporting.
 
 A case the plan leaves out is missing from coverage for one reason, the
 selector: a `status:external` case — `services/memory-graph` has 77, all

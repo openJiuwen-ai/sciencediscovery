@@ -323,7 +323,7 @@ mirror: nothing runs there.
 | L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: hermetic UT/ST and Linux binary/Docker distribution gates; no E2E |
 | L3 / `merge` | Reviewed PR enters merge queue: rerun L1/UT/ST on group SHA, mocked E2E and basic real APIs; Linux binary, Windows desktop, macOS desktop and Docker jobs are skipped |
 | L4 / `daily` | Nightly at 16:00 UTC: L3 plus Linux binary, Windows desktop installer, macOS ARM64 DMG/ZIP and Docker distribution gates and all ten previously eligible nightly cases (17 real cases total) |
-| L5 / `release` | Version release tag: same current cases, evaluation modes and distribution gates as L4, including macOS ARM64 DMG/ZIP; independent profile for future additions; no historical baseline gate |
+| L5 / `release` | Version tag push, manual **Release** dispatch, or manual **CI** dispatch with `profile=release`. Runs L4 gates plus the active public BiomniBench-DA cases, with no historical baseline gate |
 | `package` | Manual Package workflow: L1 and builds for `linux-windows`, `macos`, or `all`; the `package-gate` check covers the selected builds |
 
 `nightly.yml`, `release.yml`, and `package.yml` reuse `ci.yml`. The stable required
@@ -340,7 +340,10 @@ the version at all.
 
 Configure branch rules and scoped Environments as
 specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
-L5 failure blocks creating the draft Release and its assets while leaving the already-created tag intact. A person with write access reviews and publishes the draft from the Releases page before it becomes public.
+Both manual L5 entries record and report UT/ST coverage. A version tag
+push skips coverage, and a passing gate creates the draft Release and its
+assets. A person with write access reviews and publishes the draft from the
+Releases page.
 
 Backend selection (`--backend jiuwenswarm|legacy`, or `CI_E2E_BACKEND`) is
 independent of tiers and case selection. Native real ST and adapter live UT
@@ -412,8 +415,8 @@ question by hand:
 
 `--profile l1|l2|l3|l4|l5` names a cumulative tier. The aliases are `pr` (L2,
 the default), `merge` (L3), `daily` (L4) and `release` (L5). Higher tiers contain
-all lower cases and can add their own; L5 currently has the same eligible cases
-as L4. Real calls require explicit opt-in and
+all lower cases and can add their own. L5 adds the active public
+BiomniBench-DA cases. Real calls require explicit opt-in and
 credentials after the source plan is frozen. See
 [the tier contract](.ci/README.md#five-cumulative-tiers-one-source-catalog),
 including backend identity, usage accounting and the initial release scope.

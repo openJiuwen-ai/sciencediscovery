@@ -49,6 +49,10 @@ on:
         default: '2'
   workflow_call:
     inputs:
+      skip-coverage:
+        description: "Skip UT/ST coverage collection and reporting for a version tag push"
+        type: boolean
+        default: false
       release-version:
         description: >-
           Version stamped into the release binaries and their file names. Left
@@ -76,14 +80,12 @@ on:
         type: number
         default: 2
 
-# Keyed on the calling workflow as well as the ref: a nightly run and a manual
-# dispatch or package run can target refs/heads/main at the same time, and
-# without the workflow name they would share a group and cancel each other. In
-# a called workflow `github.workflow` is the caller's name, so each pipeline
-# gets its own lane.
+# Keyed on the calling workflow and ref so different pipelines can run on the
+# same branch. The release profile has its own group per event so manual L5
+# runs stay separate from other CI profiles and tag-triggered release gates.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ inputs.profile == 'package' && format('-package-{0}', inputs['package-platform'] || 'linux-windows') || '' }}
-  cancel-in-progress: true
+  group: ci-${{ inputs.profile == 'release' && format('release-{0}-', github.event_name) || '' }}${{ github.workflow }}-${{ github.ref }}${{ inputs.profile == 'package' && format('-package-{0}', inputs['package-platform'] || 'linux-windows') || '' }}
+  cancel-in-progress: ${{ inputs.profile != 'release' }}
 
 permissions:
   contents: read
@@ -290,12 +292,12 @@ jobs:
       # this same execution — per-file Node workers with V8 coverage, pytest
       # with `coverage run` in front — and changes nothing about what is
       # selected. The Coverage job below only merges what this step writes; a
-      # release build, which publishes no coverage, does not record it.
+      # version tag push does not record it.
       - name: Run UT
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:ut -- --profile ${{ needs.policy.outputs.profile }} ${{ !inputs['skip-coverage'] && '--coverage' || '' }}
 
       - name: Verify release plan stability
         if: ${{ success() && needs.policy.outputs.profile == 'release' }}
@@ -354,7 +356,7 @@ jobs:
       # a failed run managed to record and says that it failed, rather than
       # running anything to fill the gap.
       - name: Upload UT coverage data
-        if: always() && github.workflow != 'Release'
+        if: always() && !inputs['skip-coverage']
         uses: actions/upload-artifact@v4
         with:
           name: ut-coverage
@@ -374,10 +376,9 @@ jobs:
     # Reports on the UT and ST jobs' own runs and merges them; it executes no
     # test. The mocked browser E2E is not measured. Runs after a failed layer
     # as well, to report what that run uploaded; a cancelled pipeline has
-    # nothing to report. Release calls skip it: a tagged build publishes no
-    # coverage.
+    # nothing to report. Version tag pushes opt out of coverage.
     needs: [policy, ut, st]
-    if: ${{ !cancelled() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
+    if: ${{ !cancelled() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !inputs['skip-coverage'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -519,7 +520,7 @@ jobs:
           # and a slower read now fails in seconds with one readable line
           # instead of being killed by the journey's own 300 s cap (#1026).
           BINARY_DOWNLOAD_MIN_BYTES_PER_SECOND: "131072"
-        run: pnpm ci:st -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:st -- --profile ${{ needs.policy.outputs.profile }} ${{ !inputs['skip-coverage'] && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -540,7 +541,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload ST coverage data
-        if: always() && github.workflow != 'Release'
+        if: always() && !inputs['skip-coverage']
         uses: actions/upload-artifact@v4
         with:
           name: st-coverage

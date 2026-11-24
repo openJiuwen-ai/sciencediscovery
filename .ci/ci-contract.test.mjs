@@ -336,6 +336,27 @@ test("each layer uploads the coverage its run wrote, whichever profile ran it", 
   assert.equal(resultsLabel.length, 1);
 });
 
+test("release coverage is enabled for manual runs and disabled for version tag pushes", async () => {
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  const [ci, release] = await Promise.all(["ci.yml", "release.yml"].map(async (name) =>
+    (await readFile(join(directory, name), "utf8")).replaceAll("\r\n", "\n")));
+  assert.match(ci, /^  workflow_call:\n    inputs:\n(?: {6,}[^\n]*\n)*?      skip-coverage:\n(?: {8}description:[^\n]*\n)? {8}type: boolean\n {8}default: false$/m);
+  const gate = workflowJobs(release).gate;
+  assert.match(gate, /^      profile: release$/m);
+  assert.match(gate, /^      skip-coverage: \$\{\{ github\.event_name == 'push' && github\.ref_type == 'tag' \}\}$/m);
+
+  const jobs = workflowJobs(ci);
+  const enabled = "!inputs['skip-coverage']";
+  for (const layer of ["ut", "st"]) {
+    const command = jobs[layer].split("\n").find((line) => line.includes(`run: pnpm ci:${layer} --`));
+    assert.ok(command?.includes(`\${{ ${enabled} && '--coverage' || '' }}`), `${layer} coverage flag`);
+    const upload = artifactUploads(jobs[layer]).find(({ artifact }) => artifact === `${layer}-coverage`);
+    assert.equal(upload?.condition, `always() && ${enabled}`);
+  }
+  assert.ok(jobs.coverage.split("\n").some((line) => line.startsWith("    if:") && line.endsWith(`&& ${enabled} }}`)));
+  assert.doesNotMatch(ci, /github\.workflow != 'Release'/);
+});
+
 test("a later job downloads the artifact from the latest attempt", async () => {
   // Re-running a job leaves the previous attempt's artifact beside the new one.
   // download-artifact resolves a name to one package, and that package can be
