@@ -283,7 +283,11 @@ export const EN: Text = {
     newSessionInProject: (name: string) => `New session in ${name}`,
     projectMenu: "Project menu",
     noTasks: "No sessions yet",
-    showMore: "Show more",
+    /** The fold control's label: how many older Sessions pressing it reveals,
+     *  computed from the list itself so the tail never reads as deleted. */
+    showMore: (count: number) => `Show ${count} older ${count === 1 ? "Session" : "Sessions"}`,
+    /** The rule a folded Project states above its page: the newest N are shown. */
+    pageRule: (count: number) => `Latest ${count}`,
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",

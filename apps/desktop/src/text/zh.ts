@@ -292,7 +292,11 @@ export const ZH = {
      *  row offers. */
     projectMenu: "项目菜单",
     noTasks: "暂无会话",
-    showMore: "显示更多",
+    /** The fold control's label: how many older Sessions pressing it reveals,
+     *  computed from the list itself so the tail never reads as deleted. */
+    showMore: (count: number) => `显示更早的 ${count} 个会话`,
+    /** The rule a folded Project states above its page: the newest N are shown. */
+    pageRule: (count: number) => `最近 ${count} 个`,
     collapseSidebar: "收起侧栏",
     expandSidebar: "显示侧栏",
     /** Shown as the tooltip on a session name, for the gesture nothing else

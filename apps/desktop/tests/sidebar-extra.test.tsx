@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { describe, it } = createTest(import.meta.url, {
+const { afterEach, describe, it } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
 });
 import assert from "node:assert/strict";
@@ -23,9 +23,17 @@ import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { Session } from "../src/api/types.js";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
-import { TEXT } from "../src/text.js";
+import { setLanguage, TEXT } from "../src/text.js";
 import { Sidebar, stamp } from "../src/views/Sidebar.js";
+import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The store is module state: every case leaves the default language behind for
+// the next file the runner loads.
+afterEach(() => setLanguage("zh-CN"));
 
 const actions = {
   deleteSession: () => {},
@@ -69,6 +77,62 @@ function sessionAt(time: number) {
 
 function clock(time: number): string {
   return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * A mounted column, so the fold can be pressed rather than only read.
+ *
+ * `useGithubStars` would otherwise ask GitHub's public API on mount; a cache
+ * entry that is still fresh makes it read the stored number instead, which
+ * keeps this file off the network.
+ */
+async function mount(over: Partial<Parameters<typeof Sidebar>[0]> = {}): Promise<ReactTestRenderer> {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previous = Object.getOwnPropertyDescriptor(globals, "localStorage");
+  const stored = new Map<string, string>([
+    ["sciencediscovery-desktop:github-stars", JSON.stringify({ at: Date.now(), count: 42 })],
+  ]);
+  Object.defineProperty(globals, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+    },
+  });
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      view = create(
+        <Sidebar actions={actions} projects={[]} recent={[]} sessionsByProject={{}} {...over} />,
+      );
+    });
+  } finally {
+    if (previous === undefined) delete globals.localStorage;
+    else Object.defineProperty(globals, "localStorage", previous);
+  }
+  return view!;
+}
+
+/** The titles the column actually rendered, in reading order. */
+function rowTitles(view: ReactTestRenderer): string[] {
+  return view.root
+    .findAllByProps({ className: "side-session-name" })
+    .map((node) => node.props.children as string);
+}
+
+function moreButtons(view: ReactTestRenderer) {
+  return view.root.findAllByProps({ className: "side-more" });
+}
+
+/** Sessions a minute apart, so 「more recently used」 is unambiguous. */
+function recentSessions(count: number, from = 0): Session[] {
+  return Array.from({ length: count }, (_, index) =>
+    session(
+      `s${from + index}`,
+      `会话${from + index + 1}`,
+      new Date(Date.UTC(2026, 0, 1, 0, 0, from + index)).toISOString(),
+    ) as Session,
+  );
 }
 
 describe("the session column's dates", () => {
@@ -133,18 +197,151 @@ describe("the session stamp's calendar-day boundaries", () => {
 });
 
 describe("the session column's length", () => {
-  it("shows six rows and offers 显示更多 only when there are more", () => {
-    const six = Array.from({ length: 6 }, (_, index) => session(`s${index}`, `会话${index + 1}`));
-    const seven = [...six, session("s6", "会话7")];
+  it("shows six rows and offers the counted fold only when there are more", () => {
+    const six = recentSessions(6);
+    const seven = recentSessions(7);
 
     const short = render({ recent: six });
     assert.equal(short.split('class="side-session-name"').length - 1, 6);
-    assert.ok(!short.includes(TEXT.sidebar.showMore));
+    assert.ok(!short.includes('class="side-more"'));
 
     const long = render({ recent: seven });
     assert.equal(long.split('class="side-session-name"').length - 1, 6);
-    assert.ok(long.includes(TEXT.sidebar.showMore));
-    assert.ok(!long.includes("会话7"), "the seventh row was rendered before the fold");
+    // The control names the one row behind it, not a bare 显示更多.
+    assert.ok(long.includes("显示更早的 1 个会话"));
+    assert.ok(!long.includes("会话1"), "the seventh row was rendered before the fold");
+  });
+});
+
+/**
+ * Issue #1348: a folded tail with no count reads as Sessions that were deleted.
+ * These cases pin the count to the rows actually held back, and pin the two
+ * rows the fold must never take away: the most recent page and the open one.
+ */
+describe("the fold's count", () => {
+  it("says how many older Sessions are hidden and reveals exactly those", async () => {
+    const view = await mount({ recent: recentSessions(16) });
+
+    // The first page is the newest six, in order: the fold never hides a more
+    // recently used Session behind an older one.
+    assert.deepEqual(rowTitles(view), recentSessions(16).map((entry) => entry.title).reverse().slice(0, 6));
+    const [more] = moreButtons(view);
+    assert.ok(more, "the fold is missing");
+    assert.equal(more.props.children, "显示更早的 10 个会话");
+
+    await act(async () => { (more.props.onClick as () => void)(); });
+
+    const titles = rowTitles(view);
+    assert.equal(titles.length, 16);
+    // Expansion is the whole list in recency order, not a second page that
+    // reorders what is already on screen.
+    assert.deepEqual(titles, recentSessions(16).map((entry) => entry.title).reverse());
+    assert.equal(moreButtons(view).length, 0, "the control is still offered with nothing behind it");
+  });
+
+  it("turns the Issue's 19 visible rows into 29 in one press", async () => {
+    const projects = [project("p1", "示例项目"), project("p2", "文献项目"), project("p3", "单条项目")];
+    const view = await mount({
+      projects,
+      recent: recentSessions(6),
+      sessionsByProject: {
+        p1: recentSessions(16, 100),
+        p2: recentSessions(6, 200),
+        p3: recentSessions(1, 300),
+      },
+    });
+
+    // 6 (p1) + 6 (p2) + 1 (p3) + 6 (会话) = 19, exactly the Issue's before shot.
+    assert.equal(rowTitles(view).length, 19);
+    const [more] = moreButtons(view);
+    assert.equal(more?.props.children, "显示更早的 10 个会话");
+
+    await act(async () => { (more!.props.onClick as () => void)(); });
+
+    assert.equal(rowTitles(view).length, 29, "the press did not add the ten rows it named");
+    assert.equal(moreButtons(view).length, 0);
+  });
+
+  it("keeps the open Session on screen when it is past the first page", async () => {
+    const sessions = recentSessions(10);
+    // The oldest row sorts last, so it is the one a first page would hold back.
+    const oldest = sessions[0]!;
+    const view = await mount({ activeSessionId: oldest.id, recent: sessions });
+
+    const titles = rowTitles(view);
+    // The first page, plus the row the reader is looking at — never six rows
+    // with the open one folded away, and never a newer row pushed out to make
+    // room for it.
+    assert.equal(titles.length, 7);
+    assert.ok(titles.includes(oldest.title), "the open Session is behind the fold");
+    assert.deepEqual(titles.slice(0, 6), recentSessions(10).map((entry) => entry.title).reverse().slice(0, 6));
+    const [more] = moreButtons(view);
+    assert.equal(more?.props.children, "显示更早的 3 个会话");
+
+    await act(async () => { (more!.props.onClick as () => void)(); });
+    assert.deepEqual(rowTitles(view), recentSessions(10).map((entry) => entry.title).reverse());
+  });
+
+  it("offers no control when the open Session is the only row past the page", async () => {
+    const sessions = recentSessions(7);
+    const view = await mount({ activeSessionId: sessions[0]!.id, recent: sessions });
+
+    assert.equal(rowTitles(view).length, 7);
+    assert.equal(moreButtons(view).length, 0, "a control with nothing behind it would say 0 older Sessions");
+  });
+
+  it("states each Project's fold rule, from the page size rather than a literal", () => {
+    const markup = render({
+      projects: [project("p1", "示例项目"), project("p2", "文献项目"), project("p3", "单页项目")],
+      sessionsByProject: {
+        p1: recentSessions(8, 100),
+        p2: recentSessions(7, 200),
+        p3: recentSessions(6, 300),
+      },
+    });
+
+    // 6 is PAGE_SIZE: each folded Project says how many are shown before the
+    // cut, so the page size is visible instead of a missing tail. The Project
+    // whose whole list fits states no rule, because nothing is held back.
+    assert.equal(markup.split('class="side-project-rule"').length - 1, 2);
+    assert.equal(markup.split(TEXT.sidebar.pageRule(6)).length - 1, 2);
+    assert.equal(markup.split("最近 6 个").length - 1, 2);
+  });
+
+  it("drops the fold rule once the whole list is shown", async () => {
+    const view = await mount({
+      projects: [project("p1", "示例项目")],
+      sessionsByProject: { p1: recentSessions(8, 100) },
+    });
+
+    assert.equal(view.root.findAllByProps({ className: "side-project-rule" }).length, 1);
+    const [more] = moreButtons(view);
+    await act(async () => { (more!.props.onClick as () => void)(); });
+    assert.equal(view.root.findAllByProps({ className: "side-project-rule" }).length, 0);
+  });
+
+  it("speaks English with the same computed count", async () => {
+    setLanguage("en");
+    const view = await mount({
+      projects: [project("p1", "Sample project")],
+      sessionsByProject: { p1: recentSessions(8, 100) },
+    });
+
+    // 8 sessions: six shown, two older ones held back.
+    const [more] = moreButtons(view);
+    assert.equal(more?.props.children, "Show 2 older Sessions");
+    assert.equal(view.root.findAllByProps({ className: "side-project-rule" })[0]?.props.children, "Latest 6");
+
+    await act(async () => { (more!.props.onClick as () => void)(); });
+    assert.equal(moreButtons(view).length, 0);
+  });
+
+  it("uses the singular Session for a single hidden row in English", async () => {
+    setLanguage("en");
+    const view = await mount({ recent: recentSessions(7) });
+
+    const [more] = moreButtons(view);
+    assert.equal(more?.props.children, "Show 1 older Session");
   });
 });
 

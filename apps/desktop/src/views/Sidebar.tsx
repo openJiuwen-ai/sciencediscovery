@@ -109,6 +109,27 @@ export function stamp(
 const PAGE_SIZE = 6;
 
 /**
+ * The rows a folded list shows: its first page, plus the open Session when
+ * that one sits deeper in the list.
+ *
+ * The open Session is the row the reader is already using, so folding it away
+ * would make the column disagree with the page beside it. It is appended
+ * rather than inserted, which leaves the first page in its recency order and
+ * never pushes a newer row out to make room.
+ */
+function foldPage(sessions: readonly Session[], activeSessionId: string | undefined): readonly Session[] {
+  const first = sessions.slice(0, PAGE_SIZE);
+  if (activeSessionId === undefined || first.some((session) => session.id === activeSessionId)) return first;
+  const active = sessions.find((session) => session.id === activeSessionId);
+  return active === undefined ? first : [...first, active];
+}
+
+/** How many rows a folded list holds back; zero means it fits on one page. */
+function hiddenCount(sessions: readonly Session[], activeSessionId: string | undefined): number {
+  return sessions.length - foldPage(sessions, activeSessionId).length;
+}
+
+/**
  * The session column: 科研会话, one way in, then two lists that say what a
  * Session belongs to.
  *
@@ -292,17 +313,20 @@ export function Sidebar({
     );
   };
 
-  /** A page of Sessions, then 显示更多 — the rule in every list here, so a
-   *  Project with a year of history cannot bury the one below it. */
+  /** A page of Sessions, then the number still behind it — the rule in every
+   *  list here, so a Project with a year of history cannot bury the one below
+   *  it. The control names what pressing it adds, so the cut cannot read as
+   *  Sessions that were deleted (Issue #1348). */
   const sessionList = (key: string, sessions: readonly Session[]) => {
-    const open = expanded.has(key);
-    const shown = open ? sessions : sessions.slice(0, PAGE_SIZE);
+    const ordered = byRecency(sessions);
+    const shown = expanded.has(key) ? ordered : foldPage(ordered, activeSessionId);
+    const hidden = ordered.length - shown.length;
     return (
       <>
         {shown.map((session) => sessionRow(session))}
-        {!open && sessions.length > PAGE_SIZE ? (
+        {hidden > 0 ? (
           <button className="side-more" onClick={() => showAll(key)} type="button">
-            {TEXT.sidebar.showMore}
+            {TEXT.sidebar.showMore(hidden)}
           </button>
         ) : null}
       </>
@@ -343,7 +367,11 @@ export function Sidebar({
         {projects.length === 0 ? <div className="side-empty">{TEXT.sidebar.noProjects}</div> : null}
         {projects.map((project) => {
           const open = !folded.has(project.id);
-          const sessions = byRecency(sessionsByProject[project.id] ?? []);
+          const sessions = sessionsByProject[project.id] ?? [];
+          // A folded Project says its own rule above the page, so the size of
+          // the cut is visible before the control is pressed. Once expanded
+          // there is no rule to state.
+          const foldedPage = open && !expanded.has(project.id) && hiddenCount(sessions, activeSessionId) > 0;
           const editing = renaming?.kind === "project" && renaming.project.id === project.id;
           return (
             <div key={project.id}>
@@ -410,11 +438,17 @@ export function Sidebar({
                   </button>
                 </div>
               </div>
-              {open
-                ? sessions.length === 0
-                  ? <div className="side-empty">{TEXT.sidebar.noTasks}</div>
-                  : sessionList(project.id, sessions)
-                : null}
+              {open ? (
+                <>
+                  {/* The fold's rule sits above the page it describes, on its own
+                      line: in the Project row it would squeeze the name on a
+                      narrow column each time the row's actions appear. */}
+                  {foldedPage ? <div className="side-project-rule">{TEXT.sidebar.pageRule(PAGE_SIZE)}</div> : null}
+                  {sessions.length === 0
+                    ? <div className="side-empty">{TEXT.sidebar.noTasks}</div>
+                    : sessionList(project.id, sessions)}
+                </>
+              ) : null}
             </div>
           );
         })}
