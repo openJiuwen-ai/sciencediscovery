@@ -3434,6 +3434,30 @@
           "complexity": "C2"
         }
       ]
+    },
+    {
+      "source": "apps/desktop/src/app/session-filter.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-archive.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/system/Sessions.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-management.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
     }
   ]
 }
