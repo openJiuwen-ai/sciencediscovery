@@ -1427,6 +1427,8 @@ export const ZH = {
         modeAllowlist: "域名白名单",
         modeOpen: "开放网络",
         modeOpenWarning: "开放网络意味着沙箱里的任何代码都能访问任意地址，只保留私网过滤。确定要这样吗？",
+        switching: "正在保存网络设置，保存完成前不能切换模式。",
+        staleMode: "无法读取当前的沙箱网络设置；重新加载后才能切换模式。",
         saved: "沙箱网络已保存",
         /** The allowlist editor. The accepted format is shown by the
          *  placeholder rather than explained in a sentence. */

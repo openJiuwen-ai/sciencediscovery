@@ -1405,6 +1405,10 @@ export const EN: Text = {
         modeOpen: "Open network",
         modeOpenWarning:
           "Open network lets any code in the sandbox reach any address, keeping only private-network filtering. Continue?",
+        /** Why the mode pills cannot be pressed right now. Shown under them
+         *  whenever they are disabled, so a press never looks ignored. */
+        switching: "Saving the sandbox network settings. The mode cannot change until the save finishes.",
+        staleMode: "The current sandbox network settings could not be read. Reload them before changing the mode.",
         saved: "Sandbox network saved",
         /** The allowlist editor. The accepted format is shown by the
          *  placeholder rather than explained in a sentence. */

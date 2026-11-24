@@ -304,6 +304,29 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
 .row-note.is-error { color: var(--danger); }
 .row-note.is-warn { color: var(--warning-strong, #745612); margin: 0 0 12px; }
 
+/* The mode pills and, when they cannot be pressed, the line that says why.
+   The note sits on its own line under the control so it is readable without a
+   hover, and stays within the row's width instead of widening the pane. */
+.settings-section .seg-pills-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-section .seg-pills-field > .seg-pills-note {
+  margin: 0;
+  max-width: 360px;
+  line-height: 1.5;
+  text-align: left;
+}
+.settings-section .seg-pills button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.settings-section .seg-pills button:disabled:hover { color: var(--text-secondary); }
+
 /* ============================================================================
    Settings pages: the nine nav entries share these primitives
    ============================================================================ */

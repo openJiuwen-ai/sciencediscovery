@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 import type { Loaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
@@ -202,32 +202,52 @@ export function Select({
   );
 }
 
-/** Mutually exclusive choices, for the two- or three-way switches. */
+/** Mutually exclusive choices, for the two- or three-way switches.
+ *
+ * `disabledReason` is both the accessible description and a visible line under
+ * the control: a pill that cannot be pressed must say why, or it reads as a
+ * press that was ignored. */
 export function Pills({
+  disabled,
+  disabledReason,
   label,
   onChange,
   options,
   value,
 }: {
+  disabled?: boolean;
+  disabledReason?: string;
   label: string;
   onChange: (next: string) => void;
   options: { label: string; title?: string; value: string }[];
   value: string;
 }) {
+  const noteId = useId();
+  const describedBy = disabled && disabledReason ? noteId : undefined;
   return (
-    <div aria-label={label} className="seg-pills" role="group">
-      {options.map((option) => (
-        <button
-          aria-pressed={option.value === value}
-          className={option.value === value ? "active" : ""}
-          key={option.value}
-          onClick={() => onChange(option.value)}
-          title={option.title}
-          type="button"
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="seg-pills-field">
+      <div
+        aria-describedby={describedBy}
+        aria-label={label}
+        className="seg-pills"
+        role="group"
+      >
+        {options.map((option) => (
+          <button
+            aria-describedby={describedBy}
+            aria-pressed={option.value === value}
+            className={option.value === value ? "active" : ""}
+            disabled={disabled}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            title={disabled ? disabledReason : option.title}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {describedBy ? <small className="row-note is-warn seg-pills-note" id={noteId}>{disabledReason}</small> : null}
     </div>
   );
 }
