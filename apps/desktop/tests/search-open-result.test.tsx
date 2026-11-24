@@ -10,11 +10,20 @@ import type { WorkbenchSearchResult } from "../src/api/types.js";
 import { useWorkspace } from "../src/app/use-workspace.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 const globals = globalThis as { window?: unknown; IS_REACT_ACT_ENVIRONMENT?: boolean };
+const STORE = new Map<string, string>();
 globals.window = {
-  localStorage: { getItem: () => null, removeItem: () => {}, setItem: () => {} },
+  localStorage: {
+    getItem: (key: string) => STORE.get(key) ?? null,
+    removeItem: (key: string) => { STORE.delete(key); },
+    setItem: (key: string, value: string) => { STORE.set(key, value); },
+  },
   setTimeout: (callback: () => void, ms: number) => { const timer = setTimeout(callback, ms); timer.unref(); return timer; },
 };
 globals.IS_REACT_ACT_ENVIRONMENT = true;
+// `browserStorage()` reads the global, not `window`: the harness has to
+// publish the same object there or persistence is never exercised.
+(globalThis as { localStorage?: unknown }).localStorage =
+  (globals.window as { localStorage: unknown }).localStorage;
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function backend() {
@@ -52,6 +61,34 @@ async function mount(client: ApiClient) {
 function hit(over: Partial<WorkbenchSearchResult> = {}): WorkbenchSearchResult {
   return { detail: "", id: "artifact:doc", kind: "artifact", label: "doc.md", projectId: "p", sessionId: "b", ...over };
 }
+
+test("a stored Project selection survives the load, before the listing answers", async () => {
+  // The prune used to run on the first commit, when `projects` was still empty,
+  // and wrote the emptied selection back — the one thing the stored key exists
+  // for was lost on every reload.
+  const api = backend();
+  const held: (() => void)[] = [];
+  const slow = {
+    ...api.client,
+    request: (path: string, init?: RequestInit) =>
+      path.startsWith("/api/projects")
+        ? new Promise((resolve) => { held.push(() => resolve(api.client.request(path, init))); })
+        : api.client.request(path, init),
+  } as ApiClient;
+
+  STORE.set("sciencediscovery-desktop:search-narrowing",
+    JSON.stringify({ onlyRunning: false, onlyWithArtifacts: false, projectIds: ["p"], window: "all" }));
+
+  const view = await mount(slow);
+  assert.deepEqual(view.handle.state.narrowing.projectIds, ["p"],
+    "the stored selection must not be pruned against a listing that has not answered");
+
+  for (const release of held) release();
+  await tick();
+  assert.deepEqual(view.handle.state.narrowing.projectIds, ["p"], "and it survives the listing too");
+  await view.close();
+  STORE.clear();
+});
 
 test("an artifact hit for another Session starts that Session's read", async () => {
   // The regression this guards: the artifact branch returned before

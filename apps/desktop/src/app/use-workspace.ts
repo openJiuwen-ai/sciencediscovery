@@ -400,6 +400,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [connection, setConnection] = useState<Connection>("online");
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [projects, setProjects] = useState<Project[]>([]);
+  /** Whether the Project listing has answered; a prune before it would see an
+   *  empty list and read a stored selection as stale. */
+  const projectsLoaded = useRef(false);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   // The listing is unfiltered now — archived Sessions are read for membership
@@ -414,6 +417,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // with the folder control lit and no visible way to clear it — prune instead,
   // and write the pruned choice back so a reload does not resurrect it.
   useEffect(() => {
+    // Wait for the listing: before it answers, `projects` is empty and every id
+    // looks stale, which wrote the stored selection away on the first commit.
+    if (!projectsLoaded.current) return;
     if (narrowing.projectIds.length === 0) return;
     const known = new Set(projects.map((project) => project.id));
     const kept = narrowing.projectIds.filter((id) => known.has(id));
@@ -924,6 +930,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           [project.id, await listSessions(client, project.id, "all")] as const),
       );
       if (ticket !== refreshTicket.current) return undefined;
+      projectsLoaded.current = true;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       // Archived Sessions are read for membership, not for the list — and for the

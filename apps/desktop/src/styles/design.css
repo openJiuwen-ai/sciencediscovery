@@ -5497,7 +5497,9 @@ body.is-resizing {
 }
 .side-search-retry:hover { text-decoration: underline; }
 /* The entry is a row like 新建会话: the field only exists once it is asked for. */
-.side-search-entry { margin: 0 10px 6px; }
+/* No horizontal margin: the row shares the left edge of 新建会话 and the Project
+   rows, which keep their own padding. */
+.side-search-entry { margin: 0 0 6px; }
 .side-search-glyph { flex: 0 0 auto; color: var(--muted); }
 .side-search-control {
   display: inline-flex;
