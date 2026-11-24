@@ -243,6 +243,22 @@ test("a budget above the stated maximum is refused with a readable fix", async (
   assert.deepEqual(await codes({ budget: { ...goal().budget, expansions: 40, workers: 8 } }), []);
 });
 
+test("one over-cap expansion count reports once, not also as uneven", async () => {
+  // The worker chain's divisibility branch reads expansions, so without a cap
+  // guard 41 over 8 workers would report a cap and an uneven split — and the
+  // 48 it suggests is itself refused.
+  const overCap = await findings({ budget: { ...goal().budget, expansions: 41, workers: 8 } });
+  assert.deepEqual(overCap.map((issue) => issue.code), ["expansions_too_high"]);
+  assert.equal(`${overCap[0]!.message}（${overCap[0]!.fix}）`,
+    "41 expansions is above the 40-expansion maximum（use at most 40 expansions）");
+  // A count inside the range that does not divide still reports only that.
+  const uneven = await findings({ budget: { ...goal().budget, expansions: 33, workers: 8 } });
+  assert.deepEqual(uneven.map((issue) => issue.code), ["expansions_not_divisible"]);
+  // Two different values over their caps still report both.
+  assert.deepEqual((await codes({ budget: { ...goal().budget, expansions: 41, workers: 9 } })).sort(),
+    ["expansions_too_high", "workers_too_high"]);
+});
+
 test("a run with no isolation is refused rather than run unconfined", async () => {
   const none: EvolveSandboxCapability = {
     backend: null, bwrapPath: "bwrap", disableUserns: false, procMode: "proc",
