@@ -123,7 +123,7 @@ test("an empty answer, a failure and the rest of the list each say their own thi
   assert.match(failed, /class="side-search-note is-error" role="alert">boom</u);
 
   const more = render({ onSearch: () => {}, searchQuery: "晶", searchResults: results([hit("project", "材料")], { hasMore: true, total: 41 }) });
-  assert.match(more, /还有 41 条结果/u);
+  assert.match(more, /还有 40 条结果/u, "the note counts the hits still unseen, not every hit the route mentions");
 });
 
 test("a column with no workspace draws no results either", () => {

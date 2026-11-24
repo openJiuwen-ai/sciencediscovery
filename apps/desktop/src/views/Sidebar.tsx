@@ -661,7 +661,8 @@ export function Sidebar({
                   // is not showing: a number here would be a claim about the page
                   // rather than about the results.
                   <p className="side-search-note">
-                    {narrowed ? TEXT.sidebar.searchMoreNarrowed : TEXT.sidebar.searchMore(searchResults.total)}
+                    {narrowed ? TEXT.sidebar.searchMoreNarrowed
+                      : TEXT.sidebar.searchMore(Math.max(0, searchResults.total - searchResults.results.length))}
                   </p>
                 ) : null}
               </>
