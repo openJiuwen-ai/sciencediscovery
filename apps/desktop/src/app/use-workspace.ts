@@ -33,7 +33,7 @@ import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
 import { readSearchNarrowing, rememberSearchNarrowing } from "./search-narrowing-preference.js";
-import { narrowResults, type SearchNarrowing, type SearchSessionFacts } from "./search-narrowing.js";
+import { hasActiveNarrowing, narrowResults, narrowSessions, type SearchNarrowing, type SearchSessionFacts } from "./search-narrowing.js";
 
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
@@ -2644,6 +2644,35 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     [inboxProject, listedByProject],
   );
 
+  // #1251's fourth criterion asks that the list itself be narrowable. With no
+  // query in the field the `...` settings narrow the column, so 运行中 / 有产物 /
+  // 指定时间 / the Project selection all apply to what the folds draw; with a
+  // query they narrow its results and the column keeps every active Session,
+  // because the field is then the thing being narrowed.
+  const columnNarrowed = hasActiveNarrowing(narrowing) && searchQuery.trim() === "";
+  const artifactSessions = useMemo(
+    () => new Set(Object.entries(artifactsBySession.current)
+      .filter(([, outputs]) => outputs.length > 0)
+      .map(([id]) => id)),
+    [outputs],
+  );
+  /** The column's lists under an active narrowing, or `undefined` when the
+   *  column shows every active Session. */
+  const columnLists = useMemo(() => {
+    if (!columnNarrowed) return undefined;
+    const context = {
+      now: filterNow,
+      runningSessionId: running ? sessionId : undefined,
+      withArtifacts: artifactSessions,
+      sessionFacts: () => undefined,
+    };
+    const byProject: Record<string, Session[]> = {};
+    for (const [projectId, sessions] of Object.entries(listedByProject)) {
+      byProject[projectId] = narrowSessions(sessions, narrowing, context);
+    }
+    return { byProject, recent: narrowSessions(recent, narrowing, context) };
+  }, [artifactSessions, columnNarrowed, filterNow, listedByProject, narrowing, recent, running, sessionId]);
+
   // Which Project the open Session is in, or the inbox while none is open. The
   // name is derived rather than stored so a rename, a switch and a language
   // change all reach it without a second piece of state to keep in step. The
@@ -2902,7 +2931,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     presets,
     projects,
     providers,
-    recent,
+    recent: columnLists === undefined ? recent : columnLists.recent,
     replays,
     reviews,
     reviewerEnabled,
@@ -2916,7 +2945,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     searchResults,
     searchError,
     sessionId,
-    sessionsByProject: listedByProject,
+    sessionsByProject: columnLists === undefined ? listedByProject : columnLists.byProject,
     tabs,
     toasts,
     uploadLimit,
