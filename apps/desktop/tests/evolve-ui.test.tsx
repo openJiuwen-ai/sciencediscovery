@@ -40,6 +40,22 @@ import type { TreeView } from "../src/views/evolve/EvolveTree.js";
 import { ScoreChart, collectSeries } from "../src/views/evolve/ScoreChart.js";
 import { act, create } from "./support/dom-renderer.js";
 
+// `EvolveDetail` and `EvolveRuns` run their elapsed clocks on window timers,
+// and this renderer has no window of its own. The static renders below never
+// reach the effects; the mounted cases do.
+Object.assign(globalThis, {
+  window: {
+    clearInterval: (timer: ReturnType<typeof setInterval>) => clearInterval(timer),
+    setInterval: (callback: () => void, ms: number) => {
+      const timer = setInterval(callback, ms);
+      // A case that fails before its unmount must not leave the test process
+      // waiting on a one-second clock.
+      (timer as unknown as { unref?: () => void }).unref?.();
+      return timer;
+    },
+  },
+});
+
 const client = {} as ApiClient;
 
 const budget = {
@@ -305,11 +321,12 @@ test("a failed record without a reason falls back instead of guessing or leaking
 
 test("the retry button starts a retry for the failed run's id", async () => {
   const retried: string[] = [];
+  const opened: string[] = [];
   let card: ReturnType<typeof create> | undefined;
   await act(async () => {
     card = create(
       <EvolveRuns
-        onOpen={() => {}}
+        onOpen={(id) => { opened.push(id); }}
         onRetry={(id) => { retried.push(id); }}
         runs={[run({
           failure: { code: "sidecar_disconnected", message: "the sidecar disconnected" },
@@ -324,6 +341,7 @@ test("the retry button starts a retry for the failed run's id", async () => {
   assert.ok(button, "the failed card has a retry action");
   await act(async () => { (button.props.onClick as () => void)(); });
   assert.deepEqual(retried, ["broken"]);
+  assert.deepEqual(opened, [], "retry is a sibling, not the opening target");
   await act(async () => { card!.unmount(); });
 });
 
@@ -436,6 +454,235 @@ test("a finished run drops the stop button and keeps the panel", () => {
   );
   assert.match(html, /evolve-detail/);
   assert.equal(html.includes(">停止<"), false);
+});
+
+/**
+ * A client whose event stream the test writes to frame by frame.
+ *
+ * The stop cases have to watch the panel while the run is between "stop asked"
+ * and "run settled": a static render cannot press the button, and a stub that
+ * closes the stream at once cannot feed a realistic PUCT log into the panel.
+ */
+function controlledStream() {
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(start) { controller = start; },
+  });
+  const encoder = new TextEncoder();
+  const client = {
+    fetchStream: () => Promise.resolve(new Response(body)),
+    request: () => Promise.resolve({ stopping: true }),
+  } as unknown as ApiClient;
+  return {
+    client,
+    send(sequence: number, event: unknown) {
+      controller?.enqueue(encoder.encode(
+        `id: ${sequence}\ndata: ${JSON.stringify({
+          createdAt: "2026-10-01T09:00:00.000Z",
+          event,
+          sequence,
+        })}\n\n`,
+      ));
+    },
+  };
+}
+
+/** Let the stream's reader fold the frames just written, inside `act`. */
+async function settle() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+function stopButton(detail: ReturnType<typeof create>) {
+  return detail.root.findAll((node) =>
+    node.type === "button" && node.props.className === "evolve-task-stop")[0];
+}
+
+function stopBar(detail: ReturnType<typeof create>) {
+  return detail.root.findAll((node) =>
+    node.props.className === "evolve-stop-bar")[0];
+}
+
+test("pressing stop is busy and disabled until the run settles, not until the request returns", async () => {
+  const stream = controlledStream();
+  const errors: string[] = [];
+  let detail!: ReturnType<typeof create>;
+  await act(async () => {
+    detail = create(<EvolveDetail
+      client={stream.client}
+      onError={(message) => errors.push(message)}
+      onRunChanged={() => {}}
+      run={run()}
+    />);
+  });
+
+  assert.equal(nodeText(stopButton(detail)!).trim(), "停止");
+  assert.equal(stopButton(detail)!.props.disabled, false);
+
+  await act(async () => { (stopButton(detail)!.props.onClick as () => void)(); });
+  // The stop request resolved inside `act`, and the record still says the run
+  // is running. The old code cleared its flag in `finally`, which is exactly
+  // the 4.6-second silent window the issue measured; the control has to stay
+  // busy until the status lands.
+  assert.equal(nodeText(stopButton(detail)!).trim(), "正在停止…");
+  assert.equal(stopButton(detail)!.props.disabled, true);
+  assert.equal(stopButton(detail)!.props["aria-busy"], true);
+  const bar = stopBar(detail)!;
+  assert.match(nodeText(bar), /正在结束进行中的候选…/);
+  // The line is outside the scrolling body, so it cannot scroll out of view:
+  // it comes before .evolve-detail-scroll and is not one of its descendants.
+  assert.equal(
+    bar.findAll((node) => node.props.className === "evolve-detail-scroll").length,
+    0,
+  );
+  const scroll = detail.root.findAll((node) =>
+    node.props.className === "evolve-detail-scroll")[0]!;
+  assert.equal(
+    scroll.findAll((node) => node.props.className === "evolve-stop-bar").length,
+    0,
+  );
+  assert.deepEqual(
+    detail.root.findAll((node) =>
+      node.props.className === "evolve-stop-bar"
+      || node.props.className === "evolve-detail-scroll")
+      .map((node) => node.props.className),
+    ["evolve-stop-bar", "evolve-detail-scroll"],
+  );
+  assert.deepEqual(errors, []);
+
+  await act(async () => { detail.unmount(); });
+});
+
+test("a real PUCT log gets the honest winding-down line, not an invented candidate count", async () => {
+  const stream = controlledStream();
+  let detail!: ReturnType<typeof create>;
+  await act(async () => {
+    detail = create(<EvolveDetail
+      client={stream.client}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={run()}
+    />);
+  });
+
+  // The PUCT sequence: `selected` names the parent being expanded, and the
+  // child only appears in `expanded` already scored. Counting null-score
+  // candidate rows would therefore read zero while a proposal is in flight,
+  // so the panel deliberately says what is ending without claiming a number.
+  await act(async () => {
+    stream.send(1, { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" });
+    stream.send(2, { baselineScore: 0.41, codeHash: "sha256:root", nodeIndex: 0, type: "seeded" });
+    stream.send(3, { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, type: "selected" });
+    stream.send(4, {
+      depth: 1,
+      nodeIndex: 1,
+      parentIndex: 0,
+      score: 0.5,
+      type: "expanded",
+      valid: true,
+    });
+    stream.send(5, { ancestorVisits: [{ nodeIndex: 0, visits: 2 }], nodeIndex: 1, type: "selected" });
+  });
+  await settle();
+
+  await act(async () => { (stopButton(detail)!.props.onClick as () => void)(); });
+  assert.match(nodeText(stopBar(detail)!), /正在结束进行中的候选…/);
+  assert.doesNotMatch(nodeText(detail.root), /正在取消 \d/);
+
+  // The pending proposal lands while the stop is waiting; the line stays true
+  // rather than depending on a count that PUCT cannot supply.
+  await act(async () => {
+    stream.send(6, {
+      depth: 2,
+      nodeIndex: 2,
+      parentIndex: 1,
+      score: 0.62,
+      type: "expanded",
+      valid: true,
+    });
+    stream.send(7, { ancestorVisits: [{ nodeIndex: 1, visits: 1 }], nodeIndex: 2, type: "selected" });
+  });
+  await settle();
+  assert.match(nodeText(stopBar(detail)!), /正在结束进行中的候选…/);
+  assert.doesNotMatch(nodeText(detail.root), /正在取消 \d/);
+
+  // The run settles at 已停止: the stop control and the winding-down line go.
+  await act(async () => {
+    stream.send(8, {
+      bestNodeIndex: 1,
+      candidates: 3,
+      status: "stopped",
+      type: "search_finished",
+    });
+  });
+  await settle();
+  assert.equal(stopButton(detail), undefined);
+  assert.equal(stopBar(detail), undefined);
+  assert.doesNotMatch(nodeText(detail.root), /正在停止|正在取消|正在结束/);
+
+  await act(async () => { detail.unmount(); });
+});
+
+test("a refused stop puts the button back and reports why", async () => {
+  const errors: string[] = [];
+  const refused = {
+    fetchStream: () => Promise.resolve(new Response("")),
+    request: () => Promise.reject(new Error("stop refused")),
+  } as unknown as ApiClient;
+  let detail!: ReturnType<typeof create>;
+  await act(async () => {
+    detail = create(<EvolveDetail
+      client={refused}
+      onError={(message) => errors.push(message)}
+      onRunChanged={() => {}}
+      run={run()}
+    />);
+  });
+
+  await act(async () => { (stopButton(detail)!.props.onClick as () => void)(); });
+  assert.equal(nodeText(stopButton(detail)!).trim(), "停止");
+  assert.equal(stopButton(detail)!.props.disabled, false);
+  assert.deepEqual(errors, ["stop refused"]);
+
+  await act(async () => { detail.unmount(); });
+});
+
+test("the run card says its click opens the task panel, and still opens it", async () => {
+  const html = renderToStaticMarkup(<EvolveRuns onOpen={() => {}} runs={[run()]} />);
+  // Words on the card, not only a hover title: the affordance a reader acts on
+  // is the one they can see. The hint is a span inside main's opening button;
+  // .evolve-run-open is the button itself, so the two classes must stay apart.
+  assert.match(html, /evolve-run-panel-hint">打开任务面板</);
+  assert.match(html, /title="[^"]*打开任务面板/);
+  assert.match(html, /<button[^>]*class="evolve-run-open"[\s\S]*?evolve-run-panel-hint/);
+
+  const opened: string[] = [];
+  let runs!: ReturnType<typeof create>;
+  await act(async () => {
+    runs = create(<EvolveRuns onOpen={(id) => opened.push(id)} runs={[run()]} />);
+  });
+  const card = runs.root.findAll((node) =>
+    node.type === "button" && node.props.className === "evolve-run-open")[0]!;
+  await act(async () => { (card.props.onClick as () => void)(); });
+  assert.deepEqual(opened, ["run-1"]);
+
+  await act(async () => { runs.unmount(); });
+});
+
+test("the card hint yields to the clock, and the stop line is outside the scroller", async () => {
+  const css = await readFile(new URL("../src/styles/evolve.css", import.meta.url), "utf8");
+  // The card width follows the conversation column, which the open task panel
+  // narrows: below 400px the hint and the auto badge fold away so the elapsed
+  // clock keeps its width, while the title/accessible name still say both.
+  assert.match(css, /\.evolve-runs \{ container-type: inline-size; \}/);
+  const narrow = css.slice(css.indexOf("@container (max-width: 400px)"));
+  assert.match(narrow.slice(0, 240), /\.evolve-run-panel-hint,[\s\S]*?\.evolve-chip-auto \{ display: none; \}/);
+  // The opening button must never be hidden on a narrow card.
+  assert.doesNotMatch(narrow.slice(0, 240), /\.evolve-run-open\s*[,{]/);
+  // The hint is the AA-legible cue, not the faintest text on the card.
+  assert.match(css, /\.evolve-run-panel-hint \{[^}]*color: var\(--text-secondary\);/);
+  assert.match(css, /\.evolve-run-elapsed \{[^}]*min-width: 0;/);
+  // A fixed bar between the header and the scroll body cannot scroll away.
+  assert.match(css, /\.evolve-stop-bar \{[^}]*flex: 0 0 auto;/);
 });
 
 test("the overview's delta is the last step of the best staircase", () => {

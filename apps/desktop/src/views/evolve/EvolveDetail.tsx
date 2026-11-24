@@ -136,6 +136,17 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   }, [run.status]);
 
   const active = isEvolveRunActive(view.status);
+
+  // A stop request is not a status: it is a wait for the record to settle. The
+  // server takes seconds to cancel the candidates that are already running, and
+  // clearing this when the HTTP call returns is what made those seconds look
+  // like a click that did nothing. It ends when the run is no longer active —
+  // whether that came from `search_finished` or from the record's own status.
+  useEffect(() => {
+    if (active || !stopping) return;
+    setStopping(false);
+  }, [active, stopping]);
+
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => setClock((tick) => tick + 1), 1_000);
@@ -176,19 +187,25 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
     : view.candidates.filter((candidate) => candidate.parentIndex === selected.nodeIndex).length;
 
   const stop = () => {
+    if (stopping) return;
     setStopping(true);
     void stopEvolveRun(client, run.id)
       .then(() => callbacks.current.onRunChanged())
-      .catch((reason: unknown) => callbacks.current.onError(
-        reason instanceof Error ? reason.message : String(reason),
-      ))
-      .finally(() => setStopping(false));
+      .catch((reason: unknown) => {
+        // The request itself failed, so nothing is winding down: put the
+        // button back and say why rather than leaving it busy forever.
+        setStopping(false);
+        callbacks.current.onError(
+          reason instanceof Error ? reason.message : String(reason),
+        );
+      });
   };
 
   return <div className="evolve-detail">
     <header className="evolve-task-head">
       <h2 id="evolve-panel-title" title={run.goal.statement}>{title}</h2>
       {active ? <button
+        aria-busy={stopping || undefined}
         className="evolve-task-stop"
         disabled={stopping}
         onClick={stop}
@@ -198,6 +215,14 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
         {stopping ? TEXT.evolve.panel.stopping : TEXT.evolve.panel.stop}
       </button> : null}
     </header>
+
+    {/* The line lives between the fixed header and the scrolling body, so it
+        stays visible wherever the reader had scrolled when they pressed
+        stop — the button and the thing being wound down are one glance. */}
+    {stopping && active ? <div className="evolve-stop-bar" role="status">
+      <span aria-hidden="true" className="evolve-dot is-live" />
+      {TEXT.evolve.panel.stoppingDetail}
+    </div> : null}
 
     <div className="evolve-detail-scroll">
       <div className="evolve-notices">

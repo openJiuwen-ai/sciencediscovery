@@ -133,6 +133,7 @@ function EvolveRunCard({
           evolveStatusLabel(run.status),
           ...(failure ? [failure] : []),
           ...(run.goal.checkpointMode === "auto" ? [TEXT.evolve.autoPaceTitle] : []),
+          TEXT.evolve.openPanel,
         ].join(" · ")}
         type="button"
       >
@@ -148,6 +149,7 @@ function EvolveRunCard({
             {run.goal.checkpointMode === "auto"
               ? <span className="evolve-chip-auto">{TEXT.evolve.autoPace}</span>
               : null}
+            <span className="evolve-run-panel-hint">{TEXT.evolve.openPanel}</span>
           </span>
         </span>
         <span className={`evolve-run-state is-${evolveStatusTone(run.status)}`}>
