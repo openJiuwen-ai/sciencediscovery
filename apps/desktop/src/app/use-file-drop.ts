@@ -49,7 +49,10 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
     const onDragEnter = (event: DragEvent) => {
       if (!carriesFiles([...(event.dataTransfer?.types ?? [])])) return;
       depth.current += 1;
-      if (latest.current.enabled) setDragging(true);
+      // Reported even when the drop is not accepted: the overlay is how the app
+      // answers a drag, and a refused drop it never mentions is the one outcome
+      // the user cannot diagnose. `enabled` still decides whether files move.
+      setDragging(true);
     };
     const onDragOver = (event: DragEvent) => {
       const transfer = event.dataTransfer;
