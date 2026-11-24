@@ -22,7 +22,7 @@ import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.j
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { flatResults, groupSearchResults, moveHit, searchDetail } from "../app/session-search.js";
-import { DEFAULT_SESSION_FILTERS, hasActiveFilters, type SessionListFilters } from "../app/session-filters.js";
+import { DEFAULT_SEARCH_NARROWING, hasActiveNarrowing, type SearchNarrowing } from "../app/search-narrowing.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -59,8 +59,8 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
-  /** How the list is narrowed: scope, running, artifacts, window. */
-  listFilters?: SessionListFilters;
+  /** How the search results are narrowed: projects, running, artifacts, window. */
+  narrowing?: SearchNarrowing;
   /** What `GET /api/search` answered for the current query, if anything. */
   searchResults?: WorkbenchSearchResponse;
   /** Why the last search failed, when it did. */
@@ -172,7 +172,7 @@ export function Sidebar({
   projects,
   recent,
   running,
-  listFilters = DEFAULT_SESSION_FILTERS,
+  narrowing = DEFAULT_SEARCH_NARROWING,
   searchError,
   searchQuery = "",
   searchResults,
@@ -195,9 +195,14 @@ export function Sidebar({
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const stars = useGithubStars();
-  /** Whether a chip is narrowing at all. An empty list under a filter is that
-   *  filter's answer, not an empty workspace, and the two must not read alike. */
-  const narrowed = hasActiveFilters(listFilters);
+  /** Whether anything is narrowed at all. An empty result list under a narrowing
+   *  is that narrowing's answer, not an empty workspace. */
+  const narrowed = hasActiveNarrowing(narrowing);
+  /** Whether the field is open: the entry is a row until it is asked for, and a
+   *  restored query opens it with that query already in place. */
+  const [searching, setSearching] = useState(() => searchQuery.trim() !== "");
+  const [pickingProjects, setPickingProjects] = useState(false);
+  const [narrowMenu, setNarrowMenu] = useState(false);
 
   useEffect(() => {
     // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
@@ -397,47 +402,185 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* The field names only itself. What a search box does needs no caption,
-          and the shortcut is the chip inside the field. A column rendered
-          without a workspace has nothing to search, so it draws no field. */}
-      {onSearch === undefined ? null : (
-      <div className="side-search">
-        <input
-          aria-label={TEXT.sidebar.searchLabel}
-          className="side-search-field"
-          ref={searchField}
-          onChange={(event) => { setActiveHit(-1); onSearch(event.target.value); }}
-          onKeyDown={(event) => {
-            const hits = flatResults(searchResults?.results ?? []);
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              setActiveHit((current) => moveHit(current, event.key === "ArrowDown" ? 1 : -1, hits.length));
-              return;
-            }
-            if (event.key === "Enter") {
-              const hit = hits[activeHit];
-              if (hit !== undefined) {
+      {/* The entry is a row like 新建会话 and 导入会话: the column's resting
+          state says 搜索 and spends no field on it. Clicking it turns that row
+          into the field, in place, with the results underneath. A column drawn
+          without a workspace has nothing to search, so it draws no row. */}
+      {onSearch === undefined ? null : searching ? (
+        <div className="side-search">
+          <svg aria-hidden="true" className="side-search-glyph" fill="none" height="15" stroke="currentColor"
+            strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16.5 16.5 4 4" />
+          </svg>
+          <input
+            aria-label={TEXT.sidebar.searchLabel}
+            className="side-search-field"
+            ref={searchField}
+            onChange={(event) => { setActiveHit(-1); onSearch(event.target.value); }}
+            onKeyDown={(event) => {
+              const hits = flatResults(searchResults?.results ?? []);
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveHit((current) => moveHit(current, event.key === "ArrowDown" ? 1 : -1, hits.length));
+                return;
+              }
+              if (event.key === "Enter") {
+                const hit = hits[activeHit];
+                if (hit !== undefined) {
+                  event.preventDefault();
+                  setActiveHit(-1);
+                  onSearchOpen?.(hit);
+                }
+                return;
+              }
+              if (event.key === "Escape") {
+                // Escape leaves the search: the row comes back, and the list
+                // returns to what it was before the query.
                 event.preventDefault();
                 setActiveHit(-1);
-                onSearchOpen?.(hit);
+                setNarrowMenu(false);
+                setPickingProjects(false);
+                setSearching(false);
+                onSearch("");
               }
-              return;
-            }
-            if (event.key === "Escape") {
-              // Escape drops the query and puts the list back, rather than
-              // leaving the reader in a search they did not mean to start.
-              event.preventDefault();
-              setActiveHit(-1);
-              onSearch("");
-            }
-          }}
-          placeholder={TEXT.sidebar.searchPlaceholder}
-          type="search"
-          value={searchQuery}
-        />
-      </div>
+            }}
+            placeholder={TEXT.sidebar.searchPlaceholder}
+            type="search"
+            value={searchQuery}
+          />
+          <button
+            aria-expanded={pickingProjects}
+            aria-label={TEXT.sidebar.searchPickProjects}
+            className={`side-search-control${narrowing.projectIds.length > 0 ? " is-on" : ""}`}
+            onClick={() => { setPickingProjects((open) => !open); setNarrowMenu(false); }}
+            title={TEXT.sidebar.searchPickProjects}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round"
+              strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
+              <path d="M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z" />
+            </svg>
+          </button>
+          <button
+            aria-expanded={narrowMenu}
+            aria-label={TEXT.sidebar.filtersLabel}
+            className={`side-search-control${narrowed ? " is-on" : ""}`}
+            onClick={() => { setNarrowMenu((open) => !open); setPickingProjects(false); }}
+            title={TEXT.sidebar.filtersLabel}
+            type="button"
+          >
+            ⋯
+          </button>
+
+          {pickingProjects ? (
+            <div aria-label={TEXT.sidebar.searchPickProjects} className="side-search-menu" role="group">
+              {projects.length === 0 ? <p className="side-search-note">{TEXT.sidebar.noProjects}</p> : null}
+              {projects.map((project) => {
+                const on = narrowing.projectIds.includes(project.id);
+                return (
+                  <button
+                    aria-pressed={on}
+                    className={`side-search-option${on ? " is-on" : ""}`}
+                    key={project.id}
+                    onClick={() => actions.setSearchNarrowing({
+                      projectIds: on
+                        ? narrowing.projectIds.filter((id) => id !== project.id)
+                        : [...narrowing.projectIds, project.id],
+                    })}
+                    type="button"
+                  >
+                    {project.name}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {narrowMenu ? (
+            <div aria-label={TEXT.sidebar.filtersLabel} className="side-search-menu" role="group">
+              <button
+                aria-pressed={narrowing.onlyRunning}
+                className={`side-search-option${narrowing.onlyRunning ? " is-on" : ""}`}
+                onClick={() => actions.setSearchNarrowing({ onlyRunning: !narrowing.onlyRunning })}
+                type="button"
+              >
+                {TEXT.sidebar.filterOnlyRunning}
+              </button>
+              <button
+                aria-pressed={narrowing.onlyWithArtifacts}
+                className={`side-search-option${narrowing.onlyWithArtifacts ? " is-on" : ""}`}
+                onClick={() => actions.setSearchNarrowing({ onlyWithArtifacts: !narrowing.onlyWithArtifacts })}
+                type="button"
+              >
+                {TEXT.sidebar.filterWithArtifacts}
+              </button>
+              <span className="side-search-menu-label">{TEXT.sidebar.filterTime}</span>
+              {(["all", "day", "three-days", "week", "custom"] as const).map((window) => (
+                <button
+                  aria-pressed={narrowing.window === window}
+                  className={`side-search-option${narrowing.window === window ? " is-on" : ""}`}
+                  key={window}
+                  onClick={() => actions.setSearchNarrowing({ window })}
+                  type="button"
+                >
+                  {window === "all" ? TEXT.sidebar.windowAll
+                    : window === "day" ? TEXT.sidebar.windowDay
+                      : window === "three-days" ? TEXT.sidebar.windowThreeDays
+                        : window === "week" ? TEXT.sidebar.windowWeek : TEXT.sidebar.windowCustom}
+                </button>
+              ))}
+              {narrowing.window === "custom" ? (
+                <div className="side-search-range">
+                  <label>
+                    {TEXT.sidebar.rangeFrom}
+                    <input
+                      onChange={(event) => {
+                        const from = Date.parse(event.target.value);
+                        if (Number.isNaN(from)) return;
+                        actions.setSearchNarrowing({
+                          custom: { from, to: narrowing.custom?.to ?? Date.now() },
+                        });
+                      }}
+                      type="date"
+                      value={narrowing.custom === undefined ? "" : new Date(narrowing.custom.from).toISOString().slice(0, 10)}
+                    />
+                  </label>
+                  <label>
+                    {TEXT.sidebar.rangeTo}
+                    <input
+                      onChange={(event) => {
+                        const to = Date.parse(`${event.target.value}T23:59:59.999Z`);
+                        if (Number.isNaN(to)) return;
+                        actions.setSearchNarrowing({
+                          custom: { from: narrowing.custom?.from ?? 0, to },
+                        });
+                      }}
+                      type="date"
+                      value={narrowing.custom === undefined ? ""
+                        : new Date(narrowing.custom.to).toISOString().slice(0, 10)}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <button
+          className="side-new side-search-entry"
+          onClick={() => { setSearching(true); setPickingProjects(false); setNarrowMenu(false); }}
+          type="button"
+        >
+          <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round"
+            strokeWidth="1.8" viewBox="0 0 24 24" width="16">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16.5 16.5 4 4" />
+          </svg>
+          <span>{TEXT.sidebar.searchLabel}</span>
+        </button>
       )}
-      {onSearch === undefined || searchQuery.trim() === "" ? null : (
+      {onSearch === undefined || !searching || searchQuery.trim() === "" ? null : (
         <div className="side-search-results">
           {searchError !== undefined ? (
             // The reason the route gave, plus the next step the empty state also
@@ -454,7 +597,9 @@ export function Sidebar({
             </p>
           ) : searchResults === undefined ? null
             : searchResults.results.length === 0 ? (
-              <p className="side-search-note">{TEXT.sidebar.searchEmpty(searchQuery.trim())}</p>
+              <p className="side-search-note">
+                {narrowed ? TEXT.sidebar.searchNarrowed(searchQuery.trim()) : TEXT.sidebar.searchEmpty(searchQuery.trim())}
+              </p>
             ) : (
               <>
                 {groupSearchResults(searchResults.results).map((group) => (
@@ -470,12 +615,7 @@ export function Sidebar({
                         onClick={() => { setActiveHit(-1); onSearchOpen?.(result); }}
                         type="button"
                       >
-                        <span className="side-search-hit-label">
-                          {result.label}
-                          {result.archived === true ? (
-                            <span className="side-search-badge">{TEXT.sidebar.searchArchived}</span>
-                          ) : null}
-                        </span>
+                        <span className="side-search-hit-label">{result.label}</span>
                         <span className="side-search-hit-detail">{searchDetail(result)}</span>
                       </button>
                     ))}
@@ -488,46 +628,6 @@ export function Sidebar({
             )}
         </div>
       )}
-
-      {/* Narrowing the list, applied client-side over what the page returned:
-          the workspace is small enough that a filter is cheaper than a request,
-          and it keeps 仅运行中 honest without asking the route for run state. */}
-      <div aria-label={TEXT.sidebar.filtersLabel} className="side-filters" role="group">
-        <button
-          aria-pressed={listFilters.scope === "current"}
-          className={`side-filter-chip${listFilters.scope === "current" ? " is-on" : ""}`}
-          onClick={() => actions.setListFilters({ scope: listFilters.scope === "current" ? "all" : "current" })}
-          type="button"
-        >
-          {listFilters.scope === "current" ? TEXT.sidebar.filterScopeCurrent : TEXT.sidebar.filterScopeAll}
-        </button>
-        <button
-          aria-pressed={listFilters.onlyRunning}
-          className={`side-filter-chip${listFilters.onlyRunning ? " is-on" : ""}`}
-          onClick={() => actions.setListFilters({ onlyRunning: !listFilters.onlyRunning })}
-          type="button"
-        >
-          {TEXT.sidebar.filterOnlyRunning}
-        </button>
-        <button
-          aria-pressed={listFilters.onlyWithArtifacts}
-          className={`side-filter-chip${listFilters.onlyWithArtifacts ? " is-on" : ""}`}
-          onClick={() => actions.setListFilters({ onlyWithArtifacts: !listFilters.onlyWithArtifacts })}
-          type="button"
-        >
-          {TEXT.sidebar.filterWithArtifacts}
-        </button>
-        <button
-          className={`side-filter-chip${listFilters.window !== "all" ? " is-on" : ""}`}
-          onClick={() => actions.setListFilters({
-            window: listFilters.window === "all" ? "today" : listFilters.window === "today" ? "week" : "all",
-          })}
-          type="button"
-        >
-          {listFilters.window === "today" ? TEXT.sidebar.filterWindowToday
-            : listFilters.window === "week" ? TEXT.sidebar.filterWindowWeek : TEXT.sidebar.filterWindowAll}
-        </button>
-      </div>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
@@ -544,10 +644,6 @@ export function Sidebar({
         </div>
         {projects.length === 0 ? <div className="side-empty">{TEXT.sidebar.noProjects}</div> : null}
         {projects.map((project) => {
-          // 仅当前项目 is a narrowing over the folds, not a per-Project empty
-          // state: the Projects it excludes are not drawn at all, so none of
-          // them can say 暂无会话 about Sessions it was never asked for.
-          if (listFilters?.scope === "current" && project.id !== activeProjectId) return null;
           const open = !folded.has(project.id);
           const sessions = sessionsByProject[project.id] ?? [];
           // A folded Project says its own rule above the page, so the size of
@@ -641,7 +737,7 @@ export function Sidebar({
             user filed anything. */}
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
-          <div className="side-empty">{narrowed ? TEXT.sidebar.noMatch : TEXT.sidebar.noRecent}</div>
+          <div className="side-empty">TEXT.sidebar.noRecent</div>
         ) : (
           <div className="side-flat">{sessionList("recent", recent)}</div>
         )}

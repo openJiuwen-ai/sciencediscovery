@@ -32,8 +32,9 @@ import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./sess
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
-import { readListFilters, rememberListFilters } from "./list-filters-preference.js";
-import { filterSessions, type FilterContext, type SessionListFilters } from "./session-filters.js";
+import { readSearchNarrowing, rememberSearchNarrowing } from "./search-narrowing-preference.js";
+import { narrowResults, type SearchNarrowing, type SearchSessionFacts } from "./search-narrowing.js";
+
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -209,8 +210,8 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
-  /** Which Sessions the sidebar's four filters keep; the list reads it. */
-  listFilters: SessionListFilters;
+  /** How the search results are narrowed: projects, running, artifacts, window. */
+  narrowing: SearchNarrowing;
   /** The query the search field holds, and what `GET /api/search` answered. */
   searchQuery: string;
   searchResults?: WorkbenchSearchResponse;
@@ -247,8 +248,8 @@ export interface WorkspaceActions {
   deleteSession: (session: Session, onSettled?: () => void) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => Promise<void>;
-  /** The list's narrowing: scope, running, artifacts, window. */
-  setListFilters: (next: Partial<SessionListFilters>) => void;
+  /** The search results' narrowing: projects, running, artifacts, window. */
+  setSearchNarrowing: (next: Partial<SearchNarrowing>) => void;
   /** The sidebar's search field: debounced `GET /api/search`. */
   search: (query: string) => void;
   /** Open what a result names. */
@@ -404,12 +405,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // The listing is unfiltered now — archived Sessions are read for membership
   // and the sidebar draws the active subset — so there is no three-way state to
   // keep here any more.
-  /** How the list is narrowed: scope, running, artifacts, time window. */
-  // Read before the first paint: #1251 asks for the choice to survive a reload.
-  const [listFilters, setListFiltersState] = useState<SessionListFilters>(() => readListFilters());
+  /** How the search results are narrowed; read before the first paint, because
+   *  #1251 asks for the choice to survive a reload. */
+  const [narrowing, setNarrowingState] = useState<SearchNarrowing>(() => readSearchNarrowing());
   /** The query the field holds, the answer it produced and why it failed. */
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<WorkbenchSearchResponse>();
+  const [searchAnswer, setSearchResults] = useState<WorkbenchSearchResponse>();
   const [searchError, setSearchError] = useState<string>();
   const searchTicket = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2558,24 +2559,46 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // Session nobody has written in is not a row the reader asked for.
   const listedByProject = useMemo(() => {
     const listed: Record<string, Session[]> = {};
-    const context: FilterContext = {
+    // The column lists every active Session: the narrowings belong to the search
+    // results, not to which Sessions exist. A draft nobody has written in is not
+    // a row the reader asked for, which `withConversation` already settles.
+    for (const [projectId, sessions] of Object.entries(sessionsByProject)) {
+      listed[projectId] = withConversation(sessions);
+    }
+    return listed;
+  }, [sessionsByProject]);
+
+  /**
+   * The route's answer, narrowed by the `...` settings and by the two rules that
+   * make a search a search: an archived Session is not searchable — and neither
+   * are its artifacts — while an imported read-only snapshot is, because 活跃 is
+   * archived versus live rather than writable versus read-only.
+   *
+   * The facts come from the Sessions this page holds, so a hit for a Session it
+   * has not read is kept rather than hidden.
+   */
+  const searchResults = useMemo(() => {
+    if (searchAnswer === undefined) return undefined;
+    const facts = new Map<string, SearchSessionFacts>();
+    for (const sessions of Object.values(sessionsByProject)) {
+      for (const session of sessions) {
+        const stamp = Date.parse(session.updatedAt ?? session.createdAt);
+        facts.set(session.id, {
+          archived: session.archivedAt !== undefined,
+          stamp: Number.isNaN(stamp) ? undefined : stamp,
+        });
+      }
+    }
+    const results = narrowResults(searchAnswer.results, narrowing, {
       now: filterNow,
       runningSessionId: running ? sessionId : undefined,
       withArtifacts: new Set(Object.entries(artifactsBySession.current)
         .filter(([, outputs]) => outputs.length > 0)
         .map(([id]) => id)),
-    };
-    for (const [projectId, sessions] of Object.entries(sessionsByProject)) {
-      const visible = withConversation(sessions);
-      // 仅当前项目 hides the other folds rather than emptying them; the hiding
-      // is the sidebar's (it owns which folds are drawn), so the list it is
-      // handed stays honest — an empty entry here would draw 暂无会话 under a
-      // Project that simply is not on screen.
-      listed[projectId] = listFilters.scope === "current" && projectId !== activeProjectId
-        ? [] : filterSessions(visible, listFilters, context);
-    }
-    return listed;
-  }, [activeProjectId, filterNow, listFilters, outputs, running, sessionId, sessionsByProject]);
+      sessionFacts: (id) => facts.get(id),
+    });
+    return { ...searchAnswer, results, total: results.length };
+  }, [filterNow, narrowing, running, searchAnswer, sessionId, sessionsByProject]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
@@ -2637,12 +2660,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
-      setListFilters: (next) => setListFiltersState((current) => {
-        // Written on every change: the stored copy is what a reload reads.
-        const updated = { ...current, ...next };
-        rememberListFilters(updated);
-        return updated;
-      }),
+      setSearchNarrowing: (next) =>
+        setNarrowingState((current) => {
+          // Written on every change: the stored copy is what a reload reads.
+          const updated = { ...current, ...next };
+          rememberSearchNarrowing(updated);
+          return updated;
+        }),
       search,
       openSearchResult,
       createProject: createProjectAndOpen,
@@ -2850,7 +2874,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
-    listFilters,
+    narrowing,
     searchQuery,
     searchResults,
     searchError,
