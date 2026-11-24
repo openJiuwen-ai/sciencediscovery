@@ -15,14 +15,14 @@
 /**
  * The numbers an evolution run is sized against, in one place.
  *
- * These are limits and defaults, not a coercion: `create_evolve_run` accepts an
- * expansion count of 1–40 and refuses anything outside it at the tool boundary,
- * pre-flight refuses a worker count that does not divide the expansions, and
- * the proposal path writes the run's own token and time caps from the defaults
- * here. The desktop create dialog has to *state* these rules before a run
- * exists (#1346), so both sides read this module instead of keeping a copy
- * each — the copies drifting apart is how a dialog ends up describing a limit
- * the server does not have.
+ * These are limits and defaults, not a coercion: `create_evolve_run`'s schema
+ * states an expansion count of 1–40 and a worker count of 1–8, pre-flight
+ * refuses a count outside those bounds (or a worker count that does not divide
+ * the expansions), and the proposal path writes the run's own token and time
+ * caps from the defaults here. The desktop create dialog has to *state* these
+ * rules before a run exists (#1346), so both sides read this module instead of
+ * keeping a copy each — the copies drifting apart is how a dialog ends up
+ * describing a limit the server does not have.
  */
 
 import type { EvolveAlgorithm } from "./evolution.js";

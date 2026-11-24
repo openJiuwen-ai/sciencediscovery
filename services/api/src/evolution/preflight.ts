@@ -26,6 +26,7 @@
  * watched a progress bar for a minute has already paid for the mistake.
  */
 
+import { EVOLVE_EXPANSIONS_MAX, EVOLVE_WORKERS_MAX } from "@sciencediscovery/schema";
 import type { EvolveGoal, ModelProfile } from "@sciencediscovery/schema";
 
 import { MIN_TOKENS_PER_CALL } from "./call-budget.js";
@@ -171,6 +172,15 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       fix: "use at least 1 worker",
       message: "the worker count must be a positive integer",
     });
+  } else if (budget.workers > EVOLVE_WORKERS_MAX) {
+    // The tool schema and the create dialog's reference name the same maximum.
+    // It is a concurrency bound, not a spend budget, so the message names the
+    // cap; `describe` appends the fix, which is where the remedy belongs.
+    issues.push({
+      code: "workers_too_high",
+      fix: `use at most ${EVOLVE_WORKERS_MAX} workers`,
+      message: `${budget.workers} workers is above the ${EVOLVE_WORKERS_MAX}-worker maximum`,
+    });
   } else if (budget.expansions % budget.workers !== 0) {
     issues.push({
       code: "expansions_not_divisible",
@@ -185,6 +195,15 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
       code: "expansions_invalid",
       fix: "use at least 1 expansion",
       message: "the expansion count must be a positive integer",
+    });
+  } else if (budget.expansions > EVOLVE_EXPANSIONS_MAX) {
+    // Same bound the tool schema and the dialog state; a count is not a budget,
+    // so the message names the cap and the fix (appended by `describe`) carries
+    // the remedy.
+    issues.push({
+      code: "expansions_too_high",
+      fix: `use at most ${EVOLVE_EXPANSIONS_MAX} expansions`,
+      message: `${budget.expansions} expansions is above the ${EVOLVE_EXPANSIONS_MAX}-expansion maximum`,
     });
   }
 
