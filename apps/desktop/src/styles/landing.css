@@ -268,6 +268,13 @@
   border-radius: 0;
 }
 
+/* The landing card is grey around a white input and footer, so the hand-off
+   hint joins those two white blocks instead of leaving a grey seam. */
+.composer.is-landing .composer-seeded-hint {
+  padding: 0 16px 10px;
+  background: #fff;
+}
+
 .composer.is-landing .composer-footer {
   padding: 4px 12px 8px 14px;
   border-radius: 0 0 16px 16px;

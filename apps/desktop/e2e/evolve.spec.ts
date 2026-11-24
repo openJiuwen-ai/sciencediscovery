@@ -111,7 +111,7 @@ function liveRun(): EvolveFixture {
  *  task, so a test that has one to give fills it there. */
 async function startDesign(page: Page, options: { unisolated?: boolean } = {}): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   // On a host with no sandbox the command leaves only after the consent is
   // answered, and that answer is a second surface over the same dialog.
   if (options.unisolated) {
@@ -119,6 +119,10 @@ async function startDesign(page: Page, options: { unisolated?: boolean } = {}): 
   }
   await expect(dialog).toBeHidden();
   // The dialog places the command in the composer; sending is the user's.
+  // The composer must say so, and the caret must be where the next sentence
+  // starts, rather than leaving a filled field that looks already sent.
+  await expect(page.locator(".composer-seeded-hint")).toHaveText("已填入输入框，按发送开始设计");
+  await expect(page.locator("#composer-textarea")).toBeFocused();
   await page.getByRole("button", { name: "发送", exact: true }).click();
 }
 
@@ -268,7 +272,7 @@ test("the settings row starts a new design when the session's search has finishe
   await expect(page.locator(".evolve-create-blocked")).toHaveCount(0);
   // Usable, not merely visible: the task is accepted and the form can send.
   await dialog.getByLabel("任务描述").fill("让压缩比更高");
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeEnabled();
   await expect(page.locator(".evolve-detail")).toHaveCount(0);
 });
 
@@ -290,7 +294,7 @@ test("the settings row still opens the create dialog while a search runs, and sa
     "本会话已有正在运行的实验。请在对话中的卡片里打开它，或等它结束后再开始新的实验。",
   );
   await dialog.getByLabel("任务描述").fill("让压缩比更高");
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeDisabled();
 });
 
 test("the create dialog collects the task and hands the whole command to the composer", async ({ page }) => {
@@ -320,7 +324,7 @@ test("the create dialog collects the task and hands the whole command to the com
   await expect(dialog.locator(".evolve-algorithm-detail.is-open")).toHaveCount(0);
   await expect(dialog.getByRole("switch", { name: "自定义演进参数" })).not.toBeChecked();
   // Nothing to design yet: the task is required.
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeDisabled();
   await dialog.getByLabel("任务描述").fill("让压缩比更高，且完全无损");
 
   const pause = dialog.getByRole("switch", { name: /检查点需要人工确认/ });
@@ -329,7 +333,7 @@ test("the create dialog collects the task and hands the whole command to the com
   await dialog.getByRole("radio", { name: /OpenEvolve/ }).click();
   await expect(dialog.getByLabel("上传 JSON")).toBeHidden();
   await dialog.getByRole("switch", { name: "自定义演进参数" }).check();
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeDisabled();
   await dialog.getByLabel("上传 JSON").setInputFiles({
     name: "compression.json",
     mimeType: "application/json",
@@ -338,7 +342,7 @@ test("the create dialog collects the task and hands the whole command to the com
   await dialog.getByRole("checkbox", { name: "参与搜索 window" }).check();
   expect(posts(mock)).toHaveLength(0);
 
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
 
   // The command is placed in the composer as a token with the task after it,
   // and nothing is sent yet: the composer keeps the last word.
@@ -346,6 +350,10 @@ test("the create dialog collects the task and hands the whole command to the com
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm openevolve --no-confirm");
   await expect(page.locator("#composer-textarea")).toHaveValue("让压缩比更高，且完全无损");
+  // A closed dialog is not a started design: the composer names the next step
+  // and holds the caret at the end of the task, with the token intact.
+  await expect(page.locator(".composer-seeded-hint")).toHaveText("已填入输入框，按发送开始设计");
+  await expect(page.locator("#composer-textarea")).toBeFocused();
   expect(posts(mock)).toHaveLength(0);
 
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -361,6 +369,29 @@ test("the create dialog collects the task and hands the whole command to the com
   ).toBe(true);
   // The token belonged to that message, not to the composer.
   await expect(page.locator(".composer-command")).toHaveCount(0);
+  await expect(page.locator(".composer-seeded-hint")).toHaveCount(0);
+});
+
+test("a hand-off with no Session still tells the reader how to start it", async ({ page }) => {
+  // The landing composer is the whole surface before a Session exists. The
+  // dialog used to close here too, so an empty hand-off looked like nothing
+  // had happened at all.
+  const mock = await installMockApi(page, { sessions: [] });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+
+  await openEvolve(page);
+  const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
+  await dialog.getByLabel("任务描述").fill("让压缩比更高");
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm puct");
+  await expect(page.locator("#composer-textarea")).toHaveValue("让压缩比更高");
+  await expect(page.locator(".composer-seeded-hint")).toHaveText("已填入输入框，按发送开始设计");
+  await expect(page.locator("#composer-textarea")).toBeFocused();
+  // Filling is not sending: no Session was created and no message left.
+  expect(posts(mock)).toHaveLength(0);
 });
 
 test("a short window scrolls the fields and keeps the start reachable", async ({ page }) => {
@@ -376,7 +407,7 @@ test("a short window scrolls the fields and keeps the start reachable", async ({
   // so the one button the form exists for never sits below the fold.
   const scroll = dialog.locator(".evolve-create-scroll");
   expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  const start = await dialog.getByRole("button", { name: "开始设计" }).boundingBox();
+  const start = await dialog.getByRole("button", { name: "填入输入框" }).boundingBox();
   expect(start).not.toBeNull();
   expect(start!.y + start!.height).toBeLessThanOrEqual(560);
 });
@@ -396,7 +427,7 @@ test("the create dialog can send a design that does not pause at checkpoints", a
   await expect(pause).not.toBeChecked();
 
   await dialog.getByLabel("任务描述").fill("让压缩比更高，并且要快");
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm puct --no-confirm");
   await expect(page.locator("#composer-textarea")).toHaveValue("让压缩比更高，并且要快");
   // The token survives being completed, and it is joined to the sentence on
@@ -427,7 +458,7 @@ test("a host with no sandbox asks for the no-isolation confirmation before sendi
 
   await dialog.getByLabel("任务描述").fill("让压缩比更高");
   // Starting asks first, and a dismissed alert sends nothing.
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   const alert = page.getByRole("alertdialog");
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("没有沙箱、没有CPU/内存限制");
@@ -436,7 +467,7 @@ test("a host with no sandbox asks for the no-isolation confirmation before sendi
   await expect(dialog).toBeVisible();
   expect(posts(mock)).toHaveLength(0);
 
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
   // The answer became the command's flag, and the token carries it into the
   // message the user finally sends.
@@ -482,7 +513,7 @@ test("a typed design command on a host with no sandbox detours through the confi
   await expect(dialog.getByRole("note")).toContainText("没有沙箱的情况下运行候选代码");
   expect(posts(mock)).toHaveLength(0);
 
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
   await expect(page.locator(".composer-command")).toHaveText(
     "/evolve-design --algorithm openevolve --allow-direct",
@@ -519,7 +550,7 @@ test("a pasted --allow-direct does not answer the warning in the user's place", 
   await expect(dialog.getByLabel("任务描述")).toHaveValue("让压缩比更高");
   expect(posts(mock)).toHaveLength(0);
 
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   expect(posts(mock)).toHaveLength(0);
 
@@ -578,11 +609,11 @@ test("picking the evolve skill from the slash palette opens the setup dialog", a
   // dialog asks for one before it can hand anything back.
   await expect(page.locator("#composer-textarea")).toHaveValue("");
   await expect(dialog.getByLabel("任务描述")).toHaveValue("");
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeDisabled();
   expect(posts(mock)).toHaveLength(0);
 
   await dialog.getByLabel("任务描述").fill("让压缩比更高");
-  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await dialog.getByRole("button", { name: "填入输入框" }).click();
   await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm puct");
   await expect(page.locator("#composer-textarea")).toHaveValue("让压缩比更高");
   expect(posts(mock)).toHaveLength(0);
@@ -604,7 +635,7 @@ test("a missing runtime greys out the start and is installed from the details", 
   await expect(dialog.getByRole("radiogroup", { name: "选择搜索算法" })).toBeVisible();
   await expect(dialog.getByRole("note").filter({ hasText: "优化进程不可用" })).toBeVisible();
   await dialog.getByLabel("任务描述").fill("让压缩比更高");
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeDisabled();
 
   // 查看详情 explains where to look on this machine and offers the install.
   await dialog.getByRole("button", { name: "查看详情" }).click();
@@ -621,7 +652,7 @@ test("a missing runtime greys out the start and is installed from the details", 
   // A ready runtime retires the explanation and unblocks the form.
   await expect(details).toBeHidden();
   await expect(dialog.getByRole("note")).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "填入输入框" })).toBeEnabled();
 });
 
 /** The answer the design skill writes at a checkpoint: one line of prose, then

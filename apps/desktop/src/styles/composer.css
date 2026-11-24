@@ -125,6 +125,17 @@
 .composer-command-clear:hover { background: rgba(20, 118, 255, .13); opacity: 1; }
 .composer-command-clear:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; opacity: 1; }
 
+/* The next step after the setup dialog filled its command in. It sits between
+   the input and the footer because it is about that input: the design is not
+   running yet, and sending is what starts it. */
+.composer-seeded-hint {
+  margin: 0;
+  padding: 0 16px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;

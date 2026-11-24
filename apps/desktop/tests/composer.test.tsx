@@ -471,6 +471,19 @@ test("a design's command is a token in front of the sentence, not text", () => {
   assert.equal(render(false).includes("请描述你想要优化的对象和评估标准"), false);
 });
 
+test("a seeded design says in the composer that sending starts it", () => {
+  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" };
+  // Both mounts of the composer show it: the conversation's, and the landing
+  // one that is all there is before a Session exists. The hand-off must not be
+  // silent in either.
+  for (const landing of [false, true]) {
+    const markup = render(false, { landing, projects: [], seededCommand: seeded });
+    assert.match(markup, /class="composer-seeded-hint" role="status">已填入输入框，按发送开始设计<\/p>/u);
+  }
+  // It belongs to the token: once the token is gone, so is the instruction.
+  assert.equal(render(false).includes("已填入输入框，按发送开始设计"), false);
+});
+
 test("sending a seeded design joins the token to the sentence once", async () => {
   const sent: { command?: string; content: string }[] = [];
   let view;

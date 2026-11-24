@@ -296,6 +296,8 @@ export const EN: Text = {
     stop: "Stop",
     /** The ✕ on the design command token; the dialog only suggested it. */
     clearCommand: "Remove command",
+    /** After the dialog fills the command in, say what the next step is: sending is what starts the design. */
+    seededHint: "Filled into the input — press send to start designing",
     modelSelect: "Choose a model",
     addCustomModel: "Add a custom model",
     pillLocked: "You can switch models when this run finishes",
@@ -2014,13 +2016,13 @@ export const EN: Text = {
          travels with this one command (`--allow-direct`); it never becomes a
          setting someone sets once and forgets. */
       unisolatedBannerTitle: "This search runs candidate code without a sandbox",
-      unisolatedBannerBody: "This machine has no usable sandbox. Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. You will be asked once more when you click “Start designing”.",
+      unisolatedBannerBody: "This machine has no usable sandbox. Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. You will be asked once more when you click “Fill input”.",
       unisolatedConfirmTitle: "Run candidate code without a sandbox?",
       unisolatedConfirmBody: "The search will execute candidate programs directly: no sandbox, no CPU or memory limits, and access to your files and network. Continue only if you understand those risks and accept them.",
       unisolatedConfirmCancel: "Cancel",
       unisolatedConfirmClose: "Close",
       unisolatedConfirmContinue: "Continue anyway",
-      send: "Start designing",
+      send: "Fill input",
       cancel: "Cancel",
       blockedRunning: "This session is already running; wait for it to finish before starting another.",
       blockedSearch: "This session already has a search running. Open it from its card in the conversation, or wait for it to finish before starting another.",
@@ -2032,12 +2034,12 @@ export const EN: Text = {
        Windows and the actions that actually exist. */
     setup: {
       bannerTitle: "The optimization process is unavailable; results may not be what you expect",
-      bannerInstalling: "The optimization process is being prepared; you can start designing when it finishes",
+      bannerInstalling: "The optimization process is being prepared; you can fill the design into the input when it finishes",
       bannerAction: "View details",
       title: "The evolution runtime is unavailable",
-      introMissing: "This machine has not installed the evolution runtime yet. Once it is installed, this message and “Start designing” recover on their own.",
+      introMissing: "This machine has not installed the evolution runtime yet. This message disappears and “Fill input” becomes available once it is installed.",
       introError: "The evolution runtime did not start, or the local service could not authenticate to it.",
-      introInstalling: "The evolution runtime is being prepared. This message and “Start designing” recover when it finishes.",
+      introInstalling: "The evolution runtime is being prepared. This message disappears and “Fill input” becomes available when it finishes.",
       statusLabel: "Reported by the local service",
       whereTitle: "Start with the logs",
       logs: [

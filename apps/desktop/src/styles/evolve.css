@@ -328,7 +328,7 @@
 }
 
 /* The fields are what scroll; the footer is outside this box. A short window
-   used to put 开始设计 below the fold, which made the form's one action the
+   used to put 填入输入框 below the fold, which made the form's one action the
    last thing a reader could find. */
 .evolve-create-scroll {
   flex: 1 1 auto;

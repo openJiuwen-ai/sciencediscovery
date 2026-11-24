@@ -654,7 +654,10 @@ test("the create dialog collects the task, the search and the pace on one form",
   assert.match(html, /自定义演进参数/);
   // The starting values and the editable set stay folded away until asked for.
   assert.match(html, /class="evolve-create-direction" hidden=""/);
-  assert.match(html, /开始设计/);
+  // The submit names the action it actually performs: it fills the composer,
+  // and the send button starts the design.
+  assert.match(html, /<button[^>]*class="evolve-create-submit"[^>]*>填入输入框<\/button>/);
+  assert.equal(html.includes("开始设计"), false);
 });
 
 test("the create dialog starts from the task the composer already held", () => {
@@ -794,7 +797,7 @@ test("a host with no sandbox warns that candidates run unconfined", () => {
   assert.match(direct, /没有沙箱的情况下运行候选代码/);
   assert.match(direct, /这台机器没有可用的沙箱/);
   assert.match(direct, /可以读写你的文件、访问网络/);
-  assert.match(direct, /会再确认一次/);
+  assert.match(direct, /点击“填入输入框”时会再确认一次/);
   // The warning sits above the search cards, where a title-adjacent banner is
   // read before anything is chosen.
   assert.equal(direct.indexOf("evolve-create-notice") < direct.indexOf("选择搜索算法"), true);
@@ -881,7 +884,7 @@ test("an unusable runtime keeps the form and greys out the start", () => {
   // The choice the user made is not replaced by a setup pane: only the button
   // that cannot work is disabled.
   assert.match(html, /选择搜索算法/);
-  assert.match(html, /<button[^>]*disabled=""[^>]*>开始设计<\/button>/);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>填入输入框<\/button>/);
   // The install lives behind 查看详情, not in the form.
   assert.equal(html.includes("准备运行时"), false);
 });

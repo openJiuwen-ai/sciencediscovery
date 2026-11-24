@@ -246,7 +246,7 @@ export function EvolveCreateDialog({
           }}
         >
           {/* The fields scroll; the actions do not. A short window would
-              otherwise put 开始设计 at the bottom of a scroll and make the one
+              otherwise put 填入输入框 at the bottom of a scroll and make the one
               thing the form is for the last thing found. */}
           <div
             className={`evolve-create-scroll${overflowing ? " is-overflowing" : ""}`}

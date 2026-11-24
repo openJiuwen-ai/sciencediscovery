@@ -296,6 +296,8 @@ export const ZH = {
     stop: "停止",
     /** 设计命令上的 ✕：对话框给的是建议，改主意的人要能把它去掉再说话。 */
     clearCommand: "移除指令",
+    /** 对话框填入命令后，composer 里说清下一步：发送才会真正开始设计。 */
+    seededHint: "已填入输入框，按发送开始设计",
     modelSelect: "选择模型",
     addCustomModel: "添加自定义模型",
     pillLocked: "这一轮跑完才能切换模型",
@@ -2058,16 +2060,16 @@ export const ZH = {
       parametersLabel: "自定义演进参数",
       parametersHint: "为参数设定起始值。勾选的参数会由演进自动尝试不同取值；未勾选的始终使用起始值。",
       /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
-         横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
+         横幅让人一眼看见，点“填入输入框”时的弹窗索取逐次同意。同意只随这一次
          命令发出（`--allow-direct`），不成为会被忘记的设置。 */
       unisolatedBannerTitle: "此实验会在没有沙箱的情况下运行候选代码",
-      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有CPU/内存限制。点击“开始设计”时会再确认一次。",
+      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有CPU/内存限制。点击“填入输入框”时会再确认一次。",
       unisolatedConfirmTitle: "允许无隔离运行候选代码？",
       unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有CPU/内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
       unisolatedConfirmCancel: "取消",
       unisolatedConfirmClose: "关闭",
       unisolatedConfirmContinue: "仍然继续",
-      send: "开始设计",
+      send: "填入输入框",
       cancel: "取消",
       blockedRunning: "当前会话正在运行，等它结束后再开始新的实验。",
       blockedSearch: "本会话已有正在运行的实验。请在对话中的卡片里打开它，或等它结束后再开始新的实验。",
@@ -2078,12 +2080,12 @@ export const ZH = {
        这台机器上真实存在的路径和真实存在的操作，而不是“请联系支持”。 */
     setup: {
       bannerTitle: "优化进程不可用，可能导致无法得到预期结果",
-      bannerInstalling: "优化进程正在准备，完成后即可开始设计",
+      bannerInstalling: "优化进程正在准备，完成后即可把设计填入输入框",
       bannerAction: "查看详情",
       title: "演化运行时不可用",
-      introMissing: "这台机器还没有安装演化运行时。装好之后，这个提示和“开始设计”会自动恢复。",
+      introMissing: "这台机器还没有安装演化运行时。装好之后，这个提示会自动消失，“填入输入框”也会恢复可用。",
       introError: "演化运行时没能启动，或者本地服务没有通过它的认证。",
-      introInstalling: "演化运行时正在准备中，完成后这个提示和“开始设计”会自动恢复。",
+      introInstalling: "演化运行时正在准备中，完成后这个提示会自动消失，“填入输入框”也会恢复可用。",
       statusLabel: "本地服务返回",
       whereTitle: "先看日志",
       logs: [

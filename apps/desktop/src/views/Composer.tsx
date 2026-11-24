@@ -1238,6 +1238,12 @@ export function Composer({
           value={text}
         />
       </div>
+      {/* The dialog hands its command to the composer instead of sending it.
+          Without this line the hand-off looks finished: the dialog closed and
+          the field changed, but nothing said that sending is the next step. */}
+      {command === undefined ? null : <p className="composer-seeded-hint" role="status">
+        {TEXT.composer.seededHint}
+      </p>}
       <div className="composer-footer">
         <button
           aria-label={TEXT.composer.uploadFile}

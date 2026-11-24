@@ -270,7 +270,7 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText("新建程序演进实验");
 
-      const start = dialog.getByRole("button", { name: "开始设计" });
+      const start = dialog.getByRole("button", { name: "填入输入框" });
       // The submit is greyed for two independent reasons now: no task yet, or
       // no ready runtime. Write the task first, so what the probe below reads
       // is the runtime alone — with an empty task the button never enables and
@@ -327,6 +327,10 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
       await expect(area).toBeVisible({ timeout: 30_000 });
       await expect(area).toHaveValue(PROBLEM);
       await expect(page.locator(".composer-command")).toContainText("/evolve-design");
+      // The dialog only filled the input: say so, and put the caret at the end
+      // so Enter is the next thing a reader would naturally press.
+      await expect(page.locator(".composer-seeded-hint")).toHaveText("已填入输入框，按发送开始设计");
+      await expect(area).toBeFocused();
       const before = new Set((await api<DesktopRun[]>(page, sessionRuns())).map((run) => run.id));
       await area.press("Enter");
       // The setup dialog replaced the second "确认演进设置" card: the composer's
