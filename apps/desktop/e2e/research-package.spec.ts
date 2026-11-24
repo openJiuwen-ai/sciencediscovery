@@ -168,12 +168,14 @@ test("session menu exports research with two scope cards", async ({ page }, info
       await route.fulfill({ json: { id: "export-1", status: "completed", filename: "conversation.sdresearch" } });
     } else await route.fulfill({ body: "local package bytes" });
   });
-  await test.step("1. Find export between rename and delete, without a top toolbar", async () => {
+  await test.step("1. Find export between archive and delete, without a top toolbar", async () => {
     await page.goto("/");
     await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
     await expect(page.locator(".research-package-bar")).toHaveCount(0);
     await page.getByRole("button", { name: "会话菜单", exact: true }).click();
-    await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "导出会话", "🗑删除"]);
+    // 归档 sits between 重命名 and 导出会话: it is a Session action like the other
+    // three, so it belongs on this menu rather than in a toolbar of its own.
+    await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "归档", "导出会话", "🗑删除"]);
     await page.getByRole("menuitem", { name: "导出会话" }).click();
   });
   await test.step("2. Inspect both real UI cards and save the selected scope automatically", async () => {
