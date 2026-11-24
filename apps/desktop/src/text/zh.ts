@@ -327,6 +327,7 @@ export const ZH = {
     pageRule: (count: number) => `最近 ${count} 个`,
     noMatch: "没有符合筛选条件的会话。",
     searchRetry: "重试",
+    searchMoreNarrowed: "还有更多结果，继续输入或调整筛选以缩小范围。",
     searchPickProjects: "选择项目",
     filterTime: "指定时间",
     windowAll: "不限时间",

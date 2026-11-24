@@ -124,6 +124,32 @@ export function stamp(
 
 const PAGE_SIZE = 6;
 
+/** The `YYYY-MM-DD` a date input shows, read in the reader's own zone: a picked
+ *  day is a calendar day, not midnight UTC. */
+function localDay(at: number): string {
+  const date = new Date(at);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** The first millisecond of a picked day, local. */
+function startOfLocalDay(value: string): number | undefined {
+  const [year, month, day] = value.split("-").map(Number);
+  if (year === undefined || month === undefined || day === undefined) return undefined;
+  const at = new Date(year, month - 1, day).getTime();
+  return Number.isNaN(at) ? undefined : at;
+}
+
+/** The last millisecond of a picked day, local. */
+function endOfLocalDay(value: string): number | undefined {
+  const start = startOfLocalDay(value);
+  if (start === undefined) return undefined;
+  const date = new Date(start);
+  date.setDate(date.getDate() + 1);
+  return date.getTime() - 1;
+}
+
 /**
  * The rows a folded list shows: its first page, plus the open Session when
  * that one sits deeper in the list.
@@ -206,12 +232,12 @@ export function Sidebar({
 
   useEffect(() => {
     // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
-    // It lives on the document because the field is not focused yet — that is the
-    // whole point of the shortcut.
+    // It opens the search first — the row has no input to focus — and the effect
+    // below puts the caret in the field the click just mounted.
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchField.current?.focus();
+        setSearching(true);
         return;
       }
       if (event.key === "Escape" && searchField.current === document.activeElement) {
@@ -221,6 +247,12 @@ export function Sidebar({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // The field appears after the click or the shortcut, so the focus cannot be an
+  // `autoFocus` on a node that does not exist yet: it follows the open state.
+  useEffect(() => {
+    if (searching) searchField.current?.focus();
+  }, [searching]);
 
   const anchor = (event: { clientX: number; clientY: number }) => ({
     x: event.clientX,
@@ -536,29 +568,28 @@ export function Sidebar({
                     {TEXT.sidebar.rangeFrom}
                     <input
                       onChange={(event) => {
-                        const from = Date.parse(event.target.value);
-                        if (Number.isNaN(from)) return;
+                        const from = startOfLocalDay(event.target.value);
+                        if (from === undefined) return;
                         actions.setSearchNarrowing({
                           custom: { from, to: narrowing.custom?.to ?? Date.now() },
                         });
                       }}
                       type="date"
-                      value={narrowing.custom === undefined ? "" : new Date(narrowing.custom.from).toISOString().slice(0, 10)}
+                      value={narrowing.custom === undefined ? "" : localDay(narrowing.custom.from)}
                     />
                   </label>
                   <label>
                     {TEXT.sidebar.rangeTo}
                     <input
                       onChange={(event) => {
-                        const to = Date.parse(`${event.target.value}T23:59:59.999Z`);
-                        if (Number.isNaN(to)) return;
+                        const to = endOfLocalDay(event.target.value);
+                        if (to === undefined) return;
                         actions.setSearchNarrowing({
                           custom: { from: narrowing.custom?.from ?? 0, to },
                         });
                       }}
                       type="date"
-                      value={narrowing.custom === undefined ? ""
-                        : new Date(narrowing.custom.to).toISOString().slice(0, 10)}
+                      value={narrowing.custom === undefined ? "" : localDay(narrowing.custom.to)}
                     />
                   </label>
                 </div>
@@ -622,7 +653,12 @@ export function Sidebar({
                   </div>
                 ))}
                 {searchResults.hasMore ? (
-                  <p className="side-search-note">{TEXT.sidebar.searchMore(searchResults.total)}</p>
+                  // With a narrowing on, the route's total counts rows the column
+                  // is not showing: a number here would be a claim about the page
+                  // rather than about the results.
+                  <p className="side-search-note">
+                    {narrowed ? TEXT.sidebar.searchMoreNarrowed : TEXT.sidebar.searchMore(searchResults.total)}
+                  </p>
                 ) : null}
               </>
             )}

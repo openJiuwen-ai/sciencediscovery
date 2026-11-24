@@ -336,6 +336,7 @@ export const EN: Text = {
     pageRule: (count: number) => `Latest ${count}`,
     noMatch: "No Session matches the current filter.",
     searchRetry: "Retry",
+    searchMoreNarrowed: "More results; keep typing or narrow the search.",
     searchPickProjects: "Choose projects",
     filterTime: "Time",
     windowAll: "Any time",
