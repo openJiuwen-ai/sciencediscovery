@@ -28,6 +28,7 @@ import { preflight } from './environment.mjs';
 import { executionConfig, realShards, mockedShards, mockedBatches } from './execution.mjs';
 import { isProviderFaultOnlyWorkerFailure } from './provider-fault.mjs';
 import { retryableCaseFailures, retryFailed, retryReportMissing, shouldRetryFailedCases } from './retry.mjs';
+import { batchLaunchConfig, batchLaunchEnvironment, isolatedRetryConfig, runIsolatedRetry } from './retry-runner.mjs';
 import { checks } from './checks.mjs';
 import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
 import { startSwarm, withoutSwarm } from './swarm.mjs';
@@ -425,10 +426,8 @@ export async function main(args=process.argv.slice(2)) {
       const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
         CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
         CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),batch.key),
-        CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
-        ...(slice==='e2e'?{CI_E2E_SWARM_CHECKS:batch.checks.length?'run':'off'}:{}),
-        SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath,
-        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
+        ...batchLaunchEnvironment(batchLaunchConfig(batch, slice)),JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
+        SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
       return {code,data:existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined};
     };
     for(const [key,batch] of batches){
@@ -447,9 +446,30 @@ export async function main(args=process.argv.slice(2)) {
         const repeatPlan=join(outputDir,`playwright-${key}-retry-plan.json`);json(repeatPlan,subplan(plan,repeatEntries));
         const repeatReport=join(outputDir,`playwright-${key}-retry-results.json`);rmSync(repeatReport,{force:true});
         console.log(`Repeating ${repeatEntries.length} failed case(s): ${repeatEntries.map(e => e.id).join(', ')}`);
-        const again=await browserRun(batch,repeatPlan,repeatReport,`${key}-retry`);
+        const retryInstance = `${key}-retry`;
+        const retryResultsPath = join(
+          process.env.CI_RESULTS_DIR ? resolve(process.env.CI_RESULTS_DIR) : outputDir,
+          retryInstance,
+        );
+        const retryLogPath = join(outputDir, `e2e-${retryInstance}-driver.log`);
+        const retryCode = await runIsolatedRetry(isolatedRetryConfig({
+          repositoryRoot: root,
+          outputDir,
+          resultsPath: retryResultsPath,
+          planPath: repeatPlan,
+          reportPath: repeatReport,
+          logPath: retryLogPath,
+          instance: retryInstance,
+          batch,
+          backend: execution.backend,
+          slice,
+        }));
+        const again = {
+          code: retryCode,
+          data: existsSync(repeatReport) ? JSON.parse(readFileSync(repeatReport)) : undefined,
+        };
         retryReport=again.data;
-        if(!again.data) errors.push(retryReportMissing);
+        if(!again.data) errors.push(again.code!==0 ? retryFailed(again.code) : retryReportMissing);
         else if(again.code!==0) errors.push(retryFailed(again.code));
         repeated=new Map((again.data?.results??[]).map(r=>[r.key,r]));
         if(again.data?.errors?.length) console.log(`Case retry reported: ${again.data.errors.join('; ')}`);

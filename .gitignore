@@ -30,6 +30,7 @@ coverage/
 !.env.docker.example
 
 # Temporary files and logs
+.ci-retry/
 .tmp/
 .local/
 *.log
@@ -93,6 +94,7 @@ data-*/
 # Frozen test plans and execution evidence
 .test-runs/
 .ci-results/
+.ci-runtime/
 .b5merge/
 
 # Transient probe of the gateway boundary walk (services/gateway/tests/test_architecture_boundaries.py);
