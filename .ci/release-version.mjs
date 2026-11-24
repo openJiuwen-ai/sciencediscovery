@@ -4,113 +4,56 @@
 /**
  * A version change is a release change (#1254).
  *
- * `application/package.json`'s `version` is not a label: it names the Windows
- * installer (`artifactName`), it becomes the exe's FileVersion/ProductVersion,
- * and it is what a support conversation quotes. Nothing here enforced that, so a
- * functional pull request (`#1197`, an MCP fix) moved it from `0.4.0` to `0.4.1`
- * with a one-line edit, and `main` advertised a version no release had while
- * every job stayed green.
+ * `application/package.json`'s `version` is the single source of truth: it
+ * names the Windows installer (`electron-builder.yml`'s `artifactName` expands
+ * `${version}`), it becomes the exe's FileVersion/ProductVersion, and it is
+ * what a support conversation quotes. Nothing here enforced that, so a
+ * functional pull request (`#1197`, an MCP fix) moved it from `0.4.0` to
+ * `0.4.1` with a one-line edit, and `main` advertised a version no release
+ * had while every job stayed green.
  *
- * The rule has two halves, and both are needed:
+ * Every place that used to hand-write the number now derives it from this one
+ * field, so changing the version is a one-file edit:
+ *
+ *  - `electron-builder.yml` `artifactName` uses the `${version}` macro, which
+ *    expands the field directly (a pre-release keeps the hyphen spelling, e.g.
+ *    `0.5.0-rc1`, not the dot spelling `0.5.0.rc1` that was never valid
+ *    SemVer);
+ *  - the NSIS syntax-check stub no longer mirrors `VERSION` (`installer.nsh`
+ *    never reads it), and the README badge is a dynamic "latest release" badge.
+ *
+ * What remains to check is two things, and both are needed:
  *
  *  1. the pull request says it is a release change — title `chore(release): …`;
- *  2. every place the release number is written by hand carries the **new**
- *     number, not merely a diff that touched the file, and carries it as a whole
- *     token.
+ *  2. the new version is SemVer-shaped, so electron-updater can compare it and
+ *     the installer name stays a predictable `ScienceDiscovery-<v>-…`.
  *
- * Both halves of (2) are easy to get wrong. Touching `electron-builder.yml`
- * while leaving `ScienceDiscovery-0.4.0.rc1-…` in place is the original defect
- * wearing a release title. And a plain substring test is not enough either:
- * `0.4.0` is a prefix of `0.4.0.rc1`, so a GA release moving `0.4.0-rc1 ->
- * 0.4.0` would pass while the installer stayed named `0.4.0.rc1` — the same
- * drift. Every check below therefore matches a whole token with its delimiter
- * (`ScienceDiscovery-<v>-`, `!define VERSION "<v>"`). The README badge is not
- * in this list: it links the release list and shows the latest tag from a
- * dynamic badge, so it has no hand-written number to drift.
- *
- * This lives in `.ci/` rather than as a `ci.yml` step because the repository has
- * one frozen test plan: a command check gets a planned identity there and is
- * selected, counted and reported like any other case, whereas a step added to a
- * workflow is invisible to the catalog guard and can later be half-wired while
- * still looking green. The verdict is computed by the policy job, the only job
- * with the pull request's history, and its own cases run in the UT slice with
- * every other `.ci/*.test.mjs`.
+ * This lives in `.ci/` rather than as a `ci.yml` step because the repository
+ * has one frozen test plan: a command check gets a planned identity there and
+ * is selected, counted and reported like any other case, whereas a step added
+ * to a workflow is invisible to the catalog guard and can later be half-wired
+ * while still looking green. The verdict is computed by the policy job, the
+ * only job with the pull request's history, and its own cases run in the UT
+ * slice with every other `.ci/*.test.mjs`.
  *
  * Known gap, deliberate: the title half is checked when the pull request runs.
- * Retitling afterwards does not re-run this (that would re-run the whole suite on
- * every body edit), and the merge queue is not checked — its base has moved, so
- * there is nothing stable to compare the version against. A retitled pull
+ * Retitling afterwards does not re-run this (that would re-run the whole suite
+ * on every body edit), and the merge queue is not checked — its base has moved,
+ * so there is nothing stable to compare the version against. A retitled pull
  * request can therefore merge with release-note classification that disagrees
- * with its title; the version and its metadata cannot drift the same way,
- * because changing them needs a push, which re-runs everything.
+ * with its title; the version cannot drift from its own field the same way,
+ * because changing it needs a push, which re-runs everything.
  */
-
-/** `0.4.0-rc1` -> `0.4.0.rc1`: the form a file name may take. */
-export function dotForm(version) {
-  const hyphen = version.indexOf("-");
-  return hyphen < 0 ? version : `${version.slice(0, hyphen)}.${version.slice(hyphen + 1)}`;
-}
-
-/** electron-builder's expansion of the version field. */
-export const VERSION_MACRO = "${version}";
 
 /**
  * SemVer-shaped, optionally pre-release and build metadata.
  *
  * A shape test, not the full grammar: it exists to reject the dot spelling
- * (`0.4.0.rc1`, `semver.valid() === null`) that already shipped once, and to keep
- * the field comparable by electron-updater, which needs a real SemVer version.
+ * (`0.4.0.rc1`, `semver.valid() === null`) that already shipped once, and to
+ * keep the field comparable by electron-updater, which needs a real SemVer
+ * version.
  */
 export const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Where the release number is written by hand. A literal list on purpose: a new
- *  place to write the number should force somebody to come back to this file.
- *
- *  The Windows matcher is pinned to `-win-x64-setup.`, the suffix
- *  `electron-builder.yml` uses today. A second installer target would have to be
- *  added here, which is the moment to read this comment. */
-export const RELEASE_METADATA = Object.freeze([
-  "application/electron-builder.yml",
-  "application/build/nsh-syntax-check-stub.nsi",
-]);
-
-/**
- * The exact token each metadata file must contain.
- *
- * Each entry is `{path, checks}`; every check has to pass, and a check is one
- * literal with its delimiter, so `0.4.0` never satisfies a file that says
- * `0.4.0.rc1`.
- */
-export function requirementsFor(version) {
-  const dot = dotForm(version);
-  const preRelease = version.includes("-");
-  // At GA the documented policy puts `${version}` back in the artifact name; it
-  // cannot drift from the field it expands, so either spelling is accepted.
-  const names = preRelease ? [dot] : [dot, VERSION_MACRO];
-  return RELEASE_METADATA.map((path) => {
-    if (path === "application/electron-builder.yml") {
-      return {
-        checks: [{
-          expected: names.map((name) => `ScienceDiscovery-${name}-`).join(" or "),
-          matches: new RegExp(`ScienceDiscovery-(?:${names.map(escapeRegExp).join("|")})-win-x64-setup\\.`, "u"),
-        }],
-        path,
-      };
-    }
-    // application/build/nsh-syntax-check-stub.nsi
-    return {
-      checks: [{
-        expected: `!define VERSION "${dot}"`,
-        matches: new RegExp(`!define VERSION "${escapeRegExp(dot)}"`, "u"),
-      }],
-      path,
-    };
-  });
-}
 
 export const VERSION_FILE = "application/package.json";
 export const RELEASE_TITLE = /^chore\(release\):/u;
@@ -140,12 +83,12 @@ export function semverSuggestion(version) {
 /**
  * The verdict for one pull request.
  *
- * Pure: `files` maps each metadata path to its text as it stands in the pull
- * request, so the rule can be tested without a repository and the caller can
- * supply whatever it read. A path mapped to `undefined` is a file that is not
- * there; it is reported rather than thrown.
+ * Pure: the version it moved *from* and *to*, plus the pull request title.
+ * There is no file set to compare — every other place the number used to be
+ * spelled now derives from `application/package.json` — so only the SemVer
+ * shape and the release title are left to enforce.
  */
-export function assessVersionChange({ baseVersion, files, headVersion, title }) {
+export function assessVersionChange({ baseVersion, headVersion, title }) {
   const trimmed = (title ?? "").trim();
   if (headVersion === baseVersion) {
     return { ok: true, reason: `${VERSION_FILE} stays at ${headVersion}.` };
@@ -154,39 +97,20 @@ export function assessVersionChange({ baseVersion, files, headVersion, title }) 
     return {
       ok: false,
       reason: `${VERSION_FILE} moves to "${headVersion}", which is not a SemVer version. `
-        + `The dot spelling belongs in file names only; write it "${semverSuggestion(headVersion)}" instead.`,
+        + `Write it "${semverSuggestion(headVersion)}" instead.`,
     };
   }
-
-  const problems = [];
   if (!RELEASE_TITLE.test(trimmed)) {
-    problems.push(`the title "${trimmed}" does not start with "chore(release):"`);
-  }
-  for (const { checks, path } of requirementsFor(headVersion)) {
-    const text = files[path];
-    if (typeof text !== "string") {
-      problems.push(`${path} could not be read`);
-      continue;
-    }
-    for (const { expected, matches } of checks) {
-      if (!matches.test(text)) {
-        problems.push(`${path} does not carry ${expected}`);
-      }
-    }
-  }
-  if (problems.length === 0) {
     return {
-      ok: true,
-      reason: `${VERSION_FILE} moves ${baseVersion} -> ${headVersion} as a release change, `
-        + "and every place the release is spelled carries the new number.",
+      ok: false,
+      reason: `${VERSION_FILE} moves ${baseVersion} -> ${headVersion}, which is a release change, but the title `
+        + `"${trimmed}" does not start with "chore(release):". `
+        + "A version bump belongs to a release: title the pull request `chore(release): …` and change "
+        + "`application/package.json` alone. A functional change must not touch the version at all.",
     };
   }
   return {
-    ok: false,
-    reason: `${VERSION_FILE} moves ${baseVersion} -> ${headVersion}, which is a release change, but `
-      + `${problems.join("; ")}. `
-      + "A version bump belongs to a release: title the pull request `chore(release): …` and move every "
-      + `place the release is spelled, with the new number in it (${RELEASE_METADATA.join(", ")}). `
-      + "A functional change must not touch the version at all.",
+    ok: true,
+    reason: `${VERSION_FILE} moves ${baseVersion} -> ${headVersion} as a release change.`,
   };
 }

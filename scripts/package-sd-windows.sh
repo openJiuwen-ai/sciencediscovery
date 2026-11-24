@@ -56,9 +56,9 @@
 #      .tmp/runner-sea-build/.downloads/*.tar.xz 复制到本仓库同路径（文件名与
 #      manifest 一致，SHA256 自动校验，即跳过下载）。
 #
-# 版本号备忘：产物名 = artifactName 模板（electron-builder.yml）。rc 周期的点号
-# 写法（如 0.4.0.rc1）不是合法 SemVer，package.json 须用 0.4.0-rc1 并把 artifactName
-# 钉为字面量；发正式版时 version 改回 X.Y.Z 并把 artifactName 恢复 ${version} 宏。
+# 版本号备忘：产物名 = artifactName 模板（electron-builder.yml），其中 ${version} 直接
+# 展开 application/package.json 的 version（含 rc 连字符形式，如 0.5.0-rc1）。
+# 改版本号只需改 package.json 这一个文件。
 #
 # 产物：<壳目录>/release/ScienceDiscovery-<version>-win-x64-setup.exe
 set -euo pipefail
