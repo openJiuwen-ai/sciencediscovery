@@ -2117,6 +2117,9 @@ export const ZH = {
     open: "程序演进",
     moreRuns: (count: number) => `还有 ${count} 个`,
     fewerRuns: "收起",
+    /* 整张卡片是一个按钮，按下去打开的是右栏的任务面板，而不是就地展开；
+       卡片因此把这件事写出来，不再只画一个像折叠箭头一样的记号。 */
+    openPanel: "打开任务面板",
     /* 对话末尾那张运行卡片：等它启动，或者它已经跑了多久。分钟以下的搜索也
        要能看出在动，所以先报秒；一小时以上按设计稿写成「1小时28分钟」。 */
     notStarted: "尚未启动",
@@ -2272,6 +2275,11 @@ export const ZH = {
       close: "关闭",
       stop: "停止",
       stopping: "正在停止…",
+      /* 停止请求发出后到 run 真正落定之间，卡片要说明还在收什么，否则这几秒
+         看起来像什么都没发生。不报具体个数：puct 和 openevolve 的 selected
+         语义不同，且被丢弃的提案不会产生 expanded，事件日志里没有可信的
+         “进行中候选数”，一个数会变成永远不减的假承诺。 */
+      stoppingDetail: "正在结束进行中的候选…",
       stopHint: "停止后，已经产生的候选仍然可以查看。",
       fullscreen: "全屏",
       exitFullscreen: "退出全屏",

@@ -2078,6 +2078,10 @@ export const EN: Text = {
     open: "Program evolution",
     moreRuns: (count: number) => `${count} more`,
     fewerRuns: "Show fewer",
+    /* The whole card is a button, and what it opens is the task panel in the
+       right column rather than an inline expand; the card says so instead of
+       drawing a chevron that promises the other thing. */
+    openPanel: "Open task panel",
     /* The run card at the foot of the transcript: waiting to start, or how long
        the search has been going. */
     notStarted: "Not started",
@@ -2224,6 +2228,13 @@ export const EN: Text = {
       close: "Close",
       stop: "Stop",
       stopping: "Stopping…",
+      /* Between the stop request and the run settling, the card says what is
+         still being wound down; otherwise those seconds look like nothing
+         happened. Deliberately not a count: `selected` means the parent under
+         puct and the new candidate under openevolve, and a discarded proposal
+         never emits `expanded`, so the log has no trustworthy in-flight number
+         and one would be a promise that never falls. */
+      stoppingDetail: "Finishing the in-flight candidates…",
       stopHint: "Candidates found so far remain available after stopping.",
       fullscreen: "Full screen",
       exitFullscreen: "Exit full screen",

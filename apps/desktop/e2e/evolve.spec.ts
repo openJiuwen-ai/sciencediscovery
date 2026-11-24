@@ -64,7 +64,9 @@ function liveRun(): EvolveFixture {
     events: [
       { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
       { baselineScore: 0.41, codeHash: "sha256:root", nodeIndex: 0, type: "seeded" },
-      { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 1, type: "selected" },
+      // PUCT names the parent it expands in `selected`; the child appears only
+      // in `expanded`, already scored.
+      { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, type: "selected" },
       {
         changeSummary: "缓存 fit 的结果",
         codeHash: "sha256:a",
@@ -156,7 +158,15 @@ test("a search stays reachable after its turn and opens in the task tab", { tag:
   await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
   await expect(page.locator(".evolve-run-card")).toBeVisible();
   await expect(page.locator(".evolve-run-title")).toHaveText("让压缩比更高");
-  await page.locator(".evolve-run-card").first().click();
+  // The opening target says what pressing it does: the task panel, not an
+  // inline expand. The hint is a span inside that button.
+  await expect(page.locator(".evolve-run-panel-hint")).toBeVisible();
+  await expect(page.locator(".evolve-run-panel-hint")).toHaveText("打开任务面板");
+  await expect(page.locator(".evolve-run-open").first()).toHaveAttribute(
+    "title",
+    /打开任务面板/,
+  );
+  await page.locator(".evolve-run-open").first().click();
 
   // The detail is a mode of the right column, not a dialog over the page: the
   // conversation stays readable while the search is watched.
@@ -191,6 +201,14 @@ test("a search stays reachable after its turn and opens in the task tab", { tag:
   await page.locator(".evolve-drawer-close").first().click();
 
   await page.locator(".evolve-task-stop").click();
+  // The stop is a request, not a status: the control turns busy at once and
+  // stays that way until the record settles, saying what is still winding
+  // down instead of returning to 停止 while the run is still live.
+  await expect(page.locator(".evolve-task-stop")).toHaveText("正在停止…");
+  await expect(page.locator(".evolve-task-stop")).toBeDisabled();
+  await expect(page.locator(".evolve-stop-bar")).toContainText(
+    "正在结束进行中的候选",
+  );
   expect(
     mock.calls.some(
       (call) => call.method === "POST" && call.path === "/api/evolve/runs/evolve-1/stop",

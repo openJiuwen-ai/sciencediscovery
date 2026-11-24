@@ -163,6 +163,8 @@
 }
 
 .evolve-run-elapsed {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -226,6 +228,28 @@
   color: var(--discovery-strong);
   font-size: 10px;
   font-weight: 650;
+}
+
+/* The opening button (above) carries a visible hint that a press opens the
+   right column's 任务 panel: a chevron used to imply inline expansion, which
+   is the one thing a click does not do. --text-secondary keeps the cue
+   legible at 12px. On a narrow card the hint and the auto badge step aside so
+   the elapsed clock keeps its width; the title still says both, and the
+   opening button itself is never hidden. */
+.evolve-run-panel-hint {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* The card's width follows the conversation column, which the open task panel
+   narrows, so the threshold is a container query rather than a viewport one. */
+.evolve-runs { container-type: inline-size; }
+
+@container (max-width: 400px) {
+  .evolve-run-panel-hint,
+  .evolve-chip-auto { display: none; }
 }
 
 .evolve-dot {
@@ -1177,6 +1201,23 @@
 .evolve-notice.is-warn {
   background: var(--warning-soft);
   color: var(--warning);
+}
+
+/* The stop request is in flight. The line sits between the fixed header and
+   the scrolling body, so it stays visible wherever the reader had scrolled
+   when they pressed stop. The dot is the same live mark the run card uses, so
+   the wait reads as work rather than as a stalled panel. */
+.evolve-stop-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .evolve-notice.is-error {
