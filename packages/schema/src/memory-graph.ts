@@ -160,6 +160,18 @@ export interface MemoryGraphByEdgeResult {
 }
 
 /**
+ * Response for `POST /delete/node`: one explicitly named, whitelisted graph
+ * node was removed together with its edges. `status` is `not_found` or
+ * `rejected` when the sidecar answered 404/400, and `degraded` when the graph
+ * could not be reached (the write did not happen).
+ */
+export interface MemoryGraphDeleteResult {
+  status: "healthy" | "not_found" | "rejected" | "degraded";
+  deleted: number;
+  reason?: string;
+}
+
+/**
  * Response for `POST /query/chain`: the upstream↔downstream subgraph around a
  * selected node, with the backend's preset rules deciding which edge/node
  * types to walk based on the source node's label.

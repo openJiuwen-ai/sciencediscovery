@@ -259,7 +259,7 @@ export interface MockState {
   connectors: JsonRecord[];
   files: unknown[];
   mcpServers: JsonRecord[];
-  /** The settings row behind 设置 › 科学记忆 and the state read beside it. */
+  /** 设置 › 科学记忆 and the state read beside it. */
   memorySettings: {
     backend: string;
     enabled: boolean;
@@ -268,6 +268,9 @@ export interface MockState {
     neo4jHttp: string;
     neo4jUser: string;
   };
+  /** The mutable graph cards read: a delete removes one record, so the same
+   *  citation opens the card's not-found state afterwards. */
+  memoryHits: JsonRecord[];
   models: ModelRecord[];
   overrides: Record<string, unknown>;
   projectSettings: JsonRecord;
@@ -391,6 +394,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       neo4jUser: "",
       ...(options.memorySettings ?? {}),
     },
+    memoryHits: structuredClone(options.memory?.hits ?? []),
     models: [...(options.models ?? [DEFAULT_MODEL])],
     overrides: { ...options.overrides },
     projectSettings: {
@@ -1101,13 +1105,30 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       if (path === "/api/memory/query/by-node-type" && method === "POST") {
-        const hits = options.memory?.hits ?? [];
+        const hits = state.memoryHits;
         return json(route, 200, {
           hits,
           total: hits.length,
           truncated: options.memory?.truncated ?? false,
           ...(options.memory?.reason === undefined ? {} : { reason: options.memory.reason }),
         });
+      }
+
+      if (path === "/api/memory/delete/node" && method === "POST") {
+        const input = JSON.parse(body ?? "{}") as {
+          node_id?: string;
+          node_type?: string;
+          session_id?: string;
+        };
+        if (input.node_type !== "Evidence" || typeof input.node_id !== "string") {
+          return json(route, 400, { code: "node_type_not_deletable", error: "node_type must be Evidence" });
+        }
+        const index = state.memoryHits.findIndex((hit) => hit.label === "Evidence"
+          && hit.id === input.node_id
+          && (input.session_id === undefined || hit.sessionId === input.session_id));
+        if (index < 0) return json(route, 404, { code: "node_not_found", error: "Memory node not found" });
+        state.memoryHits.splice(index, 1);
+        return json(route, 200, { status: "healthy", deleted: 1 });
       }
 
       if (path === "/api/memory/query/chain" && method === "POST") {

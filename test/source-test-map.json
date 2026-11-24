@@ -126,6 +126,12 @@
         },
         {
           "source": "services/api/src/server.test.ts",
+          "identity": "memory-delete-http-contract",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
           "identity": "session-isolation-artifact-version-chain",
           "layer": "ut",
           "complexity": "C3"
@@ -3076,6 +3082,23 @@
       ]
     },
     {
+      "source": "apps/desktop/src/api/memory.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/api-memory.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/memory-delete.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/ArtifactDialog.tsx",
       "risk": "P1",
       "owner": "desktop",
@@ -3094,6 +3117,11 @@
       "tests": [
         {
           "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/memory-delete.test.tsx",
           "layer": "ut",
           "complexity": "C2"
         }

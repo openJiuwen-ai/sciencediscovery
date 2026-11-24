@@ -229,6 +229,22 @@
   overflow-y: auto;
 }
 
+.memory-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-soft);
+}
+.memory-dialog-footer .memory-delete-error {
+  margin-right: auto;
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* ── states ─────────────────────────────────────────────────────────────── */
 
 .memory-state {
@@ -716,6 +732,7 @@ button.memory-dependency:hover {
   }
   .memory-dialog-head,
   .memory-dialog-body,
+  .memory-dialog-footer,
   .memory-dialog-tabs { padding-left: 18px; padding-right: 18px; }
   .memory-dialog-head h2 { font-size: 16px; }
   .artifact-dialog,

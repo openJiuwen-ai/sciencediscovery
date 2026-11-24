@@ -2032,6 +2032,75 @@ def link_claims_to_report(*, artifact_id: str, artifact_version: int, claim_ids:
 # directory, the store is the warehouse).
 
 
+# The only node types a person may remove one record of through the desktop
+# card. Deliberately narrow: Evidence is a declaration (fresh uuid, no shared
+# identity), while Artifact is a project-scoped asset with version lineage and
+# SourceFile/DbRecord are citation inputs. Map label → its unique-key field so
+# the Cypher below can interpolate a constant label/field, never a caller
+# string.
+DELETABLE_NODE_TYPE_KEYS: dict[str, str] = {
+    "Evidence": "evidence_id",
+}
+
+
+def delete_node_graph(*, node_type: str, node_id: str, session_id: str | None = None) -> dict[str, Any]:
+    """Physically delete one whitelisted node and every edge attached to it.
+
+    ``session_id`` is optional scoping: when present the node must belong to
+    that Session, so a stale card cannot delete another Session's record that
+    happens to share an id. Only the target node is touched — ``DETACH
+    DELETE`` drops its in/out edges and leaves every other node in the Session
+    and project intact. Returns ``{status, deleted}``; ``status="not_found"``
+    when no matching node exists, ``status="rejected"`` for a type outside
+    ``DELETABLE_NODE_TYPE_KEYS``, and ``status="degraded"`` when the graph is
+    unreachable.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        log.warning("delete_node_graph skipped: Neo4j not reachable (type=%s id=%s)", node_type, node_id)
+        return {"status": "degraded", "reason": "memory_graph_unreachable", "deleted": 0}
+    key = DELETABLE_NODE_TYPE_KEYS.get(node_type)
+    if key is None:
+        return {"status": "rejected", "reason": "node_type_not_deletable", "deleted": 0}
+    label = node_type  # a key of the whitelist above, never caller input
+    log.debug("delete_node_graph starting: type=%s id=%s session=%s", label, node_id, session_id or "-")
+    try:
+        with driver.session() as session:
+            found_rec = session.run(
+                f"""
+                MATCH (n:{label})
+                WHERE n.{key} = $node_id
+                  AND ($sid IS NULL OR n.session_id = $sid)
+                RETURN count(n) AS found
+                """,
+                node_id=node_id,
+                sid=session_id,
+            ).single()
+            found = int(found_rec["found"]) if found_rec else 0
+            if found == 0:
+                log.info("delete_node_graph not found: type=%s id=%s session=%s",
+                         label, node_id, session_id or "-")
+                return {"status": "not_found", "reason": "node_not_found", "deleted": 0}
+            deleted_rec = session.run(
+                f"""
+                MATCH (n:{label})
+                WHERE n.{key} = $node_id
+                  AND ($sid IS NULL OR n.session_id = $sid)
+                DETACH DELETE n
+                RETURN count(n) AS deleted
+                """,
+                node_id=node_id,
+                sid=session_id,
+            ).single()
+            deleted = int(deleted_rec["deleted"]) if deleted_rec else found
+        log.info("delete_node_graph done: type=%s id=%s session=%s deleted=%d",
+                 label, node_id, session_id or "-", deleted)
+        return {"status": "healthy", "deleted": deleted}
+    except Exception as exc:
+        log.exception("delete_node_graph failed: type=%s id=%s: %s", label, node_id, exc)
+        raise
+
+
 def delete_session_graph(*, session_id: str) -> dict[str, Any]:
     """Delete a session's graph footprint.
 

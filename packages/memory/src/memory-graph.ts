@@ -36,6 +36,7 @@ import type {
   DeclareResult,
   MemoryGraphByEdgeResult,
   MemoryGraphChainResult,
+  MemoryGraphDeleteResult,
   MemoryGraphEdge,
   MemoryGraphEdgeType,
   MemoryGraphHit,
@@ -726,6 +727,66 @@ export class MemoryGraphClient {
         payload.sessionId, payload.fileId, error instanceof Error ? error.message : String(error));
       throw error;
     }
+  }
+
+  /** Physically delete one explicitly named, whitelisted node and its edges.
+   *  Unlike the cleanup mirrors this is a user action, so it reports what
+   *  happened instead of swallowing the failure: `not_found`/`rejected` are
+   *  the sidecar's refusals, `degraded` means the graph never answered, and a
+   *  refused internal token is `memory_graph_unauthorized` — the same split
+   *  `getSubgraph` makes, so the card cannot blame a timeout for a credential
+   *  the reader has to fix. Nothing else in the Session/project graph moves. */
+  async deleteNode(
+    nodeId: string,
+    nodeType: MemoryGraphNodeLabel,
+    sessionId?: string,
+  ): Promise<MemoryGraphDeleteResult> {
+    mgLog.info("deleteNode in: type=%s id=%s session=%s", nodeType, nodeId, sessionId ?? "-");
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/delete/node`, {
+        method: "POST",
+        headers: this.initHeaders(true),
+        body: JSON.stringify({
+          node_id: nodeId,
+          node_type: nodeType,
+          session_id: sessionId ?? null,
+        }),
+      });
+    } catch (error) {
+      mgLog.warn("deleteNode error: cannot reach memory-graph service (type=%s id=%s): %s",
+        nodeType, nodeId, error instanceof Error ? error.message : String(error));
+      return { status: "degraded", reason: "memory_graph_unreachable", deleted: 0 };
+    }
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (response.ok) {
+      const status = body.status === "degraded" ? "degraded" : "healthy";
+      const deleted = typeof body.deleted === "number" ? body.deleted : 0;
+      const reason = typeof body.reason === "string" ? body.reason : undefined;
+      if (status === "healthy") this.recordSnapshotChange({ session_id: sessionId });
+      mgLog.info("deleteNode done: type=%s id=%s status=%s deleted=%d", nodeType, nodeId, status, deleted);
+      return { status, deleted, ...(reason === undefined ? {} : { reason }) };
+    }
+    const detail = body.detail;
+    const code = detail !== null && typeof detail === "object"
+      ? (detail as Record<string, unknown>).code
+      : undefined;
+    const reason = typeof code === "string" ? code : undefined;
+    if (response.status === 404) {
+      return { status: "not_found", reason: reason ?? "node_not_found", deleted: 0 };
+    }
+    if (response.status === 400 || response.status === 422) {
+      return { status: "rejected", reason: reason ?? "bad_request", deleted: 0 };
+    }
+    mgLog.warn("deleteNode not ok: memory-graph returned HTTP %s code=%s (type=%s id=%s)",
+      response.status, reason ?? "unknown", nodeType, nodeId);
+    // A 401/403 is the sidecar refusing this API's internal token, not a
+    // service that never answered: report it as such, still without claiming
+    // the record was deleted.
+    if (isAuthRejection(response.status)) {
+      return { status: "degraded", reason: MEMORY_GRAPH_UNAUTHORIZED, deleted: 0 };
+    }
+    return { status: "degraded", reason: reason ?? "memory_graph_unreachable", deleted: 0 };
   }
 
   /** Delete a session's graph footprint: soft-mark its Artifact versions +
@@ -1604,6 +1665,21 @@ export class MemoryGraphSink {
           artifactId, artifactVersion, sessionId,
           error instanceof Error ? error.message : String(error));
       });
+  }
+
+  /** Delete one explicitly named Evidence record, reporting the outcome to
+   *  the caller (the desktop card). Unlike the cleanup mirrors this is a user
+   *  action, so it must not silently claim success when the graph is off. */
+  deleteNode(
+    nodeId: string,
+    nodeType: MemoryGraphNodeLabel,
+    sessionId?: string,
+  ): Promise<MemoryGraphDeleteResult> {
+    if (!this.enabled || !this.client) {
+      mgLog.debug("delete skipped: memory graph not enabled (type=%s id=%s)", nodeType, nodeId);
+      return Promise.resolve({ status: "degraded", reason: "memory_graph_disabled", deleted: 0 });
+    }
+    return this.client.deleteNode(nodeId, nodeType, sessionId);
   }
 
   /** Delete a session's graph footprint (soft-mark its Artifact versions,

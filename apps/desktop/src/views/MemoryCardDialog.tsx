@@ -26,14 +26,21 @@
  * the artifact itself in `ArtifactDialog` (see `App.tsx`'s `openReference`), so
  * the card has no properties page for something the reader can simply read.
  *
- * Reads only. The dialog never writes to the graph.
+ * Reads are read-only; deleting one Evidence record is the dialog's only
+ * write, and it goes through the control plane's authenticated route.
  */
 
 import { useEffect, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 
-import type { ApiClient } from "../api/client.js";
-import { graphCredentialsRejected, graphTemporarilyUnavailable, listMemoryNodes, memoryChain } from "../api/memory.js";
+import { ApiRequestError, type ApiClient } from "../api/client.js";
+import {
+  deleteMemoryNode,
+  graphCredentialsRejected,
+  graphTemporarilyUnavailable,
+  listMemoryNodes,
+  memoryChain,
+} from "../api/memory.js";
 import {
   listArtifacts,
   listArtifactVersions,
@@ -56,6 +63,7 @@ import {
 import { referenceNodeLabel } from "../app/memory-chips.js";
 import { paperAbstractParagraphs, paperPlainText } from "../app/paper-abstract.js";
 import { TEXT } from "../text.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 
 interface Props {
@@ -180,6 +188,9 @@ export function MemoryCardDialog({
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState<DetailTab>("preview");
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
   const nodeLabel = referenceNodeLabel(reference.kind);
   const targetSession = reference.sessionId ?? sessionId;
 
@@ -196,6 +207,7 @@ export function MemoryCardDialog({
       return;
     }
     setState({ status: "loading" });
+    setDeleteError(undefined);
     listMemoryNodes(client, [nodeLabel], targetSession).then(
       (result) => {
         if (!alive) return;
@@ -231,6 +243,36 @@ export function MemoryCardDialog({
   const provenanceReady = state.status === "ready" && state.hit.label === "Evidence";
   const currentTab = provenanceReady ? tab : "preview";
   const title = state.status === "ready" ? hitTitle(state.hit) : TEXT.memory.title;
+  // Only a successfully resolved Evidence record is deletable. Artifact
+  // citations open ArtifactDialog instead, and SourceFile/DbRecord are inputs
+  // the graph does not own.
+  const canDelete = state.status === "ready" && state.hit.label === "Evidence";
+  const deleteName = title.length > 140 ? `${title.slice(0, 137)}…` : title;
+
+  const acceptDelete = async (): Promise<void> => {
+    if (state.status !== "ready") return;
+    setDeleting(true);
+    setDeleteError(undefined);
+    try {
+      await deleteMemoryNode(client, state.hit.id, state.hit.sessionId ?? targetSession);
+      onClose();
+    } catch (failure) {
+      // A failed delete is not a missing record: the card stays on the real
+      // error. A refused internal token is the one case where the reader can
+      // act, so it gets the card's own credential copy instead of a message
+      // that reads like a timeout.
+      const code = failure instanceof ApiRequestError ? failure.code : undefined;
+      setDeleteError(
+        graphCredentialsRejected(code)
+          ? TEXT.memory.authBody
+          : failure instanceof Error && failure.message !== ""
+            ? failure.message
+            : TEXT.memory.deleteFailed,
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const dialog = (
     <div className="modal-backdrop memory-backdrop" onPointerDown={onClose}>
@@ -307,11 +349,53 @@ export function MemoryCardDialog({
             <MemoryFacts hit={state.hit} />
           )}
         </div>
+
+        {canDelete ? (
+          <footer className="memory-dialog-footer">
+            {deleteError === undefined ? null : (
+              <p className="memory-delete-error" role="alert">
+                {TEXT.memory.deleteFailed} {deleteError}
+              </p>
+            )}
+            <button
+              aria-label={TEXT.memory.deleteAction}
+              className="danger-button memory-delete-button"
+              disabled={deleting}
+              onClick={() => setDeleteConfirming(true)}
+              type="button"
+            >
+              {deleting ? TEXT.memory.deleting : TEXT.memory.deleteAction}
+            </button>
+          </footer>
+        ) : null}
       </section>
     </div>
   );
 
-  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
+  const confirmation = deleteConfirming && canDelete ? (
+    <ConfirmDialog
+      onDismiss={() => setDeleteConfirming(false)}
+      request={{
+        accept: TEXT.memory.deleteConfirmAccept,
+        body: TEXT.memory.deleteConfirmBody(deleteName),
+        eyebrow: TEXT.memory.deleteAction,
+        onAccept: acceptDelete,
+        title: TEXT.memory.deleteConfirmTitle,
+      }}
+    />
+  ) : null;
+
+  // Portals need a real body. The cards' unit tests mount without a DOM, so a
+  // missing `document.body` falls back to inline markup instead of throwing.
+  const content = (
+    <>
+      {dialog}
+      {confirmation}
+    </>
+  );
+  return typeof document === "undefined" || document.body === undefined
+    ? content
+    : createPortal(content, document.body);
 }
 
 function MemoryState({ action, body, onAction, title }: {
