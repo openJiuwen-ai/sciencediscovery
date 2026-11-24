@@ -2056,7 +2056,7 @@ export const ZH = {
          “自定义 JSON” named the file format, which is an implementation detail
          nobody should have to decode before deciding. */
       parametersLabel: "自定义演进参数",
-      parametersHint: "为参数设定起始值。勾选的参数会由演进自动尝试不同取值；未勾选的始终使用起始值。",
+      parametersHint: "为被演进程序设定起始值。勾选的参数会由演进自动尝试不同取值；未勾选的始终使用起始值。这是被演进程序 JSON 的起始值，不是本次运行的预算：预算由助手在检查点 3 确定并展示，下方只列出供参考的运行限制。",
       /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
          横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
          命令发出（`--allow-direct`），不成为会被忘记的设置。 */

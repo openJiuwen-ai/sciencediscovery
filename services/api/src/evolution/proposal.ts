@@ -51,7 +51,7 @@ import type {
   ModelThinkingMode,
   ScorecardCriterion,
 } from "@sciencediscovery/schema";
-import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
+import { EVOLVE_CANDIDATE_TIMEOUT_SECONDS, EVOLVE_EXPANSIONS_PER_WORKER, SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
@@ -395,8 +395,9 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     return "there is no starting point. Point startingPointPath at a file in the workspace, "
       + "or write the starting point into startingPointText";
   }
-  if (proposal.expansions < proposal.workers * 4) {
-    return `${proposal.workers} workers needs at least ${proposal.workers * 4} expansions, or `
+  const waveMinimum = proposal.workers * EVOLVE_EXPANSIONS_PER_WORKER;
+  if (proposal.expansions < waveMinimum) {
+    return `${proposal.workers} workers needs at least ${waveMinimum} expansions, or `
       + "the first wave spends most of the budget forking only the root and the tree stays flat";
   }
   const tuning = shapeOfSearchTuning(proposal.search);
@@ -561,7 +562,7 @@ async function assembleGoal(
       ? { allowUnisolated: true }
       : {}),
     budget: {
-      candidateTimeoutSeconds: 180,
+      candidateTimeoutSeconds: EVOLVE_CANDIDATE_TIMEOUT_SECONDS,
       expansions: proposal.expansions,
       maxCostCents: 0,
       maxSeconds: DEFAULT_MAX_SECONDS,

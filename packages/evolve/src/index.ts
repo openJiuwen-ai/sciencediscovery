@@ -35,6 +35,7 @@
 
 import { Type } from "typebox";
 
+import { EVOLVE_EXPANSIONS_MAX, EVOLVE_EXPANSIONS_MIN, EVOLVE_WORKERS_MAX, EVOLVE_WORKERS_MIN } from "@sciencediscovery/schema";
 import type {
   EvolveBudgetPlan,
   EvolveRunProposal,
@@ -252,7 +253,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       maxLength: 200_000, minLength: 1,
     })),
     editableFields: Type.Optional(Type.Array(Type.String({ maxLength: 80, minLength: 1 }), { maxItems: 50, description: "Top-level JSON fields a directed search may change; requires a JSON-object starting point." })),
-    expansions: Type.Integer({ maximum: 40, minimum: 1 }),
+    expansions: Type.Integer({ maximum: EVOLVE_EXPANSIONS_MAX, minimum: EVOLVE_EXPANSIONS_MIN }),
     frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
     howScored: Type.String({ maxLength: 400, minLength: 1 }),
     judgeModelId: Type.Optional(Type.String({ maxLength: 200, minLength: 1 })),
@@ -345,7 +346,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "The budget follows the effective mode; read get_evolve_budget before proposing the search.",
     })),
     thinkingEffort: effortParameter,
-    workers: Type.Integer({ maximum: 8, minimum: 1 }),
+    workers: Type.Integer({ maximum: EVOLVE_WORKERS_MAX, minimum: EVOLVE_WORKERS_MIN }),
   });
   const createEvolveRun: AgentTool<typeof evolveParameters> = {
     description:

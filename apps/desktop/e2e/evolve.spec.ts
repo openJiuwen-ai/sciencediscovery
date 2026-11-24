@@ -379,6 +379,12 @@ test("a short window scrolls the fields and keeps the start reachable", async ({
   const start = await dialog.getByRole("button", { name: "开始设计" }).boundingBox();
   expect(start).not.toBeNull();
   expect(start!.y + start!.height).toBeLessThanOrEqual(560);
+
+  // Switching the parameter panel on is a request to edit parameters, so the
+  // panel comes into view instead of opening under the fold.
+  await dialog.getByRole("switch", { name: "自定义演进参数" }).check();
+  await expect(dialog.locator(".evolve-json-budget")).toBeInViewport();
+  await expect(dialog.getByRole("button", { name: /添加参数/ })).toBeInViewport();
 });
 
 test("the create dialog can send a design that does not pause at checkpoints", async ({ page }) => {
@@ -820,3 +826,80 @@ function posts(mock: Mock): RecordedCall[] {
     (call) => call.method === "POST" && call.path === "/api/sessions/session-1/messages",
   );
 }
+
+test("the custom-parameter panel states the run limits and never rewrites a program field", async ({ page }) => {
+  await installMockApi(page, { sessions: [makeSession()] });
+  // The contract's desktop viewport: the editor, not the reference rules, must
+  // be the thing on the first screen.
+  await page.setViewportSize({ width: 1500, height: 950 });
+  await page.goto("/");
+
+  await openEvolve(page);
+  const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
+  await dialog.getByLabel("任务描述").fill("让压缩比更高");
+
+  // The reference is folded at rest so it cannot push the editor off the first
+  // screen; the summary still carries the bounds.
+  const budget = dialog.locator(".evolve-json-budget");
+  await expect(budget).toContainText("运行限制参考（不是本面板的设置）");
+  expect(await budget.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
+  await expect(budget.locator("summary")).toContainText("expansions 1–40 次");
+  await expect(budget.locator("summary")).toContainText("maxTokens 上限 600000 tokens");
+  await expect(budget.locator("summary")).toContainText("maxSeconds 固定 7200 秒");
+  // A visible control says the reference opens; a static-looking block hid the
+  // rules it holds.
+  const indicator = () => budget.locator("summary").evaluate((node) => {
+    const style = getComputedStyle(node, "::after");
+    return { content: style.content, width: style.width, transform: style.transform };
+  });
+  const closed = await indicator();
+  expect(closed.content).not.toBe("none");
+  expect(Number.parseFloat(closed.width)).toBeGreaterThan(0);
+
+  await dialog.getByRole("switch", { name: "自定义演进参数" }).check();
+  // The one thing the panel is for is on screen without scrolling.
+  await expect(dialog.getByRole("button", { name: /添加参数/ })).toBeInViewport({ ratio: 1 });
+
+  // Opening it shows each limit, the fixed value, and all three derivations.
+  await budget.locator("summary").click();
+  expect(await budget.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(true);
+  // The chevron turns when the block opens.
+  await expect.poll(async () => (await indicator()).transform).not.toBe(closed.transform);
+  await expect(budget.locator('[data-budget-field="expansions"]')).toContainText("整数 1–40 次");
+  await expect(budget.locator('[data-budget-field="workers"]')).toContainText("expansions ≥ 4 × workers");
+  await expect(budget.locator('[data-budget-field="maxTokens"]')).toContainText("上限 600000 tokens");
+  await expect(budget.locator('[data-budget-field="maxSeconds"]')).toContainText("服务端固定 7200 秒，不可设置");
+  const derivation = budget.locator("[data-budget-derivation]");
+  await expect(derivation).toContainText("最多 37 次");
+  await expect(derivation).toContainText("最多 6 次");
+  await expect(derivation).toContainText("最多 4 次");
+  // zh-CN terminology matches the rest of the surface; internal tool names and
+  // literal translations stay out.
+  await expect(budget).toContainText("检查点 3");
+  await expect(budget).not.toContainText("checkpoint");
+  await expect(budget).not.toContainText("get_evolve_budget");
+  await expect(budget).not.toContainText("create_evolve_run");
+  await expect(budget).not.toContainText("工具边界");
+
+  await dialog.getByLabel("上传 JSON").setInputFiles({
+    name: "params.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"expansions":41,"maxSeconds":30}'),
+  });
+  await dialog.getByRole("checkbox", { name: "参与搜索 expansions" }).check();
+
+  // 41 is a legal field of the evolved program even though the run budget would
+  // refuse it: the value is carried as typed, the form still starts, and the
+  // hint describes the field rather than claiming a rewrite.
+  await expect(dialog.getByLabel("expansions", { exact: true })).toHaveValue("41");
+  await expect(dialog.getByLabel("maxSeconds", { exact: true })).toHaveValue("30");
+  // The row's hint is the accessible description of its value control.
+  await expect(dialog.getByLabel("expansions", { exact: true }))
+    .toHaveAttribute("aria-describedby", /-budget$/);
+  await expect(dialog.locator('[data-param-field="expansions"]')).toHaveAttribute("id", /-budget$/);
+  await expect(dialog.locator('[data-param-field="expansions"]')).toContainText("程序字段「expansions」");
+  await expect(dialog.locator('[data-param-field="expansions"]')).toContainText("不会改变本次运行的预算");
+  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeEnabled();
+  await expect(dialog).not.toContainText("实际生效");
+  await expect(dialog).not.toContainText("请先改正");
+});
