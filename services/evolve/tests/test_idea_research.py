@@ -716,6 +716,17 @@ def test_a_raw_control_character_inside_a_string_does_not_end_the_stage():
         parse_json('{"text": ')
 
 
+def test_two_consecutive_json_objects_are_merged_not_rejected():
+    """A live model sometimes answers with two objects back to back; `json.loads`
+    stops at "Extra data: line N column 1" and a stage gets one correction, so the
+    whole research used to settle `interrupted`. The objects are merged instead."""
+    assert parse_json('{"candidates": []}\n{"reason": "merged"}') == {'candidates': [], 'reason': 'merged'}
+    assert parse_json('```json\n{"a": 1}\n{"b": 2}\n```') == {'a': 1, 'b': 2}
+    # Trailing content that is not JSON still fails, so genuine garbage is reported.
+    with pytest.raises(ValueError):
+        parse_json('{"a": 1}\nnot json at all')
+
+
 def test_every_stage_follows_the_models_own_thinking_level(monkeypatch):
     """No stage asks for an effort: the request leaves `reasoning_effort` out so the
     model profile's own thinking level applies, and a settings payload written before
