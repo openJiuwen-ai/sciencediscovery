@@ -348,8 +348,36 @@ test("the version menu marks the version on screen", () => {
     <VersionMenu current="v2" onSelect={() => {}} versions={versions} />,
   );
   assert.equal(count(markup, 'role="menuitemradio"'), 2);
-  assert.match(markup, /aria-checked="true"[^>]*><span>v2<\/span><svg/u);
-  assert.match(markup, /aria-checked="false"[^>]*><span>v1<\/span><\/button>/u);
+  assert.match(markup, /aria-checked="true"[^>]*><span>v2<\/span><span class="doc-version-meta">未命名会话<\/span><svg/u);
+  assert.match(markup, /aria-checked="false"[^>]*><span>v1<\/span><span class="doc-version-meta">未命名会话<\/span><\/button>/u);
+});
+
+test("the version menu names the Session and time behind each version", () => {
+  // Same-named products share a Project, so a bare "v4" cannot say whether it
+  // is this conversation's work or another one's. The row carries both the
+  // producing Session and the clock time it arrived.
+  const versions = [
+    {
+      artifact: { createdInSessionId: "a", createdInSessionTitle: "Report writer", id: "same", kind: "markdown", name: "report.md" },
+      version: { createdAt: "2026-11-22T06:41:00.000Z", id: "v4", sessionId: "b", version: 4 },
+    },
+    {
+      artifact: { createdInSessionId: "a", createdInSessionTitle: "Report writer", id: "same", kind: "markdown", name: "report.md" },
+      version: { createdAt: "2026-11-22T06:22:00.000Z", id: "v3", sessionId: "a", version: 3 },
+    },
+  ] as never;
+  const sessions = [
+    { id: "a", title: "Report writer" },
+    { id: "b", title: "Run log" },
+  ] as never;
+  const markup = renderToStaticMarkup(
+    <VersionMenu current="v4" currentSessionId="b" onSelect={() => {}} sessions={sessions} versions={versions} />,
+  );
+  // The open Session's own version says so; another Session's version is named
+  // rather than attributed to the reader's conversation.
+  assert.match(markup, /<span>v4<\/span><span class="doc-version-meta">当前会话 · \d{2}:\d{2}<\/span>/u);
+  assert.match(markup, /<span>v3<\/span><span class="doc-version-meta">Report writer · \d{2}:\d{2}<\/span>/u);
+  assert.match(markup, /title="Report writer · \d{2}:\d{2}"/u, "the full label is reachable as the row's tooltip");
 });
 
 test("a tab with a unique name spends its width on the name alone", () => {

@@ -335,6 +335,7 @@ export class ProvenanceRecorder {
     forceNewVersion?: boolean;
     description?: string;
     executionRunIds?: string[];
+    forceNewArtifact?: boolean;
     inputArtifactVersionIds?: string[];
     kind?: ScientificArtifactKind;
     logicalName?: string;
@@ -354,6 +355,7 @@ export class ProvenanceRecorder {
       ...(options.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(options.description ? { description: options.description } : {}),
       executionRunIds: options.executionRunIds,
+      ...(options.forceNewArtifact ? { forceNewArtifact: true } : {}),
       inputArtifactVersionIds: options.inputArtifactVersionIds,
       kind: options.kind,
       logicalName: options.logicalName ?? options.path,
@@ -409,6 +411,8 @@ export class ProvenanceRecorder {
     /** Request a new version even when the bytes match the newest version. */
     forceNewVersion?: boolean;
     description?: string;
+    /** Publish under a new Artifact even when a same-named one exists. */
+    forceNewArtifact?: boolean;
     name: string;
     /** When set, this artifact was declared inside a subagent: its upsert
      * must carry parentSubagentId so products hang off the subagent's child
@@ -428,7 +432,15 @@ export class ProvenanceRecorder {
     sourcePath: string;
     turnId?: string;
     workspaceRoot: string;
-  }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }> {
+  }): Promise<{
+    artifact: ScientificArtifact;
+    /** Set when this version continued a chain another Session created. The
+     *  tool result carries it so the model can say where the chain came from
+     *  instead of presenting a foreign v4 as its own first product. */
+    continuedFrom?: { sessionId: string; sessionTitle: string; version: number };
+    instruction?: string;
+    version: ScientificArtifactVersion;
+  }> {
     const derivations = await this.store.listArtifactDerivations(options.sessionId);
     // Defence-in-depth: the derivation `path` is stored normalised (the runner
     // writes `createdFiles` as clean relative paths). A caller that passes an
@@ -491,6 +503,7 @@ export class ProvenanceRecorder {
       artifactId: options.artifactId, baseVersionId: options.baseVersionId, publicationId: options.publicationId,
       ...(options.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(options.description ? { description: options.description } : {}),
+      ...(options.forceNewArtifact ? { forceNewArtifact: true } : {}),
       ...(run ? { executionRunIds: [run.id] } : {}),
       inputArtifactVersionIds: inputs.versionIds,
       kind,
@@ -561,7 +574,19 @@ export class ProvenanceRecorder {
         inputSourceFiles: sourceFileInputs,
       });
     }
-    return { artifact, version };
+    const continuedFrom = artifact.createdInSessionId === options.sessionId ? undefined : (() => {
+      const versions = this.store.listArtifactVersions(options.sessionId, artifact.id)
+        .filter((candidate) => candidate.id !== version.id && candidate.version <= version.version);
+      const base = options.baseVersionId
+        ? versions.find((candidate) => candidate.id === options.baseVersionId)
+        : undefined;
+      return {
+        sessionId: artifact.createdInSessionId,
+        sessionTitle: artifact.createdInSessionTitle,
+        version: base?.version ?? versions.at(-1)?.version ?? Math.max(1, version.version - 1),
+      };
+    })();
+    return { artifact, ...(continuedFrom ? { continuedFrom } : {}), version };
   }
 
   /** Infer the artifact inputs a piece of code read by scanning the code text

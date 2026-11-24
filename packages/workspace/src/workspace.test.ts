@@ -1001,11 +1001,25 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     sourcePath: "outputs/result",
     version: 1,
   };
+  const foreignArtifact = {
+    ...artifact,
+    createdInSessionId: "session-0",
+    createdInSessionTitle: "Earlier work",
+    id: "artifact-foreign",
+  };
+  const foreignVersion = { ...version, artifactId: foreignArtifact.id, id: "version-4", version: 4 };
   const tools = createWorkspaceTools(process.cwd(), {
     declareArtifact: async (input) => {
       calls.push(input);
       if (input.path === "outputs/alias") assert.equal(await readFile(resolve(aliasWorkspace, input.path), "utf8"), "existing output");
       if (input.path === "outputs/missing") throw new Error("missing file");
+      if (input.path === "outputs/continued") {
+        return {
+          artifact: foreignArtifact,
+          continuedFrom: { sessionId: "session-0", sessionTitle: "Earlier work", version: 3 },
+          version: foreignVersion,
+        };
+      }
       return { artifact, version };
     },
     enabledConnectorIds: [],
@@ -1032,7 +1046,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "force_new_version", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "force_new_version", "name", "new_artifact", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -1050,6 +1064,14 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   assert.equal(declaredPayload.artifact_id, "artifact-1");
   assert.equal(declaredPayload.version_id, "version-1");
   assert.equal("artifacts" in declaredPayload, false, "single-path response retains its original top-level shape");
+  assert.equal("continuedFrom" in declaredPayload, false, "a version in the open Session's own chain is not a continuation");
+
+  // A continuation of another Session's Artifact discloses where the chain came
+  // from, so a foreign v4 is not presented as this conversation's first product.
+  const continued = await declare.execute("declare-continued", { path: "outputs/continued" });
+  const continuedPayload = JSON.parse(continued.content[0]?.type === "text" ? continued.content[0].text : "{}") as Record<string, unknown>;
+  assert.deepEqual(continuedPayload.continuedFrom, { sessionId: "session-0", sessionTitle: "Earlier work", version: 3 });
+  assert.equal(continuedPayload.version, 4);
 
   const batch = await declare.execute("declare-batch", {
     description: "ignored for batch",
@@ -1059,6 +1081,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   });
   assert.deepEqual(calls, [
     { path: "outputs/result" },
+    { path: "outputs/continued" },
     { path: "outputs/first" },
     { path: "outputs/missing" },
     { path: "outputs/last" },
@@ -1102,8 +1125,26 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", ...alias }), /cannot rename or batch/);
   await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
   assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
+  await assert.rejects(
+    declare.execute("new-with-revision", { artifact_id: "artifact-1", base_version_id: "version-1", new_artifact: true, path: "edit.dat" }),
+    /new_artifact cannot be combined/,
+  );
   await declare.execute("revision-forced", { artifact_id: "artifact-1", base_version_id: "version-1", force_new_version: true, path: "edit.dat" });
   assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", forceNewVersion: true, toolCallId: "revision-forced", path: "edit.dat" });
+  // The other half of the conflict message's choice: publish as a new Artifact.
+  const created = await declare.execute("declare-new", { new_artifact: true, path: "outputs/new" });
+  assert.deepEqual(calls.at(-1), { forceNewArtifact: true, path: "outputs/new" });
+  assert.equal(JSON.parse(created.content[0]?.type === "text" ? created.content[0].text : "{}").artifact_id, "artifact-1");
+  const batchNew = await declare.execute("declare-batch-new", { new_artifact: true, paths: ["outputs/new-a", "outputs/continued"] });
+  assert.deepEqual(calls.slice(-2), [
+    { forceNewArtifact: true, path: "outputs/new-a" },
+    { forceNewArtifact: true, path: "outputs/continued" },
+  ]);
+  const batchNewPayload = JSON.parse(batchNew.content[0]?.type === "text" ? batchNew.content[0].text : "{}") as {
+    artifacts: Array<Record<string, unknown>>;
+  };
+  assert.equal("continuedFrom" in batchNewPayload.artifacts[0]!, false);
+  assert.deepEqual(batchNewPayload.artifacts[1]?.continuedFrom, { sessionId: "session-0", sessionTitle: "Earlier work", version: 3 });
   const listed = await list.execute("list", {});
   assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /llm_declared/);
   const readResult = await read.execute("read", { name: "result" });

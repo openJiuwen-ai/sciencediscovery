@@ -123,6 +123,30 @@ function formatTime(iso: string): string {
   return new Date(time).toLocaleDateString(TEXT.languageTag);
 }
 
+/** Who produced a version, as the version menu states it: the open Session says
+ *  so, another Session is named, and a version whose Session the app no longer
+ *  has is left unnamed rather than attributed to the open one. */
+function versionProducer(
+  output: SessionArtifactOutput,
+  sessions: readonly Session[],
+  currentSessionId: string | undefined,
+): string {
+  const producer = output.version.sessionId || output.artifact.createdInSessionId;
+  if (!producer) return TEXT.workspace.untitledSession;
+  if (producer === currentSessionId) return TEXT.workspace.currentSession;
+  return sessions.find((session) => session.id === producer)?.title
+    || (producer === output.artifact.createdInSessionId ? output.artifact.createdInSessionTitle : "")
+    || TEXT.workspace.untitledSession;
+}
+
+/** The clock time a version was written, shown beside its producer so two
+ *  versions of the same name are told apart by when they arrived. */
+function versionTime(iso: string | undefined): string {
+  const time = iso === undefined ? Number.NaN : Date.parse(iso);
+  if (Number.isNaN(time)) return "";
+  return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+}
+
 function previewName(label: string, path: string): string {
   return path === "" ? label : path;
 }
@@ -367,17 +391,29 @@ export function PanelExpand({ side }: { side: "left" | "right" }) {
  */
 export function VersionMenu({
   current,
+  currentSessionId,
   onSelect,
+  sessions = [],
   versions,
 }: {
   current?: string;
+  /** The open Session, whose versions are labelled as this conversation's. */
+  currentSessionId?: string;
   onSelect: (version: SessionArtifactOutput) => void;
+  /** Every Session the app knows, for naming the one that wrote a version. */
+  sessions?: readonly Session[];
   versions: SessionArtifactOutput[];
 }) {
   return (
     <div aria-label={TEXT.workspace.version} className="doc-version-menu" role="menu">
       {versions.map((output) => {
         const selected = output.version.id === current;
+        // A version number alone cannot say whether v4 is this conversation's
+        // work or another one's, which is the question the picker exists to
+        // answer once same-named products share a Project.
+        const time = versionTime(output.version.createdAt);
+        const producer = versionProducer(output, sessions, currentSessionId);
+        const meta = time === "" ? producer : `${producer} · ${time}`;
         return (
           <button
             aria-checked={selected}
@@ -385,9 +421,11 @@ export function VersionMenu({
             key={output.version.id}
             onClick={() => onSelect(output)}
             role="menuitemradio"
+            title={meta}
             type="button"
           >
             <span>v{output.version.version}</span>
+            <span className="doc-version-meta">{meta}</span>
             {selected ? <CheckGlyph /> : null}
           </button>
         );
@@ -400,11 +438,15 @@ export function VersionMenu({
  *  so the closed state always has something behind it. */
 function VersionPicker({
   current,
+  currentSessionId,
   onSelect,
+  sessions,
   versions,
 }: {
   current?: string;
+  currentSessionId?: string;
   onSelect: (version: SessionArtifactOutput) => void;
+  sessions?: readonly Session[];
   versions: SessionArtifactOutput[];
 }) {
   const [open, setOpen] = useState(false);
@@ -455,6 +497,7 @@ function VersionPicker({
       {open ? (
         <VersionMenu
           current={shown?.version.id}
+          currentSessionId={currentSessionId}
           onSelect={(version) => {
             setOpen(false);
             // The menu unmounts with the pick, and focus would land on the
@@ -462,6 +505,7 @@ function VersionPicker({
             trigger.current?.focus();
             onSelect(version);
           }}
+          sessions={sessions}
           versions={versions}
         />
       ) : null}
@@ -689,10 +733,12 @@ export function WorkspacePanel({
               {active !== undefined && activeVersions.length > 1 ? (
                 <VersionPicker
                   current={active.versionId}
+                  currentSessionId={sessionId}
                   // Keyed by the open document: a menu left open belongs to the
                   // document it was opened on, not to whatever replaces it.
                   key={active.id}
                   onSelect={(output) => void actions.selectArtifactVersion(active.id, output)}
+                  sessions={sessions}
                   versions={activeVersions}
                 />
               ) : null}

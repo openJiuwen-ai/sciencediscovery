@@ -1301,6 +1301,7 @@ async function executeAgentRun(
         ...(input.artifactId && input.toolCallId ? { publicationId: `${turnId}:${input.toolCallId}` } : {}),
         ...(input.artifactId && input.forceNewVersion ? { forceNewVersion: true } : {}),
         ...(input.description ? { description: input.description } : {}),
+        ...(input.forceNewArtifact ? { forceNewArtifact: true } : {}),
         name: input.name?.trim() || defaultName,
         path: input.path,
         parentSubagentId,

@@ -22,6 +22,8 @@ export interface ArtifactVersionInput {
   content: CasObjectRef;
   description?: string;
   executionRunIds?: string[];
+  /** Publish under a new Artifact even when a same-named one exists in scope. */
+  forceNewArtifact?: boolean;
   inputArtifactVersionIds?: string[];
   kind: ScientificArtifactKind;
   logicalName: string;
@@ -55,6 +57,8 @@ export interface RegisterWorkspaceArtifactInput {
 
   description?: string;
   executionRunIds?: string[];
+  /** Publish under a new Artifact even when a same-named one exists in scope. */
+  forceNewArtifact?: boolean;
   inputArtifactVersionIds?: string[];
   kind?: ScientificArtifactKind;
   logicalName?: string;
@@ -109,6 +113,7 @@ export class ArtifactManager {
       ...(input.forceNewVersion ? { forceNewVersion: true } : {}),
       ...(input.description ? { description: input.description } : {}),
       executionRunIds: input.executionRunIds,
+      ...(input.forceNewArtifact ? { forceNewArtifact: true } : {}),
       inputArtifactVersionIds: input.inputArtifactVersionIds,
       kind: input.kind ?? classifyScientificArtifact(input.path) ?? "other",
       logicalName: input.logicalName ?? input.path,
