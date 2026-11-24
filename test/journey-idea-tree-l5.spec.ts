@@ -114,37 +114,23 @@ for (const scenario of cases) {
         waitingConfigurations.length ? `configuration requests: ${waitingConfigurations.map((item) => `${item.capabilityId ?? "?"}:${item.state ?? "?"}`).join(", ")}` : "",
       ].filter(Boolean).join("; ");
     };
-    // Open the Session by its URL instead of clicking the sidebar. The stack is
-    // shared, so it already holds many Projects; the sidebar renders only the first
-    // rows and hides the rest behind "Show more", and a Project row that is not
-    // rendered made the click wait until the case timeout. The URL carries the same
-    // selection the click would, and it is also how a reload restores a Session.
-    //
-    // The deep link is resolved on mount against the Project and Session lists, so it
-    // has to arrive after the shell has finished loading: measured, a navigation that
-    // beat those lists left the app on its start-up shell (Project count rendered,
-    // no Session selected) and reported a missing heading three times in a row while
-    // the same Session opened in 11 ms through the API. Each attempt therefore waits
-    // for the Project list first, navigates, and — if the heading is still absent —
-    // reloads once so the still-mounted app re-resolves the URL it already has.
-    // Three bounded attempts keep the race out of the release gate without turning an
-    // unopenable Session into a pass.
+    // Open the Session the way a user does: click the Project row, then the Session
+    // row. The URL deep link is available and is how a reload restores a Session, but
+    // on this shared stack it is not deterministic — measured, it left the app on its
+    // start-up shell (Project count rendered, no Session selected) six times in one
+    // campaign and three times in the next, while the same two clicks opened the
+    // Session in 0.68-0.93 s on five out of five fresh Projects. Each click carries an
+    // explicit timeout, so a row that never renders fails this step by name instead of
+    // waiting out the case budget the way the old helper did.
     const openSession = async () => {
-      const heading = page.getByRole("heading", { name: fixture!.session.title });
-      const projects = page.getByRole("button", { name: /^(Projects|项目)$/ });
-      const deepLink = `/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        await page.goto("/");
-        await projects.first().waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
-        await page.goto(deepLink);
-        const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
-        if (await tour.isVisible().catch(() => false)) await tour.click();
-        if (await heading.isVisible({ timeout: 20_000 }).catch(() => false)) return;
-        await page.reload();
-        if (await heading.isVisible({ timeout: 20_000 }).catch(() => false)) return;
-        console.warn(`[l5-open] session heading not visible on attempt ${attempt}/3`);
-      }
-      await expect(heading).toBeVisible({ timeout: 20_000 });
+      await page.goto("/");
+      const project = page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture!.project.name });
+      await project.first().click({ timeout: 30_000 });
+      const session = page.locator("#sessions-panel-content button.nav-item").filter({ hasText: fixture!.session.title });
+      await session.first().click({ timeout: 30_000 });
+      const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
+      if (await tour.isVisible().catch(() => false)) await tour.click();
+      await expect(page.getByRole("heading", { name: fixture!.session.title })).toBeVisible({ timeout: 30_000 });
     };
     try {
       await journey.step("Start research", "A research record appears for the chosen objective", async () => {
