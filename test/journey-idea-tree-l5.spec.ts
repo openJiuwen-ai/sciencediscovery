@@ -142,7 +142,9 @@ for (const scenario of cases) {
         await session.first().click({ timeout: 30_000 });
         const tour = page.getByRole("button", { name: /^(跳过|Skip)$/ });
         if (await tour.isVisible().catch(() => false)) await tour.click();
-        if (await heading.isVisible({ timeout: 30_000 }).catch(() => false)) return;
+        // `isVisible({ timeout })` does not wait — the option is deprecated and
+        // ignored — so the heading is awaited properly here and once more at the end.
+        if (await heading.waitFor({ state: "visible", timeout: 30_000 }).then(() => true).catch(() => false)) return;
         console.warn(`[l5-open] session heading not visible after the click (attempt ${attempt}/2)`);
       }
       await expect(heading).toBeVisible({ timeout: 30_000 });
