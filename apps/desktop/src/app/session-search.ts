@@ -86,6 +86,19 @@ export interface PendingArtifact {
 }
 
 /**
+ * The bare id a result names.
+ *
+ * `GET /api/search` composes each hit's `id` from its kind — `project:<id>`,
+ * `session:<id>`, `artifact:<id>` — so the list can tell two hits with the same
+ * uuid apart. Everything that acts on a hit takes the bare id the rest of the
+ * API uses, which is the part after the first colon.
+ */
+export function bareSearchId(id: string): string {
+  const colon = id.indexOf(":");
+  return colon === -1 ? id : id.slice(colon + 1);
+}
+
+/**
  * The listed output a pending artifact result names.
  *
  * A hit carries an id; opening a document needs the whole output — its newest
@@ -106,4 +119,28 @@ export function pendingArtifactHit(
     const owner = outputSessionId(output);
     return owner === pending.sessionId || owner === "";
   });
+}
+
+/**
+ * What a clicked artifact hit can do right now.
+ *
+ * A hit for another Session has to wait: the panel lists a Session's artifacts
+ * only after `openSession` reads it. A hit for the Session that is **already
+ * open** is the case that used to open nothing — `openSession` is a no-op there,
+ * so neither the Session nor its outputs change, and an effect keyed on those
+ * would never run. When that list is already in hand the document opens at once;
+ * when it is not, the wait is registered the same way and the caller's ticket
+ * makes the effect re-read it.
+ */
+export function artifactHitPlan(
+  outputs: readonly SessionArtifactOutput[],
+  result: { id: string; sessionId: string },
+  openSessionId: string | undefined,
+): { open: SessionArtifactOutput } | { pending: PendingArtifact } {
+  const pending: PendingArtifact = { artifactId: bareSearchId(result.id), sessionId: result.sessionId };
+  if (result.sessionId === openSessionId) {
+    const listed = pendingArtifactHit(outputs, pending);
+    if (listed !== undefined) return { open: listed };
+  }
+  return { pending };
 }

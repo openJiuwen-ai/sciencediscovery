@@ -279,6 +279,7 @@ export const ZH = {
      *  row offers. */
     projectMenu: "项目菜单",
     noTasks: "暂无会话",
+    noMatch: "没有符合筛选条件的会话。",
     showMore: "显示更多",
     filtersLabel: "筛选",
     filterScopeCurrent: "当前项目",

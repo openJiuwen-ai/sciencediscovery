@@ -283,6 +283,7 @@ export const EN: Text = {
     newSessionInProject: (name: string) => `New session in ${name}`,
     projectMenu: "Project menu",
     noTasks: "No sessions yet",
+    noMatch: "No Session matches the current filter.",
     showMore: "Show more",
     filtersLabel: "Filters",
     filterScopeCurrent: "Current project",
