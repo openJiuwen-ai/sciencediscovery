@@ -524,6 +524,7 @@ export const ZH = {
       ? "文件会放进工作区，智能体就能读到。"
       : `文件会放进工作区，智能体就能读到。单个文件最大 ${limit}。`,
     archived: "这个会话已经归档，不能再写入。",
+    readOnly: "这个会话是只读的，不能再写入。",
     /** Stands in for the size when the service reports no per-file limit. */
     unlimited: "不限",
     busy: "上传中…",

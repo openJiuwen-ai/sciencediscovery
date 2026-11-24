@@ -1736,7 +1736,11 @@ export function App({ initialToken }: Props) {
           <div className={`drop-card${canUpload ? "" : " is-blocked"}`}>
             <span className="drop-mark" aria-hidden="true">{canUpload ? "⬇" : "⊘"}</span>
             <strong className="drop-title">
-              {canUpload ? TEXT.upload.dropTitle : TEXT.upload.archived}
+              {canUpload
+                ? TEXT.upload.dropTitle
+                : state.detail?.archivedAt !== undefined
+                  ? TEXT.upload.archived
+                  : TEXT.upload.readOnly}
             </strong>
             {canUpload ? <span className="drop-body">{TEXT.upload.dropBody(attachLimit)}</span> : null}
           </div>

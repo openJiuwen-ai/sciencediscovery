@@ -177,7 +177,8 @@ test("an archived session opens from 会话管理 read-only and refuses the drop
     await expect(dialog.getByText("归档期间只读：恢复后可以继续对话")).toBeVisible();
     await dialog.getByRole("button", { name: "打开", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
+    // The conversation opens read-only: the composer says why it is inert.
+    await expect(page.getByPlaceholder("已归档的会话不能发消息，恢复后即可继续。")).toBeDisabled();
   });
 
   await test.step("2. The drop is refused and says why", async () => {

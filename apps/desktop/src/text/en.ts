@@ -528,6 +528,7 @@ export const EN: Text = {
       ? "The files go into the workspace, where the agent can read them."
       : `The files go into the workspace, where the agent can read them. A single file may be up to ${limit}.`,
     archived: "This session is archived and cannot be written to.",
+    readOnly: "This session is read-only and cannot be written to.",
     unlimited: "unlimited",
     busy: "Uploading…",
     tooLarge: (name: string, limit: string) => `${name} exceeds ${limit} and was not uploaded.`,
