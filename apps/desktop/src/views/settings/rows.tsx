@@ -191,6 +191,28 @@ export function Tag({ children, tone }: { children: ReactNode; tone?: string }) 
 }
 
 /**
+ * A page's layout while its first read is in flight.
+ *
+ * This is the cache-miss frame only: a revisit paints the remembered answer
+ * instead. It draws the blocks the loaded page will draw, at the same sizes,
+ * so the answer lands without moving what is already on screen. The label is
+ * the one thing a screen reader announces; the blocks themselves carry no
+ * information and are hidden from it.
+ */
+export function SkeletonRegion({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <div aria-busy="true" aria-label={label} className="settings-skeleton" role="status">
+      {children}
+    </div>
+  );
+}
+
+/** One stand-in block inside a `SkeletonRegion`. Shape classes decide its size. */
+export function SkeletonBlock({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={`settings-skeleton-block${className ? ` ${className}` : ""}`} />;
+}
+
+/**
  * The one loading/error frame every page shares.
  *
  * A failed read renders the reason and a retry rather than an empty page: on a
@@ -199,14 +221,19 @@ export function Tag({ children, tone }: { children: ReactNode; tone?: string }) 
  *
  * Both stand-in states come back inside a section so that a page is never an
  * unlabelled blank while it fetches — the heading the user just clicked is
- * still on screen when the answer arrives underneath it.
+ * still on screen when the answer arrives underneath it. A page with a shape
+ * of its own passes `skeleton`, which replaces the single loading line only on
+ * the cache-miss path; a remembered answer is drawn by `children` as before.
  */
 export function LoadGate<T>({
   children,
   loaded,
+  skeleton,
 }: {
   children: (value: T) => ReactNode;
   loaded: Loaded<T>;
+  /** First-paint stand-in for a page whose loading state has a layout shape. */
+  skeleton?: ReactNode;
 }) {
   if (loaded.error) {
     const failure = (
@@ -232,6 +259,7 @@ export function LoadGate<T>({
     );
   }
   if (loaded.value === undefined) {
+    if (skeleton !== undefined) return <>{skeleton}</>;
     return (
       <section className="settings-section">
         <p className="settings-empty">{TEXT.settings.loading}</p>

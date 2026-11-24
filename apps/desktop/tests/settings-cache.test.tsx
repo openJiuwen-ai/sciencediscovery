@@ -31,9 +31,10 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { writeSettingsCache } from "../src/app/settings-cache.js";
-import type { SkillDescriptor, Specialist } from "../src/api/types.js";
+import type { RunnerTarget, SkillDescriptor, Specialist } from "../src/api/types.js";
 import { TEXT } from "../src/text.js";
-import { LoadGate } from "../src/views/settings/rows.js";
+import { LoadGate, SkeletonRegion } from "../src/views/settings/rows.js";
+import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { SpecialistsSettings } from "../src/views/settings/system/Specialists.js";
 import { StubClient } from "./api-stub.js";
@@ -84,6 +85,21 @@ function skillsPage(skills: SkillDescriptor[], enabled: string[]) {
   return { enabled, jiuwenSwarmSkills: [], native: false, skills, switchesAvailable: true };
 }
 
+function runner(over: Partial<RunnerTarget> = {}): RunnerTarget {
+  return {
+    alias: "gpu-01",
+    connectionKind: "ssh",
+    createdAt: "2026-10-01T08:00:00.000Z",
+    id: "runner-1",
+    location: "remote",
+    runnerCommand: "sciencediscovery-runner",
+    runnerStatus: { hostId: "runner-1", state: "disconnected" },
+    status: "ready",
+    updatedAt: "2026-10-01T08:00:00.000Z",
+    ...over,
+  };
+}
+
 describe("a settings pane's remembered answer", () => {
   it("paints the last list instead of the loading frame on the next visit", () => {
     const client = new StubClient().asClient();
@@ -122,6 +138,69 @@ describe("a settings pane's remembered answer", () => {
     );
     assert.ok(other.includes(TEXT.settings.loading), "a client that never visited starts at the loading frame");
     assert.ok(!other.includes("draft-review"), "another client's remembered Skills leaked into this one");
+  });
+
+  it("paints the remembered Runner catalog instead of the runtime skeleton", () => {
+    const client = new StubClient().asClient();
+    writeSettingsCache(client, "runner-catalog", [runner()]);
+
+    const markup = renderToStaticMarkup(<RuntimeSettings client={client} onConfirm={noop} />);
+
+    assert.ok(markup.includes("gpu-01"), "the remembered Runner is not on screen");
+    assert.ok(!markup.includes('aria-busy="true"'), "the skeleton is still drawn over a remembered catalog");
+    assert.ok(!markup.includes(TEXT.settings.system.migrated.environments.skeleton),
+      "the runtime pane fell back to its first-paint skeleton");
+  });
+
+  it("does not paint a remembered Runner catalog under another client", () => {
+    const visited = new StubClient().asClient();
+    writeSettingsCache(visited, "runner-catalog", [runner()]);
+
+    const fresh = new StubClient().asClient();
+    const markup = renderToStaticMarkup(<RuntimeSettings client={fresh} onConfirm={noop} />);
+
+    assert.ok(markup.includes(TEXT.settings.system.migrated.environments.skeleton),
+      "a client that never visited does not paint the runtime skeleton");
+    assert.ok(markup.includes('aria-busy="true"'), "the first paint is not marked busy");
+    assert.ok(!markup.includes("gpu-01"), "another client's Runner catalog leaked into this one");
+  });
+});
+
+/**
+ * A page with a layout of its own draws that layout on the cache-miss frame,
+ * and a page with a remembered answer never draws it at all. This is the
+ * `LoadGate` seam both heavy panes share.
+ */
+describe("a page's first-paint skeleton", () => {
+  const skeleton = <SkeletonRegion label="正在读取页面…"><span className="settings-skeleton-block" /></SkeletonRegion>;
+
+  it("replaces the single loading line only while there is no answer", () => {
+    const first = renderToStaticMarkup(
+      <LoadGate loaded={{ loading: true, reload: noop }} skeleton={skeleton}>
+        {() => <p>never drawn</p>}
+      </LoadGate>,
+    );
+    assert.ok(first.includes('aria-busy="true"'), "the skeleton is not marked busy");
+    assert.ok(first.includes("正在读取页面…"), "the skeleton carries no accessible label");
+    assert.ok(!first.includes(TEXT.settings.loading), "the single loading line is still drawn");
+    assert.ok(!first.includes("never drawn"), "a page with no answer drew content anyway");
+
+    const answered = renderToStaticMarkup(
+      <LoadGate loaded={{ loading: false, reload: noop, value: ["已读"] }} skeleton={skeleton}>
+        {(names) => <p>{names.join(",")}</p>}
+      </LoadGate>,
+    );
+    assert.ok(answered.includes("已读"), "the answer is not on screen");
+    assert.ok(!answered.includes('aria-busy="true"'), "the skeleton survived the answer");
+  });
+
+  it("keeps the single loading line for pages without a layout skeleton", () => {
+    const markup = renderToStaticMarkup(
+      <LoadGate loaded={{ loading: true, reload: noop }}>
+        {() => <p>never drawn</p>}
+      </LoadGate>,
+    );
+    assert.ok(markup.includes(TEXT.settings.loading), "a page without a skeleton lost its loading frame");
   });
 });
 

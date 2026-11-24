@@ -1704,6 +1704,7 @@ export const EN: Text = {
         totalColumn: "Total", inputColumn: "Input", outputColumn: "Output", model: "Model", byModel: "Usage by model (tokens)",
         unreported: "Not reported", incomplete: "Only reported usage is included. Actual usage may be higher.",
         empty: "No model usage recorded for this period.", updated: "Updated",
+        skeleton: "Loading model usage…",
       },
       migrated: {
         common: {
@@ -1723,6 +1724,7 @@ export const EN: Text = {
           connectionHeading: "Connection and resources",
           overviewHint: "Select a Runner to manage its connection, machine resources and scientific environments.",
           back: "Back to runtime environments",
+          skeleton: "Loading runtime environments…",
           runner: "Runner",
           local: "Built-in Runner",
           scope: "These environments are installed on this machine for tasks to execute code.",

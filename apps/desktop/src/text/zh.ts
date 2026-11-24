@@ -1719,6 +1719,7 @@ export const ZH = {
         totalColumn: "总量", inputColumn: "输入", outputColumn: "输出", model: "模型", byModel: "按模型统计（Token）",
         unreported: "未上报", incomplete: "仅包含已上报用量，实际用量可能更高。",
         empty: "所选时间范围内暂无模型用量记录。", updated: "更新时间",
+        skeleton: "正在读取模型用量…",
       },
       migrated: {
         common: {
@@ -1738,6 +1739,7 @@ export const ZH = {
           connectionHeading: "连接与资源",
           overviewHint: "选择一台 Runner，管理它的连接、机器资源和科学环境。",
           back: "返回运行环境",
+          skeleton: "正在读取运行环境…",
           runner: "执行机器",
           local: "内置 Runner",
           scope: "以下环境安装在这台机器上，供任务执行代码时使用。",

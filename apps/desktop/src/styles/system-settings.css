@@ -629,3 +629,45 @@
 @container (max-width: 520px) {
   .usage-settings-metrics { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* A settings page whose first read has no remembered answer paints its layout
+   instead of a single loading line: the same blocks the answer will draw, at
+   the same sizes, so nothing moves when it lands. A revisit paints the cached
+   answer and never shows this frame. */
+.settings-skeleton { display: grid; gap: 0; }
+.settings-skeleton-block {
+  display: block;
+  min-width: 0;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--surface-hover) 25%, var(--surface-subtle) 50%, var(--surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: settings-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes settings-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-skeleton-block { animation: none; }
+}
+/* 运行环境: one card per machine, drawn inside the loaded card's own frame. */
+.settings-skeleton-card .is-runner-mark { width: 32px; height: 32px; flex: 0 0 auto; border-radius: 8px; }
+.settings-skeleton-card-main { display: grid; flex: 1; gap: 7px; }
+.settings-skeleton-card-main .is-runner-name { width: 30%; height: 12px; }
+.settings-skeleton-card-main .is-runner-detail { width: 55%; height: 9px; }
+.settings-skeleton-card .is-runner-action { width: 76px; height: 28px; flex: 0 0 auto; border-radius: var(--radius-s); }
+/* 模型用量: the three metric cards and the model table. */
+.settings-skeleton-block.is-usage-metric-label { width: 44%; height: 11px; }
+.settings-skeleton-block.is-usage-metric-value { width: 60%; height: 23px; margin-top: 12px; }
+.settings-skeleton-table { display: grid; min-width: 480px; }
+.settings-skeleton-row {
+  display: grid;
+  grid-template-columns: 40% minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+}
+.settings-skeleton-row:first-child { background: var(--surface-subtle); }
+.settings-skeleton-row + .settings-skeleton-row { border-top: 1px solid #ededed; }
+.settings-skeleton-row .settings-skeleton-block { height: 12px; }
+.settings-skeleton-row .settings-skeleton-block.is-name { height: 26px; }
