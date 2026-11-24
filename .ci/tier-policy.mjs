@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { backendName } from '../test/support/tagged/execution.mjs';
 import { changedPaths, documentationOnly } from './changed-paths.mjs';
-import { assessVersionChange, RELEASE_METADATA, VERSION_FILE, versionOf } from './release-version.mjs';
+import { assessVersionChange, VERSION_FILE, versionOf } from './release-version.mjs';
 
 import { webUiStSelection } from './web-ui-st.mjs';
 
@@ -65,9 +65,9 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = 
  * Only a pull request is checked. A push to `main` and the merge queue re-verify
  * a commit whose pull request already answered this.
  */
-export function versionProblems({ baseVersion, event, files, headVersion, title }) {
+export function versionProblems({ baseVersion, event, headVersion, title }) {
   if (event !== 'pull_request') return [];
-  const verdict = assessVersionChange({ baseVersion, files, headVersion, title });
+  const verdict = assessVersionChange({ baseVersion, headVersion, title });
   return verdict.ok ? [] : [verdict.reason];
 }
 
@@ -75,10 +75,9 @@ export function versionProblems({ baseVersion, event, files, headVersion, title 
  * Reads what `versionProblems` needs from this checkout.
  *
  * The readers and Git command are injectable so a case can drive this without
- * a repository, and assert that every metadata path is actually read — a
- * mapping that quietly skipped one would leave that file unchecked while the
- * rule still looked in place.
+ * a repository and pin which commit held the previous version.
  */
+
 export function versionProblemsFromEvent({
   event,
   payload,
@@ -102,19 +101,10 @@ export function versionProblemsFromEvent({
   }
   const headVersion = versionOf(readFile(VERSION_FILE));
   const baseVersion = versionOf(showFile(base, VERSION_FILE));
-  // Compare first, read the metadata after: a pull request that deletes or
-  // renames one of those files has nothing to do with this rule, and must not be
-  // stopped by it. A missing file then becomes `undefined` rather than a throw,
-  // and the rule reports it by name if a version really did move.
   if (headVersion === baseVersion) return [];
-  const readOrUndefined = path => {
-    try { return readFile(path); } catch { return undefined; }
-  };
-  const files = Object.fromEntries(RELEASE_METADATA.map(path => [path, readOrUndefined(path)]));
   return versionProblems({
     baseVersion,
     event,
-    files,
     headVersion,
     title: payload?.pull_request?.title ?? '',
   });
