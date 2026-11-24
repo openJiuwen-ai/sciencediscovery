@@ -16,8 +16,10 @@
  */
 // Deterministic browser-level UI-ST. The API is the same stateful mock used by
 // Desktop E2E, while the browser, routing and persistence path are real.
+import assert from "node:assert/strict";
+
 import { expect, test } from "@playwright/test";
-import { TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
+import { DEFAULT_PROJECT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [TOKEN_STORAGE_KEY, TOKEN] as const);
@@ -221,4 +223,47 @@ test("GJ-03 report artifact opens memory evidence and provenance in one continuo
   await expect(dialog.locator(".evidence-source-paper")).toHaveCount(1);
   expect(mock.calls.some((call) => call.path === "/api/memory/query/by-node-type")).toBe(true);
   expect(mock.calls.some((call) => call.path === "/api/memory/query/chain")).toBe(true);
+});
+
+/**
+ * Issue #1348: the fold used to say 显示更多 with no count, so the ten rows
+ * behind it read as Sessions that had been deleted. The browser case pins the
+ * number the reader sees to the rows the press actually adds, and measures the
+ * label at both column widths so it cannot be clipped back into silence.
+ */
+test("the sidebar fold names the older Sessions it holds and reveals exactly those", { tag: "@ui-st" }, async ({ page }) => {
+  const sessions = Array.from({ length: 16 }, (_, index) =>
+    makeSession({
+      id: `session-${index + 1}`,
+      projectId: "project-1",
+      title: `会话 ${index + 1}`,
+      updatedAt: new Date(Date.UTC(2026, 10, 24, 9, 0, index)).toISOString(),
+    }),
+  );
+  await installMockApi(page, { projects: [{ ...DEFAULT_PROJECT }], sessions });
+  await page.goto("/");
+
+  const rows = page.locator(".side-row.side-sub");
+  const more = page.locator(".side-more");
+  await expect(more).toHaveText("显示更早的 10 个会话");
+  await expect(page.locator(".side-project-rule")).toHaveText("最近 6 个");
+  await expect(rows).toHaveCount(6);
+
+  // 1440px is the 296px column; 1024px narrows it to 256px. The count is the
+  // point of the label, so it has to fit at both.
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 950 });
+    const label = await more.evaluate((node) => ({ client: node.clientWidth, scroll: node.scrollWidth }));
+    assert.ok(label.scroll <= label.client, `the fold label is clipped at ${width}px`);
+  }
+  await page.setViewportSize({ width: 1440, height: 950 });
+
+  await more.click();
+
+  await expect(rows).toHaveCount(16);
+  await expect(page.locator(".side-more")).toHaveCount(0);
+  await expect(page.locator(".side-project-rule")).toHaveCount(0);
+  // The expansion keeps the recency order: newest first, oldest last.
+  await expect(page.locator(".side-session-name").first()).toHaveText("会话 16");
+  await expect(page.locator(".side-session-name").last()).toHaveText("会话 1");
 });
