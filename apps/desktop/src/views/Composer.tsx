@@ -34,6 +34,7 @@ import { useLoaded } from "../app/use-loaded.js";
 import { TEXT } from "../text.js";
 import type { EvolveDirectionInput } from "@sciencediscovery/schema";
 import { AttachmentTray } from "./AttachmentTray.js";
+import { isEvolveCommand } from "../evolve/command.js";
 import { EvolveGlyph, EvolveTreeGlyph } from "./evolve/glyphs.js";
 import { filterExperts } from "./expert-catalog.js";
 import { modelBrand } from "./model-brand.js";
@@ -1238,10 +1239,12 @@ export function Composer({
           value={text}
         />
       </div>
-      {/* The dialog hands its command to the composer instead of sending it.
-          Without this line the hand-off looks finished: the dialog closed and
-          the field changed, but nothing said that sending is the next step. */}
-      {command === undefined ? null : <p className="composer-seeded-hint" role="status">
+      {/* The design dialog hands its command to the composer instead of
+          sending it. Without this line the hand-off looks finished: the dialog
+          closed and the field changed, but nothing said that sending is the
+          next step. An Idea Tree token is a different command with its own
+          promise, so only the evolve command gets this instruction. */}
+      {command === undefined || !isEvolveCommand(command) ? null : <p className="composer-seeded-hint" role="status">
         {TEXT.composer.seededHint}
       </p>}
       <div className="composer-footer">

@@ -484,6 +484,18 @@ test("a seeded design says in the composer that sending starts it", () => {
   assert.equal(render(false).includes("已填入输入框，按发送开始设计"), false);
 });
 
+test("an idea-tree token keeps its command and task without the design hint", () => {
+  // Idea Tree uses the same composer token, but its command has its own
+  // promise. Only the evolve command may claim that sending starts a design.
+  const markup = render(false, {
+    landing: true,
+    seededCommand: { command: "/idea-tree-team", nonce: 1, text: "研究钙钛矿带隙" },
+  });
+  assert.match(markup, /composer-command-text">\/idea-tree-team</u);
+  assert.match(markup, /<textarea[^>]*>研究钙钛矿带隙<\/textarea>/u);
+  assert.equal(markup.includes("已填入输入框，按发送开始设计"), false);
+});
+
 test("sending a seeded design joins the token to the sentence once", async () => {
   const sent: { command?: string; content: string }[] = [];
   let view;

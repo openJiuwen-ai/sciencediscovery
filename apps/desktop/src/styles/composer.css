@@ -130,7 +130,7 @@
    running yet, and sending is what starts it. */
 .composer-seeded-hint {
   margin: 0;
-  padding: 0 16px 8px;
+  padding: 0 20px 8px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;

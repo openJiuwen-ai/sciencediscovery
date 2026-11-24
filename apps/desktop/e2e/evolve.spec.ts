@@ -298,8 +298,19 @@ test("the settings row still opens the create dialog while a search runs, and sa
 });
 
 test("the create dialog collects the task and hands the whole command to the composer", async ({ page }) => {
-  const mock = await installMockApi(page, { sessions: [makeSession()] });
+  const mock = await installMockApi(page, {
+    sessions: [makeSession({
+      messages: [
+        { content: "先看看这个压缩任务", createdAt: CREATED_AT, id: "message-context", role: "user" },
+      ],
+    })],
+  });
   await page.goto("/");
+  // A transcript is what makes this the conversation mount; without one the
+  // same composer is the landing surface and the screenshot would not show
+  // where the hand-off lands after a real turn.
+  await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
+  await expect(page.locator(".composer")).not.toHaveClass(/is-landing/);
 
   await openEvolve(page);
   const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
@@ -386,6 +397,7 @@ test("a hand-off with no Session still tells the reader how to start it", async 
   await dialog.getByRole("button", { name: "填入输入框" }).click();
 
   await expect(dialog).toBeHidden();
+  await expect(page.locator(".composer")).toHaveClass(/is-landing/);
   await expect(page.locator(".composer-command")).toHaveText("/evolve-design --algorithm puct");
   await expect(page.locator("#composer-textarea")).toHaveValue("让压缩比更高");
   await expect(page.locator(".composer-seeded-hint")).toHaveText("已填入输入框，按发送开始设计");
