@@ -89,9 +89,9 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     try:
         # A brief transport error can happen when the upstream closes an idle
         # keep-alive socket at the same time the pool attempts to reuse it.
-        # Retry only idempotent reads, and only once before response headers;
+        # Retry only idempotent reads, and only before response headers;
         # never replay a write or a partially streamed response.
-        attempts = 2 if safe_to_retry else 1
+        attempts = 3 if safe_to_retry else 1
         for attempt in range(attempts):
             upstream_request = client.build_request(
                 request.method,
@@ -105,7 +105,7 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
             except httpx.TransportError:
                 if attempt + 1 == attempts:
                     raise
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05 * (2 ** attempt))
     except httpx.HTTPError as error:
         _log_failure(error, request_id=request_id, request=request, started=started, phase="headers")
         return JSONResponse(

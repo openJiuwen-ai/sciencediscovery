@@ -8,6 +8,43 @@ import { portableShellResult } from "./research-shell-result.js";
 import type { ShellExecutionResult } from "@sciencediscovery/schema";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
+for (const status of ["queued", "running", "blocked"] as const) test(`research copy normalizes an interrupted run from ${status} to cancelled`, () => {
+  const ids = new ResearchPackageIds();
+  const targetSession = ids.id("source");
+  const sourceRun = {
+    id: "run", prompt: "continue", status, queueOrder: 1,
+    createdAt: "2026-11-24T00:00:00.000Z", startedAt: "2026-11-24T00:00:01.000Z",
+    settingsSnapshot: { model: "test-model" }, references: [],
+  };
+  const targetRun = {
+    ...remapRunEvent(sourceRun, ids), id: ids.id("run"), status: "cancelled",
+    finishedAt: "2026-11-24T00:00:02.000Z",
+  };
+  const source = { sessions: [{ session: { id: "source" }, runs: [sourceRun] }] };
+  const target = { sessions: [{ session: { id: targetSession }, runs: [targetRun] }] };
+  const sessions = new Map([["source", targetSession]]);
+  assert.doesNotThrow(() => verifyResearchCopy(source, target, ids, sessions, "project"));
+});
+
+test("research copy accepts a subagent step interrupted while running", () => {
+  const ids = new ResearchPackageIds();
+  const targetSession = ids.id("source");
+  const sourceStep = { id: "step", kind: "tool", status: "running", content: "running tool" };
+  const sourceSubagent = {
+    id: "subagent", sessionId: "source", parentTurnId: "turn", status: "running",
+    steps: [sourceStep],
+  };
+  const target = {
+    sessions: [{ session: { id: targetSession }, subagents: [{
+      ...remapRunEvent(sourceSubagent, ids), id: ids.id(sourceSubagent.id), sessionId: targetSession,
+      parentTurnId: ids.id(sourceSubagent.parentTurnId), status: "cancelled",
+      steps: [{ ...remapRunEvent(sourceStep, ids), id: ids.id(sourceStep.id), status: "failed" }],
+    }] }],
+  };
+  const sessions = new Map([["source", targetSession]]);
+  assert.doesNotThrow(() => verifyResearchCopy({ sessions: [{ session: { id: "source" }, subagents: [sourceSubagent] }] }, target, ids, sessions, "project"));
+});
+
 for (const state of ["completed", "failed", "cancelled"]) test(`research copy preserves ${state} shell evidence while excluding source-runner receipts`, () => {
   const ids = new ResearchPackageIds();
   const result = { executionId: "exec", environmentRevisionId: "env", language: "shell", stdout: "original output\n", stderr: "original error", exitCode: state === "completed" ? 0 : 1,

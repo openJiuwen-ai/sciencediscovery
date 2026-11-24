@@ -31,6 +31,12 @@ const comparable = (value: unknown): string => value === undefined ? "undefined"
 function equal(label: string, expected: unknown, actual: unknown): void {
   if (comparable(expected) !== comparable(actual)) throw new Error(`Research copy integrity mismatch: ${label}`);
 }
+function restoredSubagentField(field: string, value: unknown): unknown {
+  if (field === "status" && value === "running") return "cancelled";
+  if (field !== "steps" || !Array.isArray(value)) return value;
+  return value.map((step) => step && typeof step === "object" && (step as Row).status === "running"
+    ? { ...(step as Row), status: "failed" } : step);
+}
 function graphRows(snapshot: MemoryGraphSnapshot) {
   const key = (node: MemoryGraphSnapshot["nodes"][number]) => comparable({ labels: [...node.labels].sort(), properties: node.properties });
   const nodes = new Map(snapshot.nodes.map((node) => [node.id, key(node)]));
@@ -101,7 +107,8 @@ export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, i
         for (const field of ["content", "text", "code", "stdout", "stderr", "envSnapshot", "inputs", "systemPrompt", "steps", "result", "origin", "sessionId", "turnId", "parentTurnId", "toolCallId", "environmentRevisionId", "executionRunIds", "claimId", "evidenceItemId", "reviewRunId", "createdAt", "startedAt", "finishedAt", "status", "state", "queuedAt", "accepted", "provenance", "path"]) {
           if (field in row) {
             const expected = kind === "shellExecutions" && field === "result" && mapped[field]
-              ? portableShellResult(mapped[field] as ShellExecutionResult) : mapped[field];
+              ? portableShellResult(mapped[field] as ShellExecutionResult)
+              : kind === "subagents" ? restoredSubagentField(field, mapped[field]) : mapped[field];
             equal(`${kind}.${field}`, expected, restored[field]);
           }
         }
@@ -113,7 +120,18 @@ export function verifyResearchCopy(sourceValue: unknown, targetValue: unknown, i
       const restored = restoredRuns.find((item) => item.id === ids.id(String(run.id)));
       if (!restored) throw new Error("Research copy run missing");
       const mapped = remapRunEvent(run, ids);
-      for (const field of ["prompt", "status", "queueOrder", "createdAt", "startedAt", "finishedAt", "userMessageId", "assistantMessageId", "settingsSnapshot"]) equal(`run.${field}`, mapped[field] ?? null, restored[field] ?? null);
+      const restoredStatus = ["queued", "running", "blocked"].includes(String(mapped.status)) ? "cancelled" : mapped.status;
+      for (const field of ["prompt", "queueOrder", "createdAt", "startedAt", "userMessageId", "assistantMessageId", "settingsSnapshot"]) {
+        equal(`run.${field}`, mapped[field] ?? null, restored[field] ?? null);
+      }
+      equal("run.status", restoredStatus, restored.status ?? null);
+      if (restoredStatus === "cancelled" && mapped.finishedAt == null) {
+        if (typeof restored.finishedAt !== "string" || !Number.isFinite(Date.parse(restored.finishedAt))) {
+          throw new Error("Research copy integrity mismatch: run.finishedAt");
+        }
+      } else {
+        equal("run.finishedAt", mapped.finishedAt ?? null, restored.finishedAt ?? null);
+      }
       equal("run.references", remapReferences(run.references as never, ids, projectId) ?? [], restored.references ?? []);
     }
     // Exporting a restored run materializes an empty main stream even when the

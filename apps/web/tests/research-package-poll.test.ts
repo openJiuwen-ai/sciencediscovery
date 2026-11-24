@@ -7,10 +7,14 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
+import { ResearchPackageDownloadStalledError } from "../src/api/research-package-stream.js";
+import { setActiveLocale } from "../src/i18n/index.js";
 import type { ResearchPackageExportTaskView } from "../src/api/plugins.js";
 import { exportCompletionStep, exportPollStep, EXPORT_POLL_FAILURE_LIMIT, type ExportPollText } from "../src/research-package/export-poll.js";
 import { CONTINUATION_FAILURE_LIMIT, ContinuationTasks } from "../src/research-package/continuation-tasks.js";
 import { ResearchPackageExportMonitor, trackResearchPackageExport } from "../src/research-package/ResearchPackageExportTasks.js";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const TEXT: ExportPollText = {
   exportCanceled: "canceled",
@@ -231,3 +235,41 @@ test("a download failure keeps its own budget instead of inheriting the status p
   assert.match(toasts[0] ?? "", /could not be downloaded/i);
   await act(async () => { renderer.unmount(); });
 });
+
+for (const { locale, title, detail } of [
+  { locale: "zh-CN", title: "导出已完成，但证据包下载失败", detail: "证据包下载长时间没有收到数据。请检查网络连接后重试。" },
+  { locale: "en", title: "The export finished but the package could not be downloaded", detail: "The evidence package download stalled. Check your connection and try again." },
+] as const) {
+  test(`background export reports a localized download stall after exhausting its retries (${locale})`, async (context) => {
+    context.after(installWindow());
+    context.mock.timers.enable({ apis: ["setInterval"] });
+    setActiveLocale(locale);
+    context.after(() => setActiveLocale("en"));
+    const task = { ...taskView(`export-download-stall-${locale}`), status: "completed" } as const;
+    trackResearchPackageExport("project-1", task);
+    let attempts = 0;
+    const client = {
+      getResearchPackageExport: async () => task,
+      downloadResearchPackageExport: async () => {
+        attempts++;
+        throw new ResearchPackageDownloadStalledError();
+      },
+    } as unknown as ApiClient;
+    const toasts: unknown[][] = [];
+    const onToast = (...notice: unknown[]) => { toasts.push(notice); };
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => { renderer = create(createElement(ResearchPackageExportMonitor, { client, onToast })); });
+      const tick = () => act(async () => { context.mock.timers.tick(2_000); });
+      for (let attempt = 1; attempt < EXPORT_POLL_FAILURE_LIMIT - 1; attempt++) await tick();
+      assert.equal(attempts, EXPORT_POLL_FAILURE_LIMIT - 1);
+      assert.deepEqual(toasts, [], "interim failures should stay quiet");
+      await tick();
+      await tick();
+      assert.equal(attempts, EXPORT_POLL_FAILURE_LIMIT, "tracking stops after the last attempt");
+      assert.deepEqual(toasts, [["error", title, detail]]);
+    } finally {
+      if (renderer) await act(async () => renderer!.unmount());
+    }
+  });
+}

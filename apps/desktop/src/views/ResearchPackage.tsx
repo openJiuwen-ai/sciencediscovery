@@ -2,9 +2,10 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
-import type { ApiClient } from "../api/client.js";
+import { readResearchPackageBlob, ResearchPackageDownloadStalledError } from "../api/research-package-stream.js";
+import { ApiRequestError, isAbortError, type ApiClient } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
-import { cancelExport, importPackage, inspectPackage, openExportStream, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
+import { cancelExport, importPackage, inspectPackage, openExportStream, packagePreview, readCopy, readExport, ResearchPackageDownloadStartTimeoutError, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { canStreamExport, exportHistoryBridge, exportShellBridge, writeExportStream, type ExportHistoryRow } from "../app/export-bridge.js";
 import { ExportHistoryList } from "./ExportHistoryList.js";
 import { getSession } from "../api/sessions.js";
@@ -56,6 +57,28 @@ interface ExportRecord {
    *  exporting session by the time the write lands. */
   sessionId?: string;
   sessionTitle?: string;
+}
+
+const EXPORT_STATUS_REQUEST_TIMEOUT_MS = 15_000;
+const EXPORT_DOWNLOAD_RETRY_DELAYS_MS = [500, 1_500] as const;
+
+function isRetryableExportReadError(reason: unknown): boolean {
+  if (reason instanceof ApiRequestError) return reason.status === 502 || reason.status === 503 || reason.status === 504;
+  return reason instanceof TypeError && !isAbortError(reason);
+}
+
+async function openExportStreamWithRetry(client: ApiClient, project: string, task: ExportOperation): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= EXPORT_DOWNLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await openExportStream(client, project, task);
+    } catch (reason) {
+      lastError = reason;
+      if (!isRetryableExportReadError(reason) || attempt === EXPORT_DOWNLOAD_RETRY_DELAYS_MS.length) throw reason;
+      await new Promise<void>(resolve => setTimeout(resolve, EXPORT_DOWNLOAD_RETRY_DELAYS_MS[attempt]!));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("证据包下载失败，请重试。");
 }
 interface ExportFlash { id: number; tone: "success" | "error" | "neutral"; message: string; savedToken?: string; }
 
@@ -206,7 +229,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const persistArchive = useCallback(async (record: ExportRecord) => {
     patchExport(record.id, { phase: "saving" });
     try {
-      const response = await openExportStream(client, record.project, record.task);
+      const response = await openExportStreamWithRetry(client, record.project, record.task);
       const bridge = exportShellBridge();
       let savedToken: string | undefined;
       if (bridge && record.destinationToken && canStreamExport(bridge) && response.body) {
@@ -222,7 +245,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       } else if (bridge && record.destinationToken) {
         // An older shell without the streaming channels; the archive arrives as
         // one buffer, which is what this shell can accept.
-        await bridge.write(record.destinationToken, await (await response.blob()).arrayBuffer(), {
+        await bridge.write(record.destinationToken, await (await readResearchPackageBlob(response)).arrayBuffer(), {
           level: record.level,
           projectId: record.project,
           recordId: record.id,
@@ -232,7 +255,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         savedToken = record.destinationToken;
         await refreshHistory();
       } else {
-        const blob = await response.blob();
+        const blob = await readResearchPackageBlob(response);
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a"); anchor.href = url; anchor.download = record.task.filename;
         document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -240,8 +263,15 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       patchExport(record.id, { phase: "saved", savedToken });
       pushFlash("success", TEXT.researchPackage.exportSaved, savedToken);
     } catch (reason) {
-      patchExport(record.id, { phase: "save-failed", error: reason instanceof Error ? reason.message : String(reason) });
-      pushFlash("error", TEXT.researchPackage.exportSaveFailed);
+      let timeoutDetail: string | undefined;
+      if (reason instanceof ResearchPackageDownloadStalledError) {
+        timeoutDetail = TEXT.researchPackage.exportDownloadStalled;
+      } else if (reason instanceof ResearchPackageDownloadStartTimeoutError) {
+        timeoutDetail = TEXT.researchPackage.exportDownloadStartTimeout;
+      }
+      const error = timeoutDetail ?? (reason instanceof Error ? reason.message : String(reason));
+      patchExport(record.id, { phase: "save-failed", error });
+      pushFlash("error", timeoutDetail ?? TEXT.researchPackage.exportSaveFailed);
     }
   }, [client, detail?.id, patchExport, pushFlash, refreshHistory, request?.sessionId]);
   // The polling tick keeps one timer and must not restart when a save
@@ -267,7 +297,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       for (const record of active) {
         if (cancelled) return;
         try {
-          const next = await readExport(client, record.project, record.task.id);
+          const next = await readExport(client, record.project, record.task.id, AbortSignal.timeout(EXPORT_STATUS_REQUEST_TIMEOUT_MS));
           if (cancelled) return;
           const step = exportPollStep(record.project, record.task, record.failures, { ok: true, task: next }, t);
           patchExport(record.id, { failures: step.failures, task: step.task.task });

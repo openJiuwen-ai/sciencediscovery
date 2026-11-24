@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
+import { ResearchPackageDownloadStalledError } from "../src/api/research-package-stream.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { ResearchPackageDialogs } from "../src/research-package/ResearchPackageActions.js";
 import { ExportPreviewCache } from "../src/research-package/export-preview-cache.js";
@@ -262,3 +263,100 @@ test("a gone scope still admits the sizes its scope cards are showing", async (c
     context.mock.timers.reset();
   }
 });
+test("canceling a foreground package export aborts its request", async () => {
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  globalThis.window = { setInterval, clearInterval } as unknown as Window & typeof globalThis;
+  globalThis.document = {
+    activeElement: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  } as unknown as Document;
+  const preview = { revision: "r1", estimatedBytes: 1024, files: [], omissions: [] };
+  const defaults = {
+    revision: "r1",
+    necessary: preview,
+    complete: preview,
+    completeWithTrajectory: preview,
+    completeWithMemoryGraph: preview,
+    completeWithTrajectoryAndMemoryGraph: preview,
+  };
+  let receivedSignal: AbortSignal | undefined;
+  const client = {
+    getResearchPackagePreviews: async () => defaults,
+    exportResearchPackage: async (...args: unknown[]) => {
+      receivedSignal = args.at(-1) as AbortSignal | undefined;
+      return await new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+        if (receivedSignal?.aborted) abort();
+        else receivedSignal?.addEventListener("abort", abort, { once: true });
+      });
+    },
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await new ExportPreviewCache(client).refreshDefaults("project-cancel", "session-cancel");
+    await act(async () => {
+      renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ResearchPackageDialogs, {
+        client,
+        onClose: () => undefined,
+        target: { projectId: "project-cancel", sessionId: "session-cancel", kind: "package" },
+      })));
+    });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { void button(renderer!, "立即导出").props.onClick(); await Promise.resolve(); });
+    assert.ok(receivedSignal, "the export request should receive a caller-owned signal");
+    await act(async () => { button(renderer!, "取消").props.onClick(); await Promise.resolve(); });
+    assert.equal(receivedSignal.aborted, true);
+  } finally {
+    if (renderer) await act(async () => renderer!.unmount());
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+  }
+});
+
+for (const { locale, exportLabel, expected } of [
+  { locale: "zh-CN", exportLabel: "立即导出", expected: "证据包下载长时间没有收到数据。请检查网络连接后重试。" },
+  { locale: "en", exportLabel: "Immediate export", expected: "The evidence package download stalled. Check your connection and try again." },
+] as const) {
+  test(`foreground export shows the localized download stall alert (${locale})`, async () => {
+    const previousDocument = globalThis.document;
+    const previousWindow = globalThis.window;
+    globalThis.window = { setInterval, clearInterval } as unknown as Window & typeof globalThis;
+    globalThis.document = {
+      activeElement: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    } as unknown as Document;
+    const preview = { revision: "r1", estimatedBytes: 1024, files: [], omissions: [] };
+    const client = {
+      getResearchPackagePreviews: async () => ({
+        revision: "r1",
+        necessary: preview,
+        complete: preview,
+        completeWithTrajectory: preview,
+        completeWithMemoryGraph: preview,
+        completeWithTrajectoryAndMemoryGraph: preview,
+      }),
+      exportResearchPackage: async () => { throw new ResearchPackageDownloadStalledError(); },
+    } as unknown as ApiClient;
+    const target = { projectId: "project-stall", sessionId: "session-stall", kind: "package" } as const;
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await new ExportPreviewCache(client).refreshDefaults(target.projectId, target.sessionId);
+      await act(async () => {
+        renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ResearchPackageDialogs, {
+          client, onClose: () => assert.fail("a stalled export should leave the dialog open"), target,
+        })));
+      });
+      const immediateExport = button(renderer!, exportLabel);
+      assert.equal(immediateExport.props.disabled, false);
+      await act(async () => { await immediateExport.props.onClick(); });
+      assert.deepEqual(renderer!.root.findAllByProps({ role: "alert" }).map(alert => alert.children.join("")), [expected]);
+    } finally {
+      if (renderer) await act(async () => renderer!.unmount());
+      globalThis.document = previousDocument;
+      globalThis.window = previousWindow;
+    }
+  });
+}

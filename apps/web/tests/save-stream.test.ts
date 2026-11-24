@@ -4,6 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { savePackageResponse, type SaveHooks } from "../src/research-package/save-stream.js";
+import { readResearchPackageBlob, ResearchPackageDownloadStalledError, withResearchPackageIdleTimeout } from "../src/api/research-package-stream.js";
 
 const encoder = new TextEncoder();
 
@@ -51,6 +52,52 @@ test("the archive reaches the disk chunk by chunk, not as one buffer", async () 
   assert.deepEqual(events, ["write", "write", "close"]);
 });
 
+test("the caller signal reaches the export request", async () => {
+  const controller = new AbortController();
+  let received: AbortSignal | undefined;
+  const outcome = await savePackageResponse(async (signal) => {
+    received = signal;
+    return new Response("archive-bytes", { status: 200 });
+  }, "a.sdresearch", { signal: controller.signal, download: () => undefined });
+  assert.equal(outcome, "saved");
+  assert.equal(received, controller.signal);
+});
+test("an aborted export aborts the writable without closing a partial archive", async () => {
+  const { handle, chunks, events } = recordingHandle();
+  const controller = new AbortController();
+  let opened = false;
+  const pending = savePackageResponse(async (signal) => {
+    opened = true;
+    return await new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }, "a.sdresearch", {
+    signal: controller.signal,
+    picker: pickerReturning(handle, []) as SaveHooks["picker"],
+  });
+  for (let attempt = 0; attempt < 10 && !opened; attempt += 1) await Promise.resolve();
+  assert.equal(opened, true);
+  controller.abort();
+  await assert.rejects(pending, (reason: unknown) => reason instanceof Error && reason.name === "AbortError");
+  assert.deepEqual(chunks, []);
+  assert.deepEqual(events, ["abort"]);
+});
+test("a continuous download can exceed the idle timeout budget", async () => {
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const part of ["one", "two", "three", "four"]) {
+        controller.enqueue(encoder.encode(part));
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      }
+      controller.close();
+    },
+  });
+  const response = withResearchPackageIdleTimeout(new Response(body), 15);
+  assert.equal(await response.text(), "onetwothreefour");
+});
+
 test("closing the picker cancels without starting the request", async () => {
   let opened = 0;
   const outcome = await savePackageResponse(async () => { opened += 1; return new Response(); }, "a.sdresearch", {
@@ -79,4 +126,34 @@ test("a browser without the file picker keeps downloading the whole archive", as
   assert.equal(outcome, "saved");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(saved.map((item) => item.name), ["b.sdresearch"]);
+});
+
+
+test("preserves the idle timeout when Blob conversion masks the stream error", async () => {
+  const response = withResearchPackageIdleTimeout(new Response(new ReadableStream({})), 5);
+  const nativeBlob = response.blob.bind(response);
+  response.blob = () => nativeBlob().catch(() => { throw new TypeError("Failed to fetch"); });
+  await assert.rejects(readResearchPackageBlob(response), ResearchPackageDownloadStalledError);
+});
+
+test("reports a stalled download while cancellation of the source is still pending", { timeout: 1_000 }, async () => {
+  const reasons: unknown[] = [];
+  let finishCancel!: () => void;
+  const cancellation = new Promise<void>((resolve) => { finishCancel = resolve; });
+  const body = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      reasons.push(reason);
+      return cancellation;
+    },
+  });
+  const response = withResearchPackageIdleTimeout(new Response(body), 5);
+  try {
+    await assert.rejects(response.arrayBuffer(), (reason: unknown) => {
+      assert.ok(reason instanceof ResearchPackageDownloadStalledError);
+      assert.deepEqual(reasons, [reason], "the source is cancelled exactly once with the timeout reason");
+      return true;
+    });
+  } finally {
+    finishCancel();
+  }
 });

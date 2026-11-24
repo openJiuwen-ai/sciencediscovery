@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { createJourneyReporter } from "../../../test/helpers/journey-report.ts";
 
 /**
  * E2E-META
@@ -146,6 +147,60 @@ for (const locale of ["zh-CN", "en"]) {
       await capture("12-export-failed");
     });
     await info.attach("journey-report", { body: "Read-only UI, export preparing and explicit simulated failure verified. Screenshot data uses the desktop fixture control plane, not a real export failure.", contentType: "text/plain" });
+  });
+}
+
+for (const { locale, phase, expected } of [
+  { locale: "zh-CN", phase: "body", expected: "证据包下载长时间没有收到数据。请检查网络连接后重试。" },
+  { locale: "en", phase: "body", expected: "The evidence package download stalled. Check your connection and try again." },
+  { locale: "zh-CN", phase: "headers", expected: "等待证据包开始下载超时。请检查网络连接后重试。" },
+  { locale: "en", phase: "headers", expected: "Timed out waiting for the evidence package download to start. Check your connection and try again." },
+] as const) {
+  test(`a stalled evidence package download explains how to retry (${phase}, ${locale})`, async ({ page }, info) => {
+    const en = locale === "en";
+    await page.addInitScript(({ language, phase }) => {
+      localStorage.setItem("sciencediscovery-desktop:locale", language);
+      const timeout = phase === "headers" ? 30 * 1000 : 30 * 60 * 1000;
+      const schedule = window.setTimeout.bind(window);
+      window.setTimeout = (callback, delay, ...args) => schedule(callback, delay === timeout ? 900 : delay, ...args);
+      const fetchRequest = window.fetch.bind(window);
+      window.fetch = (resource, init) => {
+        const url = new URL(resource instanceof Request ? resource.url : resource, location.href);
+        if (!url.pathname.endsWith("/exports/stalled-export/download")) return fetchRequest(resource, init);
+        if (phase === "headers") {
+          return new Promise((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+          });
+        }
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { controller.enqueue(Uint8Array.of(1)); },
+        })));
+      };
+    }, { language: locale, phase });
+    await installMockApi(page, { sessions: [makeSession({ messages })] });
+    await page.route("**/idea-tree/research", route => route.fulfill({ json: { items: [] } }));
+    await page.route("**/research-package/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/preview")) return route.fulfill({ json: { revision: "r", estimatedBytes: 2048, files: [], omissions: [] } });
+      return route.fulfill({ json: { id: "stalled-export", status: "completed", filename: "research.sdresearch" } });
+    });
+    const journey = createJourneyReporter(page, info);
+    try {
+      await journey.step("1. Start exporting a conversation", "The export dialog opens and the export starts.", async () => {
+        await page.goto("/");
+        await expect(page.locator(".conversation")).toContainText("下文结论");
+        await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
+        await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
+        await page.getByRole("button", { name: en ? "Start export" : "开始导出" }).click();
+      });
+      await journey.step("2. Read the download timeout", "The error toast explains how to retry in the selected language.", async () => {
+        await expect(page.locator(".research-toast.is-error .research-toast-text")).toHaveText(expected);
+        const dir = process.env.REVIEW_SCREENSHOTS_DIR;
+        if (dir && phase === "body") await page.screenshot({ path: join(dir, `desktop-timeout-${en ? "en" : "zh"}.png`), animations: "disabled" });
+      });
+    } finally {
+      await journey.finalize();
+    }
   });
 }
 
