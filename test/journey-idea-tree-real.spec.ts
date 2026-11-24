@@ -62,19 +62,34 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         await openProjectSession(page, fixture);
         await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Skip literature retrieval. Explore low-cost iron catalysts for near-neutral water treatment, considering recovery and leaching.");
         await page.getByRole("button", { name: /^(Run analysis|运行分析)$/ }).click();
-        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 180_000 });
-        // The card is shared by every research in the Session, so identify this
-        // run by the id that was not there before the command was sent. 180s
-        // covers a cold first call, which took 72s in the measurement above but
-        // missed a 120s window once on a slow start.
+        // Ask the API first: whether the command started a research is a fact
+        // about the product, and whether the card draws it is a fact about the
+        // interface. Waiting for the card first — as this journey used to — made
+        // the two indistinguishable: a research that was created but whose card
+        // never appeared looked exactly like a command that started nothing.
+        // 180s covers a cold first call, which took 72s in the measurement above
+        // but missed a 120s window once on a slow start.
         await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 180_000, message: "the command should start exactly one new research" }).toBe(1);
         researchId = (await read()).find((entry: any) => !existingIds.has(entry.research.id)).research.id;
+        // Now the card. The interface re-reads the list on its own while it holds
+        // nothing, so this is short: a card that misses a created event no longer
+        // has to wait for a reload.
+        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 60_000 });
       });
       await journey.step("Inspect completed research", "A terminal status is reached and at least one candidate has a score and insight", async () => {
-        await expect.poll(async () => {
-          const status = (await researchById())?.research.status;
-          return terminalStatuses.includes(status) ? status : null;
-        }, { timeout: 720_000, message: "the research should settle in a terminal status" }).not.toBeNull();
+        // Read the last view each poll: a timeout has to say what the research
+        // was doing, or a stalled engine and a lost record look the same.
+        let last: any;
+        try {
+          await expect.poll(async () => {
+            last = await researchById();
+            const status = last?.research.status;
+            return terminalStatuses.includes(status) ? status : null;
+          }, { timeout: 720_000, message: "the research should settle in a terminal status" }).not.toBeNull();
+        } catch (failure) {
+          const seen = last?.research;
+          throw new Error(`research ${researchId} never settled: status=${seen?.status ?? "absent from the list"} phase=${seen?.phase ?? "?"} round=${seen?.round ?? "?"} reason=${seen?.reason ?? "none"}`, { cause: failure });
+        }
         const { graph, research } = (await researchById())!;
         // A real model can stop short of `completed`; name the persisted reason
         // so a provider or JSON-parse failure is not reported as a value mismatch.
