@@ -737,7 +737,7 @@ export function Sidebar({
             user filed anything. */}
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
-          <div className="side-empty">TEXT.sidebar.noRecent</div>
+          <div className="side-empty">{TEXT.sidebar.noRecent}</div>
         ) : (
           <div className="side-flat">{sessionList("recent", recent)}</div>
         )}
