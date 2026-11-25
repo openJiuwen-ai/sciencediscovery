@@ -118,3 +118,46 @@ test("an idle Session stops asking once the window is spent", async (context) =>
     restoreWindow();
   }
 });
+
+test("a caller that passes a fresh callback on every render does not reset the window", async (context) => {
+  // `onResearchAvailability` is a dependency of the card's `load`, so a caller
+  // that writes it inline (a new function per render) gives `load` a new identity
+  // on every render — and with the window anchored in the effect body, each poll
+  // would restart it and the timer would never stop. The window is held in a ref
+  // so it survives that.
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const restoreWindow = installWindow();
+  context.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const { client, reads } = stubClient(() => false);
+
+  const element = () => createElement(IdeaResearchCard, {
+    client,
+    sessionId: "s1",
+    onError: () => undefined,
+    onResearchAvailability: (_available: boolean) => undefined,
+  });
+  let view: ReactTestRenderer;
+  await act(async () => { view = create(element()); });
+  try {
+    // Six polls, each followed by a render that hands over a new callback.
+    for (const _ of [1, 2, 3, 4, 5, 6]) {
+      await act(async () => { context.mock.timers.tick(5_000); });
+      await act(async () => { view!.update(element()); });
+      await act(async () => { await new Promise((resolve) => setImmediate(resolve)); });
+    }
+    const whileWaiting = reads();
+    assert.ok(whileWaiting > 1, "it still polls while a research could be starting");
+    // Past the five-minute window the timer must stop for good, whatever the
+    // caller does with the callback's identity.
+    await act(async () => { context.mock.timers.tick(5 * 60_000); });
+    const atStop = reads();
+    await act(async () => { context.mock.timers.tick(60_000); });
+    await act(async () => { view!.update(element()); });
+    await act(async () => { await new Promise((resolve) => setImmediate(resolve)); });
+    assert.equal(reads(), atStop, "the window is not restarted by a new callback identity");
+  } finally {
+    await act(async () => view!.unmount());
+    context.mock.timers.reset();
+    restoreWindow();
+  }
+});

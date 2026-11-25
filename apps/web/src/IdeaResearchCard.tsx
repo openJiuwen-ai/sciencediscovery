@@ -21,10 +21,15 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState<string>();
   const [error, setError] = useState<string>();
+  /** When this card first saw an empty list; the bounded re-read is measured from it. */
+  const emptySince = useRef<number | null>(null);
+  /** Latest availability callback, held in a ref so `load` keeps one identity. */
+  const announce = useRef(onResearchAvailability);
+  announce.current = onResearchAvailability;
   const load = useCallback(async () => {
-    try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); onResearchAvailability?.(result.items.length > 0); }
+    try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); announce.current?.(result.items.length > 0); }
     catch (e) { setError(isAuthFailure(e) ? undefined : e instanceof Error ? e.message : String(e)); }
-  }, [client, sessionId, onResearchAvailability]);
+  }, [client, sessionId]);
   useEffect(() => { void load(); }, [load]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
   const [reconnect, setReconnect] = useState(0);
@@ -54,13 +59,19 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
    * for long: the timer stops once an item appears or the window is spent.
    */
   useEffect(() => {
-    if (items.length > 0) return undefined;
-    const started = Date.now();
+    if (items.length > 0) { emptySince.current = null; return undefined; }
+    // Anchored in a ref, not in the effect body: `load`'s identity comes from the
+    // parent's props, so a parent that passed an inline callback would restart the
+    // window on every poll and keep the timer alive for as long as the card is
+    // mounted. `IdeaTreeView` passes a state setter today, but the bound should
+    // not depend on how a caller writes that prop.
+    if (emptySince.current === null) emptySince.current = Date.now();
     // Bare `setInterval`, like the SSE clock above: this file is a browser
     // component, and a test harness that stubs `window` should not have to stub
     // its timers as well.
     const timer = setInterval(() => {
-      if (Date.now() - started > EMPTY_POLL_WINDOW_MS) {
+      const started = emptySince.current;
+      if (started === null || Date.now() - started > EMPTY_POLL_WINDOW_MS) {
         clearInterval(timer);
         return;
       }
