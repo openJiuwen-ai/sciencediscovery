@@ -66,16 +66,22 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   const [selectedId, setSelectedId] = useState<string>();
   const live = useRef<AbortController | undefined>(undefined);
 
-  const load = useCallback(async () => {
+  /** `keepError` is a control refusal that outlives the reload: the read refreshes the
+   *  tree, but its own success or failure must not erase why the control was refused. */
+  const load = useCallback(async (keepError?: string) => {
     try {
       setView(await getIdeaResearch(client, sessionId, researchId));
       // A later read that works is what makes the prerequisite notice go away:
       // the service came back, and the panel should not keep saying it is down.
       setUnavailable(false);
-      setError(undefined);
+      setError(keepError);
     } catch (reason: unknown) {
-      if (isUnavailable(reason)) setUnavailable(true);
-      else setError(reason instanceof Error ? reason.message : String(reason));
+      if (isUnavailable(reason)) {
+        setUnavailable(true);
+        if (keepError !== undefined) setError(keepError);
+      } else {
+        setError(keepError ?? (reason instanceof Error ? reason.message : String(reason)));
+      }
     }
   }, [client, researchId, sessionId]);
 
@@ -124,10 +130,16 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
       setView(await controlIdeaResearch(client, sessionId, researchId, operation));
       setUnavailable(false);
     } catch (reason: unknown) {
-      if (isUnavailable(reason)) setUnavailable(true);
-      else setError(reason instanceof Error ? reason.message : String(reason));
-      // The engine refused; re-read rather than leave the optimistic state behind.
-      await load();
+      if (isUnavailable(reason)) {
+        setUnavailable(true);
+        await load();
+      } else {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        // The engine refused; re-read rather than leave the optimistic state behind,
+        // but keep the refusal on the error bar: the reload is not its resolution.
+        await load(message);
+      }
     } finally {
       setBusy(false);
       setConfirmEnd(false);
