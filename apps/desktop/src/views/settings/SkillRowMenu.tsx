@@ -142,6 +142,10 @@ export function SkillRowMenu({ canDelete = true, canEdit, canExport = true, disa
     </button>
   );
 
+  // A press that only opens an empty popover is worse than no press: the page
+  // header of a built-in package offers no action, so it shows no trigger.
+  if (!canExport && !canEdit && !canDelete) return null;
+
   return (
     <div
       className="skill-row-menu"

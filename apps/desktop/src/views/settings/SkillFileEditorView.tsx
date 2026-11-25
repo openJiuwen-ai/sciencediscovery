@@ -209,24 +209,35 @@ export function SkillFileEditorView({ client, onCancel, onSaved, skillId }: Prop
           content: drafts[SKILL_MD],
           expectedRevision: next.currentRevision,
         });
+        // Each answer lands as it arrives: a later failure must not leave the
+        // editor holding the revision it read before the writes that already
+        // committed, or its retry would be a conflict every time.
         setRaw({ content: drafts[SKILL_MD], revision: next.currentRevision });
         delete remaining[SKILL_MD];
+        applyDetail(next);
+        setDrafts({ ...remaining });
       }
       for (const [path, content] of Object.entries(drafts)) {
-        if (path === SKILL_MD) continue;
+        if (path === SKILL_MD || remaining[path] === undefined) continue;
         next = await updateSkillFile(client, skillId, path, {
           content,
           expectedRevision: next.currentRevision,
         });
         loadedContents[path] = content;
         delete remaining[path];
+        applyDetail(next);
+        setContents({ ...loadedContents });
+        setDrafts({ ...remaining });
       }
-      applyDetail(next);
-      setRaw((current) => (current === undefined ? current : { ...current, revision: next.currentRevision }));
       setDrafts(remaining);
       setContents(loadedContents);
       onSaved(next);
     } catch (reason) {
+      // Keep what landed: the next 保存 starts from the revision the server
+      // already holds and resends only the drafts that failed.
+      applyDetail(next);
+      setDrafts({ ...remaining });
+      setContents({ ...loadedContents });
       setFailure(messageOf(reason));
     } finally {
       setSaving(false);
