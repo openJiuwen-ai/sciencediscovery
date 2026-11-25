@@ -348,9 +348,14 @@ class IdeaTreeEngine:
                     self.reserved -= estimate
             self.save()
             self.check_stop()
-            if raw is None or isinstance(raw, str) and not raw.strip():
-                raise ValueError(f'{role}: empty or truncated model output; stage cannot continue')
             try:
+                # An empty answer is a content failure like any other, so it takes the
+                # same single correction and the model is told its previous answer was
+                # empty. Raising here instead used to end a research that one more
+                # call could have saved, because the check sat outside this branch
+                # (#1327). A second empty answer still fails the stage, by name.
+                if raw is None or isinstance(raw, str) and not raw.strip():
+                    raise ValueError('empty or truncated model output; stage cannot continue')
                 result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
                 if check:
                     check(result)
@@ -358,7 +363,7 @@ class IdeaTreeEngine:
             except (ValueError, TypeError) as error:
                 if attempt:
                     raise ValueError(f'{role}: invalid model result after one correction: {error}') from error
-                payload = {**payload, 'correction': str(error), 'previousResponse': str(raw)[:4000]}
+                payload = {**payload, 'correction': str(error), 'previousResponse': str(raw)[:4000] if raw is not None else ''}
         raise AssertionError('unreachable')
 
     def context(self):
