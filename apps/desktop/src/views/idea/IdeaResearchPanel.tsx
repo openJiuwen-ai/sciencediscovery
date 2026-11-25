@@ -149,6 +149,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
   // Re-read the node from the view that is on screen: a frame may have replaced it.
   const selectedNode = selectedId === undefined ? undefined : view.graph.nodes.find((node) => node.id === selectedId);
   const canResume = research.status === "paused" || research.status === "interrupted";
+  // A spent budget is terminal: there is no 继续, and the engine's English reason is
+  // replaced by a Chinese note that names the used and limit token counts.
+  const budgetExhausted = research.status === "budget_exhausted";
   return (
     <section className="idea-panel" aria-label={t.heading}>
       <header className="idea-panel-header">
@@ -165,7 +168,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
         {research.batch.length ? <span>{t.batch(research.batchCompleted, research.batch.length)}</span> : null}
         <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
       </div>
-      {research.reason ? <p className="idea-panel-reason">{t.reason(research.reason)}</p> : null}
+      {budgetExhausted
+        ? <p className="idea-panel-reason">{t.budgetExhausted(research.usageKnown ? research.tokens : null, research.settings.maxTokens ?? null)}</p>
+        : research.reason ? <p className="idea-panel-reason">{t.reason(research.reason)}</p> : null}
       {error ? (
         <div className="idea-panel-error" role="alert">
           <span>{error}</span>

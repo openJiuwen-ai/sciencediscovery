@@ -74,9 +74,11 @@ automatically. Model requests use the proxy's roughly 20-minute limit.
 
 An optional total-token budget relies on usage reported by the provider. Before a
 request, the service conservatively reserves input and output tokens by UTF-8 byte
-count, so it can pause early. This is not an exact billing limit. When a provider does
-not report usage, the display is unknown and research with a total budget is
-interrupted. Materials and each stage's output have length limits. Ideation carries only
+count, so it can stop before overspending. This is not an exact billing limit. When a
+provider does not report usage, the display is unknown. A research that exhausts the
+budget records the terminal `budget_exhausted` status, keeps the used and limit token
+counts with the reason, and cannot be continued: raise the token limit and start a new
+research. Materials and each stage's output have length limits. Ideation carries only
 direction summaries plus recent and stronger candidates, not the chat history.
 
 Research scores and material recommendations are model assessments. Do not treat them

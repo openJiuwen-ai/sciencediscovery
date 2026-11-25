@@ -238,20 +238,24 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         gate.set()
         await task
         self.assertEqual(self.state['status'], 'paused')
+        self.assertNotEqual(self.state['status'], 'budget_exhausted', 'a user pause stays resumable')
         self.assertEqual(len(self.state['nodes']), 1)
         self.assertEqual(self.state['tokens'], 100)
 
     async def test_token_budget_and_missing_usage(self):
         self.state['settings']['maxTokens'] = 1
         await IdeaTreeEngine(self.state, self.store, {}, self.model).run()
-        self.assertEqual(self.state['status'], 'paused')
+        # A spent budget is terminal and says so; a user pause is not the same outcome.
+        self.assertEqual(self.state['status'], 'budget_exhausted')
+        self.assertIn('Remaining token budget cannot fund the next stage', self.state['reason'])
+        self.assertIn('Used 0 of 1 tokens', self.state['reason'])
         self.assertEqual(self.calls, [])
         self.state['settings']['maxTokens'] = 100000
         async def unknown(role, payload):
             raw, _ = await self.model(role, payload)
             return raw, None
         await IdeaTreeEngine(self.state, self.store, {}, unknown).run()
-        self.assertEqual(self.state['status'], 'paused')
+        self.assertEqual(self.state['status'], 'budget_exhausted')
         self.assertIn('budget', self.state['reason'])
         self.assertFalse(self.state['usageKnown'])
         self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
@@ -582,6 +586,29 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             ended = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
             self.assertEqual(ended['research']['status'], 'ended')
             self.assertNotIn(identifier, service._running)
+
+    async def test_service_refuses_to_continue_a_budget_exhausted_research(self):
+        # The Python lifecycle must reject the terminal budget state too, even if a
+        # caller bypasses the API client's own resumability check.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from fastapi import HTTPException
+        self.state.update(status='budget_exhausted',
+                          reason='Remaining token budget cannot fund the next stage. Used 10 of 5 tokens')
+        self.store.save(self.state)
+        with patch.object(service, '_store', self.store), \
+                patch.object(service, 'start', side_effect=AssertionError('must not start')):
+            continuation = service.Command(projectId='p', sessionId='s', researchId='research-test', operation='continue',
+                                           llm=dict(url='http://localhost', token='local'))
+            with self.assertRaises(HTTPException) as conflict:
+                await service.command(continuation)
+            self.assertEqual(conflict.exception.status_code, 409)
+            self.assertIn('increase the token limit', conflict.exception.detail)
+            # pause/end may not overwrite the terminal state into a resumable one.
+            for operation in ('pause', 'end'):
+                answer = await service.command(service.Command(projectId='p', sessionId='s', researchId='research-test', operation=operation))
+                self.assertEqual(answer['research']['status'], 'budget_exhausted')
+            self.assertEqual(service.state_for('p', 's', 'research-test')['status'], 'budget_exhausted')
 
     async def test_parallel_assessments_publish_independent_progress(self):
         started = asyncio.Event()

@@ -16,7 +16,7 @@ const cases = [
 // a scored candidate, so every wait below stops on any of them and then names
 // the persisted reason: a run that failed a model call must not be reported as
 // a value mismatch after burning its whole poll budget.
-const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
+const terminalStatuses = ["completed", "interrupted", "paused", "ended", "budget_exhausted"];
 
 // `standard` is three rounds of three candidates with three independent
 // assessors, so the waits are ordered under the 7200s case budget instead of
@@ -257,7 +257,7 @@ for (const scenario of cases) {
         await expect.poll(async () => {
           const current = await status();
           return terminalStatuses.includes(current) ? current : "waiting";
-        }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).toMatch(/^(completed|interrupted|paused|ended)$/);
+        }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).toMatch(/^(completed|interrupted|paused|ended|budget_exhausted)$/);
         const stored = await researchById();
         expect(stored, `research ${researchId} should still be readable`).toBeDefined();
         const { research, graph } = stored!;

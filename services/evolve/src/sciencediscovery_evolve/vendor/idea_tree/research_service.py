@@ -156,11 +156,15 @@ async def command(c: Command):
         if c.operation == 'get':
             return view(s)
         if c.operation == 'continue':
+            if s['status'] == 'budget_exhausted':
+                raise HTTPException(409, 'Research exhausted its token budget; increase the token limit and start a new research')
             if s['status'] in ['completed', 'ended']:
                 raise HTTPException(409, 'Research has ended; create a new research')
             start(s, c.llm)
         elif c.operation in ['pause', 'end']:
-            if s['status'] in ['completed', 'ended']:
+            # A spent budget is terminal: pause/end must not resurrect it as a resumable
+            # user pause or as an ended research.
+            if s['status'] in ['completed', 'ended', 'budget_exhausted']:
                 return view(s)
             active = _running.get(s['id'])
             if active:

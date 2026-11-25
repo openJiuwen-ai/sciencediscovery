@@ -77,3 +77,56 @@ test("with no override a research gets the deployment parameters unchanged", asy
   const payload = await createdPayload(storeWith({}));
   assert.deepEqual(payload.settings, GLOBAL);
 });
+
+function researchView(status: string) {
+  return {
+    research: {
+      id: "research-1", objective: "Compare treatments", status, phase: "ideate", round: 0,
+      batch: [], batchCompleted: 0, tokens: 10, usageKnown: true, reason: null, modelId: "m1",
+      currentNodeId: null, settings: GLOBAL,
+    },
+    graph: { edges: [], nodes: [], objective: "Compare treatments", revision: 0, treeId: "research-1", updatedAt: "" },
+  };
+}
+
+/** Send one continue and keep the engine payloads and issued model grants. */
+async function continueAttempt(status: string) {
+  const sent: Array<{ operation: string }> = [];
+  const issued: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    sent.push(payload);
+    return { ok: true, json: async () => (payload.operation === "continue" ? researchView("running") : researchView(status)) } as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens: { issue: (id: string) => { issued.push(id); return "t"; }, revoke: () => undefined } as never,
+  });
+  let error: unknown;
+  try {
+    await client.command("s1", "continue", { researchId: "research-1" });
+  } catch (reason: unknown) {
+    error = reason;
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+  return { error, issued, sent };
+}
+
+test("continue refuses a research whose token budget is spent", async () => {
+  const attempt = await continueAttempt("budget_exhausted");
+  assert.match(String(attempt.error), /increase the token limit and start a new research/);
+  assert.deepEqual(attempt.sent.map((payload) => payload.operation), ["get"], "only the status read reached the engine; nothing was started");
+  assert.deepEqual(attempt.issued, [], "no model grant was issued for a terminal research");
+});
+
+test("continue still restarts a paused research", async () => {
+  const attempt = await continueAttempt("paused");
+  assert.equal(attempt.error, undefined);
+  assert.deepEqual(attempt.sent.map((payload) => payload.operation), ["get", "continue"]);
+  assert.deepEqual(attempt.issued, ["research-1"]);
+});

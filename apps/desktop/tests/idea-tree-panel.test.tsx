@@ -6,24 +6,26 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import { ApiRequestError, type ApiClient } from "../src/api/client.js";
+import type { IdeaResearchView } from "@sciencediscovery/schema";
 import { IdeaResearchPanel } from "../src/views/idea/IdeaResearchPanel.js";
 import { TEXT } from "../src/text.js";
 
 const t = TEXT.ideaTree;
 
-function view(status = "running") {
+function view(status = "running", researchPatch: Partial<IdeaResearchView["research"]> = {}) {
   return {
     research: {
       id: "research-1", objective: "提升膜通量", status, phase: "building_tree", round: 1,
       batch: [], batchCompleted: 0, tokens: 0, usageKnown: false, reason: null, modelId: "m",
       currentNodeId: null,
-      settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
+      settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2, maxTokens: null },
+      ...researchPatch,
     },
     graph: { edges: [], nodes: [], objective: "提升膜通量", revision: 1, treeId: "tree-1", updatedAt: "2026-11-18T00:00:00Z" },
   };
 }
 
-function fakeClient(options: { unavailable?: boolean; streamBody?: string } = {}) {
+function fakeClient(options: { unavailable?: boolean; streamBody?: string; status?: string; researchPatch?: Partial<IdeaResearchView["research"]> } = {}) {
   const calls: Array<{ path: string; method: string; body?: unknown }> = [];
   const stub = {
     calls,
@@ -32,7 +34,7 @@ function fakeClient(options: { unavailable?: boolean; streamBody?: string } = {}
       calls.push({ path, method: init?.method ?? "GET", body });
       if (options.unavailable) throw new ApiRequestError("Evolve is not initialized or unavailable", 503);
       if (body?.operation === "pause") return view("paused");
-      return view("running");
+      return view(options.status ?? "running", options.researchPatch);
     },
     fetchStream: async () => new Response(options.streamBody ?? "", { status: 200, headers: { "content-type": "text/event-stream" } }),
   };
@@ -112,6 +114,39 @@ test("结束 asks before it ends a research that cannot be resumed", async () =>
     1,
     "the second press is the one that ends it",
   );
+  panel.unmount();
+});
+
+test("a budget-exhausted research is finished, not resumable, and names the tokens it spent", async () => {
+  const api = fakeClient({
+    status: "budget_exhausted",
+    researchPatch: {
+      tokens: 200000, usageKnown: true,
+      reason: "Remaining token budget cannot fund the next stage. Used 200000 of 200000 tokens",
+      settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2, maxTokens: 200000 },
+    },
+  });
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const text = JSON.stringify(panel.toJSON());
+  assert.match(text, /已结束/, "a spent budget is a finished research, not 已暂停");
+  assert.equal(text.includes("已暂停"), false);
+  assert.equal(panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.resume)).length, 0, "there is no 继续 button to press into the same ceiling");
+  assert.match(text, /200000/, "the note names the used and limit token counts");
+  assert.equal(text.includes("Remaining token budget cannot fund the next stage"), false, "the engine's English reason is not shown verbatim");
+  assert.equal(api.calls.filter((call) => (call.body as { operation?: string } | undefined)?.operation === "continue").length, 0);
+  panel.unmount();
+});
+
+test("a user pause still offers 继续", async () => {
+  const api = fakeClient({ status: "paused" });
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const text = JSON.stringify(panel.toJSON());
+  assert.match(text, /已暂停/);
+  assert.ok(panel.root.findAll((node) => node.type === "button" && JSON.stringify(node.props.children).includes(t.resume)).length > 0, "a paused research is still resumable");
   panel.unmount();
 });
 

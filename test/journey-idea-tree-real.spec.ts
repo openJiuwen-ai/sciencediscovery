@@ -42,7 +42,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
     // The engine settles a research in one of these states; only `completed`
     // can grow a scored candidate, so the poll must stop on any of them instead
     // of waiting out its whole budget on a run that will never finish.
-    const terminalStatuses = ["completed", "interrupted", "paused", "ended"];
+    const terminalStatuses = ["completed", "interrupted", "paused", "ended", "budget_exhausted"];
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
     const read = async () => {

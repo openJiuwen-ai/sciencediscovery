@@ -24,6 +24,7 @@ const STATUS_KEYS: Record<string, MessageKey> = {
   interrupted: "ideaResearch.status.interrupted",
   completed: "ideaResearch.status.completed",
   ended: "ideaResearch.status.ended",
+  budget_exhausted: "ideaResearch.status.budget_exhausted",
 };
 
 const ACTIVITY_STATUS_KEYS: Record<string, MessageKey> = {
