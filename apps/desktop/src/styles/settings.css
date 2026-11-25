@@ -2263,3 +2263,8 @@ a.secondary-button {
 }
 .skill-confirm-accept:hover:not(:disabled) { background: #000; }
 .skill-confirm-accept:disabled { opacity: .45; cursor: default; }
+
+/* A refusal acted on from a package's own page belongs on that page: the
+   switch and the delete live here now, and their failure used to be drawn in
+   a list branch that is no longer mounted. */
+.skill-subpage-notices { display: grid; gap: 6px; margin: 0 0 12px; }

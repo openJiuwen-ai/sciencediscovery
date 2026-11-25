@@ -622,6 +622,19 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       {trail}
       <div className={`settings-group-detail${view.kind === "list" ? " is-skill-list" : ""}${view.kind === "detail" ? " is-skill-detail" : ""}${view.kind === "edit" ? " is-skill-file-editor" : ""}`}>
       {header}
+      {view.kind !== "list" && (failure !== undefined || exportStatus !== undefined) ? (
+        <div className="skill-subpage-notices">
+          {failure === undefined ? null : <small className="row-note is-error" role="alert">{failure}</small>}
+          {exportStatus === undefined ? null : (
+            <span
+              className={`skill-export-status${exportStatus.error ? " is-error" : ""}`}
+              role={exportStatus.error ? "alert" : "status"}
+            >
+              {exportStatus.message}
+            </span>
+          )}
+        </div>
+      ) : null}
       {view.kind === "list" ? (() => {
         // The tabs and the add control stay on screen while the first read is
         // in flight: 添加技能 is a way in, not a property of the list below it.
