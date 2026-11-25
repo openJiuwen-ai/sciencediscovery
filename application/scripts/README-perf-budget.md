@@ -44,7 +44,8 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
 | `ok` | 两层线内 | — |
 | `regression` | 超 `baselineMs × 1.4` 但未超 `hangMs` | **warn**（退出码仍 0）；连续第 2 次由外层升为 fail |
 | `hang` | 超 `hangMs`；**或事件对缺失**（ready/healthy 行从未出现） | **fail**（退出码 1，带缺失事件归因） |
-| `blocked` | 事件对缺失**仅因上游组件挂死**（如 jw 没起来 → AGENT-READY 不会发） | 归因到上游（`BLK ... blocked by jw-ready`），不重复计数 |
+| `blocked` | 事件对缺失**仅因上游组件挂死**（如 jw 没起来 → AGENT-READY 不会发） | 归因到**根**（`BLK ... blocked by jw-ready`——报根因不报中间跳，F6），不重复计数 |
+| `skipped` | 组件被合法禁用——会话里有栈侧显式 `*-skipped` 打点（F7：`SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0` 等文档化配置） | 可见不判定（`SKP ... feature off`），不算 hang |
 
 **退出码**：0 过 / 1 有 hang / 2 用法错 / **3 会话存在但零判定行**（什么都没测到——reuse / wizard 路径目前不发 kind 标记，属覆盖缺口信号而非通过）。
 

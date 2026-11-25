@@ -668,6 +668,10 @@ try {
 
   // Sidecars: memory-graph and evolve run in the background. The control API
   // does not need them to answer /api/health, so don't block the API on them.
+  // A sidecar this stack is NOT starting emits an explicit *-skipped perf
+  // marker instead of nothing: the timing gate judges an absent pair as a
+  // hang, so a legitimately-disabled component must say so (F7 — the
+  // evidence-based exemption the gate reads, same shape as unpack's).
   const sidecarPromises = [];
   if (startsMemoryGraph) {
     sidecarPromises.push((async () => {
@@ -690,19 +694,24 @@ try {
         },
       });
       children.push(memoryGraphChild);
-      if (!await waitHealthy("memory-graph", `${memoryGraphUrl}/health`, { timeoutSeconds: memoryGraphTimeoutSeconds })) {
+      if (await waitHealthy("memory-graph", `${memoryGraphUrl}/health`, { timeoutSeconds: memoryGraphTimeoutSeconds })) {
+        perf("memory-graph-healthy");
+      } else {
         // Scientific memory is optional and user-toggled: a sidecar that will
         // not come up must not take the whole app down. The API process was
         // already spawned above with its own env snapshot, so there is nothing
         // to hand off — it simply finds the sidecar unreachable and reports
         // memoryGraph="degraded" on /api/health, which the UI shows.
+        // The healthy marker is NOT emitted here (F7 review): the gate must
+        // see the pair as missing and flag it, not read a lie.
         const childIndex = children.indexOf(memoryGraphChild);
         if (childIndex >= 0) children.splice(childIndex, 1);
         killTree(memoryGraphChild);
         say("WARNING: the memory-graph service is unavailable; continuing without scientific memory.");
       }
-      perf("memory-graph-healthy");
     })());
+  } else {
+    perf("memory-graph-skipped", "feature-off");
   }
   if (evolvePython) {
     sidecarPromises.push((async () => {
@@ -719,6 +728,8 @@ try {
       }
       perf("evolve-healthy");
     })());
+  } else {
+    perf("evolve-skipped", "feature-off");
   }
 
   // JiuwenSwarm: lazy mode starts in the background and does not block the

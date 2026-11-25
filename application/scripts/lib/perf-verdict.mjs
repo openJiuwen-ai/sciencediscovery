@@ -76,6 +76,25 @@ function copyPathSkipped(session) {
 }
 
 /**
+ * Components the stack may legitimately not start (F7): an optional
+ * sidecar disabled by configuration (SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0)
+ * or without its venv. The stack emits an explicit "<name>-skipped" perf
+ * marker for each; a session carrying that marker reports the component
+ * as `skipped` (visible in the report, judged nothing) — the same
+ * evidence-based exemption shape as unpack's copyPathSkipped.
+ */
+const SKIPPABLE = {
+  "memory-graph-ready": { domain: "stack", event: "memory-graph-skipped" },
+  "evolve-ready":       { domain: "stack", event: "evolve-skipped" },
+};
+
+function componentSkipped(session, component) {
+  const spec = SKIPPABLE[component];
+  if (!spec) return false;
+  return session.some((e) => e.domain === spec.domain && e.event === spec.event);
+}
+
+/**
  * Judge one component duration against its budget line.
  * Pure; returns a verdict row (see header for the verdicts).
  *
@@ -149,6 +168,13 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
     // branch which returns before unpack-enter): a missing unpack pair
     // is expected, not a hang (F2).
     if (d.component === "unpack" && skipCopyPair && d.durationMs === null) continue;
+    // An optional sidecar this stack never started (F7): the stack's own
+    // *-skipped marker is the evidence — report `skipped`, judge nothing,
+    // never a hang on a documented-supported configuration.
+    if (componentSkipped(session, d.component)) {
+      judgedRows.push({ component: d.component, verdict: "skipped", durationMs: null, budget: budget.hangMs, note: "feature off (evidence: skipped marker)" });
+      continue;
+    }
     judgedRows.push(judgeComponent(d.component, d.durationMs, d.missing, budget, undefined, hangOnly));
   }
   // Subordination (F4), second pass: a missing row whose pair cannot exist
@@ -156,24 +182,22 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
   // not an independent hang — whatever direction its own missing half is
   // (agent-ready lacks its TO AGENT-READY; shell-ui lacks its FROM). Blocked
   // can itself be blocked (jw -> agent-ready -> shell-ui): resolve
-  // transitively, the root stays the single hang.
+  // transitively and report THE ROOT in blockedBy (F6: the intermediate
+  // hop is an implementation detail; the on-call reads the root cause).
   const byName = new Map(judgedRows.map((r) => [r.component, r]));
   const rows = judgedRows.map((row) => {
     if (row.verdict !== "hang" || row.durationMs !== null) return row;
-    const upstream = BLOCKED_BY[row.component];
+    let upstream = BLOCKED_BY[row.component];
     if (!upstream) return row;
+    const root = (name) => BLOCKED_BY[name] ?? name;
     const upstreamRow = byName.get(upstream);
     const upstreamStalled =
       upstreamRow && upstreamRow.verdict === "hang" && upstreamRow.durationMs === null;
     if (upstreamStalled) {
-      // find the transitive root (upstream may itself be blocked)
-      let root = upstream;
-      let rootRow = upstreamRow;
-      while (rootRow?.verdict === "blocked" && BLOCKED_BY[root]) {
-        root = BLOCKED_BY[root];
-        rootRow = byName.get(root);
-      }
-      return { ...row, verdict: "blocked", blockedBy: root };
+      // walk to the ROOT: intermediate hops are themselves blocked rows
+      let r = upstream;
+      while (BLOCKED_BY[r]) r = BLOCKED_BY[r];
+      return { ...row, verdict: "blocked", blockedBy: r };
     }
     return row;
   });
@@ -182,6 +206,7 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
     regression: rows.filter((r) => r.verdict === "regression").length,
     ok: rows.filter((r) => r.verdict === "ok").length,
     blocked: rows.filter((r) => r.verdict === "blocked").length,
+    skipped: rows.filter((r) => r.verdict === "skipped").length,
   };
   return { kind, rows, summary };
 }

@@ -327,6 +327,66 @@ test("hang-only mode still fails a hang (absolute line, machine-independent)", (
 });
 
 // ---------------------------------------------------------------------------
+// verdict: F7 — a legitimately-disabled sidecar must not read as a hang
+
+test("a feature-off sidecar (skipped marker) is skipped, not hang (F7)", () => {
+  // SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0 (or a missing venv) means the
+  // stack never starts memory-graph and never emits the spawn/healthy
+  // pair — the stack's explicit *-skipped marker is the evidence. The
+  // session is healthy; judging the absent pair as hang would false-fail
+  // a documented-supported configuration and get the gate switched off.
+  const warm = syntheticWarmSession();
+  const withSkippedMarker = warm.map((e) =>
+    e.event === "memory-graph-spawn"
+      ? { domain: "stack", event: "memory-graph-skipped", atMs: e.atMs, offsetMs: e.offsetMs, raw: "[SD-PERF] stack memory-graph-skipped +2ms" }
+      : e,
+  ).filter((e) => e.event !== "memory-graph-healthy");
+  const judged = judgeSession(withSkippedMarker);
+  const mgRow = judged.rows.find((r) => r.component === "memory-graph-ready");
+  assert.equal(mgRow.verdict, "skipped");
+  assert.match(mgRow.note, /feature off/);
+  assert.equal(judged.summary.hang, 0, "a feature-off session is healthy");
+  assert.equal(judged.summary.skipped, 1);
+  assert.equal(exitCode([judged]), 0);
+});
+
+test("skipped applies in hang-only mode too (CI default)", () => {
+  const warm = syntheticWarmSession();
+  const withSkippedMarker = warm.map((e) =>
+    e.event === "memory-graph-spawn"
+      ? { domain: "stack", event: "memory-graph-skipped", atMs: e.atMs, offsetMs: e.offsetMs, raw: "[SD-PERF] stack memory-graph-skipped +2ms" }
+      : e,
+  ).filter((e) => e.event !== "memory-graph-healthy");
+  const judged = judgeSession(withSkippedMarker, undefined, { hangOnly: true });
+  assert.equal(judged.rows.find((r) => r.component === "memory-graph-ready").verdict, "skipped");
+  assert.equal(judged.summary.hang, 0);
+});
+
+// ---------------------------------------------------------------------------
+// verdict: F6 — blockedBy reports the ROOT, not the intermediate hop
+
+test("blockedBy names the transitive root, not the intermediate hop (F6)", () => {
+  // jw stalls -> agent-ready blocked by jw -> shell-ui blocked by agent-ready
+  // (intermediate). The on-call reads blockedBy to find the cause: it must
+  // say jw-ready (the root), not agent-ready (an implementation detail).
+  const warm = syntheticWarmSession();
+  const filtered = warm.filter(
+    (e) =>
+      !(
+        (e.domain === "jw" && e.event === "IS-UP") ||
+        (e.domain === "shell" && (e.event === "AGENT-READY" || e.event === "loadUi-loadURL" || e.event === "loadUi")) ||
+        (e.domain === "warmup" && e.event === "warmup-first-chat")
+      ),
+  );
+  const judged = judgeSession(filtered);
+  const shellUiRow = judged.rows.find((r) => r.component === "shell-ui");
+  assert.equal(shellUiRow.verdict, "blocked");
+  assert.equal(shellUiRow.blockedBy, "jw-ready", "the ROOT cause, not the intermediate agent-ready hop");
+  const warmupRow = judged.rows.find((r) => r.component === "warmup-done");
+  assert.equal(warmupRow.blockedBy, "jw-ready");
+});
+
+// ---------------------------------------------------------------------------
 // verdict: subordination (F4) — one upstream stall paints ONE red
 
 test("a jw stall cascades to blocked rows, not four hangs", () => {

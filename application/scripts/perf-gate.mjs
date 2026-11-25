@@ -105,11 +105,13 @@ if (jsonOut) {
     const verdict =
       j.summary.hang > 0 ? "HANG" : j.summary.regression > 0 ? "REGRESSION" : "ok";
     const blockedNote = j.summary.blocked > 0 ? `, blocked ${j.summary.blocked}` : "";
-    console.log(`  ${label}: ${verdict}  (ok ${j.summary.ok}, regression ${j.summary.regression}, hang ${j.summary.hang}${blockedNote})`);
+    const skippedNote = j.summary.skipped > 0 ? `, skipped ${j.summary.skipped}` : "";
+    console.log(`  ${label}: ${verdict}  (ok ${j.summary.ok}, regression ${j.summary.regression}, hang ${j.summary.hang}${blockedNote}${skippedNote})`);
     for (const r of j.rows) {
       const ms = r.durationMs === null ? "missing" : `${r.durationMs}ms`;
       const line = `      ${r.component.padEnd(22)} ${String(ms).padStart(10)}  (budget ${r.budget}ms)`;
       if (r.verdict === "ok") console.log(line);
+      else if (r.verdict === "skipped") console.log(`  SKP ${line}  <- ${r.note}`);
       else if (r.verdict === "regression") console.log(`  REG ${line}`);
       else if (r.verdict === "blocked") console.log(`  BLK ${line}  <- blocked by ${r.blockedBy}`);
       else console.log(`  HANG ${line}${r.missing ? `  <- ${r.missing}` : ""}`);
