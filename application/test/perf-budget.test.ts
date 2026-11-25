@@ -384,11 +384,6 @@ test("a skipped marker never hides a real measurement (round 6 nit)", () => {
   // marker-plus-measurement session reports the measured duration, never
   // a skipped row that would hide live data.
   const warm = syntheticWarmSession();
-  const withMarkerToo = warm.map((e) =>
-    e.event === "evolve-healthy"
-      ? { ...e, domain: "stack", event: "evolve-skipped", raw: "[SD-PERF] stack evolve-skipped +2ms" }
-      : e,
-  );
   // inject the marker AFTER the pair so the pair stays intact
   const withBoth = [...warm, { domain: "stack", event: "evolve-skipped", atMs: 1, offsetMs: 1, raw: "[SD-PERF] stack evolve-skipped +2ms" }];
   const judged = judgeSession(withBoth);
@@ -420,6 +415,59 @@ test("blockedBy names the transitive root, not the intermediate hop (F6)", () =>
   assert.equal(shellUiRow.blockedBy, "jw-ready", "the ROOT cause, not the intermediate agent-ready hop");
   const warmupRow = judged.rows.find((r) => r.component === "warmup-done");
   assert.equal(warmupRow.blockedBy, "jw-ready");
+});
+
+test("the walk never crosses a HEALTHY hop: agent-ready-root shape (F12)", () => {
+  // jw comes UP fine, but AGENT-READY never fires (the shell's own watch
+  // stalled). The old walk went to the chain's end unconditionally, so
+  // shell-ui/warmup-done said "blocked by jw-ready" — naming a component
+  // that measured ok, while the real stall (agent-ready) hid among several
+  // rows. The fixed walk stops at the first hop that is not itself a
+  // missing-pair hang: blockedBy must say agent-ready here.
+  const warm = syntheticWarmSession();
+  const filtered = warm.filter(
+    (e) =>
+      !(
+        (e.domain === "shell" && (e.event === "AGENT-READY" || e.event === "loadUi-loadURL" || e.event === "loadUi")) ||
+        (e.domain === "warmup" && e.event === "warmup-first-chat")
+      ),
+  );
+  const judged = judgeSession(filtered);
+  const jwRow = judged.rows.find((r) => r.component === "jw-ready");
+  assert.equal(jwRow.verdict, "ok", "precondition: jw is healthy in this shape");
+  const shellUiRow = judged.rows.find((r) => r.component === "shell-ui");
+  assert.equal(shellUiRow.verdict, "blocked");
+  assert.equal(shellUiRow.blockedBy, "agent-ready", "the walk stops at the healthy jw hop and names the real stall");
+  const warmupRow = judged.rows.find((r) => r.component === "warmup-done");
+  assert.equal(warmupRow.blockedBy, "agent-ready");
+});
+
+// ---------------------------------------------------------------------------
+// verdict: F13 — concurrent emitters may legally reverse a pair's order
+
+test("a pair whose to event PRECEDES its from is a note, not a hang (F13)", () => {
+  // shell-ui pairs AGENT-READY (shell's 250ms agent poll) with
+  // loadUi-loadURL (void-invoked right before the watch starts) — the two
+  // emitters are concurrent and either order is a healthy launch (the
+  // green CI run measured 2ms between them). A reversal must surface as
+  // "events out of order — measured, not judged", keeping the number,
+  // never a HANG.
+  const warm = syntheticWarmSession();
+  // swap AGENT-READY and loadUi-loadURL in the event list: move AGENT-READY
+  // to AFTER loadUi-loadURL, so the pair's to event genuinely precedes from
+  const arIdx = warm.findIndex((e) => e.domain === "shell" && e.event === "AGENT-READY");
+  const luIdx = warm.findIndex((e) => e.domain === "shell" && e.event === "loadUi-loadURL");
+  assert.ok(arIdx >= 0 && luIdx > arIdx, "precondition: normal order in the synthetic session");
+  const reversed = [...warm];
+  const [ar] = reversed.splice(arIdx, 1);
+  reversed.splice(luIdx, 0, ar); // AGENT-READY now sits AFTER loadUi-loadURL
+  const judged = judgeSession(reversed);
+  const shellUiRow = judged.rows.find((r) => r.component === "shell-ui");
+  assert.equal(shellUiRow.verdict, "ok");
+  assert.match(shellUiRow.note ?? "", /out of order/);
+  assert.ok(shellUiRow.durationMs !== null, "the measurement is kept");
+  assert.equal(judged.summary.hang, 0, "a concurrent-order launch is healthy");
+  assert.equal(exitCode([judged]), 0);
 });
 
 // ---------------------------------------------------------------------------

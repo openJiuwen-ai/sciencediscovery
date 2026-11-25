@@ -143,6 +143,24 @@ export function componentDurations(session) {
       (e, i) => i > fromIdx && e.domain === pair.to[0] && e.event === pair.to[1],
     );
     if (toIdx < 0) {
+      // F13: the `to` event may legitimately PRECEDE its `from` when the
+      // two emitters run concurrently (shell-ui: AGENT-READY and
+      // loadUi-loadURL are fired by independent async paths, measured 2ms
+      // apart on the green CI run — either order is a healthy launch).
+      // A strict after-from search would call the pair missing and the
+      // gate would report HANG on a fine startup. Report the pair with
+      // outOfOrder so the verdict layer shows it as a note, not a hang.
+      const beforeIdx = session.findIndex(
+        (e, i) => i < fromIdx && e.domain === pair.to[0] && e.event === pair.to[1],
+      );
+      if (beforeIdx >= 0) {
+        out.push({
+          component: pair.component,
+          durationMs: duration(session, fromIdx, beforeIdx, pair),
+          outOfOrder: true,
+        });
+        continue;
+      }
       out.push(missing(pair, "to"));
       continue;
     }
