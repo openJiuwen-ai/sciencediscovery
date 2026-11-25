@@ -81,16 +81,27 @@ function basename(session: Session): string {
   return sessionTitle(session.title);
 }
 
-/** The handoff's relative stamp: 15:46 today, then 1天前, 3天前, 1周前. */
-function stamp(session: Session): string {
+/** The local calendar date of an instant, as a whole-day index. Reading the
+ *  local components and normalizing them to UTC keeps a DST change from turning
+ *  one calendar day into 23 or 25 hours. */
+function calendarDay(time: number): number {
+  const date = new Date(time);
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+/** The row's relative stamp: 15:46 today, then 昨天, 1天前, 3天前, 1周前. */
+export function stamp(
+  session: Pick<Session, "createdAt" | "updatedAt">,
+  now = Date.now(),
+): string {
   const raw = session.updatedAt ?? session.createdAt;
   const time = Date.parse(raw);
   if (Number.isNaN(time)) return "";
-  const now = Date.now();
-  const minutes = Math.round((now - time) / 60000);
-  if (minutes < 60) return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
-  const days = Math.floor(minutes / 60 / 24);
-  if (days < 1) return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+  const days = Math.round((calendarDay(now) - calendarDay(time)) / 86_400_000);
+  // "Today" is the same local calendar date, not "under 24 hours": 22:00
+  // yesterday and 15:46 today must not both read as a bare clock time.
+  if (days <= 0) return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+  if (days === 1) return TEXT.workspace.yesterday;
   if (days < 7) return TEXT.workspace.daysAgo(days);
   return TEXT.workspace.weeksAgo(Math.floor(days / 7));
 }

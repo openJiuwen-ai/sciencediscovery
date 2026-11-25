@@ -1903,6 +1903,7 @@ export const EN: Text = {
     justNow: "just now",
     minutesAgo: (minutes: number) => `${minutes} min ago`,
     hoursAgo: (hours: number) => `${hours} h ago`,
+    yesterday: "yesterday",
     daysAgo: (days: number) => `${days} d ago`,
     weeksAgo: (weeks: number) => `${weeks} w ago`,
     open: "Open",
