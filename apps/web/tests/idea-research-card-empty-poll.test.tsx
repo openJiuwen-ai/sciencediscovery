@@ -45,12 +45,12 @@ function stubClient(items: () => Array<ReturnType<typeof researchView>>) {
   };
 }
 
-/** The card is a browser component: it reads `window.setInterval`. */
+/** The card is a browser component: it reads `window.setTimeout`. */
 function installWindow(): () => void {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
   const browser = Object.assign(new EventTarget(), {
-    setInterval: (callback: () => void, ms: number) => globalThis.setInterval(callback, ms),
-    clearInterval: (id: number) => globalThis.clearInterval(id),
+    setTimeout: (callback: () => void, ms: number) => globalThis.setTimeout(callback, ms),
+    clearTimeout: (id: number) => globalThis.clearTimeout(id),
   });
   Object.defineProperty(globalThis, "window", { configurable: true, value: browser });
   return () => {
@@ -222,6 +222,13 @@ test("a command sent into a Session that has been open for a long time opens a n
 
     assert.ok(reads() > quiet, "the command opened a new window");
     assert.equal(view!.root.findAllByProps({ className: "idea-research-panel" }).length, 1, "the research started after the command is drawn");
+
+    // The expectation is spent once the list grew past what it held when the
+    // command was sent: the card is drawn and nothing else is asked for.
+    const drawn = reads();
+    for (let i = 0; i < 12; i += 1) await act(async () => { context.mock.timers.tick(5_000); });
+    await settle();
+    assert.equal(reads(), drawn, "the expectation stops once its research is drawn");
   } finally {
     await act(async () => view!.unmount());
     context.mock.timers.reset();
@@ -262,6 +269,13 @@ test("a second research created while the client was away is drawn", async (cont
 
     assert.ok(reads() > beforeSecond, "the expectation re-reads a list that is not empty");
     assert.match(drawn(), /The second research/, "the second research is drawn");
+
+    // And it stops there: the second research filled the expectation, so an
+    // already-populated list is not polled again until something arms it.
+    const afterSecond = reads();
+    for (let i = 0; i < 12; i += 1) await act(async () => { context.mock.timers.tick(5_000); });
+    await settle();
+    assert.equal(reads(), afterSecond, "the expectation is spent once the second research is drawn");
   } finally {
     await act(async () => view!.unmount());
     context.mock.timers.reset();
