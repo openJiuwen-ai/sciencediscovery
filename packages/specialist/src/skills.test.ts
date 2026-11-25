@@ -20,6 +20,15 @@ test("skill packages reject missing, blank and non-string descriptions", () => {
   }
 });
 
+test("a package path cannot be both a file and a folder", () => {
+  const files = new Map([
+    ["SKILL.md", Buffer.from("---\nname: shape-check\ndescription: A package.\n---\n\nBody.\n")],
+    ["references/a.md", Buffer.from("# A")],
+    ["references", Buffer.from("not a folder")],
+  ]);
+  assert.throws(() => validateSkillPackage(files), /both a file and a folder: references/u);
+});
+
 test("skill packages preserve a nonblank description and the original package bytes", () => {
   const files = packageWithDescription('description: "  A useful description.  "');
   const loaded = validateSkillPackage(files);

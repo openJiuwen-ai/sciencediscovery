@@ -156,6 +156,22 @@ test("SKILL.md, a file and a folder are edited under the revision the editor saw
       () => catalog.renameFile("file-editor", "docs/b.md", { expectedRevision: 1, to: "x.md" }),
       /revision conflict/u,
     );
+    // A file may not take a folder's name: the writer would have to mkdir a
+    // path a file occupies (or the reverse), which used to surface as EEXIST.
+    await assert.rejects(
+      () => catalog.renameFile("file-editor", "scripts/run.py", {
+        expectedRevision: afterRename.currentRevision,
+        to: "docs",
+      }),
+      /both a file and a folder/u,
+    );
+    await assert.rejects(
+      () => catalog.updateFile("file-editor", "docs", {
+        content: "not a folder",
+        expectedRevision: afterRename.currentRevision,
+      }),
+      /both a file and a folder/u,
+    );
   } finally {
     await rm(dataDir, { force: true, recursive: true });
   }

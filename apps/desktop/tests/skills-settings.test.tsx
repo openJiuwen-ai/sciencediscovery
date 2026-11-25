@@ -241,6 +241,29 @@ test("a match is marked in the name and the clear control restores the list", as
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a refused switch on a package's page is explained there", async () => {
+  const page = {
+    backend: "jiuwenswarm" as const,
+    skills: [installedSkill("review")],
+  };
+  const stub = new StubClient().reply([skill]).reply(page).reply(detail);
+  const view = await mount(stub.asClient());
+  try {
+    const card = view.root.findAllByType("button")
+      .find((node) => node.props.className === "settings-card-main");
+    assert.ok(card);
+    await act(async () => { card.props.onClick(); });
+    for (let tick = 0; tick < 4; tick += 1) {
+      await act(async () => { await Promise.resolve(); });
+    }
+    assert.ok(text(view).includes("Review carefully"), "the package page did not load");
+    stub.fail(new Error("switch refused")).reply([skill]).reply(page);
+    await act(async () => { view.root.findAllByProps({ role: "switch" })[0]!.props.onClick(); });
+    assert.match(text(view), /switch refused/);
+    assert.ok(view.root.findAllByProps({ role: "alert" }).length > 0);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("bundled skills default on while saved disables and managed defaults remain off", async () => {
   const bundled = { ...skill, id: "evolve-design", source: "built-in" as const };
   const disabled = { ...skill, id: "literature-searcher", source: "built-in" as const };

@@ -766,6 +766,18 @@ export function validateSkillPackage(
     }
     files.set(path, bytes);
   }
+  // A path cannot be both a file and a folder. The writer would have to mkdir
+  // a path that a file now occupies (or the reverse) after the revision was
+  // committed, and that surfaces as a raw EEXIST rather than a package error.
+  for (const path of files.keys()) {
+    const segments = path.split("/");
+    for (let depth = 1; depth < segments.length; depth += 1) {
+      const ancestor = segments.slice(0, depth).join("/");
+      if (files.has(ancestor)) {
+        throw validationError(`Skill package path is both a file and a folder: ${ancestor}`);
+      }
+    }
+  }
   const skillMarkdown = files.get("SKILL.md");
   if (!skillMarkdown) throw validationError("Skill package must contain SKILL.md at its root");
   const parsed = parseSkillMarkdown(skillMarkdown);
