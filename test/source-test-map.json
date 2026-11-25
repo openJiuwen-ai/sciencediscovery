@@ -3554,6 +3554,18 @@
           "complexity": "C2"
         }
       ]
+    },
+    {
+      "source": "apps/web/src/ideaResearchNotice.ts",
+      "risk": "P2",
+      "owner": "web",
+      "tests": [
+        {
+          "source": "apps/web/tests/idea-research-notice.test.ts",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
     }
   ]
 }
