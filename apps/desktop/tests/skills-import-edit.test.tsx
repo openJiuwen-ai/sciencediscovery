@@ -14,6 +14,7 @@
 
 import React from "react";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { ApiRequestError, type ApiClient } from "../src/api/client.js";
 import type { ConfirmRequest } from "../src/app/use-workspace.js";
@@ -399,6 +400,58 @@ test("a stale revision is reported as a conflict, not as a failed save", async (
     await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
     assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.conflict));
   } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the editor's size line uses the shared ladder and locale, not a copy of it", async () => {
+  // packageBytes() adds the SKILL.md this form would write, 65 bytes for this
+  // fixture, so this resource puts the package exactly one byte under a MiB.
+  // The deleted local formatter compared the unrounded quotient (`mb >= 1`),
+  // so it printed "1,024 KB" (or the same number with whatever separator the
+  // OS locale uses) and "50 MB" for the limit; the shared helper promotes on
+  // the printed number and always shows one decimal. Neither the crossing nor
+  // the missing decimal depends on the host locale, so the whole line can be
+  // asserted as one string.
+  const nearMiB: SkillDetail = {
+    ...detail,
+    resourceSummary: {
+      bytes: 1_048_510,
+      files: 1,
+      kinds: { asset: 0, other: 0, reference: 1, script: 0 },
+    },
+    resources: [{ hash: "h", kind: "reference", path: "references/big.md", size: 1_048_510 }],
+  };
+  const stub = new StubClient().reply(nearMiB);
+  const view = await mount(
+    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
+  );
+  try {
+    await openAdvancedSettings(view);
+    const rendered = JSON.stringify(view.toJSON());
+
+    // 1,048,510 + 65 = 1,048,575 bytes: "1.0 MB", not "1,024 KB".
+    assert.ok(
+      rendered.includes(TEXT.settings.skills.editor.referencesUsage(1, 499, "1.0 MB", "50.0 MB")),
+      `the quota line did not read 1.0 MB / 50.0 MB: ${rendered}`,
+    );
+    assert.ok(!rendered.includes("1,024 KB"));
+
+    // The resource row prints through the same helper: the decimal point is
+    // "." and there is no grouping separator, whatever the host locale is.
+    assert.ok(rendered.includes("1023.9 KB"), `the resource row did not read 1023.9 KB: ${rendered}`);
+    assert.ok(!rendered.includes("1,023.9 KB"));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the skill editor keeps no byte formatter of its own", () => {
+  // The duplicate is what regressed (#1404): a module-private ladder printed
+  // 1,024 KB just under a MiB and formatted the number in the OS locale, so
+  // reintroducing one must fail here rather than leave the suite green.
+  const source = readFileSync(
+    new URL("../src/views/settings/SkillEditorView.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /(?:function|const)\s+formatBytes\b/);
+  assert.match(source, /import \{ formatBytes \} from "\.\.\/\.\.\/app\/format-bytes\.js"/);
 });
 
 test("a resource file is read and written through its own route", async () => {

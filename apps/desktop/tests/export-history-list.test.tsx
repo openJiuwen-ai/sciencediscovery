@@ -94,6 +94,12 @@ test("size and time format the way the row claims", () => {
   assert.equal(formatBytes(1_024), "1.0 KB");
   assert.equal(formatBytes(1024 * 1024 * 3.5), "3.5 MB");
   assert.equal(formatBytes(512), "512 B");
+  // The helper's conventions for values that are not a positive size: a
+  // negative count is nothing to show, and a value that is not a number has
+  // no size at all (#1404 shares these with the skill editor).
+  assert.equal(formatBytes(-1_024), "0 B");
+  assert.equal(formatBytes(Number.NaN), "—");
+  assert.equal(formatBytes(Number.POSITIVE_INFINITY), "—");
   // A level must not print its own base: the unit comes from the number that
   // will be printed, so one byte under a base moves up a level (F3).
   assert.equal(formatBytes(1_048_575), "1.0 MB");

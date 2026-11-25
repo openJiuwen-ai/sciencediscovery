@@ -22,6 +22,7 @@ import {
   updateSkillFile,
 } from "../../api/settings.js";
 import type { SkillDetail } from "../../api/types.js";
+import { formatBytes } from "../../app/format-bytes.js";
 import { TEXT } from "../../text.js";
 
 interface Props {
@@ -48,7 +49,9 @@ interface BodyProps {
 const SKILL_FILE = "SKILL.md";
 
 /** Mirrors `SKILL_LIMITS` in packages/specialist/src/skills.ts; the editor says
- *  what the server will accept rather than letting a save discover it. */
+ *  what the server will accept rather than letting a save discover it. Both
+ *  sides of the quota line print through `app/format-bytes.ts`, so a size here
+ *  reads exactly like the same size in the export rows. */
 const PACKAGE_LIMITS = {
   files: 500,
   totalBytes: 50 * 1024 * 1024,
@@ -93,14 +96,6 @@ function packageBytes(detail: SkillDetail, instructions: string): number {
   return resources + new TextEncoder().encode(
     `---\nname: ${detail.name}\ndescription: ${detail.description}\n---\n${instructions}`,
   ).byteLength;
-}
-
-function formatBytes(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  if (mb >= 1) return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(mb)} MB`;
-  const kb = bytes / 1024;
-  if (kb >= 1) return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(kb)} KB`;
-  return `${bytes} B`;
 }
 
 /** The directory an imported reference file lands in. Empty means the skill
