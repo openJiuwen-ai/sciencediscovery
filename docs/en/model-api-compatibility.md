@@ -143,9 +143,10 @@ response remains a provider failure (502), eligible for IdeaTree's existing one
 bounded 5xx retry. Recognized authentication, rate-limit and invalid-request
 codes retain their 401/429/400 classifications. Unknown reported errors remain
 422 with their cause, without assuming they are transient. Malformed envelopes
-remain deterministic 422 failures. IdeaTree stops an empty or truncated stage
-without a JSON-format correction; already reported usage remains accounted.
-A nonempty malformed JSON answer still permits the existing single correction.
+remain deterministic 422 failures. IdeaTree gives an empty or truncated stage the
+same single correction a malformed answer gets: the model is asked again, and that
+call's reported usage is accounted like any other. A second empty or truncated
+answer still fails the stage, with the role named in the reason.
 
 ## Basic limits and setup
 

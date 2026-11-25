@@ -30,6 +30,10 @@ class BudgetReached(Exception):
     pass
 
 
+class EmptyAnswer(ValueError):
+    """The model returned no content; the correction asks for the same answer again."""
+
+
 def text(value: Any, name: str, limit: int = 24000) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ValueError(f"{name} must contain 1–{limit} characters")
@@ -355,7 +359,7 @@ class IdeaTreeEngine:
                 # call could have saved, because the check sat outside this branch
                 # (#1327). A second empty answer still fails the stage, by name.
                 if raw is None or isinstance(raw, str) and not raw.strip():
-                    raise ValueError('empty or truncated model output; stage cannot continue')
+                    raise EmptyAnswer('empty or truncated model output; stage cannot continue')
                 result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
                 if check:
                     check(result)
@@ -363,7 +367,11 @@ class IdeaTreeEngine:
             except (ValueError, TypeError) as error:
                 if attempt:
                     raise ValueError(f'{role}: invalid model result after one correction: {error}') from error
-                payload = {**payload, 'correction': str(error), 'previousResponse': str(raw)[:4000] if raw is not None else ''}
+                # An empty answer is not a malformed one, so the correction asks for the
+                # same answer again instead of repeating a rejection the model cannot act on.
+                correction = ('empty or truncated model output; answer again with the required JSON'
+                              if isinstance(error, EmptyAnswer) else str(error))
+                payload = {**payload, 'correction': correction, 'previousResponse': str(raw)[:4000] if raw is not None else ''}
         raise AssertionError('unreachable')
 
     def context(self):

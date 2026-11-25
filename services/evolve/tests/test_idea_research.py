@@ -42,7 +42,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, 'design: invalid model result after one correction: empty or truncated model output'):
                 await engine.ask('design', {})
             self.assertEqual(len(calls), 2)
-            self.assertIn('empty or truncated', calls[1]['correction'])
+            self.assertEqual(calls[1]['correction'], 'empty or truncated model output; answer again with the required JSON')
             self.assertEqual(self.state['tokens'], 28)
             self.assertEqual(engine.reserved, 0)
             persisted = self.store.read('p', 's', 'research-test')
