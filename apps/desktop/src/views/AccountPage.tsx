@@ -21,8 +21,16 @@ import {
   type AccountSessionRow,
   type AccountUsageRecord,
 } from "../auth/account.js";
+import { useLanguage } from "../app/use-language.js";
 import type { UserSession } from "../auth/session.js";
 import { TEXT } from "../text.js";
+import {
+  bizLabel,
+  formatAccountCredits,
+  formatAccountNumber,
+  formatAccountTime,
+  formatAccountTokens,
+} from "./account-format.js";
 import { SidebarToggle } from "./SidebarToggle.js";
 
 type Filter = "all" | "earned" | "spent";
@@ -57,18 +65,6 @@ function chinaDay(offset = 0, now = Date.now()): string {
   return new Date(now + offset * DAY_MS).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
 }
 
-function formatNumber(value: number): string {
-  return Math.round(value).toLocaleString("zh-CN");
-}
-
-/** Credits settle per milli-credit, so a charge can be 0.35 and a balance
- *  598.891; flooring would turn that into -1 and 598 on the audit page. Three
- *  decimals are always shown, because "895.877" alone reads as a thousands
- *  separator in Chinese. */
-function formatCredits(value: number): string {
-  return value.toLocaleString("zh-CN", { maximumFractionDigits: 3, minimumFractionDigits: 3 });
-}
-
 /** The three credit figures the summary reads, derived from the same
  *  milli-credit integers so they always add up: available + spent = earned.
  *  The server reports `totalSpent` too, but an in-flight call holds credits the
@@ -90,32 +86,11 @@ export function creditTotals(balanceMilli: number, earnedMilli: number): CreditT
   };
 }
 
-function formatTokens(value: number): string {
-  return value >= 10_000 ? `${(value / 10_000).toFixed(value >= 100_000 ? 0 : 1)}万` : formatNumber(value);
-}
-
 /** The ledger's day keys and the server's reward day are both China-local;
  *  comparing against the UTC date of `createdAt` misreads 00:00–08:00. */
 function chinaDate(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function bizLabel(type: string): string {
-  const labels: Record<string, string> = {
-    REGISTER: "注册赠送",
-    CHECKIN: "每日签到",
-    BONUS: "累计签到奖励",
-    LLM_USAGE: "模型调用",
-    ADMIN: "人工调整",
-    REFUND: "退还",
-  };
-  return labels[type] ?? type;
 }
 
 export interface RewardProgress {
@@ -149,6 +124,9 @@ export function AccountPage({
   onToggleSidebar,
   sidebarOpen = true,
 }: Props) {
+  // The credit figures, times and business-type labels below are formatted from
+  // `TEXT`, so a language switch has to re-render this page (#1394).
+  useLanguage();
   const [ledger, setLedger] = useState<AccountLedgerRow[]>([]);
   const [ledgerEnd, setLedgerEnd] = useState(false);
   const [page, setPage] = useState(1);
@@ -473,21 +451,21 @@ export function AccountPage({
         <section className="account-metrics">
           <div className="account-metric is-primary">
             <span>{TEXT.account.available}</span>
-            <strong>{formatCredits(balance)}</strong>
+            <strong>{formatAccountCredits(balance, TEXT)}</strong>
             <small>{TEXT.account.creditsUnit}</small>
           </div>
           <div className="account-metric">
             <span>{TEXT.account.tokenEstimate}</span>
-            <strong>{formatTokens(tokenEstimate)}</strong>
+            <strong>{formatAccountTokens(tokenEstimate, TEXT)}</strong>
             <small>{TEXT.account.tokensUnit}</small>
           </div>
           <div className="account-metric">
             <span>{TEXT.account.earned}</span>
-            <strong>{formatCredits(totals.earned)}</strong>
+            <strong>{formatAccountCredits(totals.earned, TEXT)}</strong>
           </div>
           <div className="account-metric">
             <span>{TEXT.account.spent}</span>
-            <strong>{formatCredits(totalSpent)}</strong>
+            <strong>{formatAccountCredits(totalSpent, TEXT)}</strong>
           </div>
         </section>
 
@@ -530,18 +508,18 @@ export function AccountPage({
                     onClick={() => setOpenRecord((current) => current === row.id ? undefined : row.id)}
                     type="button"
                   >
-                    <span className="account-ledger-type">{bizLabel(row.bizType)}<small>{formatTime(row.createdAt)}</small></span>
-                    <span className={`account-ledger-delta${row.delta > 0 ? " is-plus" : ""}`}>{row.delta > 0 ? "+" : ""}{formatCredits(row.deltaCredits)}</span>
-                    <span className="account-ledger-balance">{TEXT.account.afterBalance(formatCredits(row.balanceAfterCredits))}</span>
+                    <span className="account-ledger-type">{bizLabel(row.bizType, TEXT)}<small>{formatAccountTime(row.createdAt, TEXT)}</small></span>
+                    <span className={`account-ledger-delta${row.delta > 0 ? " is-plus" : ""}`}>{row.delta > 0 ? "+" : ""}{formatAccountCredits(row.deltaCredits, TEXT)}</span>
+                    <span className="account-ledger-balance">{TEXT.account.afterBalance(formatAccountCredits(row.balanceAfterCredits, TEXT))}</span>
                   </button>
                   {usage && openRecord === row.id ? (
                     <div className="account-ledger-detail">
                       <span>{TEXT.account.model} <strong>{usage.model}</strong></span>
-                      <span>{TEXT.account.input} {formatNumber(usage.inputTokens)}</span>
-                      <span>{TEXT.account.cached} {formatNumber(usage.cachedTokens)}</span>
-                      <span>{TEXT.account.output} {formatNumber(usage.outputTokens)}</span>
+                      <span>{TEXT.account.input} {formatAccountNumber(usage.inputTokens, TEXT)}</span>
+                      <span>{TEXT.account.cached} {formatAccountNumber(usage.cachedTokens, TEXT)}</span>
+                      <span>{TEXT.account.output} {formatAccountNumber(usage.outputTokens, TEXT)}</span>
                       <span>{TEXT.account.latency} {usage.latencyMs === null ? "—" : `${usage.latencyMs} ms`}</span>
-                      <span>{TEXT.account.tokensTotal} {formatNumber(usage.inputTokens + usage.outputTokens)}</span>
+                      <span>{TEXT.account.tokensTotal} {formatAccountNumber(usage.inputTokens + usage.outputTokens, TEXT)}</span>
                     </div>
                   ) : null}
                 </div>
@@ -596,7 +574,7 @@ export function AccountPage({
                   {session.platformLabel}
                   {session.current ? <em>{TEXT.account.currentDevice}</em> : null}
                 </span>
-                <span className="account-device-meta">{TEXT.account.signedInAt(formatTime(session.createdAt))}</span>
+                <span className="account-device-meta">{TEXT.account.signedInAt(formatAccountTime(session.createdAt, TEXT))}</span>
                 {session.current
                   ? null
                   : <button className="account-secondary" disabled={busy} onClick={() => void revoke(session)} type="button">{TEXT.account.revokeDevice}</button>}
