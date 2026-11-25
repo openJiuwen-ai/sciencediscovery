@@ -57,6 +57,14 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const view = items.find(i => i.research.id === selected) ?? items[0];
   if (!view) return error ? <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => void load()}>{t("ideaResearch.retry")}</button></p> : null;
   const r = view.research;
+  // A spent budget is terminal: explain the used/limit tokens and never offer an
+  // end action the engine would no-op, or a resume that would hit the same ceiling.
+  const budget = r.status === "budget_exhausted"
+    ? t("ideaResearch.budgetExhausted", {
+        used: r.usageKnown ? t("ideaResearch.budgetUsed", { count: r.tokens }) : t("ideaResearch.tokensPartial", { count: r.tokens }),
+        limit: r.settings.maxTokens == null ? t("ideaResearch.budgetNoLimit") : t("ideaResearch.budgetLimit", { count: r.settings.maxTokens }),
+      })
+    : undefined;
   return <section ref={element} className="idea-research-panel" aria-label={t("ideaResearch.controlsAria")}>
     {error && <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>{t("ideaResearch.reconnect")}</button></p>}
     <button className="idea-tree-view" type="button" onClick={() => setOpen(true)}>
@@ -71,7 +79,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
         <p>{ideaResearchStatusLabel(t, r.status)} · {t("ideaResearch.round", {round: r.round, total: r.settings.maxRounds})} · {t("ideaResearch.batchProgress", {completed: r.batchCompleted, total: r.batch.length || r.batchCompleted})}</p>
         {r.unreportedBudgetEstimate ? <p>{t("ideaResearch.unreportedBudgetEstimate", { count: r.unreportedBudgetEstimate })}</p> : null}
         <p>{ideaResearchPhaseLabel(t, r, r.phase)} · {t("ideaResearch.candidatesEvaluated", {count: view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length})} · {t(r.usageKnown ? "ideaResearch.tokens" : "ideaResearch.tokensPartial", {count: r.tokens})}</p>
-        {r.reason && <p>{r.reason}</p>}
+        {budget ? <p>{budget}</p> : r.reason && <p>{r.reason}</p>}
         <ol aria-label={t("ideaResearch.progressAria")}>
           {(r.activities ?? []).slice(-12).map((activity, index) => <li key={`${activity.startedAt}-${activity.role}-${index}`}>
             {ideaResearchPhaseLabel(t, r, activity.role)}{activity.nodeId ? ` · ${t("ideaResearch.node", {id: activity.nodeId})}` : ""} · {ideaResearchActivityStatusLabel(t, activity.status)}
@@ -82,9 +90,9 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
         <div className="idea-research-actions">
           {r.status === "running" && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("pause", r.id)}>{t("ideaResearch.pause")}</button>}
           {["paused", "interrupted"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("continue", r.id)}>{t("ideaResearch.continue")}</button>}
-          {!["completed", "ended"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>{t("ideaResearch.end")}</button>}
+          {!["completed", "ended", "budget_exhausted"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>{t("ideaResearch.end")}</button>}
         </div>
-        {confirmEnd === r.id && <div role="alert">{t("ideaResearch.endWarning")}<div className="idea-research-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => void command("end", r.id)}>{t("ideaResearch.endConfirm")}</button><button className="secondary-button" type="button" onClick={() => setConfirmEnd(undefined)}>{t("ideaResearch.endCancel")}</button></div></div>}
+        {confirmEnd === r.id && !["completed", "ended", "budget_exhausted"].includes(r.status) && <div role="alert">{t("ideaResearch.endWarning")}<div className="idea-research-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => void command("end", r.id)}>{t("ideaResearch.endConfirm")}</button><button className="secondary-button" type="button" onClick={() => setConfirmEnd(undefined)}>{t("ideaResearch.endCancel")}</button></div></div>}
       </div>} />}
   </section>;
 }

@@ -304,7 +304,7 @@ export interface IdeaResearchTemplate {
 export interface IdeaResearchState {
   activities?: IdeaResearchActivity[];
   id: string;
-  status: "running" | "pausing" | "paused" | "interrupted" | "completed" | "ended";
+  status: "running" | "pausing" | "paused" | "interrupted" | "completed" | "ended" | "budget_exhausted";
   objective: string;
   phase: string;
   round: number;

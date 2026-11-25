@@ -57,6 +57,8 @@ export function ideaStatusTone(status: IdeaResearchState["status"]): string {
       return "good";
     case "interrupted":
       return "warn";
+    case "budget_exhausted":
+      return "warn";
     case "ended":
       return "quiet";
     default:

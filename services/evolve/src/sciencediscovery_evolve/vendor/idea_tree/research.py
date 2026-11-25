@@ -734,7 +734,11 @@ class IdeaTreeEngine:
         except Interrupted:
             s.update(status='ended' if self.stop_action == 'end' else 'paused', reason='Ended by user' if self.stop_action == 'end' else 'Paused by user')
         except BudgetReached as error:
-            s.update(status='paused', reason=str(error))
+            # A spent token budget is its own terminal outcome, not a pause the user can
+            # resume: continuing would hit the same ceiling before doing any work. The
+            # reason keeps the engine's text and the used/limit numbers for the UI.
+            limit = s['settings'].get('maxTokens')
+            s.update(status='budget_exhausted', reason=f'{error}. Used {s["tokens"]} of {limit} tokens')
         except Exception as error:
             if self.stop_action:
                 s.update(status='ended' if self.stop_action == 'end' else 'paused', reason='Stopped by user')

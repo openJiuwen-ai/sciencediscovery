@@ -30,6 +30,11 @@ export function createIdeaResearchClient(options: {
       }
       const previous: IdeaResearchView | undefined = operation === "continue"
         ? await invoke(sessionId, "get", { researchId: input.researchId }) : undefined;
+      // A spent token budget is terminal, not a resumable pause: the same ceiling would
+      // stop the next run before it did any work, so continue must not start it.
+      if (previous?.research.status === "budget_exhausted") {
+        throw new Error("Research exhausted its token budget; increase the token limit and start a new research");
+      }
       if (previous && !["paused", "interrupted"].includes(previous.research.status)) throw new Error("Research is not resumable");
       const modelId = previous?.research.modelId ?? options.store.resolveRuntimeSettings(sessionId).effective.modelId;
       const model = options.store.getModel(modelId);

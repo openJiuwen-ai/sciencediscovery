@@ -2205,6 +2205,7 @@ export const EN: Text = {
       interrupted: "Interrupted",
       completed: "Completed",
       ended: "Ended",
+      budget_exhausted: "Ended (budget used up)",
     },
     phase: {
       preflight_research: "Preparing",
@@ -2218,6 +2219,11 @@ export const EN: Text = {
     tokens: (tokens: number) => `${tokens} tokens`,
     tokensUnknown: "Token usage not reported",
     reason: (reason: string) => reason,
+    budgetExhausted: (used: number | null, limit: number | null) => {
+      const spent = used === null ? "used tokens were not reported" : `${used} tokens used`;
+      const cap = limit === null ? "no limit set" : `limit ${limit} tokens`;
+      return `The token budget is used up and the research has ended (${spent}, ${cap}). To keep exploring, raise the token limit and start a new research.`;
+    },
     pause: "Pause",
     resume: "Continue",
     end: "End",

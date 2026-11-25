@@ -74,6 +74,19 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   },
 };
 
+/** Engine reason strings that reach the UI; an unknown reason stays verbatim. */
+const IDEA_RESEARCH_REASONS: Record<string, string> = {
+  'Remaining token budget cannot fund the next stage': '剩余 token 预算不足以完成下一个阶段',
+  'Candidate or node limit reached': '已达到候选或节点上限',
+  'No active expandable direction remains': '没有仍可扩展的研究方向',
+  'No new legal candidate fits the remaining tree limits': '没有符合剩余树限制的新候选',
+  'Exploration round limit reached': '已达到探索轮次上限',
+  'Paused by user': '用户已暂停',
+  'Ended by user': '用户已结束',
+  'Stopped by user': '用户已停止',
+  'Service restarted; continue manually': '服务已重启，可手动继续',
+};
+
 /**
  * Every user-visible string, in one place — Simplified Chinese.
  *
@@ -2250,6 +2263,7 @@ export const ZH = {
       interrupted: "已中断",
       completed: "已完成",
       ended: "已结束",
+      budget_exhausted: "已结束（预算用尽）",
     },
     phase: {
       preflight_research: "准备研究",
@@ -2262,7 +2276,12 @@ export const ZH = {
     batch: (done: number, total: number) => `本轮 ${done}/${total}`,
     tokens: (tokens: number) => `${tokens} tokens`,
     tokensUnknown: "token 用量未上报",
-    reason: (reason: string) => reason,
+    reason: (reason: string) => IDEA_RESEARCH_REASONS[reason] ?? reason,
+    budgetExhausted: (used: number | null, limit: number | null) => {
+      const spent = used === null ? "已用 token 未上报" : `已用 ${used} tokens`;
+      const cap = limit === null ? "未设置上限" : `上限 ${limit} tokens`;
+      return `token 预算已用尽，研究已结束（${spent}，${cap}）。如需继续，请提高 token 上限后新建研究。`;
+    },
     pause: "暂停",
     resume: "继续",
     end: "结束",
