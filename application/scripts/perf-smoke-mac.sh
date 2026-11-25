@@ -278,8 +278,12 @@ log_delta_ready() {
     [ -f "$L" ] || continue
     size=$(stat -f%z "$L" 2>/dev/null || printf 0)
     if [ "$size" -lt "${LOG_OFFSETS[$i]}" ]; then
-      # rotation: the fresh file IS the delta
-      if head -c 100000 "$L" 2>/dev/null | grep -q 'AGENT-READY'; then
+      # rotation: the fresh file IS the delta. Grep the WHOLE file, no byte
+      # cap (F19): this file is small by construction — it only started
+      # existing at this smoke's launch — and it is the one candidate that
+      # can ever lock (size < offset stays true for the rest of the run);
+      # a cap would just re-create the F15 false-timeout behind a byte limit.
+      if grep -q 'AGENT-READY' "$L" 2>/dev/null; then
         LOG_PATH="$L"; LOG_OFFSET=0
         return 0
       fi
@@ -306,8 +310,8 @@ lock_grown_delta() {
     [ -f "$L" ] || continue
     size=$(stat -f%z "$L" 2>/dev/null || printf 0)
     if [ "$size" -lt "${LOG_OFFSETS[$i]}" ]; then
-      # rotation: the fresh file IS the delta
-      if head -c 100000 "$L" 2>/dev/null | grep -q '\[perf\]'; then
+      # rotation: the fresh file IS the delta — whole file, no cap (F19)
+      if grep -q '\[perf\]' "$L" 2>/dev/null; then
         LOG_PATH="$L"; LOG_OFFSET=0
         return 0
       fi

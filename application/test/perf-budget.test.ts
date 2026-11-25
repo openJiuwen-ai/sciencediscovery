@@ -466,6 +466,13 @@ test("a pair whose to event PRECEDES its from is a note, not a hang (F13)", () =
   assert.equal(shellUiRow.verdict, "ok");
   assert.match(shellUiRow.note ?? "", /out of order/);
   assert.ok(shellUiRow.durationMs !== null, "the measurement is kept");
+  // F19b: the reported number must be the ABSOLUTE value — the raw delta is
+  // negative (to preceded from) and a text report printing "shell-ui -3ms"
+  // reads like an impossible measurement.
+  assert.ok(
+    (shellUiRow.durationMs as number) >= 0,
+    `out-of-order duration must be reported as Math.abs, got ${shellUiRow.durationMs}`,
+  );
   assert.equal(judged.summary.hang, 0, "a concurrent-order launch is healthy");
   assert.equal(exitCode([judged]), 0);
 });

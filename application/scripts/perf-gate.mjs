@@ -110,7 +110,7 @@ if (jsonOut) {
     for (const r of j.rows) {
       const ms = r.durationMs === null ? "missing" : `${r.durationMs}ms`;
       const line = `      ${r.component.padEnd(22)} ${String(ms).padStart(10)}  (budget ${r.budget}ms)`;
-      if (r.verdict === "ok") console.log(line);
+      if (r.verdict === "ok") console.log(r.note ? `${line}  <- ${r.note}` : line);
       else if (r.verdict === "skipped") console.log(`  SKP ${line}  <- ${r.note}`);
       else if (r.verdict === "regression") console.log(`  REG ${line}`);
       else if (r.verdict === "blocked") console.log(`  BLK ${line}  <- blocked by ${r.blockedBy}`);

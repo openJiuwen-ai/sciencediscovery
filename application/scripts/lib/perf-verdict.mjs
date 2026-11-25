@@ -187,7 +187,10 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
       judgedRows.push({
         component: d.component,
         verdict: "ok",
-        durationMs: d.durationMs,
+        // F19b: report the ABSOLUTE value — the raw delta is negative (to
+        // preceded from) and a text report printing "shell-ui -3ms" reads
+        // like an impossible measurement; the note carries the story.
+        durationMs: Math.abs(d.durationMs),
         budget: budget.hangMs,
         note: "events out of order (concurrent emitters) — measured, not judged",
       });
