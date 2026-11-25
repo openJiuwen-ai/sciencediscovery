@@ -73,9 +73,20 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         // interface. Waiting for the card first — as this journey used to — made
         // the two indistinguishable: a research that was created but whose card
         // never appeared looked exactly like a command that started nothing.
-        // 180s covers a cold first call, which took 72s in the measurement above
-        // but missed a 120s window once on a slow start.
-        await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 180_000, message: "the command should start exactly one new research" }).toBe(1);
+        // 300s, measured rather than guessed: four live runs on this stack
+        // created the research at ~104s, ~46s, and once not at all inside the
+        // 180s this used to allow — the run was still `running` when the window
+        // closed, so the model was slow, not blocked. A window that short turns a
+        // slow preparation into a red case.
+        try {
+          await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 300_000, message: "the command should start exactly one new research" }).toBe(1);
+        } catch (failure) {
+          // Say what the run was doing: a research that never appeared is either a
+          // stalled/failed run or a slow one, and the two need different fixes.
+          const runs = await (await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, { headers, timeout: 10_000 })).json();
+          const latest = Array.isArray(runs) ? runs[0] : undefined;
+          throw new Error(`no research was created in 300s: run=${latest?.id ?? "none"} status=${latest?.status ?? "?"} error=${latest?.error ?? "none"} reason=${latest?.reason ?? "none"}`, { cause: failure });
+        }
         researchId = (await read()).find((entry: any) => !existingIds.has(entry.research.id)).research.id;
         // Now the card. The interface re-reads the list on its own while it holds
         // nothing, so this is short: a card that misses a created event no longer
