@@ -13,7 +13,7 @@ function recordingIo() {
   let nextHandle = 0;
   const io: ExportSinkIo = {
     open: (path) => { events.push(`open:${path}`); nextHandle += 1; return nextHandle; },
-    write: (handle, bytes) => { events.push(`write:${handle}:${bytes.byteLength}`); },
+    write: (handle, bytes) => { events.push(`write:${handle}:${bytes.byteLength}`); return bytes.byteLength; },
     close: (handle) => { events.push(`close:${handle}`); },
     remove: (path) => { events.push(`remove:${path}`); },
     rename: (from, to) => { events.push(`rename:${from}->${to}`); },
@@ -84,7 +84,7 @@ test("a failed close keeps the sink so the temporary can still be deleted", () =
   let handle = 0;
   const io: ExportSinkIo = {
     open: (path) => { events.push(`open:${path}`); handle += 1; return handle; },
-    write: () => undefined,
+    write: (_handle, bytes) => bytes.byteLength,
     close: (id) => { events.push(`close:${id}`); throw Object.assign(new Error("EIO"), { code: "EIO" }); },
     remove: (path) => { events.push(`remove:${path}`); },
     rename: (from, to) => { events.push(`rename:${from}->${to}`); },
@@ -153,5 +153,40 @@ test("an aborted save over an existing destination leaves the old bytes", async 
     assert.equal(existsSync(`${destination}.token-1.part`), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("a short write appends only the remaining bytes before committing", () => {
+  const { io } = recordingIo();
+  const written: number[] = [];
+  io.write = (_handle, bytes) => {
+    const part = bytes.subarray(0, 4);
+    written.push(...part);
+    return part.length;
+  };
+  const sinks = new ExportSinks(io);
+  sinks.begin("t1", "C:/exports/a.sdresearch");
+  const input = Uint8Array.from({ length: 10 }, (_, index) => index);
+  sinks.write("t1", input);
+  assert.equal(sinks.end("t1"), input.length);
+  assert.deepEqual(written, [...input]);
+});
+
+test("a stalled or failed short write discards the temporary and cannot publish", () => {
+  for (const failure of ["zero", "throw"]) {
+    const { io, events } = recordingIo();
+    const writeError = new Error("write failed");
+    let attempt = 0;
+    io.write = () => {
+      if (attempt++ === 0) return 4;
+      if (failure === "throw") throw writeError;
+      return 0;
+    };
+    const sinks = new ExportSinks(io);
+    sinks.begin("t1", "C:/exports/a.sdresearch");
+    assert.throws(() => sinks.write("t1", new Uint8Array(10)), failure === "throw" ? writeError : /未保存/u);
+    assert.equal(sinks.end("t1"), 0);
+    assert.deepEqual(events, ["open:C:/exports/a.sdresearch.t1.part", "close:1", "remove:C:/exports/a.sdresearch.t1.part"]);
   }
 });

@@ -16,14 +16,28 @@ import { verifyNativeConfigurationToolAssembly } from "./native-activation.js";
 import { nativeConfigurationDecisionPrompt } from "../runs/index.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 async function fixture(context: { after(action: () => Promise<void>): void }, enabledConnectorIds?: string[]) {
-  const parent = resolve(process.cwd(), ".tmp"), root = resolve(parent, "continuation-copy-" + randomUUID()), store = new SessionStore(root); await store.load();
-  context.after(async () => { store.close(); assert.ok(root.startsWith(parent + sep)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); });
+  const parent = resolve(process.cwd(), ".tmp"), root = resolve(parent, "continuation-copy-" + randomUUID()), store = new SessionStore(root);
+  let broker: McpGovernanceBroker | undefined;
+  context.after(async () => {
+    try {
+      broker?.close();
+    } finally {
+      store.close();
+      assert.ok(root.startsWith(parent + sep));
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    }
+  });
+  await store.load();
   const project = await store.createProject("Continuation contract"), session = await store.createSession(project.id, "Target", {}, {}, { allowUnconfiguredModel: true });
   if (enabledConnectorIds) await store.updateSession(session.id, { enabledConnectorIds });
   const run = await store.createSessionRun({ sessionId: session.id, prompt: "Owned configuration diagnostic", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
   const scheduled: Array<{ sessionId: string; requestId: string }> = [];
   const framework = configurationFramework(store, { nativeExecutor: true, connector: () => undefined, resume: async (sessionId, requestId) => { scheduled.push({ sessionId, requestId }); return run; } });
-  return { root, store, session, run, framework, scheduled };
+  const createBroker = (registry: ConstructorParameters<typeof McpGovernanceBroker>[2], catalog: McpSourceCatalog, gateway: McpTransportClient) => {
+    broker = new McpGovernanceBroker(root, store, registry, catalog, gateway);
+    return broker;
+  };
+  return { store, session, run, framework, scheduled, createBroker };
 }
 
 test("CFG-XE2E-04: proxy.resources continues its bound task using the approved receipt", async context => {
@@ -80,8 +94,7 @@ test("CFG-XE2E-04: proxy.mcp changes later calls of its bound task without chang
   };
   const catalog = new McpSourceCatalog(registry, gateway);
   await catalog.refresh();
-  const broker = new McpGovernanceBroker(h.root, h.store, registry, catalog, gateway);
-  context.after(() => broker.close());
+  const broker = h.createBroker(registry, catalog, gateway);
   const invoke = (accession: string) => broker.invoke({
     projectId: h.session.projectId, sessionId: h.session.id, sourceId: "uniprot", toolId: "lookup",
     input: { accession }, toolCallId: `continuation-${accession}`, turnId: h.run.id,

@@ -107,3 +107,17 @@ test("resolved model facts seed the window while explicit environment remains au
     modelContextTokens: 200_000,
   }).modelContextTokens, 300_000);
 });
+
+
+test("the contributed message budget counts text independently of the content representation", () => {
+  const config = resolveContextBudget({ SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS: "10" });
+  for (const content of ["x".repeat(11), [{ type: "text", text: "x".repeat(11) }],
+    [{ type: "text", text: "123456" }, { type: "text", text: "12345" }], { content: "x".repeat(11) }]) {
+    const input = { ...collected(), messages: [{ role: "user", content }] };
+    const result = applyContextBudget(input, config);
+    assert.deepEqual(result.messages, []);
+    assert.ok(result.diagnostics.some((item) => item.code === "CONTEXT_MESSAGES_DROPPED"));
+  }
+  const messages = [{ role: "user", content: [{ type: "text", text: "12345" }, { type: "text", text: "67890" }] }];
+  assert.deepEqual(applyContextBudget({ ...collected(), messages }, config).messages, messages);
+});

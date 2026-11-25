@@ -25,7 +25,7 @@ import pytest
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 from fastapi.testclient import TestClient
 
-from sciencediscovery_memory_graph import backend
+from sciencediscovery_memory_graph import backend, persistence, research_package
 from sciencediscovery_memory_graph.local_backend import LocalHandle
 
 
@@ -472,3 +472,32 @@ def test_call_subquery_union_removes_duplicates(tmp_path: Path) -> None:
         "CALL { RETURN 1 AS x UNION RETURN 1 AS x UNION RETURN 2 AS x } RETURN x ORDER BY x"
     ))
     assert [r["x"] for r in rows] == [1, 2]
+
+
+def test_research_package_preserves_records_with_the_same_id_from_different_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    router = backend.BackendRouter(local=_handle(tmp_path))
+    router.set_backend("local")
+    monkeypatch.setattr(backend, "_router", router)
+    for source in ("catalog-a", "catalog-b"):
+        persistence.upsert_tool_call(
+            task_id=f"tool-{source}", session_id="session", turn_id="turn",
+            tool_name="db_search", tool_type="mcp", result_count=1,
+            products=[{"product_type": "db_record", "source": source, "identifier": "REC-1"}],
+        )
+    snapshot = research_package.export_snapshot(["session"])
+
+    def check_records(graph: dict) -> None:
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        assert {nodes[edge["target"]]["properties"]["source"] for edge in graph["edges"]
+                if edge["type"] == "produces"} == {"catalog-a", "catalog-b"}
+        assert all(nodes[edge["source"]]["properties"]["task_id"] ==
+                   "tool-" + nodes[edge["target"]]["properties"]["source"]
+                   for edge in graph["edges"] if edge["type"] == "produces")
+
+    check_records(snapshot)
+    for node in snapshot["nodes"]:
+        node["properties"]["session_id"] = "imported"
+    research_package.import_snapshot(["imported"], **snapshot)
+    check_records(research_package.export_snapshot(["imported"]))

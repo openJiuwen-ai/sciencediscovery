@@ -168,8 +168,8 @@ export class ControlPlaneClient {
     });
   }
 
-  getRun(sessionId: string, runId: string): Promise<SessionRun> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`);
+  getRun(sessionId: string, runId: string, signal?: AbortSignal): Promise<SessionRun> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`, { signal });
   }
 
   /** GET /api/sessions/:id/usage — the same route the Web UI uses for usage. */

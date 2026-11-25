@@ -86,6 +86,92 @@ test("evidence export choices update the estimate and custom workspace selection
   }
 });
 
+for (const scenario of ["pending", "replaced", "timed out"] as const) {
+  test(`custom export preview handles ${scenario} independently of default polling`, async (context) => {
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const previousDocument = globalThis.document;
+    const previousWindow = globalThis.window;
+    globalThis.window = { setInterval, clearInterval } as unknown as Window & typeof globalThis;
+    globalThis.document = { activeElement: null, addEventListener: () => undefined, removeEventListener: () => undefined } as unknown as Document;
+    const files = [{ path: "one.csv", size: 1, selected: true }, { path: "two.csv", size: 2, selected: false }];
+    const preview = { revision: "r1", estimatedBytes: 1_024, files, omissions: [] };
+    const defaults = { revision: "r1", necessary: preview, complete: preview, completeWithTrajectory: preview, completeWithMemoryGraph: preview, completeWithTrajectoryAndMemoryGraph: preview };
+    const requests: Array<{ paths?: string[]; signal?: AbortSignal }> = [];
+    let releaseStale: ((value: typeof preview) => void) | undefined;
+    let defaultPolls = 0;
+    const client = {
+      getResearchPackagePreviews: async () => {
+        if (++defaultPolls > 1) throw new ApiRequestError("default refresh failed", 500);
+        return defaults;
+      },
+      previewResearchPackage: async (...[, , , paths, , , signal]: Parameters<ApiClient["previewResearchPackage"]>) => {
+        requests.push({ paths, signal });
+        if (scenario === "replaced" && requests.length === 1) {
+          return new Promise<typeof preview>((resolve) => { releaseStale = resolve; });
+        }
+        if (scenario === "timed out" && requests.length === 1) {
+          return new Promise<typeof preview>((_, reject) => {
+            signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+          });
+        }
+        if (scenario === "pending" && requests.length === 1) {
+          throw new ApiRequestError("still pending", 202, "EXPORT_PREVIEW_PENDING");
+        }
+        return { ...preview, estimatedBytes: 2_048, files: files.map((file) => ({ ...file, selected: paths!.includes(file.path) })) };
+      },
+    } as unknown as ApiClient;
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(createElement(LocaleProvider, { initialLocale: "en-US" }, createElement(ResearchPackageDialogs, {
+          client,
+          onClose: () => undefined,
+          target: { projectId: "project-a", sessionId: "session-a", kind: "package" },
+        })));
+      });
+      const tick = async (milliseconds: number) => { await act(async () => { context.mock.timers.tick(milliseconds); }); };
+      const select = async (index: number, checked: boolean) => {
+        await act(async () => { renderer!.root.findAllByType("input")[index]!.props.onChange({ target: { checked } }); });
+      };
+      await select(1, true);
+      await tick(180);
+      assert.deepEqual(requests[0]?.paths, ["one.csv", "two.csv"]);
+      assert.equal(button(renderer!, "Immediate export").props.disabled, true);
+      assert.equal(button(renderer!, "Background export").props.disabled, true);
+      if (scenario === "pending") {
+        assert.equal(renderer!.root.findAllByProps({ role: "alert" }).length, 0);
+        await tick(1_000);
+        assert.deepEqual(requests[1]?.paths, requests[0]?.paths);
+      } else if (scenario === "replaced") {
+        await select(0, false);
+        assert.equal(requests[0]?.signal?.aborted, true);
+        await tick(180);
+        assert.deepEqual(requests[1]?.paths, ["two.csv"]);
+        await act(async () => { releaseStale?.(preview); });
+      } else {
+        await tick(10_000);
+        assert.equal(requests[0]?.signal?.aborted, true);
+        assert.match(renderer!.root.findByProps({ role: "alert" }).children.join(""), /taking longer than expected/);
+        await act(async () => { button(renderer!, "Retry").props.onClick(); });
+        await tick(180);
+        assert.deepEqual(requests[1]?.paths, requests[0]?.paths);
+      }
+      await tick(3_000);
+      assert.ok(defaultPolls > 1);
+      assert.equal(requests.length, 2);
+      assert.equal(button(renderer!, "Immediate export").props.disabled, false);
+      assert.equal(button(renderer!, "Background export").props.disabled, false);
+      assert.ok(renderer!.root.findAllByType("strong").some((node) => node.children.join("").includes("2.0 KiB")));
+      assert.equal(renderer!.root.findAllByProps({ role: "alert" }).length, 0);
+    } finally {
+      if (renderer) await act(async () => renderer!.unmount());
+      globalThis.document = previousDocument;
+      globalThis.window = previousWindow;
+      context.mock.timers.reset();
+    }
+  });
+}
+
 test("file selection shows inspection progress immediately and supports success, failure and retry", async () => {
   const previousDocument = globalThis.document;
   globalThis.document = { activeElement: null, addEventListener: () => undefined, removeEventListener: () => undefined } as unknown as Document;

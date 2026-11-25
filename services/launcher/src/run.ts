@@ -297,6 +297,8 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   // 7. 接收事件流
   let exitCode = 0;
   let finalStatus = run.status;
+  let sawTerminal = false;
+  let lastSequence = 0;
   let finalError: string | undefined;
   let finalFiles: unknown[] | undefined;
   let finalMessageContent: string | undefined;
@@ -433,12 +435,14 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         }
         break;
       case "run.completed":
+        sawTerminal = true;
         finalStatus = "completed";
         finalFiles = event.files as unknown[];
         finalMessageContent = (event.message as { content?: string } | undefined)?.content;
         if (outputMode !== "text") process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "run.failed":
+        sawTerminal = true;
         finalStatus = "failed";
         finalError = String(event.error);
         if (outputMode === "text") {
@@ -451,6 +455,7 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         }
         break;
       case "run.cancelled":
+        sawTerminal = true;
         finalStatus = "cancelled";
         if (outputMode !== "text") process.stdout.write(JSON.stringify(event) + "\n");
         break;
@@ -461,13 +466,27 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   };
 
   try {
-    await client.subscribeRunEvents(
-      sessionId,
-      run.id,
-      0,
-      (event) => handleEvent(event),
-      abortController.signal,
-    );
+    const subscribe = (signal: AbortSignal) => client.subscribeRunEvents(sessionId, run.id, lastSequence, (event, sequence) => {
+      if (sequence > lastSequence) lastSequence = sequence;
+      handleEvent(event);
+    }, signal);
+    await subscribe(abortController.signal);
+    if (!sawTerminal && !abortController.signal.aborted) {
+      // The status endpoint confirms failures/cancellations but does not carry
+      // the answer or files. Replay events to recover a completed result.
+      const recoverySignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(5_000)]);
+      const persisted = await client.getRun(sessionId, run.id, recoverySignal);
+      if (persisted.status === "failed" || persisted.status === "interrupted") {
+        handleEvent({ type: "run.failed", error: persisted.error ?? `Run ${persisted.status}` });
+      } else if (persisted.status === "cancelled") {
+        handleEvent({ type: "run.cancelled" });
+      } else {
+        await subscribe(recoverySignal);
+        if (!sawTerminal && !abortController.signal.aborted) {
+          throw new Error(`Run ${run.id} event stream ended without a final result (last known status: ${persisted.status}).`);
+        }
+      }
+    }
   } catch (err) {
     if (!abortController.signal.aborted) {
       const msg = err instanceof Error ? err.message : String(err);

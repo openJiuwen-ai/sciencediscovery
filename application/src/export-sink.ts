@@ -17,7 +17,7 @@ import { closeSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 
 export interface ExportSinkIo {
   open: (path: string) => number;
-  write: (handle: number, bytes: Uint8Array) => void;
+  write: (handle: number, bytes: Uint8Array) => number;
   close: (handle: number) => void;
   remove: (path: string) => void;
   rename: (from: string, to: string) => void;
@@ -25,7 +25,7 @@ export interface ExportSinkIo {
 
 const NODE_IO: ExportSinkIo = {
   open: (path) => openSync(path, "w"),
-  write: (handle, bytes) => { writeSync(handle, bytes); },
+  write: (handle, bytes) => writeSync(handle, bytes),
   close: (handle) => { closeSync(handle); },
   remove: (path) => { rmSync(path, { force: true }); },
   rename: (from, to) => { renameSync(from, to); },
@@ -59,8 +59,21 @@ export class ExportSinks {
   write(token: string, bytes: Uint8Array): void {
     const sink = this.open.get(token);
     if (!sink) throw new Error("导出流无效，请重新选择保存位置。");
-    this.io.write(sink.handle, bytes);
-    sink.bytes += bytes.byteLength;
+    try {
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const remaining = bytes.subarray(offset);
+        const written = this.io.write(sink.handle, remaining);
+        if (!Number.isInteger(written) || written <= 0 || written > remaining.byteLength) {
+          throw new Error("无法完整写入导出文件，未保存。");
+        }
+        offset += written;
+        sink.bytes += written;
+      }
+    } catch (error) {
+      this.abort(token);
+      throw error;
+    }
   }
 
   /** Close the temporary and move it onto the destination. The caller owns the

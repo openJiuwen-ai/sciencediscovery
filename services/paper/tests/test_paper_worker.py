@@ -25,6 +25,7 @@ from pathlib import Path
 
 from PIL import Image
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfdoc import PDFArray
 from reportlab.pdfgen import canvas
 
 import sys
@@ -69,6 +70,23 @@ class PaperWorkerTest(unittest.TestCase):
             self.assertTrue((output / "pages/page-0001.png").is_file())
             persisted = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["inputSha256"], manifest["inputSha256"])
+
+    def test_extracts_figure_with_a_shifted_page_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "shifted.pdf"
+            pdf = canvas.Canvas(str(source), pagesize=(220, 200))
+            pdf.drawImage(ImageReader(Image.new("RGB", (40, 40), (10, 100, 180))), 155, 60, 40, 40)
+            pdf.showPage()
+            pdf._doc.Pages.pages[-1].MediaBox = PDFArray([100, 0, 220, 200])
+            pdf.save()
+
+            output = root / "output"
+            manifest = extract_pdf(source, output)
+            self.assertEqual(len(manifest["images"]), 1)
+            figure = manifest["images"][0]
+            self.assertEqual(figure["bbox"], [155.0, 100.0, 195.0, 140.0])
+            self.assertTrue((output / figure["path"]).is_file())
 
     def test_rejects_non_pdf_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

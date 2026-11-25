@@ -36,6 +36,7 @@ import {
   modelWireDiagnosticsOf,
   ModelRequestError,
   normalizeUsage,
+  parseRetryAfter,
   proxyDispatcher,
   resolveModelClientPolicy,
   streamModelTurn,
@@ -227,6 +228,28 @@ test("a 429 carries the provider's retry delay on the thrown error", async () =>
     // The sidecar owns the retry for this path, so the delay is carried on
     // the error instead of being spent here (issue #1232).
     assert.equal(failure.retryAfterMs, 2_000);
+  });
+});
+
+test("a 429 with an HTTP date does not retry before the provider's deadline", async () => {
+  let attempts = 0;
+  let retryAt = 0;
+  let retriedAt = 0;
+  await withServer(async (request, response) => {
+    await readBody(request);
+    if (++attempts === 1) {
+      retryAt = Math.floor(Date.now() / 1_000) * 1_000 + 2_000;
+      response.writeHead(429, { "content-type": "application/json", "retry-after": new Date(retryAt).toUTCString() });
+      response.end('{"error":{"message":"busy"}}');
+      return;
+    }
+    retriedAt = Date.now();
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ baseUrl, model: "alias-4", proxy: { mode: "direct" } }, "s", [], [],
+      policy, AbortSignal.timeout(5_000));
+    assert.equal(turn.wireDiagnostics?.attempts, 2);
+    assert.ok(retriedAt >= retryAt, `retried at ${retriedAt} before ${retryAt}`);
   });
 });
 
@@ -1274,4 +1297,15 @@ test("OpenAI usage aliases with zero placeholders do not erase reported token co
   assert.deepEqual(normalizeUsage({ input_tokens: 0, output_tokens: 0, prompt_tokens: 15, completion_tokens: 64, total_tokens: 79 }),
     { inputTokens: 15, outputTokens: 64, reasoningTokens: null, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null,
       aliasConflict: { prompt_tokens: 15, completion_tokens: 64, input_tokens: 0, output_tokens: 0 } });
+});
+
+
+test("Retry-After accepts delay-seconds and HTTP dates without interpreting other numeric inputs as dates", () => {
+  const now = Date.UTC(2026, 10, 25, 7, 35, 20, 500);
+  assert.equal(parseRetryAfter("2", now), 2_000);
+  assert.equal(parseRetryAfter("Wed, 25 Nov 2026 07:35:23 GMT", now), 2_500);
+  assert.equal(parseRetryAfter("Wed, 25 Nov 2026 07:35:19 GMT", now), 0);
+  for (const invalid of [undefined, ["1", "2"], "-1", "1.5", " ", "never"]) {
+    assert.equal(parseRetryAfter(invalid, now), undefined);
+  }
 });

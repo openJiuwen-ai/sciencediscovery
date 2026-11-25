@@ -50,10 +50,9 @@ def clean_cell(value: Any) -> str:
 
 def bounded_bbox(page: Any, bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float] | None:
     x0, top, x1, bottom = bbox
-    x0 = max(0.0, min(float(page.width), float(x0)))
-    x1 = max(0.0, min(float(page.width), float(x1)))
-    top = max(0.0, min(float(page.height), float(top)))
-    bottom = max(0.0, min(float(page.height), float(bottom)))
+    page_x0, page_top, page_x1, page_bottom = map(float, page.bbox)
+    x0, top = max(page_x0, float(x0)), max(page_top, float(top))
+    x1, bottom = min(page_x1, float(x1)), min(page_bottom, float(bottom))
     if x1 - x0 < 8 or bottom - top < 8:
         return None
     return (x0, top, x1, bottom)

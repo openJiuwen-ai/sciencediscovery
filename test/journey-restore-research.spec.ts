@@ -18,7 +18,7 @@ import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSessi
  * 6. Reload and confirm the snapshot remains read-only; create an independent research copy.
  * 7. Confirm the source notice disappears after ten seconds and stays hidden after reload.
  * 8. Compare history, artifact versions, task logs and scientific memory; edit only the copy.
- * 9. Compare necessary/complete export previews, file defaults, downloaded scope and original reasoning.
+ * 9. Compare necessary/complete previews and verify a pending custom selection recovers and exports the selected scope with the original reasoning.
  * Environment: Isolated local API, Runner, memory graph and web stack.
  * Type: mocked
  * LLM: none; package fixture contains a historical transcript and workspace file.
@@ -86,7 +86,7 @@ test("complete research package import restores a visible Session history", { ta
       expect(response.ok()).toBeTruthy();
       expect(await response.text()).toBe("value\n42\n");
     });
-    await journey.step("Compare export scope before sharing", "Necessary selects evidence files and marks trajectory limits; complete resets defaults and retains the full reasoning in its downloaded package.", async () => {
+    await journey.step("Compare export scope before sharing", "Necessary selects evidence files and marks trajectory limits. Complete resets defaults, retries a pending custom selection, and downloads the selected files with the full reasoning.", async () => {
       await page.getByRole("button", { name: "Imported history的更多操作", exact: true }).click();
       const exportMenu = page.getByRole("menuitem", { name: "导出", exact: true });
       if (await exportMenu.getAttribute("aria-expanded") !== "true") await exportMenu.click();
@@ -145,11 +145,30 @@ test("complete research package import restores a visible Session history", { ta
       page.off("request", trackPreview);
       await dialog.getByText("自定义内容", { exact: true }).click();
       await expect(scratch).toBeChecked();
+      let customPreviewRequests = 0;
+      const customPreviewUrl = (url: URL) => url.pathname.endsWith("/research-package/preview") && url.searchParams.get("customFiles") === "1";
+      const pendingOnce = async (route: import("@playwright/test").Route) => {
+        if (++customPreviewRequests === 1) {
+          await route.fulfill({ status: 202, json: { code: "EXPORT_PREVIEW_PENDING" } });
+        } else {
+          await route.fallback();
+        }
+      };
+      await page.route(customPreviewUrl, pendingOnce);
+      try {
+        await scratch.uncheck();
+        await expect.poll(() => customPreviewRequests).toBeGreaterThanOrEqual(2);
+        await expect(dialog.getByRole("button", { name: "立即导出", exact: true })).toBeEnabled();
+      } finally {
+        await page.unroute(customPreviewUrl, pendingOnce);
+      }
       await expect(dialog.getByRole("button", { name: "立即导出", exact: true })).toBeEnabled();
       await expect(dialog).toContainText("显示所选内容的未压缩估算大小");
       await expect(dialog.getByRole("alert")).toHaveCount(0);
       const complete = await downloadPackage(true);
       expect(complete.manifest.exportProfile.level).toBe("complete");
+      expect(complete.manifest.exportProfile.omitted.workspaceFiles).toBe(1);
+      expect(complete.manifest.exportProfile.included.workspaceFiles).toBe(previewFiles.length);
       expect(complete.manifest.exportProfile.capabilities.fullTrajectory).toBe(true);
       expect(complete.manifest.exportProfile.capabilities.fullMemoryGraph).toBe(true);
       expect(complete.manifest.exportProfile.included.memoryNodes).toBeGreaterThan(0);

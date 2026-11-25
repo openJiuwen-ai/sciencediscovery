@@ -88,7 +88,7 @@ export class ExportPreviewCache {
     }).catch(() => undefined);
     return work;
   }
-  get(projectId: string, sessionId: string, level: "necessary" | "complete", paths?: string[], includeFullTrajectory = false, revision?: string, includeFullMemoryGraph = false) {
+  get(projectId: string, sessionId: string, level: "necessary" | "complete", paths?: string[], includeFullTrajectory = false, revision?: string, includeFullMemoryGraph = false, signal?: AbortSignal) {
     const defaults = this.peekDefaults(projectId, sessionId);
     if (!paths && defaults && (!revision || revision === defaults.revision)) {
       if (level === "necessary") return Promise.resolve(defaults.necessary);
@@ -97,6 +97,11 @@ export class ExportPreviewCache {
     }
     const selected = paths ? [...new Set(paths)].sort() : undefined;
     const key = JSON.stringify([projectId, sessionId, revision, level, includeFullTrajectory, includeFullMemoryGraph, selected]);
+    // A cancellable request belongs to its dialog. Sharing its in-flight
+    // promise could let an old dialog cancel a newer request for the same files.
+    if (signal) {
+      return this.client.previewResearchPackage(projectId, sessionId, level, selected, includeFullTrajectory, includeFullMemoryGraph, signal);
+    }
     const cached = this.state.entries.get(key);
     if (cached) return cached;
     const work = this.client.previewResearchPackage(projectId, sessionId, level, selected, includeFullTrajectory, includeFullMemoryGraph);

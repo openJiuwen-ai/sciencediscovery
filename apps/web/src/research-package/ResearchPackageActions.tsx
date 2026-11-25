@@ -4,7 +4,7 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 import type { ResearchPackageExportProfileView as ResearchPackageExportProfile } from "../api/plugins.js";
 import { trackResearchPackageExport } from "./ResearchPackageExportTasks.js";
 import { ContinueResearchButton } from "./ContinueResearchButton.js";
-import { ExportPreviewCache, PreviewBudgetExpired } from "./export-preview-cache.js";
+import { ExportPreviewCache, PREVIEW_BUDGET_MS, PreviewBudgetExpired } from "./export-preview-cache.js";
 import { savePackageResponse } from "./save-stream.js";
 import { ApiRequestError } from "../api/auth.js";
 import { isAbortError } from "../api/client.js";
@@ -136,6 +136,11 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   // Conflating them is what let a slow preview claim the session had no files
   // while it had 176 of them (#1140).
   const [preparing, setPreparing] = useState(false);
+  const [defaultsError, setDefaultsError] = useState<string>();
+  const [customPreviewError, setCustomPreviewError] = useState<string>();
+  const [customPreparing, setCustomPreparing] = useState(false);
+  const [customPreviewTimedOut, setCustomPreviewTimedOut] = useState(false);
+  const [customRetry, setCustomRetry] = useState(0);
   // Keyed by revision + size: any new selection is unanswered again, which is what
   // the second confirmation is for.
   const [acknowledgedLimitKey, setAcknowledgedLimitKey] = useState<string>();
@@ -174,51 +179,84 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     });
     setScopeGone(false);
     const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).then(() => {
-      if (active) setPreparing(false);
+      if (active) { setPreparing(false); setDefaultsError(undefined); }
     }).catch((reason: unknown) => {
       if (!active) return;
       // The dialog renders this state from its own snapshot, so the wording can
       // match what is actually on screen; the rejection's message is not used.
       if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_RESOURCE_DELETED") {
-        setScopeGone(true); setError(undefined); setPreparing(false); return;
+        setScopeGone(true); setDefaultsError(undefined); setPreparing(false); return;
       }
       // Our own budget expiring is not a failure and must never be shown as one:
       // it is the same state as "still working", and the poll asks again.
       if (reason instanceof PreviewBudgetExpired || isAbortError(reason)) {
-        setPreparing(true); setError(undefined); return;
+        setPreparing(true); setDefaultsError(undefined); return;
       }
       // The server's pending answer means the same thing, with the localized
       // copy the async contract already produces.
       if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_PENDING") {
-        setPreparing(true); setError(undefined); return;
+        setPreparing(true); setDefaultsError(undefined); return;
       }
       setPreparing(false);
-      setError(errorText(reason));
+      setDefaultsError(errorText(reason));
     }); };
     refresh();
     const timer = window.setInterval(refresh, 3_000);
     return () => { active = false; unsubscribe(); window.clearInterval(timer); };
   }, [previewCache, target.projectId, target.sessionId]);
   useEffect(() => {
-    let active = true;
     setError(undefined);
-    if (!defaults) { setPreview(undefined); return () => { active = false; }; }
+    setCustomPreviewError(undefined);
+    setCustomPreparing(false);
+    setCustomPreviewTimedOut(false);
+    if (scopeGone) return;
+    if (!defaults) { setPreview(undefined); return; }
     if (!selectedPaths) {
       const result = level === "necessary" ? defaults.necessary : includeFullMemoryGraph
         ? includeFullTrajectory ? defaults.completeWithTrajectoryAndMemoryGraph : defaults.completeWithMemoryGraph
         : includeFullTrajectory ? defaults.completeWithTrajectory : defaults.complete;
       setPreview(result); setFiles(result.files);
-      return () => { active = false; };
+      return;
     }
     setPreview(undefined);
-    const load = () => { void previewCache.get(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, sessionRevision, level === "complete" && includeFullMemoryGraph).then((result) => {
-        if (active) { setPreview(result); setFiles(result.files); }
-      }).catch((reason: unknown) => { if (active) setError(errorText(reason)); }); };
-    // Collapse rapid checkbox changes; level defaults use their own cached/in-flight result.
-    const timer = selectedPaths ? setTimeout(load, 180) : undefined;
-    if (!selectedPaths) load();
-    return () => { active = false; if (timer !== undefined) clearTimeout(timer); };
-  }, [previewCache, defaults, level, includeFullTrajectory, includeFullMemoryGraph, selectedPaths, sessionRevision, target.projectId, target.sessionId]);
+    setCustomPreparing(true);
+    const controller = new AbortController();
+    let nextAttempt: ReturnType<typeof setTimeout>;
+    const budget = setTimeout(() => {
+      clearTimeout(nextAttempt);
+      controller.abort(new PreviewBudgetExpired());
+      setCustomPreparing(false);
+      setCustomPreviewTimedOut(true);
+    }, PREVIEW_BUDGET_MS);
+    const load = async () => {
+      try {
+        const result = await previewCache.get(target.projectId, target.sessionId, level, selectedPaths,
+          level === "complete" && includeFullTrajectory, sessionRevision,
+          level === "complete" && includeFullMemoryGraph, controller.signal);
+        if (controller.signal.aborted) return;
+        setPreview(result);
+        setFiles(result.files);
+      } catch (reason) {
+        if (controller.signal.aborted) return;
+        if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_PENDING") {
+          nextAttempt = setTimeout(() => void load(), 1_000);
+          return;
+        }
+        if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_RESOURCE_DELETED") setScopeGone(true);
+        else setCustomPreviewError(errorText(reason));
+      }
+      clearTimeout(budget);
+      setCustomPreparing(false);
+    };
+    // Collapse rapid checkbox changes before starting the first request.
+    nextAttempt = setTimeout(() => void load(), 180);
+    return () => {
+      clearTimeout(nextAttempt);
+      clearTimeout(budget);
+      controller.abort();
+    };
+  }, [previewCache, defaults, level, includeFullTrajectory, includeFullMemoryGraph, selectedPaths, sessionRevision, target.projectId, target.sessionId, scopeGone, customRetry]);
+  const dialogError = error ?? (selectedPaths && defaults ? customPreviewError : defaultsError);
   const cancelExport = () => { exportAbortRef.current?.abort(); };
   const exportPackage = async () => {
     const controller = new AbortController();
@@ -305,8 +343,12 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       {level === "complete" ? <label className="research-export-toggle"><input checked={includeFullMemoryGraph} onChange={(event) => setIncludeFullMemoryGraph(event.target.checked)} type="checkbox" /><span><strong>{t("researchPackage.fullMemoryGraph")}</strong><small>{t("researchPackage.fullMemoryGraphHint")}</small></span></label> : null}
       <p className="research-export-note">{t("researchPackage.completeNote")}</p>
       {preview?.omissions.length ? <details className="research-export-details"><summary>{t("researchPackage.omissions", { count: preview.omissions.length })}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
-      {preparing && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
-      {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
+      {!scopeGone && (selectedPaths && defaults ? customPreparing : preparing) && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
+      {!scopeGone && customPreviewTimedOut ? <div>
+        <p role="alert" className="research-export-error">{t("researchPackage.customPreviewTimedOut")}</p>
+        <button type="button" className="secondary-button" onClick={() => setCustomRetry((attempt) => attempt + 1)}>{t("researchPackage.retry")}</button>
+      </div> : null}
+      {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : dialogError ? <p role="alert" className="research-export-error">{dialogError}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
     <footer className="dialog-actions"><button className="secondary-button" onClick={() => { if (busy) cancelExport(); else onClose(); }} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || blockedByLimit || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || blockedByLimit || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;

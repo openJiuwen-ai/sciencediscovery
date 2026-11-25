@@ -24,7 +24,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createZstdDecompress } from "node:zlib";
 
-import { parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
+import { parseEnvFile, invocationArguments, parseInvocation, USAGE } from "./cli-options.js";
 import { migrateLegacyDirectory } from "./directory-migration.js";
 import { readPayloadLocator } from "./payload-container.js";
 import { resolvePayload } from "./payload-store.js";
@@ -55,11 +55,13 @@ export async function applyEnvFile(path: string, env: NodeJS.ProcessEnv): Promis
 
 /** Locate `--env-file` before full parsing, since it changes the defaults. */
 export function envFileArgument(argv: readonly string[], cwd: string): string | undefined {
-  const index = argv.indexOf("--env-file");
-  if (index === -1) return undefined;
-  const value = argv[index + 1];
-  if (value === undefined) throw new Error("--env-file requires a value");
-  return resolve(cwd, value);
+  let path: string | undefined;
+  for (const [argument, value] of invocationArguments(argv.slice(1))) {
+    if (argument !== "--env-file") continue;
+    if (value === undefined) throw new Error("--env-file requires a value");
+    path = resolve(cwd, value);
+  }
+  return path;
 }
 
 async function runExtract(destination: string): Promise<number> {

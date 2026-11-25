@@ -166,12 +166,12 @@ export class PluginApiClient extends AuthApiClient {
     return response.blob();
   }
 
-  previewResearchPackage(projectId: string, sessionId: string, level: "necessary" | "complete", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = true): Promise<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfileView; maxBytes?: number; archiveBytes?: number }> {
+  previewResearchPackage(projectId: string, sessionId: string, level: "necessary" | "complete", filePaths?: string[], includeFullTrajectory = true, includeFullMemoryGraph = true, signal?: AbortSignal): Promise<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; files: Array<{ path: string; size: number; selected?: boolean }>; omissions: string[]; exportProfile?: ResearchPackageExportProfileView; maxBytes?: number; archiveBytes?: number }> {
     const params = new URLSearchParams({ sessionId, level });
     if (filePaths) { params.set("customFiles", "1"); for (const path of filePaths) params.append("filePath", path); }
     if (!includeFullTrajectory) params.set("includeFullTrajectory", "0");
     params.set("includeFullMemoryGraph", includeFullMemoryGraph ? "1" : "0");
-    return this.requestResearchPackagePreview(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${params}`);
+    return this.requestResearchPackagePreview(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${params}`, signal);
   }
 
   async getResearchPackagePreviews(projectId: string, sessionId: string, signal?: AbortSignal): Promise<{

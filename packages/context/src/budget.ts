@@ -141,6 +141,18 @@ function diagnostic(code: string, message: string): ContextDiagnostic & { contri
   return { code, contributorId: "context.budget", message, severity: "warning" };
 }
 
+function contributedTextLength(content: unknown): number {
+  if (typeof content === "string") return content.length;
+  if (Array.isArray(content)) {
+    return content.reduce<number>((total, part: unknown) => total + contributedTextLength(part), 0);
+  }
+  if (typeof content !== "object" || content === null) return 0;
+  const part = content as { text?: unknown; content?: unknown };
+  if (typeof part.text === "string") return part.text.length;
+  // Some providers extract tool-result text from an object rather than a text part.
+  return typeof part.content === "string" ? part.content.length : 0;
+}
+
 /** Enforces admission budgets before the invocation context is rendered. */
 export function applyContextBudget<TMessage extends RuntimeMessage>(
   input: CollectedContext<TMessage>,
@@ -203,7 +215,7 @@ export function applyContextBudget<TMessage extends RuntimeMessage>(
   const newestFirst = input.messages.toReversed();
   for (const message of newestFirst) {
     if (output.messages.length >= budget.maxContributedMessages) break;
-    const content = typeof message.content === "string" ? message.content.length : 0;
+    const content = contributedTextLength(message.content);
     if (messageCharacters + content > budget.contributedMessageBudgetCharacters) continue;
     output.messages.unshift(structuredClone(message));
     messageCharacters += content;

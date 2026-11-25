@@ -17,9 +17,10 @@ const { describe, test } = createTest(import.meta.url, { tags: ["category:ut", "
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 
+import { envFileArgument } from "./cli.js";
 import { parseInvocation, USAGE } from "./cli-options.js";
 import { runCommand, thinkingChanges, thinkingRefusal } from "./run.js";
 import { ControlPlaneClient, type SessionThinkingControls } from "./control-plane-client.js";
@@ -63,6 +64,18 @@ describe("run option parsing", () => {
     assert.equal(a.runSettings?.input, "hello");
     const b = parseInvocation(["run", "--stdin"], {}, cwd);
     assert.equal(b.runSettings?.stdin, true);
+  });
+
+  test("env and data-dir options are recognized only outside another option's value", () => {
+    const args = ["run", "--content", "--env-file", "--model", "--data-dir", "--auto-approve"];
+    assert.equal(envFileArgument(args, cwd), undefined);
+    const invocation = parseInvocation(args, {}, cwd);
+    assert.equal(invocation.runSettings?.input, "--env-file");
+    assert.equal(invocation.runSettings?.modelId, "--data-dir");
+    assert.equal(invocation.usesDefaultDataDir, true);
+    const withEnvFile = [...args, "--env-file", "fixture.env"];
+    assert.equal(envFileArgument(withEnvFile, cwd), resolve(cwd, "fixture.env"));
+    assert.equal(parseInvocation(withEnvFile, {}, cwd).envFile, resolve(cwd, "fixture.env"));
   });
 
   test("parses session/project/model/skills/connectors/review/token/output", () => {
@@ -221,6 +234,28 @@ describe("run with --effort / --thinking", () => {
     assert.deepEqual(serve.updates, [{ approvalMode: "always_allow" }]);
     assert.equal(serve.runs.length, 0);
   });
+
+  for (const status of ["running", "completed", "failed", "cancelled"] as const) {
+    test(`an SSE EOF without a terminal event reconciles a ${status} run`, async (t) => {
+      const serve = mockServe(t);
+      const cursors: number[] = [];
+      t.mock.method(ControlPlaneClient.prototype, "getRun", async () => ({ status, error: "fixture failure" }));
+      t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
+        _session: string, _run: string, after: number, event: (value: unknown, sequence: number) => void,
+      ) => {
+        cursors.push(after);
+        if (after === 0) event({ type: "run.started" }, 8);
+        else if (status === "completed") event({ type: "run.completed", message: { content: "replayed answer" } }, 9);
+      });
+      const result = await run({});
+      assert.equal(result.exitCode, status === "completed" ? 0 : status === "cancelled" ? 130 : 1);
+      assert.deepEqual(cursors, status === "failed" || status === "cancelled" ? [0] : [0, 8]);
+      const summary = serve.stdout.join("").trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.type === "result");
+      assert.equal(summary.status, status === "running" ? "failed" : status);
+      if (status === "running") assert.match(summary.error, /without a final result.*running/);
+      if (status === "completed") assert.equal(summary.content, "replayed answer");
+    });
+  }
 
   test("without either flag the session's thinking is neither read nor written", async (t) => {
     const serve = mockServe(t);

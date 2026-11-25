@@ -114,7 +114,7 @@ export async function completeChatRequest(
         status: error.statusCode,
         // The sidecar owns the retry decision for this path, so the provider's
         // delay reaches it as a header instead of being spent here.
-        headers: { "content-type": "application/json", ...(error.retryAfterMs !== undefined ? { "retry-after": String(error.retryAfterMs / 1000) } : {}) },
+        headers: { "content-type": "application/json", ...(error.retryAfterMs !== undefined ? { "retry-after": String(Math.ceil(error.retryAfterMs / 1000)) } : {}) },
       });
     }
   }
