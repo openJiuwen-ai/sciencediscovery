@@ -257,6 +257,14 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   // JiuwenSwarm (as a foreground import did) and the catalog is re-read once.
   useEffect(() => subscribeGitSkillImportJob(setBackgroundImport), []);
   const [view, setView] = useState<SkillView>({ kind: "list" });
+  // A message belongs to the page that produced it. Moving on starts clean,
+  // so a refusal from one page does not follow the reader into the next; the
+  // next page's own actions set their own message afterwards.
+  const goTo = (next: SkillView) => {
+    setFailure(undefined);
+    setNotice(undefined);
+    setView(next);
+  };
   const [dialog, setDialog] = useState<SkillDialogKind>();
 
   const loaded = useLoaded<SkillPage>(async () => {
@@ -440,7 +448,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           setBusy(true);
           try {
             await deleteSkill(client, skill.id);
-            setView({ kind: "list" });
+            goTo({ kind: "list" });
             setNotice(TEXT.settings.skills.rowMenu.deleted(skill.name));
           } catch (reason) {
             setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.rowMenu.deleteFailed);
@@ -460,7 +468,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
 
   const chooseRowAction = (skill: SkillDescriptor, action: SkillRowAction) => {
     if (action === "export") void exportSkill(skill);
-    else if (action === "edit") setView({ id: skill.id, kind: "edit", name: skill.name });
+    else if (action === "edit") goTo({ id: skill.id, kind: "edit", name: skill.name });
     else void removeSkill(skill);
   };
 
@@ -495,7 +503,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   const afterCreate = async (skill: SkillDetail) => {
     // A created package is a list item from now on, and the list is where the
     // user would go to look at it, so the form does not linger.
-    setView({ kind: "list" });
+    goTo({ kind: "list" });
     await afterInstall(skill);
   };
 
@@ -567,7 +575,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   }
 
   const copy = view.kind === "list" ? undefined : subviewCopy(view);
-  const back = () => setView({ kind: "list" });
+  const back = () => goTo({ kind: "list" });
 
   // The list's title is one block: the filters and the add control sit on the
   // tab row below it, where the handoff puts them.
@@ -712,7 +720,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
               </div>
               <SkillAddMenu
                 onChoose={(choice) => {
-                  if (choice === "create") setView({ kind: "create" });
+                  if (choice === "create") goTo({ kind: "create" });
                   else setDialog(choice);
                 }}
               />
@@ -765,7 +773,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                     {markFor(skill)}
                     <button
                       className="settings-card-main"
-                      onClick={() => setView({
+                      onClick={() => goTo({
                         description: skill.description,
                         id: skill.id,
                         kind: "detail",
@@ -914,7 +922,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           initialTab={view.tab}
           onBack={back}
           onDelete={(skill) => void removeSkill(skill)}
-          onEdit={(skill) => setView({ id: skill.id, kind: "edit", name: skill.name })}
+          onEdit={(skill) => goTo({ id: skill.id, kind: "edit", name: skill.name })}
           onToggle={(skill, next) => void toggle(catalogKey(skill.id), skill, next)}
           pending={busy || bulkPending || pending.has(catalogKey(view.id))}
           skillId={view.id}
@@ -925,7 +933,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       {view.kind === "edit" ? (
         <SkillFileEditorView
           client={client}
-          onCancel={() => setView({
+          onCancel={() => goTo({
             description: "",
             id: view.id,
             kind: "detail",
@@ -934,7 +942,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           })}
           onSaved={(skill) => {
             loaded.reload();
-            setView({
+            goTo({
               description: skill.description,
               id: skill.id,
               kind: "detail",

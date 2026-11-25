@@ -261,6 +261,14 @@ test("a refused switch on a package's page is explained there", async () => {
     await act(async () => { view.root.findAllByProps({ role: "switch" })[0]!.props.onClick(); });
     assert.match(text(view), /switch refused/);
     assert.ok(view.root.findAllByProps({ role: "alert" }).length > 0);
+    // The message belongs to the page that produced it.
+    await act(async () => {
+      const back = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.backToList);
+      assert.ok(back);
+      back.props.onClick();
+    });
+    assert.ok(!text(view).includes("switch refused"), "the refusal followed the reader to the list");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
