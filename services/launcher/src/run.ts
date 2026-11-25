@@ -467,7 +467,7 @@ export async function runCommand(context: RunContext, log: (message: string) => 
 
   try {
     const subscribe = (signal: AbortSignal) => client.subscribeRunEvents(sessionId, run.id, lastSequence, (event, sequence) => {
-      if (sequence > lastSequence) lastSequence = sequence;
+      if (sequence !== undefined && sequence > lastSequence) lastSequence = sequence;
       handleEvent(event);
     }, signal);
     await subscribe(abortController.signal);

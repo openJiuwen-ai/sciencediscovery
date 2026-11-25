@@ -193,7 +193,7 @@ describe("run with --effort / --thinking", () => {
     efforts: ["high", "max"], modelId: "m1", modelName: "DeepSeek", modes: ["auto", "enabled", "disabled"], supported: true,
   };
 
-  function mockServe(t: import("node:test").TestContext) {
+  function mockServe(t: import("node:test").TestContext, mockStream = true) {
     const stdout: string[] = [];
     const updates: unknown[] = [];
     const runs: unknown[] = [];
@@ -205,7 +205,7 @@ describe("run with --effort / --thinking", () => {
     t.mock.method(ControlPlaneClient.prototype, "updateSession", async (_session: string, body: unknown) => { updates.push(body); return {}; });
     t.mock.method(ControlPlaneClient.prototype, "createRun", async (_session: string, body: unknown) => { runs.push(body); return { id: "run", status: "running" }; });
     t.mock.method(ControlPlaneClient.prototype, "getSessionUsage", async () => ({}));
-    t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
+    if (mockStream) t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
       _session: string, _run: string, _after: number, onEvent: (event: unknown) => void,
     ) => { onEvent({ type: "run.completed", message: { content: "answer" } }); });
     return { controlReads: () => controlReads, runs, stdout, updates };
@@ -237,15 +237,18 @@ describe("run with --effort / --thinking", () => {
 
   for (const status of ["running", "completed", "failed", "cancelled"] as const) {
     test(`an SSE EOF without a terminal event reconciles a ${status} run`, async (t) => {
-      const serve = mockServe(t);
+      const serve = mockServe(t, false);
       const cursors: number[] = [];
       t.mock.method(ControlPlaneClient.prototype, "getRun", async () => ({ status, error: "fixture failure" }));
-      t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
-        _session: string, _run: string, after: number, event: (value: unknown, sequence: number) => void,
-      ) => {
+      t.mock.method(globalThis, "fetch", async (input: string) => {
+        const after = Number(new URL(input).searchParams.get("after"));
         cursors.push(after);
-        if (after === 0) event({ type: "run.started" }, 8);
-        else if (status === "completed") event({ type: "run.completed", message: { content: "replayed answer" } }, 9);
+        const frames = after === 0
+          ? 'id: 8\ndata: {"type":"run.started"}\n\ndata: {"type":"agent.registered"}\n\n'
+          : status === "completed" && after === 8
+          ? 'id: 9\ndata: {"type":"run.completed","message":{"content":"replayed answer"},"files":[{"path":"answer.txt"}]}\n\n'
+          : "";
+        return new Response(frames, { headers: { "content-type": "text/event-stream" } });
       });
       const result = await run({});
       assert.equal(result.exitCode, status === "completed" ? 0 : status === "cancelled" ? 130 : 1);
@@ -253,7 +256,10 @@ describe("run with --effort / --thinking", () => {
       const summary = serve.stdout.join("").trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.type === "result");
       assert.equal(summary.status, status === "running" ? "failed" : status);
       if (status === "running") assert.match(summary.error, /without a final result.*running/);
-      if (status === "completed") assert.equal(summary.content, "replayed answer");
+      if (status === "completed") {
+        assert.equal(summary.content, "replayed answer");
+        assert.deepEqual(summary.files, [{ path: "answer.txt" }]);
+      }
     });
   }
 
