@@ -755,6 +755,20 @@ def test_two_consecutive_json_objects_are_merged_not_rejected():
         parse_json('{"a": 1}\nnot json at all')
 
 
+def test_two_objects_that_carry_the_same_key_keep_the_later_value():
+    """The merge is a tolerance for a malformed answer, so its two boundary rules are
+    pinned rather than left to `{**a, **b}`: a key both objects carry keeps the later
+    value (a list is replaced, not concatenated), and at most eight objects are read
+    — a ninth re-raises the original `Extra data` error instead of merging forever."""
+    assert parse_json('{"a": 1}\n{"a": 2}') == {'a': 2}
+    assert parse_json('{"candidates": [1]}\n{"candidates": [2]}') == {'candidates': [2]}
+    eight = '\n'.join(['{"k": 0}'] + ['{"k%d": %d}' % (index, index) for index in range(1, 8)])
+    merged = parse_json(eight)
+    assert merged['k'] == 0 and merged['k7'] == 7
+    with pytest.raises(ValueError):
+        parse_json(eight + '\n{"k8": 8}')
+
+
 def test_every_stage_follows_the_models_own_thinking_level(monkeypatch):
     """No stage asks for an effort: the request leaves `reasoning_effort` out so the
     model profile's own thinking level applies, and a settings payload written before

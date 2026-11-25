@@ -57,6 +57,10 @@ def parse_json(raw: str) -> Any:
         # stops with "Extra data: line N column 1". Every trailing chunk has to
         # parse as JSON for that reading to be accepted; objects are merged, and
         # anything else re-raises the original error so genuine garbage still fails.
+        # Two rules make the tolerance predictable instead of accidental: at most
+        # eight objects in total are read (a ninth keeps the original error rather
+        # than merging forever), and a key both objects carry keeps the later value
+        # — a list is not concatenated, so a restated field replaces the first one.
         if 'Extra data' not in str(error):
             raise
         decoder = json.JSONDecoder(strict=False)
@@ -64,15 +68,19 @@ def parse_json(raw: str) -> Any:
             value, index = decoder.raw_decode(body)
             # `raw_decode` reports an offset relative to the slice it was given, so
             # the next slice starts where that chunk ended inside the whole body.
-            for _ in range(8):
+            chunks = 1
+            while True:
                 rest = body[index:].lstrip(" \t\r\n,")
                 if not rest:
                     return value
+                if chunks >= 8:
+                    raise error
                 extra, end = decoder.raw_decode(rest)
                 if not (isinstance(value, dict) and isinstance(extra, dict)):
                     raise error
                 value = {**value, **extra}
                 index = len(body) - len(rest) + end
+                chunks += 1
         except json.JSONDecodeError:
             raise error
         raise error
