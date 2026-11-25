@@ -95,32 +95,13 @@ export function hasActiveNarrowing(narrowing: SearchNarrowing): boolean {
 }
 
 /**
- * Apply the narrowing to the route's answer.
- *
- * Two rules come before the reader's own choices, because they are properties of
- * "search" rather than of a filter:
- *
- * - **Archived Sessions are not searchable, and neither are their artifacts.**
- *   The route may still return them; the column is the active set, so a hit that
- *   resolves to an archived Session is dropped. Artifacts carry no archived flag
- *   of their own, so they are judged through the Session that wrote them.
- * - **An imported read-only snapshot is active.** It cannot be written to, but it
- *   is a live entry in the column and the owner's reading of 活跃 is archived
- *   versus live, not writable versus read-only.
- *
- * A Session this page does not hold (`sessionFacts` answers `undefined`) is kept:
- * the route found it, and dropping a result the workspace merely has not read
- * would hide Sessions from another Project.
- */
-/**
  * Apply the same narrowing to the Session column.
  *
- * With no query in the field, the `...` settings narrow the list itself — which is
- * what #1251's fourth criterion asks for ("the session list can be narrowed by
- * scope / running / artifacts / time window, and the choice survives a reload").
- * With a query they narrow its results: the field is then the thing being
- * narrowed, and a narrowed result list over an unfiltered column is the shape the
- * owner asked for.
+ * The column's half of `narrowResults`: the same four dimensions — the Project
+ * selection, 运行中, 有产物 and 指定时间 — over the Sessions a fold holds.
+ * Archived Sessions are dropped first, because the column is the active set;
+ * 有产物 drops a Session whose artifacts the page has not read, because the
+ * `withArtifacts` set is all the page knows about them.
  */
 export function narrowSessions<T extends { archivedAt?: string; createdAt: string;
   id: string; projectId?: string; updatedAt?: string }>(
@@ -139,6 +120,24 @@ export function narrowSessions<T extends { archivedAt?: string; createdAt: strin
   });
 }
 
+/**
+ * Apply the narrowing to the route's answer.
+ *
+ * Two rules come before the reader's own choices, because they are properties of
+ * "search" rather than of a filter:
+ *
+ * - **Archived Sessions are not searchable, and neither are their artifacts.**
+ *   The route may still return them; the column is the active set, so a hit that
+ *   resolves to an archived Session is dropped. Artifacts carry no archived flag
+ *   of their own, so they are judged through the Session that wrote them.
+ * - **An imported read-only snapshot is active.** It cannot be written to, but it
+ *   is a live entry in the column and the owner's reading of 活跃 is archived
+ *   versus live, not writable versus read-only.
+ *
+ * A Session this page does not hold (`sessionFacts` answers `undefined`) is kept:
+ * the route found it, and dropping a result the workspace merely has not read
+ * would hide Sessions from another Project.
+ */
 export function narrowResults(
   results: readonly WorkbenchSearchResult[],
   narrowing: SearchNarrowing,

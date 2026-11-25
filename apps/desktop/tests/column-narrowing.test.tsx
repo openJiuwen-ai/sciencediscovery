@@ -7,6 +7,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 import type { ApiClient } from "../src/api/client.js";
 import { useWorkspace } from "../src/app/use-workspace.js";
+import { SEARCH_DEBOUNCE_MS } from "../src/app/session-search.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 const globals = globalThis as { window?: unknown; IS_REACT_ACT_ENVIRONMENT?: boolean };
 const STORE = new Map<string, string>();
@@ -34,6 +35,17 @@ function backend() {
     token: "",
     request: async (path: string) => {
       if (path.endsWith("/artifact-outputs")) return [];
+      if (path.startsWith("/api/search")) {
+        // Two session hits, one from each Project: the query's own answer, so the
+        // assertion can tell a narrowed result apart from an empty one.
+        return {
+          hasMore: false, limit: 20, offset: 0, total: 2,
+          results: [
+            { detail: "P", id: "session:s1", kind: "session", label: "one", projectId: "p", projectName: "P", sessionId: "s1" },
+            { detail: "Q", id: "session:s2", kind: "session", label: "two", projectId: "q", projectName: "Q", sessionId: "s2" },
+          ],
+        };
+      }
       if (path === "/api/inbox") return { id: "inbox" };
       if (/^\/api\/projects\/[^/]+\/sessions/.test(path)) {
         if (path.includes("/p/sessions")) return [session("s1", "p", "one")];
@@ -82,6 +94,27 @@ test("with no narrowing the column lists every active Session", async () => {
   const byProject = view.handle.state.sessionsByProject as Record<string, { id: string }[]>;
   assert.deepEqual(byProject.p.map(row => row.id), ["s1"]);
   assert.deepEqual(byProject.q.map(row => row.id), ["s2"], "no selection means no fold is filtered");
+  await view.close();
+  STORE.clear();
+});
+
+test("with a query the column keeps every active Session", async () => {
+  // Only the no-query half narrows the column; a query narrows its results and
+  // the column stays whole. Dropping the `searchQuery` half of `columnNarrowed`
+  // has to fail somewhere, and this is the case that says so.
+  const view = await listed({ projectIds: ["p"] });
+  await act(async () => {
+    view.handle.actions.search("one");
+    // The field debounces the route, so the answer lands after SEARCH_DEBOUNCE_MS;
+    // `act` flushes the state that answer sets when this callback resolves.
+    await new Promise((resolve) => setTimeout(resolve, SEARCH_DEBOUNCE_MS + 200));
+  });
+  const byProject = view.handle.state.sessionsByProject as Record<string, { id: string }[]>;
+  assert.deepEqual(byProject.p.map(row => row.id), ["s1"]);
+  assert.deepEqual(byProject.q.map(row => row.id), ["s2"],
+    "a query narrows the results, not the folds");
+  const hits = view.handle.state.searchResults?.results.map(hit => hit.sessionId);
+  assert.deepEqual(hits, ["s1"], "the query's own results are narrowed to the chosen Project");
   await view.close();
   STORE.clear();
 });
