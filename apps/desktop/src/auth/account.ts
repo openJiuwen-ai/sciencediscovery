@@ -26,11 +26,21 @@ import type {
 } from "@sciencediscovery/account-session";
 
 import type { UserSession } from "./session.js";
+import { TEXT } from "../text.js";
 
 export type { AccountCredit, AccountDevice, AccountMe, AccountSession, AccountUser };
 export { AccountApiError, accountSessionToUserSession, describeDevice };
 
-export const DEFAULT_ACCOUNT_NAME = "华为账号用户";
+/**
+ * The product name shown when HUAWEI shares no display name for the profile.
+ *
+ * Read at call time on purpose: a module-level constant would freeze whichever
+ * language happened to be active when this module first loaded, so an English
+ * UI would keep showing the Chinese name (#1398).
+ */
+export function defaultAccountName(): string {
+  return TEXT.account.defaultName;
+}
 
 /** Base URL of the account service; empty means "same origin as this page". */
 export function accountsBaseUrl(): string {

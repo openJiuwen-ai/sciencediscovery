@@ -134,6 +134,8 @@ export const EN: Text = {
     projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.",
     projectImport: (name: string) => `Import conversation into ${name}`, messageMenu: "Reply menu", packageContents: "Conversation, workspace files, artifacts and related research evidence.",
     title: "Research package", import: "Import conversation", export: "Export conversation", continue: "Continue chatting", branch: "Create branch chat", source: "Return to source",
+    /** The fallback "save as" name for a session the server left untitled. */
+    untitledSession: "Research session", downloadFailed: "The evidence package could not be downloaded. Try again.",
     readOnly: "Imported evidence · Read-only. Create an independent copy to continue with the retained materials.", copying: "Copying research in the background…", failed: "Operation failed",
     recalculating: "Recalculating…",
     omissionsSummary: (count: number) => `Not included: ${count} workspace file${count === 1 ? "" : "s"}`, download: "Download", preparing: "Preparing the package in the background…", close: "Close", copyMissing: "The conversation or operation record for this copy no longer exists; waiting has stopped. Create a new continuation.", copyPollingFailed: "Unable to read copy progress; retries have stopped. Refresh or try again later.", legacyUnavailable: "The local service is temporarily unavailable, retrying…", exportPollingFailed: "Unable to read export progress; retries have stopped. Export again later.", exportMissing: "The export task no longer exists. Export again.",
@@ -227,6 +229,8 @@ export const EN: Text = {
 
   account: {
     eyebrow: "HUAWEI ID",
+    /** The name shown when HUAWEI shares no display name for the profile. */
+    defaultName: "HUAWEI ID user",
     back: "Back to sessions",
     joined: (days: number) => `Joined ${days} days ago`,
     emailReadonly: (email: string) => `Email ${email}`,
