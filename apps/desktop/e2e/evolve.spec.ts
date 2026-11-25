@@ -624,6 +624,45 @@ test("a missing runtime greys out the start and is installed from the details", 
   await expect(dialog.getByRole("button", { name: "开始设计" })).toBeEnabled();
 });
 
+test("opening the create dialog re-reads the runtime, so a sidecar that died after the app started blocks the design", async ({ page }) => {
+  const mock = await installMockApi(page, { sessions: [makeSession()] });
+  await page.goto("/");
+
+  // The app's own read at start has to land before the runtime "dies": this
+  // journey is about the read that opening the form makes, not that one.
+  const statusReadsAtStart = () => mock.calls.filter(
+    (call) => call.method === "GET" && call.path === "/api/evolve/status",
+  ).length;
+  await expect.poll(statusReadsAtStart).toBeGreaterThan(0);
+  await page.waitForLoadState("networkidle");
+  expect(statusReadsAtStart()).toBeGreaterThan(0);
+
+  // The app read a ready runtime when it started; the sidecar dies before the
+  // user opens the form. The dialog's own read is the only thing that can see
+  // it: the status used to be read once and trusted, which left 就绪, the
+  // "runtime unavailable" banner hidden and 开始设计 clickable over a runtime
+  // that could not run the design.
+  let statusReads = 0;
+  await page.route("**/api/evolve/status", (route) => {
+    statusReads += 1;
+    return route.fulfill({
+      body: JSON.stringify({ canInitialize: false, error: "sidecar exited", state: "error" }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
+  await openEvolve(page);
+  const dialog = page.getByRole("dialog", { name: "新建程序演进实验" });
+  await expect(dialog).toBeVisible();
+  // Polled, not sampled once: the re-read is a request, and a synchronous count
+  // would race it. The banner below is the user-visible proof the read landed.
+  await expect.poll(() => statusReads).toBeGreaterThan(0);
+  await expect(dialog.getByRole("note").filter({ hasText: "优化进程不可用" })).toBeVisible();
+  await dialog.getByLabel("任务描述").fill("让压缩比更高");
+  await expect(dialog.getByRole("button", { name: "开始设计" })).toBeDisabled();
+});
+
 /** The answer the design skill writes at a checkpoint: one line of prose, then
  *  the fenced block the desktop turns into a card. */
 function checkpointAnswer(over: Record<string, string | number> = {}): string {
