@@ -27,7 +27,7 @@
  * is shown as absent instead of being invented as 0.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { IdeaTreeSettingsDetails, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
 import type { ApiClient } from "../../api/client.js";
 import { ApiRequestError } from "../../api/client.js";
@@ -52,12 +52,48 @@ const DIRECTIONS = [
   { label: t.minimize, value: "minimize" },
 ];
 
-/** A number typed into the form; empty means "the server's default", which is `null`
- *  for `maxTokens` and "omit the field" for the others. */
-function readNumber(raw: string): number | undefined {
+/** The note ids live beside the range table so the inputs' `aria-describedby`
+ *  and the notes cannot drift apart. */
+const DEPTH_ERROR_ID = "idea-tree-max-depth-error";
+const NODES_ERROR_ID = "idea-tree-max-nodes-error";
+const TOKENS_ERROR_ID = "idea-tree-max-tokens-error";
+
+/** A number field keeps the text the user typed, so a refused value stays visible
+ *  next to its reason instead of silently reverting to the previous number. */
+type NumberKey = "maxDepth" | "maxNodes" | "maxTokens";
+interface NumberField { text: string; invalid: boolean }
+type NumberFields = Record<NumberKey, NumberField>;
+
+function numberText(value: number | null | undefined): string {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function numberFieldsOf(settings: IdeaTreeSettingsDetails): NumberFields {
+  return {
+    maxDepth: { text: numberText(settings.maxDepth), invalid: false },
+    maxNodes: { text: numberText(settings.maxNodes), invalid: false },
+    maxTokens: { text: numberText(settings.maxTokens), invalid: false },
+  };
+}
+
+/** The store's own bounds (`boundedInteger` in services/api/src/store/settings.ts).
+ *  Enforcing them in the field means the pane refuses a value the server would
+ *  reject with a message after Save, and the note can name the permitted range. */
+const RANGES: Record<NumberKey, { min: number; max: number }> = {
+  maxDepth: { min: 1, max: 20 },
+  maxNodes: { min: 2, max: 10_000 },
+  maxTokens: { min: 1, max: Number.MAX_SAFE_INTEGER },
+};
+
+/** Read one stored count. Empty text is not a number: `maxTokens` maps it to the
+ *  API's `null` ("no per-research cap"), while depth and nodes have no unset value
+ *  and refuse it. Everything else must be an integer inside the field's range;
+ *  `0`, negatives, fractions, out-of-range values and `1e999` are refused instead
+ *  of being folded into a default or reaching the server. */
+function parseCount(raw: string, range: { min: number; max: number }): number | undefined {
   if (raw.trim() === "") return undefined;
   const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
+  return Number.isSafeInteger(value) && value >= range.min && value <= range.max ? value : undefined;
 }
 
 export function IdeaTreeSettings({ client }: { client: ApiClient }) {
@@ -72,11 +108,19 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
     }
   });
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
+  const [fields, setFields] = useState<NumberFields>();
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [failure, setFailure] = useState<string>();
+  /** Counts user edits — numbers, selects and prompts — so an answer that lands
+   *  after one (a reload, or the PUT's own response) cannot replace what the user
+   *  typed or "heal" a refused field. `save()` compares the count across its
+   *  request for the same reason. */
+  const edits = useRef(0);
 
   useEffect(() => {
-    if (loaded.value) setDraft(loaded.value);
+    if (!loaded.value || edits.current !== 0) return;
+    setDraft(loaded.value);
+    setFields(numberFieldsOf(loaded.value));
   }, [loaded.value]);
 
   const patch = (next: Partial<IdeaTreeSettingsDetails>) => {
@@ -84,10 +128,46 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
     setStatus("idle");
   };
 
+  /** A select or prompt edit: the same patch, but it also makes the pane dirty. */
+  const editField = (next: Partial<IdeaTreeSettingsDetails>) => {
+    edits.current += 1;
+    patch(next);
+  };
+
+  /** Keep the typed text and refuse invalid numbers on the spot. The draft is only
+   *  patched with an accepted value, so a refused `-5` cannot reach the PUT body as
+   *  `maxTokens: null`, and Save stays blocked until the text is corrected.
+   *
+   *  A number input reports text it cannot represent — `1e999` is the example that
+   *  started this — as `value === ""` with `validity.badInput === true`. That is not
+   *  an empty box: only `badInput === false` plus no text may mean "no cap"/absent. */
+  const editNumber = (key: NumberKey, raw: string, badInput: boolean) => {
+    edits.current += 1;
+    const empty = raw.trim() === "" && !badInput;
+    const value = empty ? undefined : parseCount(raw, RANGES[key]);
+    const invalid = key === "maxTokens" ? !empty && value === undefined : value === undefined;
+    setFields((current) => (current ? { ...current, [key]: { text: raw, invalid } } : current));
+    if (invalid) {
+      setStatus("idle");
+      return;
+    }
+    if (key === "maxTokens") patch({ maxTokens: value ?? null });
+    else if (value !== undefined) patch({ [key]: value } as Partial<IdeaTreeSettingsDetails>);
+  };
+
+  const editNumberInput = (key: NumberKey) => (event: FormEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    editNumber(key, input.value, input.validity.badInput);
+  };
+
+  const numbers = fields ?? (draft ? numberFieldsOf(draft) : undefined);
+  const blocked = numbers === undefined || Object.values(numbers).some((field) => field.invalid);
+
   const save = async () => {
-    if (!draft) return;
+    if (!draft || blocked) return;
     setStatus("saving");
     setFailure(undefined);
+    const generation = edits.current;
     const body: UpdateIdeaTreeSettingsRequest = {
       templateId: draft.templateId,
       explorationIntensity: draft.explorationIntensity,
@@ -102,7 +182,16 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
     };
     try {
       const saved = await updateIdeaTreeSettings(client, body);
+      // An edit typed while the request was in flight describes values this
+      // response does not contain. Keep the typed draft, do not mark it saved,
+      // and let the next Save send it; the late reload will skip the pane too.
+      if (edits.current !== generation) {
+        setStatus("idle");
+        return;
+      }
+      edits.current = 0;
       setDraft(saved);
+      setFields(numberFieldsOf(saved));
       setStatus("saved");
       loaded.reload();
     } catch (reason: unknown) {
@@ -110,8 +199,6 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
       setFailure(reason instanceof ApiRequestError && reason.status === 503 ? t.unavailable : reason instanceof Error ? reason.message : String(reason));
     }
   };
-
-  const number = (value: number | null | undefined) => (value === null || value === undefined ? "" : String(value));
 
   return (
     <LoadGate loaded={loaded}>
@@ -121,7 +208,7 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
             <Row hint={t.templateHint} title={t.template}>
               <Select
                 label={t.template}
-                onChange={(value) => patch({ templateId: value as IdeaTreeSettingsDetails["templateId"] })}
+                onChange={(value) => editField({ templateId: value as IdeaTreeSettingsDetails["templateId"] })}
                 options={TEMPLATES}
                 value={draft.templateId}
               />
@@ -129,7 +216,7 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
             <Row hint={t.intensityHint} title={t.intensity}>
               <Select
                 label={t.intensity}
-                onChange={(value) => patch({ explorationIntensity: value as IdeaTreeSettingsDetails["explorationIntensity"] })}
+                onChange={(value) => editField({ explorationIntensity: value as IdeaTreeSettingsDetails["explorationIntensity"] })}
                 options={INTENSITIES}
                 value={draft.explorationIntensity}
               />
@@ -137,41 +224,52 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
             <Row hint={t.directionHint} title={t.direction}>
               <Select
                 label={t.direction}
-                onChange={(value) => patch({ scoreDirection: value as IdeaTreeSettingsDetails["scoreDirection"] })}
+                onChange={(value) => editField({ scoreDirection: value as IdeaTreeSettingsDetails["scoreDirection"] })}
                 options={DIRECTIONS}
                 value={draft.scoreDirection}
               />
             </Row>
             <Row hint={t.maxDepthHint} title={t.maxDepth}>
               <input
+                aria-describedby={numbers?.maxDepth.invalid ? `${DEPTH_ERROR_ID}` : undefined}
+                aria-invalid={numbers?.maxDepth.invalid ?? false}
                 aria-label={t.maxDepth}
                 className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxDepth: value }); }}
+                max={RANGES.maxDepth.max}
+                min={RANGES.maxDepth.min}
+                onInput={editNumberInput("maxDepth")}
                 type="number"
-                value={number(draft.maxDepth)}
+                value={numbers?.maxDepth.text ?? ""}
               />
+              {numbers?.maxDepth.invalid ? <small className="row-note is-error" id={DEPTH_ERROR_ID} role="alert">{t.invalidDepth}</small> : null}
             </Row>
             <Row hint={t.maxNodesHint} title={t.maxNodes}>
               <input
+                aria-describedby={numbers?.maxNodes.invalid ? `${NODES_ERROR_ID}` : undefined}
+                aria-invalid={numbers?.maxNodes.invalid ?? false}
                 aria-label={t.maxNodes}
                 className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxNodes: value }); }}
+                max={RANGES.maxNodes.max}
+                min={RANGES.maxNodes.min}
+                onInput={editNumberInput("maxNodes")}
                 type="number"
-                value={number(draft.maxNodes)}
+                value={numbers?.maxNodes.text ?? ""}
               />
+              {numbers?.maxNodes.invalid ? <small className="row-note is-error" id={NODES_ERROR_ID} role="alert">{t.invalidNodes}</small> : null}
             </Row>
             <Row hint={t.tokensHint} title={t.tokens}>
               <input
+                aria-describedby={numbers?.maxTokens.invalid ? `${TOKENS_ERROR_ID}` : undefined}
+                aria-invalid={numbers?.maxTokens.invalid ?? false}
                 aria-label={t.tokens}
                 className="field-input"
-                min={0}
-                onChange={(event) => patch({ maxTokens: readNumber(event.target.value) ?? null })}
+                min={RANGES.maxTokens.min}
+                onInput={editNumberInput("maxTokens")}
                 placeholder={t.noCap}
                 type="number"
-                value={number(draft.maxTokens)}
+                value={numbers?.maxTokens.text ?? ""}
               />
+              {numbers?.maxTokens.invalid ? <small className="row-note is-error" id={TOKENS_ERROR_ID} role="alert">{t.invalidTokens}</small> : null}
             </Row>
           </Group>
           <Group heading={t.promptsHeading}>
@@ -184,7 +282,7 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
                 <textarea
                   aria-label={label}
                   className="field-input settings-textarea"
-                  onChange={(event) => patch({ [key]: event.target.value } as Partial<IdeaTreeSettingsDetails>)}
+                  onChange={(event) => editField({ [key]: event.target.value } as Partial<IdeaTreeSettingsDetails>)}
                   placeholder={t.promptPlaceholder}
                   rows={3}
                   value={value ?? ""}
@@ -193,7 +291,7 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
             ))}
           </Group>
           <div className="settings-actions is-end">
-            <button className="primary-button" disabled={status === "saving"} onClick={() => void save()} type="button">
+            <button className="primary-button" disabled={status === "saving" || blocked} onClick={() => void save()} type="button">
               {status === "saving" ? t.saving : t.save}
             </button>
             {status === "saved" ? <small role="status">{t.saved}</small> : null}
