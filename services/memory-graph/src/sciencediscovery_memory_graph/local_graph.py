@@ -21,8 +21,8 @@ new state of each node / relationship it touched to two human-readable files:
 * ``nodes.jsonl`` — ``{"id","labels","props"}`` or ``{"id","deleted":true}``
 * ``edges.jsonl`` — ``{"id","type","src","dst","props"}`` or ``{"id","deleted":true}``
 
-Replay is last-write-wins on ``id``, so a torn final line (crash mid-append) is
-skipped and everything before it survives. The files are compacted on load once
+Replay is last-write-wins on ``id``. A torn final line is removed on load before
+the graph can append new records. The files are compacted on load once
 dead lines outnumber live ones.
 
 Mutators journal an inverse operation so a failed statement (or a rolled back
@@ -103,22 +103,37 @@ class Store:
         lines = 0
         if not path.exists():
             return state, 0
-        with path.open("r", encoding="utf-8") as fh:
+        # Load runs before the backend publishes the graph to any writer. Read
+        # bytes so even a partial UTF-8 character cannot interrupt replay.
+        truncate_at: int | None = None
+        needs_newline = False
+        with path.open("rb") as fh:
             for raw in fh:
-                raw = raw.strip()
-                if not raw:
+                terminated = raw.endswith(b"\n")
+                if not raw.strip() and terminated:
                     continue
                 try:
-                    rec = json.loads(raw)
+                    rec = json.loads(raw.decode("utf-8"))
                     rid = rec["id"]
+                    if not isinstance(rid, str):
+                        raise ValueError("invalid graph record id")
                 except (ValueError, KeyError, TypeError):
                     log.warning("skipping unreadable line in %s", path.name)
+                    if not terminated:
+                        truncate_at = fh.tell() - len(raw)
                     continue
                 lines += 1
                 if rec.get("deleted"):
                     state.pop(rid, None)
                 else:
                     state[rid] = rec
+                needs_newline = not terminated
+        if truncate_at is not None:
+            with path.open("r+b") as fh:
+                fh.truncate(truncate_at)
+        elif needs_newline:
+            with path.open("ab") as fh:
+                fh.write(b"\n")
         return state, lines - len(state)
 
     def append(self, node_recs: list[dict[str, Any]], edge_recs: list[dict[str, Any]]) -> None:

@@ -16,7 +16,8 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 
 import { DatabaseSync } from "node:sqlite";
@@ -2011,6 +2012,34 @@ test("run event streams repair a torn tail and keep sequences monotonic", async 
   assert.equal(appended.sequence, 2, "the repaired tail frees its sequence");
   const records = await reopened.listSessionRunEvents(session.id, run.id);
   assert.deepEqual(records.map((record) => record.sequence), [1, 2]);
+});
+
+test("run event replay skips JSON records of the wrong shape between valid events", async () => {
+  const tempRoot = await mkdtemp(resolve(tmpdir(), "sd-run-record-shape-"));
+  const store = new SessionStore(tempRoot);
+  try {
+    await store.load();
+    const model = await store.createModel({ apiToken: "token", baseUrl: "https://models.example.test/v1", model: "model", name: "Model" });
+    const project = await store.createProject("Run event replay");
+    const session = await store.createSession(project.id, "Replay", model.id);
+    const run = await store.createSessionRun({
+      prompt: "Read past a bad record", sessionId: session.id,
+      settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+    });
+    for (const turn of [1, 2]) {
+      await store.appendSessionRunEvent(session.id, run.id, { phase: "thinking", turn, type: "agent.phase" });
+    }
+    const path = resolve(tempRoot, "run-events", session.id, run.id, "main.jsonl");
+    const [first, second] = (await readFile(path, "utf8")).trim().split("\n");
+    const wrongEvent = JSON.stringify({ sequence: 100, createdAt: "2026-11-25T00:00:00.000Z", event: true });
+    await writeFile(path, [first, "null", "[]", "{}", wrongEvent, second, ""].join("\n"), "utf8");
+    const events = await store.listSessionRunEvents(session.id, run.id);
+    assert.deepEqual(events.map((record) => record.sequence), [1, 2]);
+    assert.deepEqual(events.map((record) => record.event), [1, 2].map((turn) => ({ phase: "thinking", turn, type: "agent.phase" })));
+  } finally {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  }
 });
 
 test("legacy array run event files stay readable and later appends continue their sequences", async (context) => {

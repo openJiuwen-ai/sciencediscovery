@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createApp } from "./app.js";
-import type { AccountsConfig } from "./config.js";
+import { ConfigError, loadConfig, type AccountsConfig } from "./config.js";
 import { hashPassword } from "./crypto.js";
 import type { HttpRequest, HttpResponse } from "./http.js";
 import { ledgerAfter } from "./ledger.js";
@@ -38,6 +38,32 @@ import type {
   AccountsStore, AdminRow, AdminSessionRow, AuditRow, AuthFlowRow, CreditRow, HoldInput, HoldResult, LedgerRow, OverviewRow,
   ReleaseResult, SessionRow, SettleInput, SettleResult, SignInInput, SignInResult, UsageDayRow, UsageRecordRow, UserFilter, UserListRow, UserRow,
 } from "./store.js";
+
+test("account configuration validates sign-in rewards and preserves explicit zero", () => {
+  const env = {
+    DATABASE_URL: "postgres://local/accounts_test",
+    JWT_SECRET: randomUUID(),
+    HUAWEI_CLIENT_ID: "local-fixture",
+    WEB_RETURN_URL: "http://localhost/return",
+    ADMIN_ORIGIN: "http://localhost",
+  };
+  function rewards(overrides: NodeJS.ProcessEnv = {}) {
+    const config = loadConfig({ ...env, ...overrides });
+    return [config.dailyRewardCredits, config.checkinBonusEveryDays, config.streakBonusCredits];
+  }
+  assert.deepEqual(rewards(), [100, 7, 50]);
+  assert.deepEqual(rewards({ DAILY_REWARD_DAYS: "9" }), [100, 9, 50]);
+  assert.deepEqual(rewards({ DAILY_REWARD_CREDITS: "0", CHECKIN_BONUS_EVERY_DAYS: "0", DAILY_REWARD_DAYS: "9", STREAK_BONUS_CREDITS: "0" }), [0, 0, 0]);
+  for (const [key, value] of [
+    ["DAILY_REWARD_CREDITS", "100credits"],
+    ["DAILY_REWARD_CREDITS", String(Number.MAX_SAFE_INTEGER)],
+    ["CHECKIN_BONUS_EVERY_DAYS", "   "],
+    ["DAILY_REWARD_DAYS", "1.5"],
+    ["STREAK_BONUS_CREDITS", "-1"],
+  ] as const) {
+    assert.throws(() => rewards({ [key]: value }), (error: unknown) => error instanceof ConfigError && error.message.includes(key));
+  }
+});
 
 const SERVICE_TOKEN = "service-token";
 

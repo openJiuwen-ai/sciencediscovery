@@ -133,23 +133,31 @@ export function profileRows(
 
   const idField = fields.find((field) => IDENTIFIER_NAMES.has(normalizeName(field)))
     ?? fields.find((field) => kinds.get(field) === "identifier");
-  const seenIds = new Set<string>();
-  let duplicateIds = 0;
-
-  const parsedRows: DataRow[] = rows.map((row, index) => {
+  const parsedRows: DataRow[] = rows.map((row) => {
     const parsed: DataRow = { __rowId: "" };
     for (const field of fields) {
       writeCell(parsed, field, parseValue(readCell(row, field), kinds.get(field) !== "quantitative"));
     }
-    const candidate = idField ? String(parsed[idField] ?? "").trim() : "";
-    let rowId = candidate || `row-${index + 2}`;
-    if (seenIds.has(rowId)) {
-      duplicateIds += 1;
-      rowId = `${rowId}#${index + 2}`;
-    }
-    seenIds.add(rowId);
-    parsed.__rowId = rowId;
     return parsed;
+  });
+  const sourceIds = parsedRows.map((row) => idField === undefined ? "" : String(row[idField] ?? "").trim());
+  // A generated key must also leave room for explicit IDs later in the file.
+  const reservedIds = new Set(sourceIds.filter(Boolean));
+  const assignedIds = new Set<string>();
+  let duplicateIds = 0;
+  parsedRows.forEach((row, index) => {
+    const sourceId = sourceIds[index]!;
+    let rowId = sourceId || `row-${index + 2}`;
+    if (sourceId ? assignedIds.has(sourceId) : reservedIds.has(rowId) || assignedIds.has(rowId)) {
+      if (sourceId) duplicateIds += 1;
+      const base = `${rowId}#${index + 2}`;
+      rowId = base;
+      for (let suffix = 2; reservedIds.has(rowId) || assignedIds.has(rowId); suffix += 1) {
+        rowId = `${base}#${suffix}`;
+      }
+    }
+    assignedIds.add(rowId);
+    row.__rowId = rowId;
   });
 
   if (duplicateIds) warnings.push(translateActive("csv.importDuplicateIds", { count: duplicateIds }));
