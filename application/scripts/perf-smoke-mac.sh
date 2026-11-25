@@ -102,7 +102,22 @@ SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sd-perf-smoke.XXXXXX")"
 DATA_DIR="$SMOKE_DIR/data"
 APP_DIR="$SMOKE_DIR/Applications"
 mkdir -p "$DATA_DIR" "$APP_DIR"
-trap 'if [ "$KEEP" = "1" ]; then printf "[perf-smoke] KEEP=1 — kept for debugging: %s\n" "$SMOKE_DIR" >&2; else rm -rf "$SMOKE_DIR"; fi' EXIT
+
+# ONE EXIT handler, both jobs, right order (F9: bash keeps exactly one trap
+# per signal — a second `trap … EXIT` SILENTLY REPLACES the first, so the
+# v2 script's separate wipe and restore traps never both ran; the wipe was
+# dead code and every run leaked the copied .app + unpacked envs, hundreds
+# of MB per run). The restore must run BEFORE the wipe: the wizard backups
+# live inside $SMOKE_DIR.
+cleanup() {
+  cleanup_wizard
+  if [ "$KEEP" = "1" ]; then
+    printf '[perf-smoke] KEEP=1 — kept for debugging: %s\n' "$SMOKE_DIR" >&2
+  else
+    rm -rf "$SMOKE_DIR"
+  fi
+}
+trap cleanup EXIT
 
 # REALPATH FORM for the data dir: on macOS $TMPDIR is the /var/folders/...
 # spelling while Electron's process.resourcesPath is realpath'd to
@@ -119,15 +134,17 @@ DATA_DIR="$(/usr/bin/python3 -c 'import os,sys; sys.stdout.write(os.path.realpat
 # --- rail 1: wizard state — backup, seed, restore-on-exit -----------------------
 # The REAL userData is used (Electron ignores $HOME on macOS): back up any
 # existing wizard-state.json under BOTH name candidates, seed ours, and
-# restore on exit — the trap above runs AFTER this restore trap (LIFO).
+# restore on exit via the cleanup trap installed above (F9: one handler,
+# restore first, wipe second — the backups live inside $SMOKE_DIR).
 BACKUPS=()
 cleanup_wizard() {
-  for spec in "${BACKUPS[@]}"; do
+  # ${arr[@]+...} guard: macOS still ships bash 3.2, where "${arr[@]}" on an
+  # EMPTY array is an unbound-variable error under set -u (F10 shape).
+  for spec in ${BACKUPS[@]+"${BACKUPS[@]}"}; do
     UD="${spec%%|*}"; BAK="${spec#*|}"
     if [ -f "$BAK" ]; then mv "$BAK" "$UD/wizard-state.json"; else rm -f "$UD/wizard-state.json"; fi
   done
 }
-trap cleanup_wizard EXIT
 for NAME in "${NAME_CANDIDATES[@]}"; do
   UD="$AS_DIR/$NAME"
   mkdir -p "$UD"
@@ -259,8 +276,11 @@ fi
 step "judging $JUDGE_LOG (gate args: ${GATE_ARGS[*]:-none})"
 # The gate's own exit code passes through untouched (0/1/3 are its verdicts).
 # set -e must not eat it: run the gate with +e and forward the code.
+# ${arr[@]+...} guard (F10): stock macOS bash 3.2 treats "${GATE_ARGS[@]}"
+# on an empty array as unbound under set -u — the documented no-args local
+# release path would die on the very last line after doing all the work.
 set +e
-node "$GATE" "$JUDGE_LOG" "${GATE_ARGS[@]}"
+node "$GATE" "$JUDGE_LOG" ${GATE_ARGS[@]+"${GATE_ARGS[@]}"}
 GATE_RC=$?
 set -e
 exit "$GATE_RC"
