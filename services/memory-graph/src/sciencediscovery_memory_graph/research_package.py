@@ -18,8 +18,11 @@ EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersed
 
 
 def _key(labels: list[str], props: dict[str, Any]) -> str:
-    return json.dumps([sorted(labels), props.get("session_id"),
-                       _node_identity(labels[0], props)], ensure_ascii=False)
+    identity: Any = _node_identity(labels[0], props)
+    if labels[0] == "DbRecord":
+        # Match the storage key without changing the identity used by graph UI queries.
+        identity = [props.get("source"), identity]
+    return json.dumps([sorted(labels), props.get("session_id"), identity], ensure_ascii=False)
 
 
 def export_snapshot(session_ids: list[str]) -> dict[str, Any]:

@@ -188,6 +188,20 @@ export function defaultSettings(
   };
 }
 
+const OPTIONS_WITH_VALUE = new Set([
+  "--bwrap", "--sandbox-provider", "--seatbelt", "--data-dir", "--env-file", "--gateway-port",
+  "--host", "--port", "--runner-port", "--to", "--content", "--session", "--project", "--model",
+  "--skills", "--connectors", "--approval", "--review", "--effort", "--thinking", "--token", "--output", "--timeout",
+]);
+
+/** Tokenize options once under the same rules before and after loading the env file. */
+export function* invocationArguments(args: readonly string[]): Iterable<[string, string | undefined]> {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    yield [argument, OPTIONS_WITH_VALUE.has(argument) ? args[++index] : undefined];
+  }
+}
+
 export function parseInvocation(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -202,7 +216,8 @@ export function parseInvocation(
   const dataDirFromEnvironment = Boolean(
     env.SCIENCE_DISCOVERY_DATA_DIR?.trim() || env.SCIENCE_AGENT_DATA_DIR?.trim(),
   );
-  const dataDirFromArgument = rest.includes("--data-dir");
+  const argumentsWithValues = [...invocationArguments(rest)];
+  const dataDirFromArgument = argumentsWithValues.some(([argument]) => argument === "--data-dir");
   const invocation: ParsedInvocation = {
     command: command === "--help" || command === "-h"
       ? "help"
@@ -218,14 +233,13 @@ export function parseInvocation(
     return invocation.runSettings;
   };
 
-  for (let index = 0; index < rest.length; index += 1) {
-    const argument = rest[index];
+  for (const [argument, value] of argumentsWithValues) {
     // run 的位置参数:不以 "-" 开头的项当问题正文或完整 JSON 输入(仅首个)
     if (invocation.command === "run" && argument !== undefined && !argument.startsWith("-") && invocation.runSettings && invocation.runSettings.positional === undefined) {
       invocation.runSettings.positional = argument;
       continue;
     }
-    const next = (): string => requireValue(argument as string, rest[++index]);
+    const next = (): string => requireValue(argument, value);
     switch (argument) {
       case "--bwrap": invocation.settings.bwrapPath = next(); break;
       case "--sandbox-provider": {

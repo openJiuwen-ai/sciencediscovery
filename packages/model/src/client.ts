@@ -610,10 +610,7 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
       }
       contentType = String(headers["content-type"] ?? "");
       recorder.headers(statusCode, headers);
-      const retryAfter = headers["retry-after"];
-      if (typeof retryAfter === "string" && Number.isFinite(Number(retryAfter))) {
-        retryAfterMs = Number(retryAfter) * 1_000;
-      }
+      retryAfterMs = parseRetryAfter(headers["retry-after"]);
     } catch (error) {
       if (options.signal.aborted) { await dispatcher?.close(); throw new Error("aborted"); }
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -652,10 +649,17 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
       detail,
       retryAfterMs,
     );
-    if ((statusCode === 429 || statusCode >= 500) && attempt < options.policy.maxRetries) {
+    // Node timers overflow above this delay and fire almost immediately.
+    if ((statusCode === 429 || statusCode >= 500) && attempt < options.policy.maxRetries
+      && (retryAfterMs === undefined || retryAfterMs <= 2_147_483_647)) {
       lastError = failure;
       recorder.retry("provider_http");
-      await backoff(attempt, retryAfterMs, options.signal);
+      try {
+        await backoff(attempt, retryAfterMs, options.signal);
+      } catch (error) {
+        await dispatcher?.close();
+        throw error;
+      }
       continue;
     }
     await dispatcher?.close();
@@ -691,14 +695,33 @@ async function collectBounded(body: AsyncIterable<Uint8Array>, cap: number): Pro
   return text.slice(0, cap);
 }
 
+export function parseRetryAfter(header: string | string[] | undefined, now = Date.now()): number | undefined {
+  if (typeof header !== "string") return;
+  const value = header.trim();
+  if (/^[0-9]+$/.test(value)) {
+    const milliseconds = Number(value) * 1_000;
+    return Number.isSafeInteger(milliseconds) ? milliseconds : Number.MAX_SAFE_INTEGER;
+  }
+  // HTTP dates start with a weekday. Date.parse alone accepts bare numbers,
+  // signed values and other strings that are invalid Retry-After durations.
+  if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(value)) return;
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) return Math.max(0, date - now);
+}
+
 async function backoff(attempt: number, retryAfterMs: number | undefined, signal: AbortSignal): Promise<void> {
   const delay = retryAfterMs ?? Math.min(4_000, 500 * 2 ** attempt);
+  if (signal.aborted) throw new Error("aborted");
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, delay);
-    signal.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(timer);
       reject(new Error("aborted"));
-    }, { once: true });
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delay);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
