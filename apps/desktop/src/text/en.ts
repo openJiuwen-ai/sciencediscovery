@@ -1603,6 +1603,10 @@ export const EN: Text = {
         tokens: "Token limit",
         tokensHint: "Total tokens one research may use; empty means no extra cap.",
         noCap: "No extra cap",
+        /** Said when a committed box cannot be saved: the range the store accepts. */
+        numberRange: (min: number, max: number) => `Enter a whole number from ${min} to ${max}.`,
+        numberOrEmpty: (min: number, max: number) => `Enter a whole number from ${min} to ${max}, or leave it empty for no extra cap.`,
+        invalidNumbers: "A number was not accepted; fix it before saving.",
         promptsHeading: "Stage prompt overrides",
         designPrompt: "Design stage",
         aggregatorPrompt: "Aggregate stage",

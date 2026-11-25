@@ -27,11 +27,12 @@
  * is shown as absent instead of being invented as 0.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { IdeaTreeSettingsDetails, UpdateIdeaTreeSettingsRequest } from "@sciencediscovery/schema";
 import type { ApiClient } from "../../api/client.js";
 import { ApiRequestError } from "../../api/client.js";
 import { getIdeaTreeSettings, updateIdeaTreeSettings } from "../../api/settings.js";
+import { commitsOnEnter } from "../../app/ime-enter.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
 import { Group, LoadGate, Row, Select } from "./rows.js";
@@ -52,12 +53,75 @@ const DIRECTIONS = [
   { label: t.minimize, value: "minimize" },
 ];
 
-/** A number typed into the form; empty means "the server's default", which is `null`
- *  for `maxTokens` and "omit the field" for the others. */
-function readNumber(raw: string): number | undefined {
-  if (raw.trim() === "") return undefined;
-  const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
+type NumberKey = "maxDepth" | "maxNodes" | "maxTokens";
+
+/** What each numeric box accepts. An empty box has a documented value only for
+ *  `maxTokens`, where the API reads `null` as "no per-research cap"; `maxDepth` and
+ *  `maxNodes` are required numbers (`packages/schema/src/runtime-settings.ts:352-353`),
+ *  so empty text there is a draft the user has not finished and cannot be saved.
+ *  The upper bound is the API's own: the store bounds these with
+ *  `Number.MAX_SAFE_INTEGER` for tokens (`services/api/src/store/settings.ts:629`),
+ *  and every box is checked with `Number.isSafeInteger`. */
+type NumberRule = { emptyIsNull: boolean; max: number; min: number };
+const NUMBER_RULES: Record<NumberKey, NumberRule> = {
+  maxDepth: { emptyIsNull: false, min: 1, max: 20 },
+  maxNodes: { emptyIsNull: false, min: 2, max: 10_000 },
+  maxTokens: { emptyIsNull: true, min: 1, max: Number.MAX_SAFE_INTEGER },
+};
+const NUMBER_ROWS: { hint: string; key: NumberKey; placeholder?: string; title: string }[] = [
+  { hint: t.maxDepthHint, key: "maxDepth", title: t.maxDepth },
+  { hint: t.maxNodesHint, key: "maxNodes", title: t.maxNodes },
+  { hint: t.tokensHint, key: "maxTokens", placeholder: t.noCap, title: t.tokens },
+];
+
+/** The range a box accepts, said only when the user needs it. */
+function refusal(key: NumberKey): string {
+  const rule = NUMBER_RULES[key];
+  return rule.emptyIsNull ? t.numberOrEmpty(rule.min, rule.max) : t.numberRange(rule.min, rule.max);
+}
+
+/**
+ * One numeric box edited as text, the shape `SettingsNumber` gives the quota and
+ * count rows: the text is a draft, committed on blur or Enter, and text that does
+ * not parse is refused with `aria-invalid` and a visible note instead of being
+ * dropped at the keystroke that produced it (#1403).
+ *
+ * The page owns the parse rather than `SettingsNumber` doing it, because one of the
+ * three boxes holds `null` ("no cap") and the shared component's value is a number.
+ */
+function NumberBox({ invalid, label, max, message, min, onCommit, onTextChange, placeholder, value }: {
+  invalid: boolean; label: string; max: number; message: string; min: number;
+  onCommit: () => void; onTextChange: (text: string, badInput: boolean) => void; placeholder?: string; value: string;
+}) {
+  // `onInput` as well as `onChange`: React compares the input's `value` between
+  // events, and a number input whose text it cannot represent (e.g. `1e999`) keeps
+  // reporting `""`, so the change event for the keystroke after it is never
+  // dispatched. The native input event still arrives, which is what lets a box the
+  // browser calls `badInput` be cleared again instead of staying stuck.
+  const read = (input: HTMLInputElement) => onTextChange(input.value, input.validity.badInput);
+  // The note is the reason the box is marked, so it is described by the input and
+  // not only announced when it appears.
+  const note = useId();
+  return (
+    <div className="settings-number">
+      <input
+        aria-describedby={invalid ? note : undefined}
+        aria-invalid={invalid}
+        aria-label={label}
+        className="field-input is-number"
+        max={max}
+        min={min}
+        onBlur={onCommit}
+        onChange={(event) => read(event.currentTarget)}
+        onInput={(event) => read(event.currentTarget)}
+        onKeyDown={(event) => { if (commitsOnEnter(event)) { event.preventDefault(); event.currentTarget.blur(); } }}
+        placeholder={placeholder}
+        type="number"
+        value={value}
+      />
+      {invalid ? <small className="row-note is-error" id={note} role="alert">{message}</small> : null}
+    </div>
+  );
 }
 
 export function IdeaTreeSettings({ client }: { client: ApiClient }) {
@@ -72,6 +136,11 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
     }
   });
   const [draft, setDraft] = useState<IdeaTreeSettingsDetails>();
+  /** Text typed into a numeric box and not committed yet. A committed box drops its
+   *  text again, so what it shows is what the form holds. `badInput` marks text the
+   *  browser holds but cannot parse, which reads as `""` and must not be mistaken
+   *  for an empty box. */
+  const [typed, setTyped] = useState<Partial<Record<NumberKey, { badInput?: boolean; invalid: boolean; text?: string }>>>({});
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [failure, setFailure] = useState<string>();
 
@@ -84,8 +153,44 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
     setStatus("idle");
   };
 
+  const typeNumber = (key: NumberKey, text: string, badInput: boolean) => {
+    setTyped((current) => ({ ...current, [key]: { badInput, invalid: false, text } }));
+    // Editing starts a new attempt, so the previous "saved" note stops describing
+    // a form that no longer holds what was saved.
+    setStatus("idle");
+    setFailure(undefined);
+  };
+
+  /** Blur or Enter: the box's text becomes the form's value, or the box says why not.
+   *  A refused commit leaves the text in place, so nothing the user typed is replaced
+   *  by the value that was there before. */
+  const commitNumber = (key: NumberKey) => {
+    const entry = typed[key];
+    if (entry?.text === undefined) return;
+    const rule = NUMBER_RULES[key];
+    const raw = entry.text.trim();
+    const value = raw === "" ? null : Number(raw);
+    // `badInput` is not an empty box: it is text the browser could not turn into a
+    // number, so it is refused rather than read as "no cap" for the token row.
+    const accepted = !entry.badInput && (value === null
+      ? rule.emptyIsNull
+      : Number.isSafeInteger(value) && value >= rule.min && value <= rule.max);
+    if (!accepted) {
+      setTyped((current) => ({ ...current, [key]: { badInput: entry.badInput, invalid: true, text: entry.text } }));
+      // A refusal is a new state of the form as well: the earlier "saved" note would
+      // otherwise sit next to the error.
+      setStatus("idle");
+      setFailure(undefined);
+      return;
+    }
+    setTyped((current) => ({ ...current, [key]: { invalid: false } }));
+    patch({ [key]: value } as Partial<IdeaTreeSettingsDetails>);
+  };
+
+  const refused = NUMBER_ROWS.some(({ key }) => typed[key]?.invalid === true);
+
   const save = async () => {
-    if (!draft) return;
+    if (!draft || refused) return;
     setStatus("saving");
     setFailure(undefined);
     const body: UpdateIdeaTreeSettingsRequest = {
@@ -142,37 +247,24 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
                 value={draft.scoreDirection}
               />
             </Row>
-            <Row hint={t.maxDepthHint} title={t.maxDepth}>
-              <input
-                aria-label={t.maxDepth}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxDepth: value }); }}
-                type="number"
-                value={number(draft.maxDepth)}
-              />
-            </Row>
-            <Row hint={t.maxNodesHint} title={t.maxNodes}>
-              <input
-                aria-label={t.maxNodes}
-                className="field-input"
-                min={1}
-                onChange={(event) => { const value = readNumber(event.target.value); if (value !== undefined) patch({ maxNodes: value }); }}
-                type="number"
-                value={number(draft.maxNodes)}
-              />
-            </Row>
-            <Row hint={t.tokensHint} title={t.tokens}>
-              <input
-                aria-label={t.tokens}
-                className="field-input"
-                min={0}
-                onChange={(event) => patch({ maxTokens: readNumber(event.target.value) ?? null })}
-                placeholder={t.noCap}
-                type="number"
-                value={number(draft.maxTokens)}
-              />
-            </Row>
+            {NUMBER_ROWS.map(({ hint, key, placeholder, title }) => {
+              const rule = NUMBER_RULES[key];
+              return (
+                <Row hint={hint} key={key} title={title}>
+                  <NumberBox
+                    invalid={typed[key]?.invalid === true}
+                    label={title}
+                    max={rule.max}
+                    message={refusal(key)}
+                    min={rule.min}
+                    onCommit={() => commitNumber(key)}
+                    onTextChange={(text, badInput) => typeNumber(key, text, badInput)}
+                    placeholder={placeholder}
+                    value={typed[key]?.text ?? number(draft[key])}
+                  />
+                </Row>
+              );
+            })}
           </Group>
           <Group heading={t.promptsHeading}>
             {([
@@ -193,9 +285,10 @@ export function IdeaTreeSettings({ client }: { client: ApiClient }) {
             ))}
           </Group>
           <div className="settings-actions is-end">
-            <button className="primary-button" disabled={status === "saving"} onClick={() => void save()} type="button">
+            <button className="primary-button" disabled={status === "saving" || refused} onClick={() => void save()} type="button">
               {status === "saving" ? t.saving : t.save}
             </button>
+            {refused ? <small className="row-note is-error" role="alert">{t.invalidNumbers}</small> : null}
             {status === "saved" ? <small role="status">{t.saved}</small> : null}
             {status === "failed" ? <small role="alert">{failure ?? t.failed}</small> : null}
           </div>

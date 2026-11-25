@@ -1621,6 +1621,10 @@ export const ZH = {
         tokens: "token 上限",
         tokensHint: "单次研究可用的总 token；留空表示不额外限制。",
         noCap: "不额外限制",
+        /** Said when a committed box cannot be saved: the range the store accepts. */
+        numberRange: (min: number, max: number) => `请输入 ${min} 到 ${max} 之间的整数。`,
+        numberOrEmpty: (min: number, max: number) => `请输入 ${min} 到 ${max} 之间的整数，或留空表示不额外限制。`,
+        invalidNumbers: "有数值未通过校验，修正后才能保存。",
         promptsHeading: "阶段提示词覆盖",
         designPrompt: "设计阶段",
         aggregatorPrompt: "汇总阶段",
