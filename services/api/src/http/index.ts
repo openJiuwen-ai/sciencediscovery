@@ -767,6 +767,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   };
   const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
 
+  /** Best-effort kernel teardown for a Session that loses its persistent state.
+   *
+   *  The runner is the only owner of the kernel directory, so an unreachable
+   *  `/health` means "unknown", never "no kernels": probing first turned an
+   *  unreachable runner into a silently skipped teardown while the route still
+   *  answered 200 (#1405). The request is therefore sent unconditionally —
+   *  `teardownKernels` is idempotent per Session — and a failure is recorded
+   *  with the same shape as `sandbox_network_teardown_failed`, leaving the
+   *  caller free to decide how the request answers. `undefined` means the count
+   *  is unknown, never that nothing was torn down. */
+  const teardownSessionKernels = async (
+    sessionId: string,
+    reason: string,
+  ): Promise<{ count: number; reason: string } | undefined> => {
+    try {
+      return await runnerClient.teardownKernels(sessionId, reason);
+    } catch (error) {
+      runLog.warn("session_kernel_teardown_failed", {
+        errorMessage: shortErrorMessage(error),
+        sessionId,
+      });
+      return undefined;
+    }
+  };
+
   const sessionHasResearchHistory = async (sessionId: string): Promise<boolean> => {
     // A session is importable only while it is truly unused. Keep this check
     // broader than the visible transcript: background runs, artifact planning,
@@ -3588,8 +3613,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return sendError(response, 409, "Cannot change archive state during an active run");
         }
         const isArchive = sessionArchiveMatch[2] === "archive";
-        if (isArchive && (await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
-          await runnerClient.teardownKernels(sessionArchiveMatch[1]!, "Session was archived; persistent memory was lost");
+        if (isArchive) {
+          await teardownSessionKernels(sessionArchiveMatch[1]!, "Session was archived; persistent memory was lost");
         }
         const updated = isArchive
           ? await store.archiveSession(sessionArchiveMatch[1]!)
@@ -3708,9 +3733,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // recording a no-op re-selection and the "from" side of the audit entry.
         const previousApprovalMode = requestedApprovalMode ? store.getSession(sessionId)?.approvalMode : undefined;
         if (requestedApprovalMode && previousApprovalMode !== requestedApprovalMode) {
-          const teardown = (await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available
-            ? await runnerClient.teardownKernels(sessionId, "Approval mode changed; persistent memory was lost")
-            : undefined;
+          const teardown = await teardownSessionKernels(sessionId, "Approval mode changed; persistent memory was lost");
           const modeChange = await store.setApprovalMode(
             sessionId,
             requestedApprovalMode,
@@ -3748,9 +3771,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           .some((run) => run.settingsSnapshot.ideaTreeEnabled)
           ? ideaTreeRepository(sessionMatch[1]!)
           : undefined;
-        if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
-          await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
-        }
+        // Before the record disappears: once it is gone nothing can name the
+        // kernels left behind, so the teardown attempt is unconditional.
+        await teardownSessionKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         // Cancel delayed and active Reviewer work while its durable task
         // records still exist. Otherwise a quiet-window timer can wake after
         // deletion and attempt to read a Session that no longer exists.
