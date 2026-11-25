@@ -68,7 +68,11 @@ import type {
   SkillDeletionImpact,
   SkillDescriptor,
   SkillDetail,
+  SkillMarkdownContent,
   SkillResourceContent,
+  DeleteSkillFileRequest,
+  RenameSkillFileRequest,
+  UpdateSkillMarkdownRequest,
   Specialist,
   SystemQuotaSettings,
   SystemTimeoutSettings,
@@ -295,6 +299,52 @@ export function updateSkillFile(
   return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(path)}`, {
     body: JSON.stringify(body),
     method: "PUT",
+  });
+}
+
+/** The raw text of SKILL.md, for the editor that shows the whole document. */
+export function getSkillMarkdown(
+  client: ApiClient,
+  skillId: string,
+): Promise<SkillMarkdownContent> {
+  return client.request<SkillMarkdownContent>(`/api/skills/${encodeURIComponent(skillId)}/skill-md`);
+}
+
+/** Replace SKILL.md with the edited text; the server validates the package. */
+export function updateSkillMarkdown(
+  client: ApiClient,
+  skillId: string,
+  body: UpdateSkillMarkdownRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}/skill-md`, {
+    body: JSON.stringify(body),
+    method: "PUT",
+  });
+}
+
+/** Remove one resource, or every resource under a folder path. */
+export function deleteSkillFile(
+  client: ApiClient,
+  skillId: string,
+  path: string,
+  body: DeleteSkillFileRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(path)}`, {
+    body: JSON.stringify(body),
+    method: "DELETE",
+  });
+}
+
+/** Move a file, or a folder and everything under it, to a new path. */
+export function renameSkillFile(
+  client: ApiClient,
+  skillId: string,
+  path: string,
+  body: RenameSkillFileRequest,
+): Promise<SkillDetail> {
+  return client.request<SkillDetail>(`/api/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(path)}/rename`, {
+    body: JSON.stringify(body),
+    method: "POST",
   });
 }
 

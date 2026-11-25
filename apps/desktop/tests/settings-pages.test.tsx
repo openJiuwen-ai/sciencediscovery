@@ -856,7 +856,7 @@ describe("the skill card", () => {
     ...fields,
   }) as SkillDescriptor;
 
-  it("identifies all three sources before expanding a card", () => {
+  it("separates the three sources into tabs and marks every card", () => {
     const sourceClient = new StubClient().asClient();
     writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
       enabled: [],
@@ -868,14 +868,21 @@ describe("the skill card", () => {
     const markup = renderToStaticMarkup(
       <SkillsSettings client={sourceClient} />,
     );
-    for (const label of ["SD 内置", "JiuwenSwarm 内置", "自建"]) {
-      assert.ok(markup.includes(label), `The collapsed list does not identify ${label}`);
+    // The catalog's built-in and JiuwenSwarm's own built-ins are the two
+    // official packages; the managed one is 我的.
+    for (const label of [
+      TEXT.settings.skills.tabs.all(3),
+      TEXT.settings.skills.tabs.mine(1),
+      TEXT.settings.skills.tabs.official(2),
+    ]) {
+      assert.ok(markup.includes(label), `The list does not count ${label}`);
     }
-    assert.ok(markup.includes(TEXT.settings.skills.scope));
+    assert.ok(markup.includes(TEXT.settings.skills.cardTag.builtIn), "a built-in card carries no 内置 tag");
+    assert.ok(markup.includes(TEXT.settings.skills.cardTag.external), "a managed card carries no 外部 tag");
     assert.ok(!markup.includes("settings-detail-heading"), "Sources must be visible before opening instructions");
   });
 
-  it("reads source badges in the current language after the module was loaded", () => {
+  it("reads card tags in the current language after the module was loaded", () => {
     const previous = getLanguage();
     const sourceClient = new StubClient().asClient();
     writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
@@ -886,8 +893,8 @@ describe("the skill card", () => {
       for (const language of ["en", "zh-CN"] as const) {
         setLanguage(language);
         const markup = renderToStaticMarkup(<SkillsSettings client={sourceClient} />);
-        assert.ok(markup.includes(TEXT.settings.skills.source.builtIn));
-        assert.ok(markup.includes(TEXT.settings.skills.source.managed));
+        assert.ok(markup.includes(TEXT.settings.skills.cardTag.builtIn));
+        assert.ok(markup.includes(TEXT.settings.skills.cardTag.external));
       }
     } finally { setLanguage(previous); }
   });

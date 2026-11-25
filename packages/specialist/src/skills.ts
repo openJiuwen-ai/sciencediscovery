@@ -34,6 +34,7 @@ import type {
   CreateSkillPackageRequest,
   CreateSkillRequest,
   CreateSkillDialogueDraftRequest,
+  DeleteSkillFileRequest,
   DistillSessionSkillRequest,
   ExecutionRun,
   CreateGitSkillReviewDraftsRequest,
@@ -44,6 +45,7 @@ import type {
   InspectGitSkillRepositoryRequest,
   StartGitSkillImportJobRequest,
   MergeSkillReviewDraftsRequest,
+  RenameSkillFileRequest,
   SkillDescriptor,
   SkillDetail,
   SkillPackageFileBytes,
@@ -57,7 +59,9 @@ import type {
   SkillVersionSummary,
   SkillVersionProvenance,
   SkillDraft,
+  SkillMarkdownContent,
   SkillValidationDiagnostic,
+  UpdateSkillMarkdownRequest,
   UpdateSkillRequest,
   UpdateSkillFileRequest,
 } from "@sciencediscovery/schema";
@@ -2323,6 +2327,141 @@ export class SkillCatalog {
       const loaded = validateSkillPackage(files, { directoryName: id, revision });
       const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), {
         ...(input.sourceSessionId ? { sessionId: input.sourceSessionId } : {}),
+        source: "manual",
+      });
+      const previous = this.index.managed[id]!;
+      this.index.managed[id] = { currentRevision: revision };
+      try {
+        await this.saveIndex();
+      } catch (error) {
+        this.index.managed[id] = previous;
+        await rm(this.revisionRoot(id, revision), { force: true, recursive: true });
+        throw error;
+      }
+      this.managed.set(id, committed);
+      return structuredClone(committed.detail);
+    });
+  }
+
+  /** The raw bytes of SKILL.md, frontmatter included: the file editor shows
+   *  the document it is about to write back. */
+  readSkillMarkdown(id: string): SkillMarkdownContent {
+    this.assertLoaded();
+    const value = this.builtIns.get(id) ?? this.managed.get(id);
+    if (!value) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+    const bytes = value.files.get("SKILL.md");
+    if (!bytes) throw new SkillCatalogError("SKILL_NOT_FOUND", `SKILL.md is missing: ${id}`);
+    return { content: bytes.toString("utf8"), revision: value.detail.currentRevision, skillId: id };
+  }
+
+  /** Replace SKILL.md with the text the editor showed. The package is
+   *  validated after the write, so a bad frontmatter or a renamed identity is
+   *  refused instead of committed. */
+  async updateSkillMarkdown(id: string, input: UpdateSkillMarkdownRequest): Promise<SkillDetail> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      if (this.builtIns.has(id)) throw new SkillCatalogError("SKILL_READ_ONLY", `Built-in skill is read-only: ${id}`);
+      const current = this.managed.get(id);
+      if (!current) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+      if (input.expectedRevision !== current.detail.currentRevision) {
+        throw new SkillCatalogError("SKILL_CONFLICT", `Skill revision conflict: expected ${input.expectedRevision}, current ${current.detail.currentRevision}`);
+      }
+      const revision = current.detail.currentRevision + 1;
+      const files = cloneFiles(current.files);
+      files.set("SKILL.md", Buffer.from(input.content, "utf8"));
+      const loaded = validateSkillPackage(files, { directoryName: id, revision });
+      const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), {
+        source: "manual",
+      });
+      const previous = this.index.managed[id]!;
+      this.index.managed[id] = { currentRevision: revision };
+      try {
+        await this.saveIndex();
+      } catch (error) {
+        this.index.managed[id] = previous;
+        await rm(this.revisionRoot(id, revision), { force: true, recursive: true });
+        throw error;
+      }
+      this.managed.set(id, committed);
+      return structuredClone(committed.detail);
+    });
+  }
+
+  /** Remove one resource, or every resource under a folder path. SKILL.md is
+   *  the package's identity and is never removed here; deleting the Skill is
+   *  the catalog's own operation. */
+  async deleteFile(id: string, rawPath: string, input: DeleteSkillFileRequest): Promise<SkillDetail> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      if (this.builtIns.has(id)) throw new SkillCatalogError("SKILL_READ_ONLY", `Built-in skill is read-only: ${id}`);
+      const current = this.managed.get(id);
+      if (!current) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+      if (input.expectedRevision !== current.detail.currentRevision) {
+        throw new SkillCatalogError("SKILL_CONFLICT", `Skill revision conflict: expected ${input.expectedRevision}, current ${current.detail.currentRevision}`);
+      }
+      const path = normalizedPackagePath(rawPath);
+      if (path === "SKILL.md") throw validationError("SKILL.md cannot be deleted");
+      const targets = [...current.files.keys()].filter((candidate) => candidate === path || candidate.startsWith(`${path}/`));
+      if (targets.length === 0) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill file not found: ${path}`);
+      const revision = current.detail.currentRevision + 1;
+      const files = cloneFiles(current.files);
+      for (const target of targets) files.delete(target);
+      const loaded = validateSkillPackage(files, { directoryName: id, revision });
+      const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), {
+        source: "manual",
+      });
+      const previous = this.index.managed[id]!;
+      this.index.managed[id] = { currentRevision: revision };
+      try {
+        await this.saveIndex();
+      } catch (error) {
+        this.index.managed[id] = previous;
+        await rm(this.revisionRoot(id, revision), { force: true, recursive: true });
+        throw error;
+      }
+      this.managed.set(id, committed);
+      return structuredClone(committed.detail);
+    });
+  }
+
+  /** Move a file, or a folder and everything under it, to a new path. */
+  async renameFile(id: string, rawFrom: string, input: RenameSkillFileRequest): Promise<SkillDetail> {
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      if (this.builtIns.has(id)) throw new SkillCatalogError("SKILL_READ_ONLY", `Built-in skill is read-only: ${id}`);
+      const current = this.managed.get(id);
+      if (!current) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+      if (input.expectedRevision !== current.detail.currentRevision) {
+        throw new SkillCatalogError("SKILL_CONFLICT", `Skill revision conflict: expected ${input.expectedRevision}, current ${current.detail.currentRevision}`);
+      }
+      const from = normalizedPackagePath(rawFrom);
+      const to = normalizedPackagePath(input.to);
+      if (from === "SKILL.md" || to === "SKILL.md" || to.startsWith("SKILL.md/")) {
+        throw validationError("SKILL.md keeps its name");
+      }
+      if (to === from || to.startsWith(`${from}/`)) {
+        throw validationError(`A file cannot be moved into itself: ${from} -> ${to}`);
+      }
+      const moved = [...current.files.keys()].filter((candidate) => candidate === from || candidate.startsWith(`${from}/`));
+      if (moved.length === 0) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill file not found: ${from}`);
+      const renamed = new Map(moved.map((candidate) => [
+        candidate,
+        candidate === from ? to : `${to}${candidate.slice(from.length)}`,
+      ]));
+      const movedSet = new Set(moved);
+      for (const target of renamed.values()) {
+        if (current.files.has(target) && !movedSet.has(target)) {
+          throw validationError(`A file already exists at ${target}`);
+        }
+      }
+      const revision = current.detail.currentRevision + 1;
+      const files = cloneFiles(current.files);
+      for (const source of moved) files.delete(source);
+      for (const [source, target] of renamed) {
+        files.set(target, Buffer.from(current.files.get(source)!));
+      }
+      const loaded = validateSkillPackage(files, { directoryName: id, revision });
+      const committed = await this.commitManaged(loaded, revision, new Date().toISOString(), {
         source: "manual",
       });
       const previous = this.index.managed[id]!;

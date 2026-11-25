@@ -18,6 +18,7 @@ import { isAbortError, type ApiClient } from "../../api/client.js";
 import { inspectGitSkillRepository } from "../../api/settings.js";
 import type {
   GitSkillImportCandidate,
+  GitSkillImportJob,
   GitSkillRepositoryInspection,
   StartGitSkillImportJobRequest,
 } from "../../api/types.js";
@@ -25,9 +26,11 @@ import { TEXT } from "../../text.js";
 
 interface Props {
   client: ApiClient;
-  /** Leaves for the list as soon as the job is accepted. The import itself
-   *  runs in the API process; the list shows its progress and result. */
-  onDone?: () => void;
+  /** The background job this dialog started, once the store has it. The dialog
+   *  stays open on its progress and the list takes over when it ends. */
+  job?: GitSkillImportJob;
+  /** Closes the dialog without importing. */
+  onCancel: () => void;
   /** Starts the background job. The view only builds the selection. */
   onStart: (request: StartGitSkillImportJobRequest) => Promise<void>;
 }
@@ -59,19 +62,38 @@ function messageOf(reason: unknown): string {
   return message || TEXT.settings.skills.importFailed;
 }
 
+/** An http(s) repository address: a host and at least an owner/repository
+ *  path. The handoff draws a GitHub URL, and that is the common case, but the
+ *  route itself clones any https remote, so the check only refuses what cannot
+ *  be a repository before a clone is attempted. */
+function looksLikeRepositoryUrl(value: string): boolean {
+  return /^https?:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+/iu.test(value.trim());
+}
+
+function GitHubMark() {
+  return (
+    <svg aria-hidden="true" className="skill-git-github" height="32" viewBox="0 0 16 16" width="32">
+      <path
+        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 /**
- * 技能 › 从 GitHub 导入.
+ * 技能 › 从 GitHub 导入, as the handoff's dialog.
  *
  * Inspection comes before any write, because a repository may hold several
  * packages and only the user can say which ones belong in this catalog. The
  * inspection pins a commit and every selected package is imported at that
  * exact commit, so the rows the user ticked are the bytes that get installed.
  *
- * A package already installed is an `update` and is imported with the revision
- * the inspection saw: if another window edited it meanwhile the server answers
- * 409, and the row says so rather than silently replacing that edit.
+ * The import itself is one background job: the dialog shows its progress
+ * (`done / total`) and closes when it ends, leaving the list and its banner to
+ * report the outcome.
  */
-export function SkillGitImportView({ client, onDone, onStart }: Props) {
+export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [subdirectory, setSubdirectory] = useState("");
@@ -90,6 +112,11 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
   };
 
   const inspect = async () => {
+    if (!looksLikeRepositoryUrl(url)) {
+      reset();
+      setFailure(TEXT.settings.skills.gitDialog.invalidUrl);
+      return;
+    }
     const controller = new AbortController();
     inspectionRequest.current = controller;
     setInspecting(true);
@@ -118,7 +145,7 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
   };
 
   /** Stop waiting for the clone. The server finishes its own work; what this
-   *  ends is the page being unusable while it does. */
+   *  ends is the dialog being unusable while it does. */
   const cancelInspect = () => {
     inspectionRequest.current?.abort();
   };
@@ -199,9 +226,6 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
         ...(inspection.ref ? { ref: inspection.ref } : {}),
         repositoryUrl: inspection.repositoryUrl,
       });
-      // The job is accepted and runs in the API; the list is where its
-      // progress and the installed packages are shown.
-      onDone?.();
     } catch (reason) {
       setFailure(messageOf(reason));
     } finally {
@@ -209,112 +233,132 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
     }
   };
 
+  const active = job !== undefined && (job.status === "queued" || job.status === "running") ? job : undefined;
+  const percent = active !== undefined && active.total > 0 ? Math.round((active.done / active.total) * 100) : 0;
+
   return (
     <div className="skill-git">
-      <div className="skill-git-source">
-        <div className="skill-git-url">
-          <label className="settings-field">
-            <span className="settings-field-label">{TEXT.settings.skills.git.url}</span>
-            <input
-              aria-label={TEXT.settings.skills.git.url}
-              className="field-input"
-              disabled={inspecting || busy}
-              onChange={(event) => {
-                setUrl(event.target.value);
-                reset();
-              }}
-              placeholder={TEXT.settings.skills.git.urlPlaceholder}
-              spellCheck={false}
-              value={url}
-            />
-          </label>
-          <button
-            className="secondary-button"
-            disabled={inspecting || busy || url.trim() === ""}
-            onClick={() => void inspect()}
-            type="button"
-          >
-            {inspecting ? TEXT.settings.skills.git.inspecting : TEXT.settings.skills.git.inspect}
-          </button>
+      <div className="skill-git-intro">
+        <div aria-hidden="true" className="skill-git-marks">
+          <GitHubMark />
+          <span className="skill-git-dots"><i /><i /><i /></span>
+          <span className="skill-git-app-mark" />
         </div>
-        <div className="settings-field-pair">
-          <label className="settings-field">
-            <span className="settings-field-label">{TEXT.settings.skills.git.ref}</span>
-            <input
-              aria-label={TEXT.settings.skills.git.ref}
-              className="field-input"
-              disabled={inspecting || busy}
-              onChange={(event) => {
-                setRef(event.target.value);
-                reset();
-              }}
-              placeholder={TEXT.settings.skills.git.refPlaceholder}
-              spellCheck={false}
-              value={ref}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">{TEXT.settings.skills.git.subdirectory}</span>
-            <input
-              aria-label={TEXT.settings.skills.git.subdirectory}
-              className="field-input"
-              disabled={inspecting || busy}
-              onChange={(event) => {
-                setSubdirectory(event.target.value);
-                reset();
-              }}
-              placeholder={TEXT.settings.skills.git.subdirectoryPlaceholder}
-              spellCheck={false}
-              value={subdirectory}
-            />
-          </label>
-        </div>
+        <p className="skill-git-subtitle">{TEXT.settings.skills.gitDialog.subtitle}</p>
       </div>
 
-      {inspecting ? (
-        <div className="skill-git-progress" role="status">
-          <small className="row-note">{TEXT.settings.skills.git.inspectHint}</small>
-          <button className="secondary-button" onClick={cancelInspect} type="button">
-            {TEXT.settings.skills.git.cancelInspect}
-          </button>
-        </div>
-      ) : null}
-
-      {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
-
-      {inspection ? (
-        <section
-          aria-label={TEXT.settings.skills.git.found(total)}
-          className="skill-git-results"
-        >
-          <div className="skill-git-results-head">
-            <div>
-              <h3>{TEXT.settings.skills.git.found(total)}</h3>
-              <p className="row-note">
-                {TEXT.settings.skills.git.commit(inspection.commit)}
-                {candidates.length < total
-                  ? ` · ${TEXT.settings.skills.git.loaded(candidates.length, total)}`
-                  : null}
-                {" · "}{TEXT.settings.skills.git.selectHint}
-              </p>
-            </div>
-            <button
-              className="primary-button"
-              disabled={busy || selected.size === 0}
-              onClick={() => void importFromGit()}
-              type="button"
+      {active !== undefined ? (
+        <div className="skill-git-progress-block" role="status">
+          <p className="skill-git-progress-text">
+            {TEXT.settings.skills.gitDialog.progress(active.done, active.total)}
+          </p>
+          <div className="skill-git-progress-row">
+            <div
+              aria-hidden="true"
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={percent}
+              className="skill-git-progress-bar"
+              role="progressbar"
             >
-              {busy
-                ? TEXT.settings.skills.importBusy
-                : TEXT.settings.skills.git.importSelected(selected.size)}
-            </button>
+              <span style={{ width: `${percent}%` }} />
+            </div>
+            <span className="skill-git-progress-pct">{percent}%</span>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="skill-git-field">
+            <label className="settings-field">
+              <span className="settings-field-label">{TEXT.settings.skills.git.url}</span>
+              <div className="skill-git-url-row">
+                <input
+                  aria-label={TEXT.settings.skills.git.url}
+                  className={`field-input${failure ? " is-error" : ""}`}
+                  disabled={inspecting || busy}
+                  onChange={(event) => {
+                    setUrl(event.target.value);
+                    reset();
+                  }}
+                  placeholder={TEXT.settings.skills.git.urlPlaceholder}
+                  spellCheck={false}
+                  value={url}
+                />
+                <button
+                  className="secondary-button"
+                  disabled={inspecting || busy || url.trim() === ""}
+                  onClick={() => void inspect()}
+                  type="button"
+                >
+                  {inspecting ? TEXT.settings.skills.git.inspecting : TEXT.settings.skills.git.inspect}
+                </button>
+              </div>
+            </label>
           </div>
 
-          {inspection.candidates.length === 0 ? (
-            <p className="settings-empty">{TEXT.settings.skills.git.empty}</p>
-          ) : (
-            <>
-              <div className="skill-git-select-bar">
+          {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+
+          <details className="skill-git-advanced">
+            <summary>{TEXT.settings.skills.gitDialog.advanced}</summary>
+            <div className="settings-field-pair">
+              <label className="settings-field">
+                <span className="settings-field-label">{TEXT.settings.skills.git.ref}</span>
+                <input
+                  aria-label={TEXT.settings.skills.git.ref}
+                  className="field-input"
+                  disabled={inspecting || busy}
+                  onChange={(event) => {
+                    setRef(event.target.value);
+                    reset();
+                  }}
+                  placeholder={TEXT.settings.skills.git.refPlaceholder}
+                  spellCheck={false}
+                  value={ref}
+                />
+              </label>
+              <label className="settings-field">
+                <span className="settings-field-label">{TEXT.settings.skills.git.subdirectory}</span>
+                <input
+                  aria-label={TEXT.settings.skills.git.subdirectory}
+                  className="field-input"
+                  disabled={inspecting || busy}
+                  onChange={(event) => {
+                    setSubdirectory(event.target.value);
+                    reset();
+                  }}
+                  placeholder={TEXT.settings.skills.git.subdirectoryPlaceholder}
+                  spellCheck={false}
+                  value={subdirectory}
+                />
+              </label>
+            </div>
+          </details>
+
+          {inspecting ? (
+            <div className="skill-git-progress" role="status">
+              <small className="row-note">{TEXT.settings.skills.git.inspectHint}</small>
+              <button className="secondary-button" onClick={cancelInspect} type="button">
+                {TEXT.settings.skills.git.cancelInspect}
+              </button>
+            </div>
+          ) : null}
+
+          {inspection ? (
+            <section
+              aria-label={TEXT.settings.skills.git.found(total)}
+              className="skill-git-results"
+            >
+              <div className="skill-git-results-head">
+                <div>
+                  <h3>{TEXT.settings.skills.git.found(total)}</h3>
+                  <p className="row-note">
+                    {TEXT.settings.skills.git.commit(inspection.commit)}
+                    {candidates.length < total
+                      ? ` · ${TEXT.settings.skills.git.loaded(candidates.length, total)}`
+                      : null}
+                    {" · "}{TEXT.settings.skills.git.selectHint}
+                  </p>
+                </div>
                 <label className="skill-git-select-all">
                   <input
                     aria-label={TEXT.settings.skills.git.selectAll}
@@ -326,58 +370,87 @@ export function SkillGitImportView({ client, onDone, onStart }: Props) {
                   {TEXT.settings.skills.git.selectAll}
                 </label>
               </div>
-              <div className="skill-candidates">
-                {candidates.map((candidate) => {
-                  const canChoose = candidate.status === "new" || candidate.status === "update";
-                  return (
-                    <label
-                      className={`skill-candidate${canChoose ? "" : " is-disabled"}`}
-                      key={candidate.subdirectory}
-                    >
-                      <input
-                        checked={selected.has(candidate.subdirectory)}
-                        disabled={!canChoose || busy}
-                        onChange={(event) => toggle(candidate.subdirectory, event.target.checked)}
-                        type="checkbox"
-                      />
-                      <span className="skill-candidate-main">
-                        <strong>
-                          {candidate.name ?? candidate.subdirectory}
-                          <span className={`skill-candidate-status is-${candidate.status}`}>
-                            {STATUS_LABEL[candidate.status]()}
-                          </span>
-                        </strong>
-                        <small>{candidate.description ?? candidate.subdirectory}</small>
-                        {candidate.diagnostics.length ? (
-                          <small className="is-error">{candidate.diagnostics.join(" ")}</small>
-                        ) : null}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              {inspection.nextCursor !== undefined ? (
-                <div className="skill-git-more">
-                  <small className="row-note">
-                    {TEXT.settings.skills.git.loaded(candidates.length, total)}
-                  </small>
-                  <button
-                    className="secondary-button"
-                    disabled={busy || loadingMore}
-                    onClick={() => void loadMore()}
-                    type="button"
-                  >
-                    {loadingMore
-                      ? TEXT.settings.skills.git.loadingMore
-                      : TEXT.settings.skills.git.loadMore}
-                  </button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </section>
-      ) : null}
 
+              {candidates.length === 0 ? (
+                <p className="settings-empty">{TEXT.settings.skills.git.empty}</p>
+              ) : (
+                <>
+                  <div className="skill-candidates">
+                    {candidates.map((candidate) => {
+                      const canChoose = candidate.status === "new" || candidate.status === "update";
+                      return (
+                        <label
+                          className={`skill-candidate${canChoose ? "" : " is-disabled"}`}
+                          key={candidate.subdirectory}
+                        >
+                          <input
+                            checked={selected.has(candidate.subdirectory)}
+                            disabled={!canChoose || busy}
+                            onChange={(event) => toggle(candidate.subdirectory, event.target.checked)}
+                            type="checkbox"
+                          />
+                          <span className="skill-candidate-main">
+                            <strong>
+                              {candidate.name ?? candidate.subdirectory}
+                              <span className={`skill-candidate-status is-${candidate.status}`}>
+                                {STATUS_LABEL[candidate.status]()}
+                              </span>
+                            </strong>
+                            <small>{candidate.description ?? candidate.subdirectory}</small>
+                            {candidate.diagnostics.length ? (
+                              <small className="is-error">{candidate.diagnostics.join(" ")}</small>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {inspection.nextCursor !== undefined ? (
+                    <div className="skill-git-more">
+                      <small className="row-note">
+                        {TEXT.settings.skills.git.loaded(candidates.length, total)}
+                      </small>
+                      <button
+                        className="secondary-button"
+                        disabled={busy || loadingMore}
+                        onClick={() => void loadMore()}
+                        type="button"
+                      >
+                        {loadingMore
+                          ? TEXT.settings.skills.git.loadingMore
+                          : TEXT.settings.skills.git.loadMore}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </section>
+          ) : null}
+        </>
+      )}
+
+      <div className="skill-dialog-actions">
+        <button
+          className="secondary-button"
+          disabled={busy || active !== undefined}
+          onClick={onCancel}
+          type="button"
+        >
+          {TEXT.settings.skills.uploadDialog.cancel}
+        </button>
+        <button
+          className="primary-button"
+          disabled={busy || active !== undefined || !inspection || chosen.length === 0}
+          onClick={() => void importFromGit()}
+          type="button"
+        >
+          {busy || active !== undefined
+            ? TEXT.settings.skills.gitDialog.importing
+            : inspection === undefined
+              ? TEXT.settings.skills.importAction
+              : TEXT.settings.skills.git.importSelected(chosen.length)}
+        </button>
+      </div>
     </div>
   );
 }
