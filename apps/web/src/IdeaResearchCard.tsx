@@ -8,20 +8,8 @@ import { ideaResearchActivityStatusLabel, ideaResearchPhaseLabel, ideaResearchSt
 
 /** How often an empty list is re-read while a research is expected. */
 const EMPTY_POLL_MS = 5_000;
-/** The slower cadence the same re-read falls back to once the wait is clearly long. */
-const EMPTY_POLL_SLOW_MS = 30_000;
-/** How long the fast cadence lasts before the slow one takes over. */
-const EMPTY_POLL_FAST_FOR_MS = 2 * 60_000;
-/**
- * How long that re-read keeps going before the card accepts "nothing started".
- *
- * As long as the journey itself gives a research to be created
- * (`CREATE_BUDGET_MS` in `test/journey-idea-tree-real.spec.ts` is 600s, and a
- * measured run created its research at 403s): a card that stopped asking after
- * five minutes would leave a Session blank for the rest of a slow start, which
- * is the bug this poll exists to fix.
- */
-const EMPTY_POLL_WINDOW_MS = 10 * 60_000;
+/** How long that re-read keeps going before the card accepts "nothing started". */
+const EMPTY_POLL_WINDOW_MS = 5 * 60_000;
 
 export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
   const { t } = useLocale();
@@ -67,9 +55,8 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
    * Session — which is exactly how the real L4 journey failed: the command ran,
    * the research existed, and the card stayed absent for its whole wait.
    *
-   * Bounded, so an idle Session that never starts a research does not ask
-   * forever: five seconds at first, thirty once the wait is clearly long, and
-   * nothing at all once an item appears or the window is spent.
+   * Bounded, so an idle Session that never starts a research makes no requests
+   * for long: the timer stops once an item appears or the window is spent.
    */
   useEffect(() => {
     if (items.length > 0) { emptySince.current = null; return undefined; }
@@ -79,20 +66,18 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     // mounted. `IdeaTreeView` passes a state setter today, but the bound should
     // not depend on how a caller writes that prop.
     if (emptySince.current === null) emptySince.current = Date.now();
-    // Bare `setTimeout`, like the SSE clock above: this file is a browser
+    // Bare `setInterval`, like the SSE clock above: this file is a browser
     // component, and a test harness that stubs `window` should not have to stub
-    // its timers as well. A chain rather than a fixed interval, so the cadence
-    // can slow down without a second timer.
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = () => {
+    // its timers as well.
+    const timer = setInterval(() => {
       const started = emptySince.current;
-      const now = Date.now();
-      if (started === null || now - started > EMPTY_POLL_WINDOW_MS) return;
+      if (started === null || Date.now() - started > EMPTY_POLL_WINDOW_MS) {
+        clearInterval(timer);
+        return;
+      }
       void load();
-      timer = setTimeout(tick, now - started < EMPTY_POLL_FAST_FOR_MS ? EMPTY_POLL_MS : EMPTY_POLL_SLOW_MS);
-    };
-    timer = setTimeout(tick, EMPTY_POLL_MS);
-    return () => clearTimeout(timer);
+    }, EMPTY_POLL_MS);
+    return () => clearInterval(timer);
   }, [items.length, load]);
 
   useEffect(() => {
