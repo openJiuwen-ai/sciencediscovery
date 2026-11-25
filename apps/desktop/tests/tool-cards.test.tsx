@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 import type { ApiClient } from "../src/api/client.js";
 import type { PermissionRequest, ToolTrace } from "../src/api/types.js";
-import { TEXT } from "../src/text.js";
+import { setLanguage, TEXT } from "../src/text.js";
 import { PermissionCard } from "../src/views/PermissionCard.js";
 import { ToolCard } from "../src/views/ToolCard.js";
 import { ToolDetail } from "../src/views/ToolDetail.js";
@@ -135,6 +135,68 @@ describe("a tool call's input and result are tiles, not another row of folds", (
     const html = card({ trace: trace({ output: "stdout: 3" }) });
     assert.doesNotMatch(html, /role="button"/);
     assert.doesNotMatch(html, new RegExp(TEXT.conversation.openInPanel));
+  });
+});
+
+describe("a tool result's runner and egress diagnostics follow the UI language", () => {
+  it("shows Chinese instead of the producers' English sentences", () => {
+    setLanguage("zh-CN");
+    try {
+      const html = card({
+        trace: trace({
+          status: "failed",
+          output: "example.org:443 is not in the sandbox network allowed domains\nTunnel connection failed: 403 Forbidden",
+        }),
+      });
+      assert.match(html, /沙箱网络拒绝访问 example\.org:443/);
+      assert.match(html, /代理隧道连接失败：403 Forbidden/);
+      assert.doesNotMatch(html, /is not in the sandbox network allowed domains|Tunnel connection failed/);
+    } finally {
+      setLanguage("zh-CN");
+    }
+  });
+
+  it("shows a localized runner timeout in Chinese", () => {
+    setLanguage("zh-CN");
+    try {
+      const html = card({
+        trace: trace({ name: "run_shell", status: "failed", output: "Shell execution timed out after 5000 ms" }),
+      });
+      assert.match(html, /工具执行已超过 5 秒/);
+      assert.doesNotMatch(html, /Shell execution timed out after 5000 ms/);
+    } finally {
+      setLanguage("zh-CN");
+    }
+  });
+
+  it("localizes a diagnostic that arrives under a runner section marker", () => {
+    setLanguage("zh-CN");
+    try {
+      const html = card({
+        trace: trace({
+          status: "failed",
+          output: "stdout: started\nstderr: example.org:443 is not in the sandbox network allowed domains",
+        }),
+      });
+      assert.match(html, /沙箱网络拒绝访问 example\.org:443/);
+      assert.match(html, /started/);
+      assert.doesNotMatch(html, /is not in the sandbox network allowed domains/);
+    } finally {
+      setLanguage("zh-CN");
+    }
+  });
+
+  it("keeps the producer's English wording in an English UI", () => {
+    setLanguage("en");
+    const output = "Tunnel connection failed: 403 Forbidden\nShell execution timed out after 5000 ms";
+    try {
+      const html = card({ trace: trace({ status: "failed", output }) });
+      assert.match(html, /Tunnel connection failed: 403 Forbidden/);
+      assert.match(html, /Shell execution timed out after 5000 ms/);
+      assert.doesNotMatch(html, /代理隧道连接失败|工具执行已超过/);
+    } finally {
+      setLanguage("zh-CN");
+    }
   });
 });
 

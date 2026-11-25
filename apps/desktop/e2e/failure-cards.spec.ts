@@ -325,3 +325,117 @@ test("a model without a saved API key is explained in both languages", async ({ 
     await expect(cards.locator(".run-failure-code")).toHaveText("model-credential-missing");
   });
 });
+
+test("tool results localize runner, egress and proxy diagnostics without changing English", async ({ page, journey }) => {
+  const session = makeSession();
+  const runs: ReplayRecord[] = [];
+  const mock = await installMockApi(page, { sessions: [session], runsBySession: { [session.id]: runs } });
+  await page.addInitScript(({ key, token }) => {
+    localStorage.setItem(key, token);
+    if (localStorage.getItem("sciencediscovery-desktop:locale") === null) {
+      localStorage.setItem("sciencediscovery-desktop:locale", "zh-CN");
+    }
+  }, { key: TOKEN_STORAGE_KEY, token: randomUUID() });
+
+  // The Session view also reads the configuration queue and the Idea Tree
+  // list and graph; without these the mock's loud 404 would sit in the
+  // evidence frame.
+  await page.route(`**/api/sessions/${session.id}/configuration-requests`, route => route.fulfill({
+    body: JSON.stringify({ items: [] }), contentType: "application/json", status: 200,
+  }));
+  await page.route(`**/api/sessions/${session.id}/idea-tree/research`, route => route.fulfill({
+    body: JSON.stringify({ items: [] }), contentType: "application/json", status: 200,
+  }));
+  await page.route(`**/api/sessions/${session.id}/idea-tree/graph*`, route => route.fulfill({
+    body: JSON.stringify({ graph: null, hasIdeaTreeRun: false, treeIds: [] }), contentType: "application/json", status: 200,
+  }));
+
+  const timeoutOutput = "Shell execution timed out after 5000 ms";
+  const egressOutput = "example.org:443 is not in the sandbox network allowed domains\nTunnel connection failed: 403 Forbidden";
+  const trace = (id: string, output: string) => ({ id, input: "{}", name: "run_shell", output, status: "failed" as const });
+
+  // The runner and the egress gateway write these sentences where no UI
+  // locale is known, so the tool result carries them verbatim to the client.
+  await page.route(`**/api/sessions/${session.id}/messages`, async route => {
+    const { content } = route.request().postDataJSON() as { content: string };
+    const user = { id: "user-tool", role: "user", content, createdAt: CREATED_AT };
+    const answer = { id: "answer-tool", role: "assistant", content: "DESKTOP_TOOL_DIAGNOSTICS_OK", createdAt: CREATED_AT };
+    const run = {
+      id: "run-tool", sessionId: session.id, userMessageId: user.id, createdAt: CREATED_AT,
+      finishedAt: CREATED_AT, prompt: content, queueOrder: 1, status: "completed", assistantMessageId: answer.id,
+    };
+    const events = [
+      { run: { ...run, status: "running" }, type: "run.queued" },
+      { model: { name: "Local mock" }, runId: run.id, settings: {}, type: "run.started" },
+      { responseId: "response-tool", turn: 1, type: "assistant.response.started" },
+      { trace: trace("call-timeout", timeoutOutput), type: "tool.completed" },
+      { trace: trace("call-egress", egressOutput), type: "tool.completed" },
+      { delta: answer.content, responseId: "response-tool", turn: 1, type: "assistant.delta" },
+      { files: [], message: answer, type: "run.completed" },
+      { run, status: "completed", type: "run.status" },
+    ];
+    const stored = mock.state.sessions[0];
+    if (!stored) throw new Error("Mock Session is missing");
+    stored.messages = [...(stored.messages ?? []), user, answer];
+    runs.push({ run, events });
+    await route.fulfill({
+      body: events.map((event, index) => `id: ${index + 1}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+      contentType: "text/event-stream", status: 200,
+    });
+  });
+
+  const openSession = async () => {
+    await page.goto("/");
+    const project = page.locator(".side-project-toggle").filter({ hasText: "默认项目" });
+    await expect(project).toBeVisible();
+    if (await project.getAttribute("aria-expanded") === "false") await project.click();
+    const group = page.locator(".side-project").filter({ has: project }).locator("..");
+    await group.locator(".side-session").filter({ hasText: session.title }).click();
+    await expect(page.locator("#composer-textarea")).toBeEnabled();
+  };
+  // A terminal run folds its reasoning and tool calls into one line; the cards
+  // exist in the DOM but are only readable once that fold is open.
+  const openRunFold = async () => {
+    const fold = page.locator("details.run-fold");
+    await expect(fold).toHaveCount(1);
+    // Direct child: the tool cards inside the fold are `details` elements too.
+    await fold.locator("> summary").click();
+  };
+
+  journey.scenario({
+    goal: "工具结果里的 Runner 超时、沙箱出口拒绝和代理隧道失败随界面语言本地化，英文界面保持生产者原文。",
+    preconditions: ["Desktop 页面及独立内存 API", "一次包含失败工具调用的运行记录，无真实 Runner 或代理"],
+  });
+  await journey.step("中文界面读取工具诊断", "超时、域名白名单拒绝和代理 403 都以中文显示，原文不再出现。", async () => {
+    // Tall enough that lifting the two expanded tool cards into view puts both
+    // diagnostics in the same evidence shot.
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await openSession();
+    await page.locator("#composer-textarea").fill("检查工具诊断");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await openRunFold();
+    const cards = page.locator(".tool-card");
+    await expect(cards).toHaveCount(2);
+    await cards.nth(0).locator("summary").click();
+    await expect(cards.nth(0).locator(".tool-io-code").last()).toContainText("工具执行已超过 5 秒");
+    await expect(cards.nth(0).locator(".tool-io-code").last()).not.toContainText(timeoutOutput);
+    await cards.nth(1).locator("summary").click();
+    await expect(cards.nth(1).locator(".tool-io-code").last()).toContainText("沙箱网络拒绝访问 example.org:443");
+    await expect(cards.nth(1).locator(".tool-io-code").last()).toContainText("代理隧道连接失败：403 Forbidden");
+    await expect(cards.nth(1).locator(".tool-io-code").last()).not.toContainText("is not in the sandbox network allowed domains");
+    await cards.nth(0).scrollIntoViewIfNeeded();
+  });
+  await journey.step("英文界面保留原文", "重新加载为英文后，同样的记录仍显示生产者写入的英文句子。", async () => {
+    await page.evaluate(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+    await openSession();
+    await openRunFold();
+    const cards = page.locator(".tool-card");
+    await expect(cards).toHaveCount(2);
+    await cards.nth(0).locator("summary").click();
+    await expect(cards.nth(0).locator(".tool-io-code").last()).toContainText(timeoutOutput);
+    await cards.nth(1).locator("summary").click();
+    await expect(cards.nth(1).locator(".tool-io-code").last()).toContainText("Tunnel connection failed: 403 Forbidden");
+    await expect(cards.nth(1).locator(".tool-io-code").last()).not.toContainText("代理隧道连接失败");
+    await cards.nth(0).scrollIntoViewIfNeeded();
+  });
+});

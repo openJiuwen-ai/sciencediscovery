@@ -3797,6 +3797,11 @@
           "source": "apps/desktop/tests/account-format.test.tsx",
           "layer": "ut",
           "complexity": "C1"
+        },
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
         }
       ]
     },
@@ -3814,6 +3819,28 @@
           "source": "apps/desktop/tests/account-format.test.tsx",
           "layer": "ut",
           "complexity": "C1"
+        },
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/tool-diagnostics.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/failure-cards.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
         }
       ]
     },
