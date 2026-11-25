@@ -11,6 +11,7 @@ import { ExportHistoryList } from "./ExportHistoryList.js";
 import { getSession } from "../api/sessions.js";
 import { formatBytes } from "../app/format-bytes.js";
 import { TEXT } from "../text.js";
+import { untitled } from "../app/session-order.js";
 import { claimsEscape } from "./dialog-escape.js";
 import { copyPollStep } from "./research-package-copy-poll.js";
 import { exportPollStep } from "./research-package-poll.js";
@@ -24,11 +25,17 @@ export interface PackageRequest {
 /** Default "save as" name — the session title plus a local timestamp — so the
  *  native dialog opens with a sensible, editable filename. */
 export function suggestedExportName(detail: SessionDetail): string {
-  const title = (detail.title ?? "").trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || "科研会话";
+  const scrub = (value: string) => value.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120);
+  const title = scrub(detail.title ?? "");
+  // An unused session carries the sentinel "Untitled session" (#1398 review F2),
+  // so the fallback has to cover it as well as a blank title. The label goes
+  // through the same scrub as a real title: a translation with a colon or a
+  // slash must not compose a filename the save dialog rejects.
+  const name = untitled(title) ? scrub(TEXT.researchPackage.untitledSession) : title;
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return `${title}_${stamp}.sdresearch`;
+  return `${name}_${stamp}.sdresearch`;
 }
 
 interface ExportRecord {
@@ -47,7 +54,8 @@ interface ExportRecord {
   savedToken?: string;
   /** What the dialog shows: localized when the sentence is one the client knows. */
   error?: string;
-  /** The server's own wording, shown only inside a details block (#1024). */
+  /** The failure's own wording — the server's, the transport's, or a rejected
+   *  value — shown only inside a details block (#1024, #1398). */
   rawError?: string;
   /** The package profile and session title travel with the write, so the shell
    *  can record a row that says which search the package belongs to. */
@@ -67,7 +75,7 @@ function isRetryableExportReadError(reason: unknown): boolean {
   return reason instanceof TypeError && !isAbortError(reason);
 }
 
-async function openExportStreamWithRetry(client: ApiClient, project: string, task: ExportOperation): Promise<Response> {
+export async function openExportStreamWithRetry(client: ApiClient, project: string, task: ExportOperation): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= EXPORT_DOWNLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
@@ -78,7 +86,40 @@ async function openExportStreamWithRetry(client: ApiClient, project: string, tas
       await new Promise<void>(resolve => setTimeout(resolve, EXPORT_DOWNLOAD_RETRY_DELAYS_MS[attempt]!));
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("证据包下载失败，请重试。");
+  // Defensive only: the loop rethrows on its last attempt, so nothing reaches
+  // this line today, and the caller rethrows on the final attempt as well.
+  // Should that ever change, the failure must still be a localized sentence
+  // rather than a bare non-Error value.
+  throw new Error(TEXT.researchPackage.downloadFailed, { cause: lastError });
+}
+
+/**
+ * What a failed download tells the user (#1398 reviews F1/F4).
+ *
+ * `persistArchive` uses this only while the failure still belongs to the
+ * download, i.e. before the archive starts going to its destination; a save
+ * that fails afterwards is the shell's failure and gets the generic save
+ * sentence instead. The visible sentence comes from the text table — a
+ * transport failure's own wording, such as Chromium's "Failed to fetch", is
+ * English in a Chinese dialog — so that wording is demoted to `rawError`, which
+ * only the technical-details block shows. A timeout the client phrased itself,
+ * or a server error the client knows, keeps its more specific localized
+ * sentence. A rejection that carries no readable text contributes no
+ * `rawError` rather than "undefined" or "[object Object]".
+ */
+export function saveFailureDetail(reason: unknown, timeoutDetail?: string): { error: string; rawError?: string } {
+  const raw = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "";
+  // A refusal the stream itself can name keeps its advice above the fold: the
+  // export task is gone (404) or the archive expired (410), which the generic
+  // download sentence would bury in the details block (#1398 review).
+  const status = reason instanceof ApiRequestError ? reason.status : undefined;
+  const statusDetail = status === 404
+    ? TEXT.researchPackage.taskMissing
+    : status === 410
+      ? TEXT.researchPackage.taskExpired
+      : undefined;
+  const error = timeoutDetail ?? statusDetail ?? taskErrorMessage(raw) ?? TEXT.researchPackage.downloadFailed;
+  return { error, rawError: raw && raw !== error ? raw : undefined };
 }
 interface ExportFlash { id: number; tone: "success" | "error" | "neutral"; message: string; savedToken?: string; }
 
@@ -228,11 +269,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   // choice). Used for both auto-save and retry.
   const persistArchive = useCallback(async (record: ExportRecord) => {
     patchExport(record.id, { phase: "saving" });
+    /** True once the archive starts going to its destination. Before that a
+     *  failure is a download failure; after it, it is a save failure, and the
+     *  shell's own wording can name the destination path the renderer must not
+     *  show (#1398 review F4). */
+    let writing = false;
     try {
       const response = await openExportStreamWithRetry(client, record.project, record.task);
       const bridge = exportShellBridge();
       let savedToken: string | undefined;
       if (bridge && record.destinationToken && canStreamExport(bridge) && response.body) {
+        writing = true;
         await writeExportStream(bridge, record.destinationToken, response.body, {
           level: record.level,
           projectId: record.project,
@@ -244,8 +291,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         await refreshHistory();
       } else if (bridge && record.destinationToken) {
         // An older shell without the streaming channels; the archive arrives as
-        // one buffer, which is what this shell can accept.
-        await bridge.write(record.destinationToken, await (await readResearchPackageBlob(response)).arrayBuffer(), {
+        // one buffer, which is what this shell can accept. The buffer is read
+        // before the write starts, so a failed read still counts as a download
+        // failure.
+        const archive = await (await readResearchPackageBlob(response)).arrayBuffer();
+        writing = true;
+        await bridge.write(record.destinationToken, archive, {
           level: record.level,
           projectId: record.project,
           recordId: record.id,
@@ -269,9 +320,17 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       } else if (reason instanceof ResearchPackageDownloadStartTimeoutError) {
         timeoutDetail = TEXT.researchPackage.exportDownloadStartTimeout;
       }
-      const error = timeoutDetail ?? (reason instanceof Error ? reason.message : String(reason));
-      patchExport(record.id, { phase: "save-failed", error });
-      pushFlash("error", timeoutDetail ?? TEXT.researchPackage.exportSaveFailed);
+      // A download failure gets the localized download sentence with the raw
+      // wording kept for the details block. Once the write has begun, the shell
+      // said what happened and may have named a path: only the generic save
+      // sentence is shown, and no raw wording is recorded (#1398 review F4).
+      // The row and the toast beside it read the same sentence, so one failure
+      // never gets two explanations (#1398 review, HongyeZhou).
+      const detail = writing
+        ? { error: timeoutDetail ?? TEXT.researchPackage.exportSaveFailed, rawError: undefined }
+        : saveFailureDetail(reason, timeoutDetail);
+      patchExport(record.id, { phase: "save-failed", ...detail });
+      pushFlash("error", detail.error);
     }
   }, [client, detail?.id, patchExport, pushFlash, refreshHistory, request?.sessionId]);
   // The polling tick keeps one timer and must not restart when a save
@@ -574,7 +633,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {excludedWorkspaceFiles > 0 ? <p className="research-package-notice">{t.omissionsSummary(excludedWorkspaceFiles)}</p> : null}
           {sessionHistory.length > 0 || finishedExports.some(record => record.phase !== "saved") ? <div className="research-package-saved"><h3>{t.savedExports}</h3>
             {historyBridge ? <ExportHistoryList locale={TEXT.languageTag} onForget={record => void forgetHistory(record)} onReveal={record => void revealHistory(record)} rows={sessionHistory} /> : null}
-            {finishedExports.filter(record => record.phase !== "saved").map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span><button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <><span className="is-error">{record.error ?? t.failed}</span>{record.rawError && record.rawError !== record.error ? <details className="research-package-raw"><summary>{t.detailsRaw}</summary><code>{record.rawError}</code></details> : null}</> : null}</div>)}
+            {finishedExports.filter(record => record.phase !== "saved").map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span>{record.phase === "save-failed" ? <><span className="is-error">{record.error ?? t.exportSaveFailed}</span>{record.rawError ? <details className="research-package-raw"><summary>{t.detailsRaw}</summary><code>{record.rawError}</code></details> : null}<button onClick={() => retrySave(record)} type="button">{t.retrySave}</button></> : null}{record.phase === "pack-failed" ? <><span className="is-error">{record.error ?? t.failed}</span>{record.rawError && record.rawError !== record.error ? <details className="research-package-raw"><summary>{t.detailsRaw}</summary><code>{record.rawError}</code></details> : null}</> : null}</div>)}
             {historyBridge ? null : finishedExports.filter(record => record.phase === "saved" && record.savedToken).map(record => <div className="research-package-saved-row" key={record.id}><span>{record.filename}</span><button onClick={() => void openLocation(record.savedToken!)} type="button">{t.openLocation}</button></div>)}
           </div> : null}
         </> : dialog === "import" ? <>

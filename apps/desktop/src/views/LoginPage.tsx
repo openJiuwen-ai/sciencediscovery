@@ -12,9 +12,9 @@ import type { ApiClient } from "../api/client.js";
 import type { ModelProvider, ModelProviderPreset } from "../api/types.js";
 import {
   AccountApiError,
-  DEFAULT_ACCOUNT_NAME,
   accountSessionToUserSession,
   accountsConfigured,
+  defaultAccountName,
   type AccountSession,
   describeDevice,
   exchangeTicket,
@@ -77,7 +77,7 @@ export async function settleAuthCallback(
   if (!ticket) return undefined;
   window.history.replaceState(null, "", window.location.pathname);
   const account = await exchangeTicket(ticket, describeDevice());
-  const next = accountSessionToUserSession(account, readSession(), DEFAULT_ACCOUNT_NAME);
+  const next = accountSessionToUserSession(account, readSession(), defaultAccountName());
   const localToken = await acquireLocalAccessToken(account.accessToken);
   saveSession(next);
   return { session: next, localToken };
@@ -115,7 +115,7 @@ export function LoginPage({
     settlementStarted.current = true;
 
     const commit = async (account: AccountSession): Promise<void> => {
-      const next = accountSessionToUserSession(account, session, DEFAULT_ACCOUNT_NAME);
+      const next = accountSessionToUserSession(account, session, defaultAccountName());
       // The local bearer token belongs to this machine, not to the person. Ask
       // this loopback API for it after sign-in rather than making the user copy
       // a startup credential into the UI.
@@ -154,7 +154,7 @@ export function LoginPage({
       setStep("verifying");
       try {
         const fresh = sessionNeedsRefresh(current)
-          ? accountSessionToUserSession(await refreshAccountSession(current.refreshToken), current, DEFAULT_ACCOUNT_NAME)
+          ? accountSessionToUserSession(await refreshAccountSession(current.refreshToken), current, defaultAccountName())
           : current;
         const me = await fetchAccountMe(fresh.accessToken);
         await commit({

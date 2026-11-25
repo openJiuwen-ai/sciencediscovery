@@ -126,6 +126,8 @@ export const ZH = {
     projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入「会话」，也可以选择一个已有项目。",
     projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
     title: "科研证据包", import: "导入会话", export: "导出会话", continue: "继续聊天", branch: "创建新分支聊天", source: "返回来源会话",
+    /** The fallback "save as" name for a session the server left untitled. */
+    untitledSession: "科研会话", downloadFailed: "证据包下载失败，请重试。",
     readOnly: "导入证据快照 · 只读。创建独立副本后，可使用已有材料继续研究。", copying: "正在复制研究记录，可切换会话…", failed: "操作失败",
     recalculating: "正在重算…",
     omissionsSummary: (count: number) => `未包含 ${count} 个工作区文件`, download: "下载", preparing: "正在后台准备证据包…", close: "关闭", copyMissing: "复制任务对应的会话或操作记录已不存在，已停止等待。请重新创建续聊。", copyPollingFailed: "暂时无法读取复制进度，已停止重试。请稍后刷新或重新操作。", legacyUnavailable: "本地服务暂时不可用，正在重试…", exportPollingFailed: "暂时无法读取导出进度，已停止重试。请稍后重新导出。", exportMissing: "导出任务已不存在，请重新导出。",
@@ -216,6 +218,8 @@ export const ZH = {
 
   account: {
     eyebrow: "华为账号",
+    /** The name shown when HUAWEI shares no display name for the profile. */
+    defaultName: "华为账号用户",
     back: "返回会话",
     joined: (days: number) => `加入 ${days} 天`,
     emailReadonly: (email: string) => `邮箱 ${email}`,
