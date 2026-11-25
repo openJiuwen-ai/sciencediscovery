@@ -7,6 +7,8 @@ This page records the command-line behavior of the ScienceDiscovery single-file 
 ```text
 ScienceDiscovery serve [options]       Start the Web UI, API, runner, and default JiuwenSwarm/adapter
 ScienceDiscovery run [input] [options] Run an Agent task against an already running serve
+ScienceDiscovery evolve <action> ...   List, inspect, watch, or stop evolve searches
+ScienceDiscovery idea <action> ...     List, inspect, watch, pause, continue, or stop Idea Tree research
 ScienceDiscovery extract --to <dir>    Extract the embedded runtime without starting services
 ScienceDiscovery version               Print the build and embedded Node / CPython / micromamba versions
 ScienceDiscovery help                  Show help
@@ -17,6 +19,8 @@ Local source mode has no `ScienceDiscovery` single-file launcher. Its CLI client
 ```bash
 node services/launcher/dist/main.js run ...
 ```
+
+`evolve` and `idea` use the same entry point.
 
 ## `serve`
 
@@ -125,6 +129,68 @@ against the service started by `start-stack.sh`. Address and data-directory rule
 ### Docker
 
 There is normally no reason to run `run` inside the container. A host-side client can connect to the published port and use the bind-mounted data directory or an explicit token.
+
+## `evolve` and `idea`
+
+An evolve search (`/evolve-design`) and an Idea Tree research (`/idea-tree`) keep running on the server for minutes to hours after the turn that started them has ended. These two commands list, inspect, follow, and control them from a terminal. They call the same HTTP routes as the Web cards, so stopping from the CLI has the same effect as **Stop** on the evolve dashboard or **End research** on the Idea Tree card. Like `run`, they connect to an already running `serve`, read the token from the same `--data-dir`, and accept `--token`, `--host`, `--port`, and `--output <jsonl|text>`.
+
+```text
+ScienceDiscovery evolve list [--session <id>]
+ScienceDiscovery evolve get <run-id> [--candidate <hash>]
+ScienceDiscovery evolve watch <run-id> [--after <sequence>]
+ScienceDiscovery evolve stop <run-id>
+
+ScienceDiscovery idea list --session <id>
+ScienceDiscovery idea get <research-id> --session <id>
+ScienceDiscovery idea watch <research-id> --session <id>
+ScienceDiscovery idea pause|continue|stop <research-id> --session <id>
+```
+
+| Action | `evolve` | `idea` |
+| --- | --- | --- |
+| `list` | Every search, newest first; `--session` narrows it to one session, as the route's `sessionId` filter does | The research in the session given by `--session` |
+| `get` | Status, candidates, tokens, cost, and best node; `--candidate <hash>` prints that candidate's source instead | Status, phase, round, tokens, and each candidate with its score |
+| `watch` | Streams the search's events until it ends | Streams the research's progress until it stops running |
+| `stop` | Stops the search | Ends the research; an ended research cannot be continued |
+| `pause` / `continue` | Not available: an evolve search cannot be paused | Pauses after the step in progress / resumes a paused or interrupted research |
+
+Each command offers what its card offers: evolve has no pause, and Idea Tree research is addressed per session because its routes are. Find run ids with `evolve list` and research ids with `idea list`.
+
+### Output
+
+The convention is the same as `run`:
+
+- On a terminal, text: tables and readable lines on stdout; connection notes and the final status of `watch` on stderr.
+- In a pipe or redirect, JSONL: each object exactly as the route returns it, one per line — run records, event records (`{"sequence", "createdAt", "event"}`), and research views (`{"research", "graph"}`). `watch` adds `{"type":"reconnect"}` lines and ends with one `{"type":"result"}` line; a failure is a `{"type":"error"}` line. Nothing else is printed, so `jq` works directly.
+
+```bash
+# Searches that are still running
+./ScienceDiscovery evolve list | jq -r 'select(.status == "running") | .id'
+
+# Keep a search's events and branch on how it ended
+./ScienceDiscovery evolve watch "$RUN" > events.jsonl && echo "search succeeded"
+
+# Save the source of the best candidate
+best=$(./ScienceDiscovery evolve get "$RUN" | jq .bestNodeIndex)
+hash=$(jq -r "select(.event.type == \"expanded\" and .event.nodeIndex == $best) | .event.codeHash" events.jsonl)
+./ScienceDiscovery evolve get "$RUN" --candidate "$hash" --output text > best.py
+```
+
+### `watch`
+
+`watch` replays what has already happened, then follows live, and returns when the engine stops running; for a run that has already ended it returns at once. When the connection drops, for example because of a network interruption or a `serve` restart, it reconnects with growing pauses for about three minutes and continues where it stopped. Evolve resumes after the last event sequence it printed, so no event is lost or repeated. An Idea Tree update carries the whole current state, so after a reconnect it shows the present state and skips an update it has already shown. To continue an evolve watch in a new process, pass the last `sequence` you kept to `--after`.
+
+Ctrl-C stops watching, not the engine. Use `stop` for that.
+
+The exit status follows `run` (0 completed, 1 failed, 130 cancelled):
+
+| Exit status | `evolve` ended | `idea` ended |
+| --- | --- | --- |
+| 0 | `succeeded` | `completed` |
+| 130 | `stopped` | `ended` or `paused` |
+| 1 | `failed` or `budget_exhausted` | `interrupted` |
+
+`watch` also exits 1 when the run is not found, the token is refused, or the connection cannot be recovered, and 130 on Ctrl-C.
 
 ## `extract`
 
