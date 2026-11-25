@@ -736,9 +736,16 @@ class IdeaTreeEngine:
         except BudgetReached as error:
             # A spent token budget is its own terminal outcome, not a pause the user can
             # resume: continuing would hit the same ceiling before doing any work. The
-            # reason keeps the engine's text and the used/limit numbers for the UI.
+            # reason keeps the engine's text and, only when the provider reported usage,
+            # the measured used/limit numbers. An unreported budget is admitted instead of
+            # asserting a count we do not have.
             limit = s['settings'].get('maxTokens')
-            s.update(status='budget_exhausted', reason=f'{error}. Used {s["tokens"]} of {limit} tokens')
+            if s.get('usageKnown'):
+                spent = (f'Used {s["tokens"]} of {limit} tokens' if limit is not None
+                         else f'Used {s["tokens"]} tokens with no configured limit')
+            else:
+                spent = 'Reported token usage is unavailable'
+            s.update(status='budget_exhausted', reason=f'{error}. {spent}')
         except Exception as error:
             if self.stop_action:
                 s.update(status='ended' if self.stop_action == 'end' else 'paused', reason='Stopped by user')

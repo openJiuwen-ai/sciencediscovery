@@ -257,6 +257,10 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         await IdeaTreeEngine(self.state, self.store, {}, unknown).run()
         self.assertEqual(self.state['status'], 'budget_exhausted')
         self.assertIn('budget', self.state['reason'])
+        # The budget was spent by the conservative admission reserve, not measured
+        # usage: the persisted reason must not claim a reported count of 0.
+        self.assertIn('Reported token usage is unavailable', self.state['reason'])
+        self.assertNotIn('Used 0 of', self.state['reason'])
         self.assertFalse(self.state['usageKnown'])
         self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
 
