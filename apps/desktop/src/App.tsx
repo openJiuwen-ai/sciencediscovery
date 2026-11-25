@@ -1786,6 +1786,7 @@ export function App({ initialToken }: Props) {
             ? (task, signal) => draftEvolveDirection(client, state.detail!.id, task, signal)
             : undefined}
           onInitialize={() => void evolve.initialize()}
+          onRefreshStatus={evolve.refreshStatus}
           onSend={(command, direction) => {
             closeEvolveCreate();
             // The flags become a token in the composer, the task the sentence

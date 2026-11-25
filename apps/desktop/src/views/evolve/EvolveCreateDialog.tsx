@@ -73,6 +73,13 @@ export interface EvolveCreateDialogProps {
    *  still work. */
   onGenerateDirection?: (task: string, signal: AbortSignal) => Promise<EvolveDirectionInput>;
   onInitialize: () => void;
+  /** Re-read the runtime when the form opens. The dialog is handed the state
+   *  the app read earlier; a sidecar that died since then would otherwise
+   *  still show 就绪, hide the "runtime cannot run the search" banner and let
+   *  开始设计 spend a design turn on a runtime that cannot execute it. One
+   *  cheap read on open; while the form stays open the hook's own slow poll
+   *  keeps it current. */
+  onRefreshStatus?: () => Promise<void>;
   /** The command with the task after it, plus the confirmed parameters when
    *  the panel was used. It is placed in the composer, never sent here. */
   onSend: (command: string, direction?: EvolveDirectionInput) => void;
@@ -93,6 +100,7 @@ export function EvolveCreateDialog({
   onClose,
   onGenerateDirection,
   onInitialize,
+  onRefreshStatus,
   onSend,
   running,
   status,
@@ -140,6 +148,14 @@ export function EvolveCreateDialog({
     const end = node.value.length;
     node.setSelectionRange(end, end);
   }, []);
+
+  // Opening the form is the moment readiness decides a purchase: re-read it
+  // rather than trust a state the app may have read minutes ago. Cheap and
+  // once per open — a dead sidecar turns into the banner below and a disabled
+  // 开始设计 before the user has typed anything.
+  useEffect(() => {
+    void onRefreshStatus?.();
+  }, [onRefreshStatus]);
 
   useEffect(() => {
     const node = scrollArea.current;
