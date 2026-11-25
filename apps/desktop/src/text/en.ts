@@ -2678,6 +2678,30 @@ export const EN: Text = {
     technicalDetails: "Technical details",
   },
 
+  /** The stable diagnostics a Runner, the sandbox egress gateway or a proxy
+   *  client writes into a tool result (#1382). The English dictionary keeps
+   *  the producers' original wording, so an English UI reads exactly what it
+   *  read before; the tool-result renderer re-generates the sentence through
+   *  whichever dictionary is active. */
+  toolDiagnostics: {
+    timeout: (label: string, timeoutMs: number) => `${label} timed out after ${timeoutMs} ms`,
+    networkDisabled: "sandbox network access is disabled for this execution",
+    domainNotAllowed: (host: string, port: number) =>
+      `${host}:${port} is not in the sandbox network allowed domains`,
+    ipLiteral: (host: string) =>
+      `${host} is an IP address; sandbox network access allows domain names only`,
+    privateAddress: (host: string) =>
+      `${host} is a private address; enable private network access to allow it`,
+    privateResolution: (host: string) =>
+      `${host} resolves only to private or loopback addresses; enable private network access to allow it`,
+    resolveFailed: (host: string, detail: string) => `${host} could not be resolved: ${detail}`,
+    unreachable: (target: string) =>
+      `Sandbox network access could not reach ${target} through this deployment's outbound route`,
+    absoluteForm: "Sandbox network access expects absolute-form proxy requests",
+    cannotForward: (protocol: string) => `Sandbox network access cannot forward ${protocol} without CONNECT`,
+    tunnelFailed: (status: string) => `Tunnel connection failed: ${status}`,
+  },
+
   errors: {
     generic: "Something went wrong",
     sessionCreate: "Could not create the session",
