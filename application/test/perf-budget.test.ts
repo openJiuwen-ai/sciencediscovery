@@ -5,13 +5,13 @@
 //   session 1 (first, provisioning=true): shell-boot 6167ms (stack-spawned
 //     elapsed), unpack 1969ms, runner 221ms, memory-graph 2858ms,
 //     evolve 2852ms, api 2797ms (wall clock 12:07:41.201 -> 43.998),
-//     jw 7868ms, AGENT-READY 18781ms, shell-ui 118ms, warmup 1256ms
+//     jw 7868ms, AGENT-READY 18781ms, shell-ui 122ms (loadUi-loadURL), warmup 1256ms
 //   session 2 (warm, 12:10:28): shell-boot 1577ms, runner 214ms,
 //     memory-graph 640ms, evolve 1046ms, api 1660ms, jw 4845ms,
-//     AGENT-READY 8456ms, shell-ui 145ms, warmup 533ms
+//     AGENT-READY 8456ms, shell-ui 151ms (loadUi-loadURL), warmup 533ms
 //   session 3 (warm, 12:13:12): shell-boot 1516ms, runner 426ms,
 //     memory-graph 653ms, evolve 1034ms, api 1481ms, jw 4782ms,
-//     AGENT-READY 8178ms, shell-ui 64ms, warmup 713ms
+//     AGENT-READY 8178ms, shell-ui 68ms (loadUi-loadURL), warmup 713ms
 //
 // Any parser change that stops extracting these numbers turns a test red
 // by name (pyc-budget precedent). The incident-shaped inputs pin the
@@ -80,6 +80,7 @@ function syntheticFirstSession() {
     "2026-11-24T12:07:51.403Z [stack:err] [SD-PERF] jw IS-UP +9555ms loopTotal=7866ms probe#32",
     "2026-11-24T12:07:53.133Z [perf] AGENT-READY elapsed=18781ms watchAttempts=36",
     "2026-11-24T12:07:53.255Z [perf] loadUi elapsed=18899ms",
+    "2026-11-24T12:07:53.259Z [perf] loadUi-loadURL elapsed=18903ms ui=http://127.0.0.1:4310",
     "2026-11-24T12:07:54.389Z [warmup] first-chat /api/mcp/sources/reload -> 200",
   ];
   const events = parsePerfTimeline(lines.join("\n"));
@@ -108,6 +109,7 @@ function syntheticWarmSession() {
     "[SD-PERF] jw IS-UP +4952ms loopTotal=4845ms probe#20",
     "2026-11-24T12:10:36.703Z [perf] AGENT-READY elapsed=8456ms watchAttempts=19",
     "2026-11-24T12:10:36.854Z [perf] loadUi elapsed=8601ms",
+    "2026-11-24T12:10:36.858Z [perf] loadUi-loadURL elapsed=8607ms ui=http://127.0.0.1:4310",
     "2026-11-24T12:10:37.236Z [warmup] first-chat /api/mcp/sources/reload -> 200",
   ];
   const events = parsePerfTimeline(lines.join("\n"));
@@ -190,7 +192,7 @@ test("first-session durations match the 2026-11-24 measured values", () => {
   assert.equal(rows["api-ready"], 2797);
   assert.equal(rows["jw-ready"], 7868);
   assert.equal(rows["agent-ready"], 18781);
-  assert.equal(rows["shell-ui"], 118);
+  assert.equal(rows["shell-ui"], 122);
   assert.equal(rows["warmup-done"], 1256);
 });
 
@@ -203,7 +205,7 @@ test("warm-session durations match the measured values (session 2)", () => {
   assert.equal(rows["api-ready"], 1660);
   assert.equal(rows["jw-ready"], 4845);
   assert.equal(rows["agent-ready"], 8456);
-  assert.equal(rows["shell-ui"], 145);
+  assert.equal(rows["shell-ui"], 151);
   assert.equal(rows["warmup-done"], 533);
 });
 
@@ -268,11 +270,100 @@ test("a 2x regression is reported as regression (warn), not hang", () => {
   assert.equal(judged.summary.hang, 0, "regression only, not a hang");
 });
 
-test("exitCode: hang anywhere fails the run, regression alone does not", () => {
-  const hangRun = [{ summary: { hang: 1, regression: 0, ok: 9 } }];
-  const regressionRun = [{ summary: { hang: 0, regression: 2, ok: 7 } }];
+test("exitCode: hang anywhere fails the run, regression alone does not, nothing-judged is exit 3", () => {
+  // F1: a run whose sessions produced ZERO verdict rows measured nothing
+  // and must not report green — that is the W25 shape wearing a CI badge.
+  const hangRun = [{ summary: { hang: 1, regression: 0, ok: 9 }, rows: [{}] }];
+  const regressionRun = [{ summary: { hang: 0, regression: 2, ok: 7 }, rows: [{}, {}] }];
+  const healthyRun = [{ summary: { hang: 0, regression: 0, ok: 9 }, rows: Array(9) }];
+  const nothingJudgedRun = [{ summary: { hang: 0, regression: 0, ok: 0 }, rows: [] }];
+  const mixedRun = [nothingJudgedRun[0], healthyRun[0]]; // one judged session suffices
   assert.equal(exitCode(hangRun), 1);
   assert.equal(exitCode(regressionRun), 0);
+  assert.equal(exitCode(healthyRun), 0);
+  assert.equal(exitCode(nothingJudgedRun), 3, "zero verdict rows = measured nothing = exit 3");
+  assert.equal(exitCode(mixedRun), 0, "one judged session makes the run measurable");
+});
+
+// ---------------------------------------------------------------------------
+// verdict: subordination (F4) — one upstream stall paints ONE red
+
+test("a jw stall cascades to blocked rows, not four hangs", () => {
+  const warm = syntheticWarmSession();
+  // A real jw stall means jw never came up, so AGENT-READY never fired
+  // either (the shell watches the agent port jw serves) — filter both,
+  // plus everything downstream of AGENT-READY (loadUi-loadURL, warmup).
+  const filtered = warm.filter(
+    (e) =>
+      !(
+        (e.domain === "jw" && e.event === "IS-UP") ||
+        (e.domain === "shell" && (e.event === "AGENT-READY" || e.event === "loadUi-loadURL" || e.event === "loadUi")) ||
+        (e.domain === "warmup" && e.event === "warmup-first-chat")
+      ),
+  );
+  const judged = judgeSession(filtered);
+  const jwRow = judged.rows.find((r) => r.component === "jw-ready");
+  assert.equal(jwRow.verdict, "hang", "the stalled component itself is the hang");
+  // agent-ready's FROM is module-load (present) and its TO AGENT-READY is
+  // absent because jw never came up: blocked by jw-ready, not a second hang.
+  const agentRow = judged.rows.find((r) => r.component === "agent-ready");
+  assert.equal(agentRow.verdict, "blocked", "agent-ready is blocked BY the jw stall");
+  assert.equal(agentRow.blockedBy, "jw-ready");
+  // shell-ui / warmup-done's FROM (AGENT-READY) is absent: blocked by
+  // agent-ready, which itself is blocked — one root, three blocked rows,
+  // exactly ONE hang for the on-call to read.
+  const shellUiRow = judged.rows.find((r) => r.component === "shell-ui");
+  assert.equal(shellUiRow.verdict, "blocked");
+  const warmupRow = judged.rows.find((r) => r.component === "warmup-done");
+  assert.equal(warmupRow.verdict, "blocked");
+  assert.equal(judged.summary.hang, 1);
+  assert.equal(judged.summary.blocked, 3);
+});
+
+// ---------------------------------------------------------------------------
+// verdict: the win32 in-place path (F2) — no unpack pair, no false hang
+
+test("an in-place first session (win32) does not hang on the missing unpack pair", () => {
+  // provisioning=true + in-place branch: bootstrapPackaged-enter carries
+  // provisioning=true (kind=first) but the copy path never ran, so there
+  // is no unpack-enter/unpack-done pair. The healthy session must pass.
+  const warm = syntheticWarmSession();
+  const inPlace = warm.map((e) => {
+    if (e.event === "bootstrapPackaged-enter") {
+      return { ...e, raw: e.raw.replace("provisioning=false", "provisioning=true") };
+    }
+    return e;
+  });
+  // rename the short-circuit marker to the in-place marker (either is
+  // acceptable evidence; use in-place to exercise that branch)
+  for (const e of inPlace) {
+    if (e.event === "bootstrap short-circuit") e.event = "bootstrap in-place-fix-enter";
+    if (e.event === "bootstrapPackaged-enter") e.event = "bootstrapPackaged-enter";
+  }
+  const judged = judgeSession(inPlace);
+  assert.equal(judged.kind, "first");
+  const unpackRow = judged.rows.find((r) => r.component === "unpack");
+  assert.equal(unpackRow, undefined, "no unpack row at all when the copy path is proven skipped");
+  assert.equal(judged.summary.hang, 0, "healthy in-place first start must not fail");
+});
+
+// ---------------------------------------------------------------------------
+// parser: shell-ui pairs same-origin events (F5)
+
+test("shell-ui uses loadUi-loadURL (SD_PERF origin), never the legacy loadUi line", () => {
+  // The pair must subtract offsets sharing sdPerfT0. loadUi is
+  // Date.now()-appStartAt — a different origin — so its absence from the
+  // pair is intentional and pinned here (see parse-perf-timeline.mjs).
+  const warm = syntheticWarmSession();
+  const rows = durationRows(warm);
+  // AGENT-READY 8456 -> loadUi-loadURL 8607 = 151ms (same-origin diff)
+  assert.equal(rows["shell-ui"], 151);
+  // and the legacy loadUi line alone (elapsed=8601, different origin)
+  // must NOT be used: remove the loadUrl-loadURL line and the pair goes
+  // missing rather than silently falling back to the biased line.
+  const without = warm.filter((e) => e.event !== "loadUi-loadURL");
+  const withoutRows = durationRows(without);
+  assert.equal(withoutRows["shell-ui"], null, "no loadUi-loadURL -> pair missing, no biased fallback");
 });
 
 // ---------------------------------------------------------------------------
@@ -304,7 +395,7 @@ test("perf-budget.json warm baselines are exactly the n=2 session means", () => 
     "api-ready": [1660, 1481],
     "jw-ready": [4845, 4782],
     "agent-ready": [8456, 8178],
-    "shell-ui": [145, 64],
+    "shell-ui": [151, 68],
     "warmup-done": [533, 713],
   };
   const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
@@ -318,13 +409,18 @@ test("perf-budget.json warm baselines are exactly the n=2 session means", () => 
   }
 });
 
-test("agent-ready hang budget equals the shell's AGENT_READY_TIMEOUT_MS", () => {
+test("agent-ready hang budget equals the shell's AGENT_READY_TIMEOUT_MS (read from source)", () => {
   // 180s from design sec4a H7, matching the code constant so the gate and
-  // the runtime timeout blow together. Pin the equality so a change on
-  // either side turns this red.
+  // the runtime timeout blow together. F3: assert against the constant AS
+  // DECLARED IN src/main.ts — a change to either side must turn this red,
+  // so the coupling cannot silently rot.
   const budget = JSON.parse(readFileSync(join(here, "..", "scripts", "perf-budget.json"), "utf8"));
-  assert.equal(budget.sessions.first["agent-ready"].hangMs, 180000);
-  assert.equal(budget.sessions.warm["agent-ready"].hangMs, 180000);
+  const src = readFileSync(join(here, "..", "src", "main.ts"), "utf8");
+  const m = /const AGENT_READY_TIMEOUT_MS = ([\d_]+);/.exec(src);
+  assert.ok(m, "AGENT_READY_TIMEOUT_MS must stay declarative in src/main.ts (const, single line)");
+  const declared = Number(m[1].replaceAll("_", ""));
+  assert.equal(budget.sessions.first["agent-ready"].hangMs, declared);
+  assert.equal(budget.sessions.warm["agent-ready"].hangMs, declared);
 });
 
 // ---------------------------------------------------------------------------

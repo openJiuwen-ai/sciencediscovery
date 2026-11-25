@@ -43,20 +43,28 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
 | `ok` | 两层线内 | — |
 | `regression` | 超 `baselineMs × 1.4` 但未超 `hangMs` | **warn**（退出码仍 0）；连续第 2 次由外层升为 fail |
 | `hang` | 超 `hangMs`；**或事件对缺失**（ready/healthy 行从未出现） | **fail**（退出码 1，带缺失事件归因） |
+| `blocked` | 事件对缺失**仅因上游组件挂死**（如 jw 没起来 → AGENT-READY 不会发） | 归因到上游（`BLK ... blocked by jw-ready`），不重复计数 |
+
+**退出码**：0 过 / 1 有 hang / 2 用法错 / **3 会话存在但零判定行**（什么都没测到——reuse / wizard 路径目前不发 kind 标记，属覆盖缺口信号而非通过）。
 
 规则细节：
 
 - **缺失即挂死**：组件的 healthy 事件没到，本身就是挂死信号——判
   hang 而不是放过（W25 教训：门禁全绿但用户等几分钟的形态不允许
   重现）。
-- **分档判定**：`first`（首启，含 unpack 税）与 `warm`（热启，
-  bootstrap 短路）用各自预算表；混档必误报。attach 档（关窗重开）
-  识别不了档位时报 note 拒猜、不判。
-- **从属归因**：多层线同时爆时最早爆的线负责（防一次 jw 挂死刷
-  三条红）；`agent-ready` 的 180s 与运行时常量
-  `AGENT_READY_TIMEOUT_MS` 对齐，单测钉死。
-- **warm 的 unpack 豁免**：热启短路路径本来就没有 unpack 对，
-  缺失不算挂。
+- **零判定 = exit 3**：一个没测到任何东西的 run 不允许报绿（同 W25
+  形态的 CI 版）。
+- **分档判定**：`first`（首启）与 `warm`（热启短路）用各自预算表；
+  混档必误报。识别不了档位（reuse/wizard 路径无标记）报 note 拒猜。
+- **从属归因**：`BLOCKED_BY` 表实现（jw→agent-ready→shell-ui/warmup
+  传递闭包求根）——一次 jw 挂死只红一条，级联行标 blocked；
+  `agent-ready` 的 180s 与运行时常量 `AGENT_READY_TIMEOUT_MS` 对齐
+  （单测从 `src/main.ts` 读源码钉死耦合）。
+- **copy 路径豁免**（原 warm unpack 豁免推广）：unpack 对缺失时看
+  **证据而非档位**——会话里有 `bootstrap short-circuit` 或
+  `bootstrap in-place-fix-enter`（win32 in-place 分支在 unpack 之前
+  return）即豁免；provisioning=true + in-place 的健康 win32 首启不会
+  误报。
 
 ### 两层预算的数值出处
 
