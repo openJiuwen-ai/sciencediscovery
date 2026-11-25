@@ -786,7 +786,19 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       if (path === "/api/timeout-settings" && method === "PUT") {
-        state.timeouts = JSON.parse(body ?? "{}") as Record<string, number>;
+        const next = JSON.parse(body ?? "{}") as Record<string, number>;
+        const idle = next.gatewayIdleTimeoutMs ?? 0;
+        const turn = next.gatewayTurnTimeoutMs ?? 0;
+        // The product's store refuses a finite turn limit below a finite idle
+        // limit (`normalizeTimeoutSettings` in services/api/src/store/settings.ts).
+        // The mock answers like that store, so a page that skips its own check
+        // fails here instead of only in production.
+        if (idle > 0 && turn > 0 && turn < idle) {
+          return json(route, 400, {
+            error: "gatewayTurnTimeoutMs must be greater than or equal to gatewayIdleTimeoutMs when both timeouts are finite",
+          });
+        }
+        state.timeouts = next;
         return json(route, 200, state.timeouts);
       }
 

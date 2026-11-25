@@ -1943,7 +1943,7 @@ export const EN: Text = {
         gatewayIdle: "Gateway idle timeout",
         gatewayIdleHint: "How long to wait when a connection sends no new data.",
         gatewayTurn: "Turn timeout",
-        gatewayTurnHint: "The longest a single conversational turn may take.",
+        gatewayTurnHint: "The longest a single conversational turn may take. When both are set, the turn limit is at least the idle limit; setting either one to unlimited removes the rule.",
         kernelIdle: "Kernel idle timeout",
         kernelIdleHint: "How long a persistent kernel may sit idle before it is reclaimed.",
         permissionWait: "Approval wait timeout",
@@ -1953,6 +1953,7 @@ export const EN: Text = {
         seconds: "seconds",
         unlimited: "Unlimited",
         saved: "Saved",
+        orderError: "The turn timeout cannot be shorter than the gateway idle timeout. Raise the turn timeout, lower the idle timeout, or set one of them to unlimited.",
       },
       quotas: {
         heading: "Quotas",

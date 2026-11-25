@@ -2436,6 +2436,11 @@
           "complexity": "C3"
         },
         {
+          "source": "apps/desktop/tests/timeout-ordering.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
           "layer": "ui-st",
           "complexity": "C3"

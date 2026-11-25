@@ -686,9 +686,20 @@ test.describe("MCP 服务器", () => {
 });
 
 test.describe("超时", () => {
-  test("a value is written in milliseconds when its field is left, and zero means unlimited", async ({ page }) => {
-    const mock = await installMockApi(page, { models: MODELS });
+  async function openTimeouts(page: Page, over: JsonRecord = {}) {
+    const mock = await installMockApi(page, { models: MODELS, ...over });
     const dialog = await openSettings(page, "超时");
+    return { dialog, mock };
+  }
+
+  const ORDER_NOTE = "单轮超时不能短于网关空闲超时";
+
+  test("states the ordering rule and writes a value in milliseconds when its field is left", async ({ page }) => {
+    const { dialog, mock } = await openTimeouts(page);
+
+    // The rule the service enforces is on the field the reader edits, so a
+    // refused pair is not the first time they hear about it.
+    await expect(dialog.getByText(/两者都设置时，单轮时限不短于网关空闲时限/u)).toBeVisible();
 
     const idle = dialog.getByRole("spinbutton", { name: "网关空闲超时" });
     await expect(idle).toHaveValue("240");
@@ -702,36 +713,155 @@ test.describe("超时", () => {
       .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
       .toMatchObject({ gatewayIdleTimeoutMs: 90_000 });
 
-    // The switch is not a draft at all: it writes on the press.
+    // The switch is not a draft at all: it writes on the press, and the value
+    // it restores is one the pair still accepts — the idle limit here, not a
+    // fixed 60 s the service would refuse against it.
     const unlimited = dialog.getByRole("switch", { name: "单轮超时 · 不限" });
     await expect(unlimited).toHaveAttribute("aria-checked", "true");
     await unlimited.click();
-    await expect(dialog.getByRole("spinbutton", { name: "单轮超时" })).toHaveValue("60");
+    const turn = dialog.getByRole("spinbutton", { name: "单轮超时" });
+    await expect(turn).toHaveValue("90");
     await expect
       .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
-      .toMatchObject({ gatewayIdleTimeoutMs: 90_000, gatewayTurnTimeoutMs: 60_000 });
+      .toMatchObject({ gatewayIdleTimeoutMs: 90_000, gatewayTurnTimeoutMs: 90_000 });
+    await expect(turn).not.toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
   });
 
-  test("a refused write says why and puts the field back", async ({ page }) => {
-    await installMockApi(page, {
-      fail: { message: "quota exceeded", method: "PUT", path: "/api/timeout-settings" },
-      models: MODELS,
+  test("refuses a turn limit below the idle limit at the field, without a write", async ({ page }) => {
+    const { dialog, mock } = await openTimeouts(page, {
+      timeouts: { gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 60_000 },
     });
-    const dialog = await openSettings(page, "超时");
+
+    const turn = dialog.getByRole("spinbutton", { name: "单轮超时" });
+    await expect(turn).toHaveValue("60");
+    await turn.fill("30");
+    await turn.blur();
+
+    // The page refuses the pair itself: the draft stays where the reader can
+    // correct it, the field says why, and nothing is put on the wire.
+    await expect(turn).toHaveValue("30");
+    await expect(turn).toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.locator(".row-note.is-error")).toContainText(ORDER_NOTE);
+    expect(mock.calls.some((call) => call.method === "PUT" && call.path === "/api/timeout-settings")).toBe(false);
+
+    // Correcting the draft writes the pair and clears the mark.
+    await turn.fill("240");
+    await turn.blur();
+    await expect
+      .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
+      .toMatchObject({ gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 240_000 });
+    await expect(turn).not.toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
+  });
+
+  test("keeps the reader's edits when the service refuses the write", async ({ page }) => {
+    const { dialog, mock } = await openTimeouts(page, {
+      failOnce: {
+        message: "gatewayTurnTimeoutMs must be greater than or equal to gatewayIdleTimeoutMs when both timeouts are finite",
+        method: "PUT",
+        path: "/api/timeout-settings",
+      },
+      timeouts: { gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 60_000 },
+    });
+
+    const idle = dialog.getByRole("spinbutton", { name: "网关空闲超时" });
+    const turn = dialog.getByRole("spinbutton", { name: "单轮超时" });
+    await idle.fill("30");
+    await idle.blur();
+
+    // The reader gets a sentence about their two timeouts, not the store's
+    // field names, and the field the refusal names is the one marked.
+    await expect(dialog.locator(".row-note.is-error")).toContainText(ORDER_NOTE);
+    await expect(dialog.getByText(/gatewayTurnTimeoutMs/u)).toHaveCount(0);
+    await expect(turn).toHaveAttribute("aria-invalid", "true");
+    // The idle edit was not what the refusal named, so it is still theirs.
+    await expect(idle).toHaveValue("30");
+
+    // The retry carries both edits: nothing the reader changed was reverted.
+    await turn.fill("240");
+    await turn.blur();
+    await expect
+      .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
+      .toMatchObject({ gatewayIdleTimeoutMs: 30_000, gatewayTurnTimeoutMs: 240_000 });
+    await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
+  });
+
+  for (const locale of [
+    { id: "zh-CN", group: "超时", idle: "网关空闲超时", rule: "两者都设置时，单轮时限不短于网关空闲时限", saved: "已保存", settings: "设置", turn: "单轮超时", unlimited: "不限" },
+    { id: "en", group: "Timeouts", idle: "Gateway idle timeout", rule: "When both are set, the turn limit is at least the idle limit", saved: "Saved", settings: "Settings", turn: "Turn timeout", unlimited: "Unlimited" },
+  ] as const) {
+    test(`the ordering note keeps its own line and leaves the hint its width (${locale.id})`, async ({ page }) => {
+      await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [LOCALE_STORAGE_KEY, locale.id]);
+      const mock = await installMockApi(page, {
+        models: MODELS,
+        timeouts: { gatewayIdleTimeoutMs: 120_000, gatewayTurnTimeoutMs: 0 },
+      });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const dialog = await openSettings(page, locale.group, locale.settings);
+      await expect(dialog.getByText(locale.rule)).toBeVisible();
+
+      // The turn limit starts unlimited; turning it off seeds the idle limit,
+      // and a shorter value produces the note under the row.
+      await dialog.getByRole("switch", { name: `${locale.turn} · ${locale.unlimited}` }).click();
+      const turn = dialog.getByRole("spinbutton", { name: locale.turn });
+      await expect(turn).toHaveValue("120");
+      await expect(dialog.locator(".settings-detail-meta")).toContainText(locale.saved);
+      await turn.fill("30");
+      await turn.blur();
+      await expect(turn).toHaveAttribute("aria-invalid", "true");
+
+      const row = dialog.locator(".settings-row").filter({ hasText: locale.turn });
+      const hint = row.locator(".row-title small");
+      const note = row.locator(".row-note.is-error");
+      await expect(note).toBeVisible();
+      expect(writeCall(mock, "PUT", "/api/timeout-settings")).toMatchObject({ gatewayTurnTimeoutMs: 120_000 });
+
+      for (const width of [1280, 960]) {
+        await page.setViewportSize({ width, height: 900 });
+        const [hintBox, noteBox] = await Promise.all([hint.boundingBox(), note.boundingBox()]);
+        if (hintBox === null || noteBox === null) {
+          throw new Error(`${locale.id}@${width}: expected hint and note boxes`);
+        }
+        // The hint column keeps a readable width instead of collapsing to the
+        // note's max-content width.
+        expect(hintBox.width, `${locale.id}@${width}: hint squeezed`).toBeGreaterThan(120);
+        // The note is a line under the row, not text across the hint.
+        expect(noteBox.y, `${locale.id}@${width}: note is not under the hint`).toBeGreaterThanOrEqual(
+          hintBox.y + hintBox.height - 1,
+        );
+        const overlaps = hintBox.x < noteBox.x + noteBox.width
+          && noteBox.x < hintBox.x + hintBox.width
+          && hintBox.y < noteBox.y + noteBox.height
+          && noteBox.y < hintBox.y + hintBox.height;
+        expect(overlaps, `${locale.id}@${width}: note overlaps the hint`).toBe(false);
+        // And the row itself does not overflow horizontally.
+        const overflow = await row.evaluate((element) => element.scrollWidth - element.clientWidth);
+        expect(overflow, `${locale.id}@${width}: row overflows`).toBeLessThanOrEqual(1);
+      }
+
+      // And the timestamp from the seed write no longer describes this draft.
+      await expect(dialog.locator(".settings-detail-meta")).not.toContainText(locale.saved);
+    });
+  }
+
+  test("a refused write says why and keeps the draft", async ({ page }) => {
+    const { dialog } = await openTimeouts(page, {
+      fail: { message: "quota exceeded", method: "PUT", path: "/api/timeout-settings" },
+    });
 
     const idle = dialog.getByRole("spinbutton", { name: "网关空闲超时" });
     await idle.fill("90");
     await idle.blur();
 
     await expect(dialog.locator(".row-note.is-error")).toHaveText("quota exceeded");
-    // The stored value is what the service still has, so that is what the
-    // field goes back to rather than leaving a value nobody saved.
-    await expect(idle).toHaveValue("240");
+    // A failure the page cannot attribute keeps the draft visible with the
+    // reason beside it, instead of silently restoring the stored values.
+    await expect(idle).toHaveValue("90");
   });
 
   test("leaving a pane keeps what was written, because there is no draft to drop", async ({ page }) => {
-    await installMockApi(page, { models: MODELS });
-    const dialog = await openSettings(page, "超时");
+    const { dialog } = await openTimeouts(page);
 
     const idle = dialog.getByRole("spinbutton", { name: "网关空闲超时" });
     await idle.fill("90");
