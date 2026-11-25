@@ -109,8 +109,11 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
 - **已就绪**（本 PR）：机制件 + CLI + 单测，纯函数零行为变化。
 - **已就绪**（本 PR 增补）：`--hang-only` 模式（CI 机器无本机基线时
   只判挂死层）+ `perf-smoke-mac.sh` 冒烟脚本（出包后真启动 App：
-  隔离 HOME、预种 wizard 状态、等 AGENT-READY、温退出、交门禁判定；
+  **真实 home 三轨道**——wizard 状态备份/预种/恢复、日志字节偏移增量、
+  单实例锁预检（Electron 在 macOS 忽略 `$HOME`，隔离 HOME 设计已被
+  真机证伪，v2 起为三轨道设计）；等 AGENT-READY、温退出、交门禁判定；
   超时/中途崩溃不放弃——把日志交给门禁判成 hang 才是冒烟的意义）。
-- **P3-1**（待拍板后）：`build-mac.sh` step 6 接线
-  `perf-smoke-mac.sh`；两连击计数逻辑届时放 CI wrapper。
+- **P3-1**（✅ 已接线并实证）：`build-mac.sh` step 6（`SD_PERF_SMOKE=1`
+  开启）+ `ci.yml` macos-desktop env/artifact；fork Package@macos 首跑
+  绿（ok 10/hang 0/exit 0）。两连击计数逻辑放 CI wrapper（P3-2 后）。
 - **P3-3**（可选）：Windows 侧 `package-sd-windows.sh` 同构对接。

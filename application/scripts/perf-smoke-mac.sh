@@ -85,7 +85,13 @@ die()  { printf '\033[1;31m[perf-smoke] FAIL: %s\033[0m\n' "$*" >&2; exit "$2"; 
 # correct without it caring.
 NAME_CANDIDATES=(sd-shell ScienceDiscovery)
 
-REAL_HOME="$(/usr/bin/python3 -c 'import os,sys; sys.stdout.write(os.path.expanduser("~"))')"
+# REAL_HOME via getpwuid, NOT expanduser: Electron resolves ~ through
+# getpwuid and ignores $HOME on macOS, so a harness that sets $HOME would
+# otherwise make the smoke seed/read a DIFFERENT home than the app's —
+# reintroducing the wrong-directory bug the rails were built to avoid.
+# getpwuid is the one resolver both sides agree on (F18).
+REAL_HOME="$(/usr/bin/python3 -c 'import os,pwd,sys; sys.stdout.write(pwd.getpwuid(os.getuid()).pw_dir)')"
+[ -d "$REAL_HOME" ] || die "cannot resolve the real home via getpwuid" 2
 AS_DIR="$REAL_HOME/Library/Application Support"
 LOGS_ROOT="$REAL_HOME/Library/Logs"
 
@@ -126,6 +132,10 @@ mkdir -p "$DATA_DIR" "$APP_DIR"
 # dead code and every run leaked the copied .app + unpacked envs, hundreds
 # of MB per run). The restore must run BEFORE the wipe: the wizard backups
 # live inside $SMOKE_DIR.
+# F18: the traps are installed BELOW, after cleanup_wizard/BACKUPS are
+# defined — a failure between the old install point and the definitions
+# would have hit "cleanup_wizard: command not found" and skipped BOTH the
+# restore and the wipe.
 cleanup() {
   # kill the app first on signal paths: a live Electron child would re-write
   # wizard-state.json AFTER the restore below and re-point the real install
@@ -142,7 +152,6 @@ cleanup() {
     rm -rf "$SMOKE_DIR"
   fi
 }
-trap cleanup EXIT
 # INT/TERM/HUP: Ctrl-C out of a five-minute wait, CI cancellation, a lost
 # terminal — without these traps NONE of the cleanup ran on the signal path
 # (cleanup_wizard was EXIT-only), leaving the real wizard-state.json pointed
@@ -154,7 +163,6 @@ on_signal() {
   printf '\n[perf-smoke] caught signal — killing app, restoring, wiping\n' >&2
   exit 130
 }
-trap on_signal INT TERM HUP
 
 # REALPATH FORM for the data dir: on macOS $TMPDIR is the /var/folders/...
 # spelling while Electron's process.resourcesPath is realpath'd to
@@ -174,8 +182,9 @@ DATA_DIR="$(/usr/bin/python3 -c 'import os,sys; sys.stdout.write(os.path.realpat
 # --- rail 1: wizard state — backup, seed, restore-on-exit -----------------------
 # The REAL userData is used (Electron ignores $HOME on macOS): back up any
 # existing wizard-state.json under BOTH name candidates, seed ours, and
-# restore on exit via the cleanup trap installed above (F9: one handler,
-# restore first, wipe second — the backups live inside $SMOKE_DIR).
+# restore on exit via the cleanup trap installed below (F9: one handler,
+# restore first, wipe second — the backups live inside $SMOKE_DIR; the
+# install sits HERE, after every handler it calls is defined — F18).
 BACKUPS=()
 cleanup_wizard() {
   # ${arr[@]+...} guard: macOS still ships bash 3.2, where "${arr[@]}" on an
@@ -185,6 +194,8 @@ cleanup_wizard() {
     if [ -f "$BAK" ]; then mv "$BAK" "$UD/wizard-state.json"; else rm -f "$UD/wizard-state.json"; fi
   done
 }
+trap cleanup EXIT
+trap on_signal INT TERM HUP
 for NAME in "${NAME_CANDIDATES[@]}"; do
   UD="$AS_DIR/$NAME"
   mkdir -p "$UD"
@@ -256,17 +267,28 @@ printf '[perf-smoke] app pid %s\n' "$APP_PID" >&2
 # the rest of the script (delta extract, gate, artifact copy) works on the
 # one true file. Evidence-driven, the same shape as the verdict layer's
 # copyPathSkipped: key on evidence, not on a guess.
+# F15: size < offset on a candidate means the app ROTATED the log at launch
+# (5MB cap, renameSync to .1) — the fresh file IS this run's delta: lock it
+# with offset 0. Requiring growth past an offset that no longer exists
+# burns the full wait and exits 6 on a healthy launch.
 log_delta_ready() {
   local i L size
   for i in "${!LOG_PATHS[@]}"; do
     L="${LOG_PATHS[$i]}"
     [ -f "$L" ] || continue
     size=$(stat -f%z "$L" 2>/dev/null || printf 0)
-    if [ "$size" -gt "${LOG_OFFSETS[$i]}" ]; then
-      if tail -c +"$((${LOG_OFFSETS[$i]} + 1))" "$L" 2>/dev/null | grep -q 'AGENT-READY'; then
-        LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
+    if [ "$size" -lt "${LOG_OFFSETS[$i]}" ]; then
+      # rotation: the fresh file IS the delta
+      if head -c 100000 "$L" 2>/dev/null | grep -q 'AGENT-READY'; then
+        LOG_PATH="$L"; LOG_OFFSET=0
         return 0
       fi
+      continue
+    fi
+    [ "$size" -gt "${LOG_OFFSETS[$i]}" ] || continue
+    if tail -c +"$((${LOG_OFFSETS[$i]} + 1))" "$L" 2>/dev/null | grep -q 'AGENT-READY'; then
+      LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
+      return 0
     fi
   done
   return 1
@@ -274,14 +296,23 @@ log_delta_ready() {
 
 # lock_grown_delta: the app DIED before AGENT-READY (exited path) — pick the
 # candidate whose delta still smells like the smoke app ([perf] lines), else
-# the only one that grew. Nothing grew anywhere -> LOG_PATH stays empty and
-# the extract step fails with exit 6, which is the honest verdict there.
+# the only one that grew (or was rotated: F15, fresh file = whole delta).
+# Nothing grew anywhere -> LOG_PATH stays empty and the extract step fails
+# with exit 6, which is the honest verdict there.
 lock_grown_delta() {
   local i L size
   for i in "${!LOG_PATHS[@]}"; do
     L="${LOG_PATHS[$i]}"
     [ -f "$L" ] || continue
     size=$(stat -f%z "$L" 2>/dev/null || printf 0)
+    if [ "$size" -lt "${LOG_OFFSETS[$i]}" ]; then
+      # rotation: the fresh file IS the delta
+      if head -c 100000 "$L" 2>/dev/null | grep -q '\[perf\]'; then
+        LOG_PATH="$L"; LOG_OFFSET=0
+        return 0
+      fi
+      continue
+    fi
     [ "$size" -gt "${LOG_OFFSETS[$i]}" ] || continue
     if tail -c +"$((${LOG_OFFSETS[$i]} + 1))" "$L" 2>/dev/null | grep -q '\[perf\]'; then
       LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
@@ -292,6 +323,11 @@ lock_grown_delta() {
     L="${LOG_PATHS[$i]}"
     [ -f "$L" ] || continue
     size=$(stat -f%z "$L" 2>/dev/null || printf 0)
+    if [ "$size" -lt "${LOG_OFFSETS[$i]}" ]; then
+      # rotation: the fresh file IS the delta
+      LOG_PATH="$L"; LOG_OFFSET=0
+      return 0
+    fi
     if [ "$size" -gt "${LOG_OFFSETS[$i]}" ]; then
       LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
       return 0
@@ -321,8 +357,18 @@ done
 # app died).
 case "$STATE" in
   ready)
-    step "AGENT-READY seen — settling (warmup window)"
-    for _ in $(seq 1 20); do
+    # F14: the settle window must COVER the warmup the gate is about to
+    # judge — a literal 20s truncates a healthy 20-60s warmup (cold catalog
+    # ~48s per first-chat-warmup.ts) and the gate reads the missing pair
+    # as a HANG. Derive the window from the SAME budget the gate judges
+    # by (warmup-done hangMs), with a floor so a broken budget file never
+    # shortens the wait.
+    WARMUP_BUDGET_MS="$(node -p "require('$SCRIPT_DIR/../scripts/perf-budget.json').sessions.warm['warmup-done'].hangMs" 2>/dev/null || printf 0)"
+    case "$WARMUP_BUDGET_MS" in (*[!0-9]*|"") WARMUP_BUDGET_MS=0;; esac
+    [ "$WARMUP_BUDGET_MS" -ge 20000 ] || WARMUP_BUDGET_MS=20000
+    SETTLE_ROUNDS=$(( WARMUP_BUDGET_MS / 1000 ))
+    step "AGENT-READY seen — settling (warmup window ${WARMUP_BUDGET_MS}ms, from perf-budget.json)"
+    for _ in $(seq 1 "$SETTLE_ROUNDS"); do
       tail -c +"$((LOG_OFFSET + 1))" "$LOG_PATH" 2>/dev/null | grep -q '\[warmup\] first-chat .*-> 200' && break
       kill -0 "$APP_PID" 2>/dev/null || break
       sleep 1

@@ -17,6 +17,8 @@
 //               never reached its own TO event (subordination, sec4d
 //               rule 5): one jw stall paints ONE red, the rows it
 //               cascades into are marked blocked, not hang
+//   skipped     an optional sidecar the stack never started (explicit
+//               *-skipped marker, F7): visible, judged nothing
 //
 // Missing data is never guessed away: a component whose event pair is
 // only half present (durationMs === null) reports hang (or blocked) with
@@ -178,6 +180,19 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
       judgedRows.push({ component: d.component, verdict: "skipped", durationMs: null, budget: budget.hangMs, note: "feature off (evidence: skipped marker)" });
       continue;
     }
+    // F13: the pair's events arrived out of order (concurrent emitters,
+    // either order is a healthy launch): show the measurement as a note
+    // row, never judge it — a hang here would false-red a fine startup.
+    if (d.outOfOrder) {
+      judgedRows.push({
+        component: d.component,
+        verdict: "ok",
+        durationMs: d.durationMs,
+        budget: budget.hangMs,
+        note: "events out of order (concurrent emitters) — measured, not judged",
+      });
+      continue;
+    }
     judgedRows.push(judgeComponent(d.component, d.durationMs, d.missing, budget, undefined, hangOnly));
   }
   // Subordination (F4), second pass: a missing row whose pair cannot exist
@@ -187,21 +202,28 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
   // can itself be blocked (jw -> agent-ready -> shell-ui): resolve
   // transitively and report THE ROOT in blockedBy (F6: the intermediate
   // hop is an implementation detail; the on-call reads the root cause).
+  // F12: advance only while the hop being entered is ITSELF a missing-pair
+  // hang — walking unconditionally passes straight through a healthy hop
+  // and names a green component as the cause (jw healthy, agent-ready
+  // stalled: shell-ui must say "blocked by agent-ready", never "by jw-ready").
   const byName = new Map(judgedRows.map((r) => [r.component, r]));
+  const stalledHang = (name) => {
+    const r = byName.get(name);
+    return !!r && r.verdict === "hang" && r.durationMs === null;
+  };
   const rows = judgedRows.map((row) => {
     if (row.verdict !== "hang" || row.durationMs !== null) return row;
     let upstream = BLOCKED_BY[row.component];
-    if (!upstream) return row;
-    const upstreamRow = byName.get(upstream);
-    const upstreamStalled =
-      upstreamRow && upstreamRow.verdict === "hang" && upstreamRow.durationMs === null;
-    if (upstreamStalled) {
-      // walk to the ROOT: intermediate hops are themselves blocked rows
-      let r = upstream;
-      while (BLOCKED_BY[r]) r = BLOCKED_BY[r];
-      return { ...row, verdict: "blocked", blockedBy: r };
+    if (!upstream || !stalledHang(upstream)) return row;
+    // walk to the ROOT, hop by hop, never crossing a healthy one: every
+    // hop entered must itself be a missing-pair hang (F12)
+    let r = upstream;
+    for (;;) {
+      const next = BLOCKED_BY[r];
+      if (!next || !stalledHang(next)) break;
+      r = next;
     }
-    return row;
+    return { ...row, verdict: "blocked", blockedBy: r };
   });
   const summary = {
     hang: rows.filter((r) => r.verdict === "hang").length,
