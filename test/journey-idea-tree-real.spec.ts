@@ -32,13 +32,20 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
     // The waits are therefore bounded by progress, not only by the clock:
     //   - creating: up to 600s, but a run that ends `failed`/`blocked`/`cancelled`
     //     fails at once with its own reason instead of waiting out the budget;
-    //   - settling: up to 1800s, but 300s without a single new token, round,
+    //   - settling: up to 1800s, but 900s without a single new token, round,
     //     activity or node fails as "stopped progressing".
     // A slow provider no longer reds the case; an engine that really stalls still
     // does, and says what it was doing when it stopped.
     const CREATE_BUDGET_MS = 600_000;
     const TERMINAL_BUDGET_MS = 1_800_000;
-    const STALL_MS = 300_000;
+    // The same allowance the real shard runs under, not a guess:
+    // `.github/workflows/real-e2e.yml:122-123` sets
+    // SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS to 900000 — "Allow long research
+    // turns to go up to fifteen minutes without progress". A single provider
+    // call does not advance any of the progress counters, so a threshold below
+    // that allowance would report the same provider latency this change exists
+    // to stop reporting.
+    const STALL_MS = 900_000;
     test.setTimeout(3_000_000);
     journey.scenario({ goal: "Explore a small materials research question and retrieve the result after reload", preconditions: ["Isolated stack and live model credentials"] });
     const real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
