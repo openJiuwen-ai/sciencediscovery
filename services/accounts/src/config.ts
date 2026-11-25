@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { MILLI_PER_CREDIT } from "./pricing.js";
+
 /**
  * Deployment settings for the account service.
  *
@@ -99,6 +101,16 @@ export function parseDuration(raw: string | undefined, fallbackSeconds: number):
   return amount * multiplier;
 }
 
+function readNonNegativeInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, scale = 1): number {
+  const raw = env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!/^\d+$/u.test(raw.trim()) || !Number.isSafeInteger(value * scale)) {
+    throw new ConfigError(`${name} must be a non-negative integer within the supported range`);
+  }
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AccountsConfig {
   const required = ["DATABASE_URL", "JWT_SECRET", "HUAWEI_CLIENT_ID", "WEB_RETURN_URL", "ADMIN_ORIGIN"];
   const missing = required.filter((name) => !(env[name] ?? "").trim());
@@ -106,6 +118,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AccountsConfig
 
   const jwtSecret = (env.JWT_SECRET ?? "").trim();
   if (Buffer.byteLength(jwtSecret, "utf8") < 32) throw new ConfigError("JWT_SECRET must be at least 32 bytes");
+
+  const bonusPeriodName = env.CHECKIN_BONUS_EVERY_DAYS !== undefined
+    ? "CHECKIN_BONUS_EVERY_DAYS" : "DAILY_REWARD_DAYS";
 
   return {
     databaseUrl: (env.DATABASE_URL ?? "").trim(),
@@ -135,9 +150,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AccountsConfig
     // 1 credit is 0.08 CNY. Daily rewards are long-lived; every 7th
     // accumulated check-in also pays the streak bonus.
     registerGrantCredits: Number(env.REGISTER_GRANT_CREDITS ?? 500),
-    dailyRewardCredits: Number(env.DAILY_REWARD_CREDITS ?? 100),
-    checkinBonusEveryDays: Number(env.CHECKIN_BONUS_EVERY_DAYS ?? env.DAILY_REWARD_DAYS ?? 7),
-    streakBonusCredits: Number(env.STREAK_BONUS_CREDITS ?? 50),
+    dailyRewardCredits: readNonNegativeInteger(env, "DAILY_REWARD_CREDITS", 100, MILLI_PER_CREDIT),
+    checkinBonusEveryDays: readNonNegativeInteger(env, bonusPeriodName, 7),
+    streakBonusCredits: readNonNegativeInteger(env, "STREAK_BONUS_CREDITS", 50, MILLI_PER_CREDIT),
     adminAdjustLimitCredits: Number(env.ADMIN_ADJUST_LIMIT_CREDITS ?? 100000),
     adminMaxFailures: Number(env.ADMIN_MAX_FAILURES ?? 5),
     adminLockSeconds: parseDuration(env.ADMIN_LOCK, 900),

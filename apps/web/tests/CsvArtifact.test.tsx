@@ -115,6 +115,22 @@ test("profiles artifact rows and keeps stable, disambiguated record IDs", () => 
   assert.match(table.warnings[0] ?? "", /duplicate identifiers/);
 });
 
+test("generated row keys avoid all explicit IDs, including later records", () => {
+  const table = parse("row-ids.csv", [
+    "id,value",
+    "sample#4,10",
+    "sample,20",
+    "sample,30",
+    "sample#4#2,40",
+    ",50",
+    "row-6,60",
+  ].join("\n"));
+  const ids = table.rows.map((row) => row.__rowId);
+  assert.equal(new Set(ids).size, table.rows.length);
+  assert.deepEqual([ids[0], ids[1], ids[3], ids[5]], ["sample#4", "sample", "sample#4#2", "row-6"]);
+  assert.deepEqual(table.rows.filter((row) => row.__rowId === ids[2]).map((row) => row.value), [30]);
+});
+
 test("profiles common scientific missing-value tokens as null", () => {
   const table = parse("missing.csv", [
     "id,value",

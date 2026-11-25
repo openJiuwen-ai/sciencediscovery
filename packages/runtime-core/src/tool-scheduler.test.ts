@@ -15,6 +15,42 @@ import {
 
 interface Call { id: number; mode: ToolExecutionMode }
 
+async function assertParallelRejection(reason: undefined | null): Promise<void> {
+  const started: number[] = [];
+  const sibling = Promise.withResolvers<number>();
+  const running = scheduleToolCalls({
+    calls: [0, 1, 2, 3],
+    classify: (id) => id === 3 ? "exclusive" : "parallel",
+    execute: async (id) => {
+      started.push(id);
+      if (id === 0) throw reason;
+      return id === 1 ? sibling.promise : id;
+    },
+    maxParallelToolCalls: 2,
+    signal: new AbortController().signal,
+  });
+  const outcome = running.then(
+    () => ({ status: "fulfilled" }),
+    (error: unknown) => ({ status: "rejected", error }),
+  );
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, [0, 1]);
+  } finally {
+    sibling.resolve(1);
+  }
+  assert.deepEqual(await outcome, { status: "rejected", error: reason });
+  assert.deepEqual(started, [0, 1]);
+}
+
+test("parallel rejection with undefined drains running tools and stops scheduling", async () => {
+  await assertParallelRejection(undefined);
+});
+
+test("parallel rejection with null drains running tools and stops scheduling", async () => {
+  await assertParallelRejection(null);
+});
+
 test("rolling pool never exceeds maxParallelToolCalls", async () => {
   const calls = Array.from({ length: 1_000 }, (_, id): Call => ({ id, mode: "parallel" }));
   let active = 0;

@@ -71,7 +71,7 @@ export async function scheduleToolCalls<TCall, TResult>(
     const ready = new Array<boolean>(group.length).fill(false);
     let nextToStart = 0;
     let nextToCommit = 0;
-    let firstFailure: unknown;
+    let firstFailure: { reason: unknown } | undefined;
 
     const commitReady = (): void => {
       while (nextToCommit < slots.length && ready[nextToCommit]) {
@@ -95,7 +95,7 @@ export async function scheduleToolCalls<TCall, TResult>(
           ready[groupIndex] = true;
           commitReady();
         } catch (error) {
-          firstFailure ??= error;
+          firstFailure ??= { reason: error };
           return;
         }
       }
@@ -106,7 +106,7 @@ export async function scheduleToolCalls<TCall, TResult>(
       () => worker(),
     );
     await Promise.allSettled(workers);
-    if (firstFailure !== undefined) throw firstFailure;
+    if (firstFailure !== undefined) throw firstFailure.reason;
   }
 
   return committed;

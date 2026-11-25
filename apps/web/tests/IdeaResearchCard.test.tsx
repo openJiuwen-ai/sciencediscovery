@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "../src/api.js";
 import { IdeaResearchCard } from "../src/IdeaResearchCard.js";
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -100,5 +101,51 @@ test('budget exhaustion is ended, explains the used/limit tokens, and offers no 
     if (renderer) await act(async () => renderer.unmount());
     if (previous) Object.defineProperty(globalThis, 'window', previous);
     else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test("a delayed research list cannot replace a newer paused stream update", async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
+  const view = (status: "running" | "pausing" | "paused", updatedAt: string): IdeaResearchView => ({
+    research: {
+      id: "r", status, objective: "synthetic", phase: "design", round: 1,
+      settings: { maxRounds: 3 }, batch: [], batchCompleted: 0, tokens: 0, usageKnown: true,
+    } as IdeaResearchView["research"],
+    graph: { treeId: "r", updatedAt, nodes: [], edges: [] } as IdeaResearchView["graph"],
+  });
+  const running = view("running", "2026-11-25T08:58:38.222635+00:00");
+  const pausing = view("pausing", "2026-11-25T08:58:38.222636+00:00");
+  const paused = view("paused", "2026-11-25T08:58:38.222637+00:00");
+  let resolveList!: (result: { items: IdeaResearchView[] }) => void;
+  let onView!: (incoming: IdeaResearchView) => void;
+  let attempts = 0;
+  const client = {
+    listIdeaResearch: () => ++attempts === 1
+      ? Promise.resolve({ items: [running] })
+      : new Promise(resolve => { resolveList = resolve; }),
+    ideaResearchCommand: async () => pausing,
+    subscribeIdeaResearch: async (_session: string, _id: string, callback: typeof onView) => { onView = callback; },
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = create(createElement(IdeaResearchCard, { client, sessionId: "s", onError: error => assert.fail(String(error)) }));
+    });
+    assert.ok(renderer);
+    await act(async () => { renderer.root.findByProps({ className: "idea-tree-view" }).props.onClick(); });
+    const action = (label: string) => renderer.root.findAllByType("button").find(button => button.children.includes(label));
+    const pause = action("Pause");
+    assert.ok(pause);
+    await act(async () => { pause.props.onClick(); });
+    assert.equal(attempts, 2);
+    await act(async () => { onView(paused); });
+    assert.ok(action("Continue"));
+    await act(async () => { resolveList({ items: [pausing] }); });
+    assert.ok(action("Continue"));
+  } finally {
+    if (renderer) await act(async () => renderer?.unmount());
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
   }
 });

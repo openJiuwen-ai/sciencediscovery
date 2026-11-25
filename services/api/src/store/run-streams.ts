@@ -26,14 +26,17 @@ export interface RunStreamLine {
 /** Parse one JSONL record, or undefined when the line is blank or torn. */
 export function parseStreamLine(line: string): RunStreamLine | undefined {
   if (!line) return undefined;
-  let parsed: RunStreamLine;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(line) as RunStreamLine;
+    parsed = JSON.parse(line);
   } catch {
     return undefined; // Ignore a torn tail left by a crash mid-write.
   }
-  if (typeof parsed.sequence !== "number" || typeof parsed.createdAt !== "string" || !parsed.event) return undefined;
-  return parsed;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const { sequence, createdAt, event } = parsed as Record<string, unknown>;
+  if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0 || typeof createdAt !== "string") return undefined;
+  if (!event || typeof event !== "object" || Array.isArray(event) || !("type" in event) || typeof event.type !== "string") return undefined;
+  return { sequence, createdAt, event: event as RunStreamLine["event"] };
 }
 
 export function parseStreamLines(content: string): RunStreamLine[] {

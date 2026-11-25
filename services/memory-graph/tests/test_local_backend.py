@@ -396,13 +396,23 @@ def test_graph_survives_restart_as_plain_text(tmp_path: Path) -> None:
     assert {"n1"} <= live
 
 
-def test_torn_final_line_is_skipped(tmp_path: Path) -> None:
-    h = _handle(tmp_path)
-    h.session().run("CREATE (:Task {task_id: 'ok'})")
-    with (tmp_path / "graph" / "nodes.jsonl").open("a") as fh:
-        fh.write('{"id":"n99","labels":["Task"],"pr')
-    rows = list(_handle(tmp_path).session().run("MATCH (n:Task) RETURN n.task_id AS id"))
-    assert [r["id"] for r in rows] == ["ok"]
+@pytest.mark.parametrize("tail", [b'{"id":"torn', b'{"id":"torn","props":{"name":"\xe4\xb8', b""])
+def test_repairs_tail_before_committing_more_nodes_and_edges(tmp_path: Path, tail: bytes) -> None:
+    with _handle(tmp_path).session() as s:
+        s.run("CREATE (a:Task {task_id: 'a'})-[:next]->(:Task {task_id: 'b'})")
+
+    for name in ("nodes.jsonl", "edges.jsonl"):
+        path = tmp_path / "graph" / name
+        data = path.read_bytes()
+        path.write_bytes(data + tail if tail else data.rstrip(b"\r\n"))
+
+    with _handle(tmp_path).session() as s:
+        assert s.run("MATCH ()-[r:next]->() RETURN count(r) AS c").single()["c"] == 1
+        s.run("MATCH (b:Task {task_id: 'b'}) CREATE (b)-[:next]->(:Task {task_id: 'c'})")
+
+    with _handle(tmp_path).session() as s:
+        rows = list(s.run("MATCH (a:Task)-[:next]->(b:Task) RETURN a.task_id AS src, b.task_id AS dst ORDER BY src"))
+        assert [(r["src"], r["dst"]) for r in rows] == [("a", "b"), ("b", "c")]
 
 
 def test_backend_is_a_setting_that_defaults_to_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

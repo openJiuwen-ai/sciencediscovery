@@ -26,7 +26,14 @@ export interface StateView {
 export function canonicalState(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalState).join(",")}]`;
+  if (Array.isArray(value)) {
+    const elements: string[] = [];
+    for (let index = 0; index < value.length; index++) {
+      if (!Object.hasOwn(value, index)) throw new Error(`State must contain only finite JSON values: missing array index ${index}`);
+      elements.push(canonicalState(value[index]));
+    }
+    return `[${elements.join(",")}]`;
+  }
   if (typeof value === "object" && value !== null
     && [Object.prototype, null].includes(Object.getPrototypeOf(value))) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalState((value as Record<string, unknown>)[key])}`).join(",")}}`;

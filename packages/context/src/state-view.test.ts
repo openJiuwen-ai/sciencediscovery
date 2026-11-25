@@ -19,6 +19,16 @@ test("state views retain immutable values and restrict component access", () => 
   assert.throws(() => view.read("plan", 2), /schema/);
   assert.throws(() => canonicalState({ invalid: undefined }), /finite JSON/);
 });
+test("canonical state rejects sparse arrays and preserves explicit null entries", () => {
+  const checkpoint = (value: unknown) => ({ id: "run:1", scope: "session:a", components: [{ ...component(1), value }] });
+  for (const length of [1, 2]) {
+    const sparse = new Array<unknown>(length);
+    assert.throws(() => canonicalState(sparse), /missing array index 0/);
+    assert.throws(() => createStateView(checkpoint(sparse)), /missing array index 0/);
+  }
+  assert.deepEqual(createStateView(checkpoint([null, null])).read("plan"), [null, null]);
+});
+
 test("capture retries revision changes and rejects continuously changing state", async () => {
   let reads = 0;
   const provider: StateProvider = { id: "plan", capture: async () => component(Math.min(++reads, 2)) };

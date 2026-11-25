@@ -56,6 +56,29 @@ describe("paperAbstractParagraphs", () => {
     assert.deepEqual(paperAbstractParagraphs("One<br/>Two"), ["One", "Two"]);
   });
 
+  it("splits escaped publisher blocks without removing comparison text", () => {
+    const raw = "&amp;lt;h4&amp;gt;Methods&amp;lt;/h4&amp;gt;"
+      + "&amp;lt;p&amp;gt;Values &lt;LOD and &gt;0.&amp;lt;/p&amp;gt;"
+      + "&lt;p&gt;One&lt;br/&gt;Two &lt;i&gt;in situ&lt;/i&gt;.&lt;/p&gt;";
+
+    assert.deepEqual(paperAbstractParagraphs(raw), ["Values <LOD and >0.", "One", "Two in situ."]);
+  });
+
+  it("drops supported JATS markup while keeping its text", () => {
+    const raw = '<p>See <xref rid="t1">Table 1</xref> for <mml:math><mml:mi>x</mml:mi></mml:math>.</p>'
+      + '<table><caption>Ratio</caption></table>';
+
+    assert.deepEqual(paperAbstractParagraphs(raw), ["See Table 1 for x.", "Ratio"]);
+  });
+
+  it("reads JATS sections and escaped publisher tags with attributes", () => {
+    const raw = '<abstract><sec><title>Methods</title><p>Values &lt;LOD and &gt;0 for '
+      + '&lt;italic&gt;BRCA1&lt;/italic&gt;. See &lt;xref rid="t1 &gt; t0"&gt;Table 1&lt;/xref&gt;.</p></sec>'
+      + '<sec>&amp;lt;p content-type=&amp;quot;summary&amp;quot;&amp;gt;Replicated.&amp;lt;/p&amp;gt;</sec></abstract>';
+
+    assert.deepEqual(paperAbstractParagraphs(raw), ["Values <LOD and >0 for BRCA1. See Table 1.", "Replicated."]);
+  });
+
   it("has nothing to say about an empty abstract", () => {
     assert.deepEqual(paperAbstractParagraphs("   "), []);
     assert.deepEqual(paperAbstractParagraphs("<h4>Methods</h4>"), []);
@@ -79,6 +102,22 @@ describe("paperPlainText", () => {
 
   it("drops real inline markup too", () => {
     assert.equal(paperPlainText("A <b>bold</b> claim."), "A bold claim.");
+  });
+
+  it("keeps encoded inequalities alongside real and escaped markup", () => {
+    const value = "<b title='quoted > sign'>Result</b>: values &lt;LOD and &gt;0 for &lt;i&gt;A&lt;/i&gt;";
+    const expected = "Result: values <LOD and >0 for A";
+    assert.equal(paperPlainText(value), expected);
+    assert.deepEqual(paperAbstractParagraphs(`<p>${value}</p>`), [expected]);
+    assert.equal(paperPlainText("Result: values <LOD and >0"), "Result: values <LOD and >0");
+  });
+
+  it("removes JATS inline wrappers and preserves unmatched escaped notation", () => {
+    assert.equal(
+      paperPlainText('Effect of <italic>BRCA1</italic> and <bold>TP53</bold> <named-content>in vitro</named-content>.'),
+      "Effect of BRCA1 and TP53 in vitro.",
+    );
+    assert.equal(paperPlainText("A literal &lt;i&gt; marker and x &lt;LOD"), "A literal <i> marker and x <LOD");
   });
 
   it("keeps a comparison that only looks like a tag", () => {

@@ -24,6 +24,12 @@ const EMPTY_POLL_FAST_FOR_MS = 2 * 60_000;
  */
 const EMPTY_POLL_WINDOW_MS = 10 * 60_000;
 
+function keepLatestView(incoming: IdeaResearchView, current?: IdeaResearchView): IdeaResearchView {
+  // Both snapshots carry the evolve store's UTC ISO timestamp. Compare the strings
+  // directly to preserve microseconds when a list response races a stream update.
+  return current && current.graph.updatedAt > incoming.graph.updatedAt ? current : incoming;
+}
+
 export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
   const { t } = useLocale();
   const element = useRef<HTMLElement>(null);
@@ -54,7 +60,10 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const load = useCallback(async () => {
     try {
       const result = await client.listIdeaResearch(sessionId);
-      setItems(result.items);
+      setItems(current => {
+        const byId = new Map(current.map(item => [item.research.id, item]));
+        return result.items.map(incoming => keepLatestView(incoming, byId.get(incoming.research.id)));
+      });
       // An item closes the window that was opened for an empty list, so a Session
       // that already has a research is not re-read for the rest of the card's
       // life. An expectation is spent once the list has grown past what it held
@@ -78,7 +87,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     if (!activeId) return;
     const controller = new AbortController();
     void client.subscribeIdeaResearch(sessionId, activeId, incoming => {
-      setItems(current => current.map(item => item.research.id === incoming.research.id ? incoming : item));
+      setItems(current => current.map(item => item.research.id === incoming.research.id ? keepLatestView(incoming, item) : item));
       setError(undefined);
     }, controller.signal).catch(e => {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
