@@ -28,6 +28,8 @@ const copy = {
   delete: "删除",
   detail: "详情",
   detailFiles: "文件",
+  exit: "退出编辑",
+  content: "内容",
   edit: "编辑",
   export: "导出",
   importAction: "导入",
@@ -259,28 +261,31 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
 
       await journey.step(
         "从条目右侧的下三角菜单打开编辑",
-        "菜单列出导出、编辑、删除，编辑页以技能名命名。",
+        "菜单列出导出、编辑、删除；编辑页以技能名命名，头部给出退出编辑与保存。",
         async () => {
           await openRowMenu(settings, name);
           await expect(settings.getByRole("menuitem", { name: copy.delete, exact: true })).toBeVisible();
           await chooseMenuItem(settings, copy.edit);
-          // The trail bar names the editor; the page itself opens on 名称.
-          await expect(settings.locator(".skill-pane-bar .skill-breadcrumb"))
-            .toContainText(`编辑 ${name}`);
+          await expect(settings.locator(".skill-editor-page")).toBeVisible();
+          await expect(settings.getByRole("button", { name: copy.exit, exact: true })).toBeVisible();
           await expect(settings.getByRole("button", { name: copy.save, exact: true })).toBeVisible();
         },
       );
 
       await journey.step(
-        "改写指令并保存",
-        "编辑器报告已保存。",
+        "改写正文并保存",
+        "保存回到技能详情页，接口读到的正文就是改写后的内容。",
         async () => {
-          const instructions = settings.getByLabel(copy.instructions, { exact: true });
-          await expect(instructions).toHaveValue(new RegExp(firstInstructions.replace(/\./g, "\\.")));
-          await instructions.fill(editedInstructions);
+          const content = settings.getByLabel(copy.content, { exact: true });
+          const raw = await content.inputValue();
+          expect(raw).toContain(firstInstructions);
+          await content.fill(raw.replace(firstInstructions, editedInstructions));
           await settings.getByRole("button", { name: copy.save, exact: true }).click();
-          await expect(settings.locator("small.row-note[role=status]")).toContainText(copy.saved);
-          await settings.getByRole("button", { name: copy.back, exact: true }).click();
+          await expect(settings.locator(".skill-detail-page")).toBeVisible();
+          await expect(settings.getByRole("tab", { name: "技能详情", exact: true }))
+            .toHaveAttribute("aria-selected", "true");
+          await settings.locator(".skill-detail-back").click();
+          await expect(settings.locator(".settings-list")).toBeVisible();
         },
       );
 
@@ -313,7 +318,10 @@ test.describe("Desktop Skill import and editing", { tag: ["@isolation:global", "
           id = installed.find((skill) => skill.name === name)?.id;
           expect(id, "the imported Skill is readable through the API").toBeTruthy();
           const detail = await api<InstalledSkill>(page, `/api/skills/${encodeURIComponent(id!)}`);
-          expect(detail.instructions?.trim()).toBe(editedInstructions);
+          // The file editor writes the whole document, so the heading the
+          // package shipped stays above the rewritten paragraph.
+          expect(detail.instructions?.trim()).toContain(editedInstructions);
+          expect(detail.instructions?.trim()).toContain(`# ${name}`);
           expect(detail.frontmatter?.license).toBe("MIT");
         },
       );
