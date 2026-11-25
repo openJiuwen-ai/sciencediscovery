@@ -52,10 +52,20 @@
 #                         outlives it and the gate gets to JUDGE the hang)
 #   SD_SMOKE_KEEP=1       keep the throwaway dirs for debugging (paths
 #                         printed on exit; default: wiped)
+#   SD_SMOKE_SKIP_LOCK=1  bypass the single-instance preflight (mock/
+#                         validation runs against a developer's live
+#                         instance only; CI runners never need it)
 #   SD_SMOKE_LOG_OUT=path ALSO copy the judged delta to <path> (parent
 #                         dirs created). CI sets this to a fixed path so
 #                         first-run measurements upload as the P3-2
 #                         baseline-collection artifact.
+#
+# SIGKILL honesty note: INT/TERM/HUP are trapped (restore + wipe via the
+# EXIT handler), but a hard kill -9 leaves the real wizard-state.json
+# seeded pointing at $SMOKE_DIR/data. Recovery is by hand: the backup taken
+# before seeding lives at $SMOKE_DIR/wizard-state-backup-<name>.json, and
+# $SMOKE_DIR's name is printed by the "wizard state seeded" step line —
+# copy the backup back and delete $SMOKE_DIR.
 set -euo pipefail
 
 # --- locate everything from this script's own location ------------------------

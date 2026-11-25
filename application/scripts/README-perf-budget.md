@@ -8,7 +8,7 @@
 ## 一分钟上手
 
 ```bash
-# 判定一份 shell.log（出包冒烟后跑；退出码 0=过 / 1=挂死 / 2=用法错）
+# 判定一份 shell.log（出包冒烟后跑；退出码 0=过 / 1=挂死 / 2=用法错 / 3=零判定行）
 node scripts/perf-gate.mjs ~/Library/Logs/sd-shell/shell.log
 
 # CI / 脚本消费
@@ -16,7 +16,7 @@ node scripts/perf-gate.mjs <log> --json
 node scripts/perf-gate.mjs <log> --fail-on-regression   # 发布跑或两连击时用
 node scripts/perf-gate.mjs <log> --hang-only             # CI 机器无本机基线时
 
-# 单测（18+3+2 项，fixture 钉死 2026-11-24 真机实数）
+# 单测（31 项，fixture 钉死 2026-11-24 真机实数）
 node --experimental-strip-types --no-warnings --test test/perf-budget.test.ts
 ```
 
@@ -30,7 +30,7 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
         {component: durationMs}
               │
               ▼ perf-verdict.mjs + perf-budget.json
-        三态判定：ok / regression / hang
+        五态判定：ok / regression / hang / blocked（从属归因）/ skipped（合法禁用）
               │
               ▼ perf-gate.mjs（CLI）
         报告 + 退出码（hang=1；regression 默认 warn=0，
