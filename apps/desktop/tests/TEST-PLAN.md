@@ -177,12 +177,11 @@
    形成层叠上下文；`.ctx-menu` 虽然 `z-index: 300`，但被限制在这个上下文里，
    超出 296px 侧栏的部分被右侧 `.main-area` 盖住。真实点击落在空白页面上。
    用例改为点击菜单左缘（`position: { x: 10, y: 10 }`）并在此记录。
-3. **从设置页打开的确认框点不到“删除/确认”。** `SystemSettingsDialog` 的
-   `.config-backdrop` 是 `z-index: 1200` 的全屏层，确认框的遮罩在其下方，
-   确认按钮虽然被画出来，但真实点击会落在设置层的 `.settings-group-detail` 上。
-   键盘（Enter）仍能触发同一个动作，所以不是无法完成，而是只能用键盘。
-   证据：`settings-interactions.spec.ts`（删除专家、删除 MCP）与
-   `remote-hosts.spec.ts`（删除机器）都只能用 `press("Enter")`。
+3. **已验证修复：设置页确认框支持鼠标删除。** 当前 `.modal-backdrop`
+   的 `z-index: 1300` 高于 `.config-backdrop` 的 `1200`。
+   `settings-interactions.spec.ts` 的专家删除已使用真实 `click()`；
+   `journey-desktop-specialist-toggle.spec.ts` 在真实 API 上覆盖中英文取消及
+   鼠标确认删除。其他用例保留 Enter 不代表指针操作不可用。
 4. **设置页没有任何关闭控件，“点遮罩关闭”也永远触发不了。** 关闭逻辑挂在
    `.config-backdrop` 的 `onMouseDown`（只有 `event.target === currentTarget`
    才关），但 `.config-panel { flex: 1 }` 填满整个 backdrop，中间没有可点的

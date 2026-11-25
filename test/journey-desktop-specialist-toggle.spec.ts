@@ -25,14 +25,15 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
   for (const locale of ["zh-CN", "en"] as const) {
     /**
      * E2E-META
-     * Purpose: Custom Specialists can be disabled and re-enabled persistently; their create action matches Skills.
+     * Purpose: Specialist controls preserve enablement, report disabled bindings truthfully, and repair removed skills.
      * Steps:
      *   1. Open Desktop Skills and Specialists and compare the header actions.
-     *   2. Create a custom Specialist in the UI, disable it, reload, and edit it while disabled.
+     *   2. Create and bind a custom Specialist, disable it, verify its visible disabled binding, unbind and edit it.
      *   3. Verify a failed toggle stays disabled, then retry successfully.
      *   4. Bulk disable and enable custom and built-in roles; the fixed reviewer remains unchanged.
      *   5. Check the create action and switch in a narrow window, restoring owned data in finally.
-     *   6. Cancel deletion from the edit/delete-only menu, then confirm and verify removal through the real API.
+     *   6. Remove an owned selected skill, toggle the stale role, and explicitly repair the missing reference in its editor.
+     *   7. Cancel deletion from the edit/delete-only menu, then confirm and verify removal through the real API.
      * Environment: Immutable isolated API at E2E_BASE_URL; Desktop Vite on 4178; pinned Chromium; 1440x900 and 960x720, DPR 1.
      * Type: mocked
      * LLM: loopback stub for model bootstrap only; no Run submitted or model call expected.
@@ -41,10 +42,10 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
      * MCP: none
      * OtherExternal: none; one owned browser PUT is aborted to test transport failure, with no fabricated API response.
      * Credentials: E2E_API_TOKEN from the isolated stack; synthetic loopback model token only.
-     * CostSideEffects: No paid services; restores original enabled flags and deletes owned Specialist, Project, Session and model.
+     * CostSideEffects: No paid services; restores original enabled flags and deletes owned skill, Specialist, Project, Session and model.
      */
     test(`${locale}: manage custom Specialist enablement`, { tag: "@mocked" }, async ({ page, journey }) => {
-      test.setTimeout(120_000);
+      test.setTimeout(180_000);
       const zh = locale === "zh-CN";
       const words = zh
         ? { settings: "设置", skills: "技能", specialists: "专家", addSkill: "添加技能", add: "新增专家", name: "名称", description: "描述", instructions: "指令", save: "保存", edit: "编辑", editTitle: "编辑专家", off: "已禁用", disableAll: "一键关闭", enableAll: "一键启用" }
@@ -56,6 +57,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
       let fixture: JourneyFixture | undefined;
       let baseline: Specialist[] = [];
       let created: Specialist | undefined;
+      let temporarySkillId: string | undefined;
       const settings = page.getByRole("dialog", { name: words.settings, exact: true });
       const card = settings.locator(".settings-card").filter({ hasText: name });
       const toggle = card.getByRole("switch");
@@ -82,7 +84,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           expect(specialistAction).toEqual(skillAction);
           await settings.getByRole("button", { name: words.specialists, exact: true }).click();
         });
-        await journey.step("2. Create and disable a custom role", "The real API persists disabled state through a browser reload and an edit.", async () => {
+        await journey.step("2. Create, bind and disable a custom role", "The real API preserves the binding; Desktop names it as disabled until the user explicitly unbinds it.", async () => {
           await settings.getByRole("button", { name: words.add, exact: true }).click();
           const form = page.getByRole("dialog", { name: words.add, exact: true });
           await form.getByLabel(words.name, { exact: true }).fill(name);
@@ -92,6 +94,12 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await expect(form).toBeHidden();
           created = (await api<Specialist[]>(page, "/api/specialists")).find(s => s.name === name);
           expect(created).toBeTruthy();
+          await page.keyboard.press("Escape");
+          await page.getByRole("button", { name: zh ? "会话设置" : "Session settings", exact: true }).click();
+          await page.getByRole("button", { name: zh ? /^专家/u : /^Experts/u }).click();
+          await page.locator(".expert-row").filter({ hasText: name }).click();
+          await expect.poll(async () => (await api<{ specialistId?: string }>(page, `/api/sessions/${fixture!.session.id}`)).specialistId).toBe(created!.id);
+          await openSettings();
           await toggle.click();
           await expect(toggle).toHaveAttribute("aria-checked", "false");
           expect((await readCreated())?.enabled).toBe(false);
@@ -99,6 +107,19 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await openSettings();
           await expect(toggle).toHaveAttribute("aria-checked", "false");
           await page.keyboard.press("Escape");
+          await page.getByRole("button", { name: zh ? "会话设置" : "Session settings", exact: true }).click();
+          const boundRow = page.getByRole("button", { name: zh ? /^专家/u : /^Experts/u });
+          await expect(boundRow).toContainText(name);
+          await expect(boundRow).toContainText(zh ? "已停用" : "Disabled");
+          await expect(page.locator("#session-experts-hint")).toContainText(zh ? "当前会话仍保留绑定" : "this session keeps its binding");
+          await boundRow.click();
+          const disabledOption = page.locator(".expert-row").filter({ hasText: name });
+          await expect(disabledOption).toHaveAttribute("aria-current", "true");
+          await expect(disabledOption).toBeDisabled();
+          const none = page.locator(".expert-list").getByRole("button", { name: zh ? "无" : "None", exact: true });
+          await expect(none).not.toHaveAttribute("aria-current", "true");
+          await none.click();
+          await expect.poll(async () => (await api<{ specialistId?: string }>(page, `/api/sessions/${fixture!.session.id}`)).specialistId ?? null).toBe(null);
           await page.getByRole("button", { name: zh ? "会话设置" : "Session settings", exact: true }).click();
           await page.getByRole("button", { name: zh ? /^专家/u : /^Experts/u }).click();
           await expect(page.locator(".expert-list")).toBeVisible();
@@ -156,7 +177,36 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await expect(menu.getByRole("menuitem")).toHaveText([words.edit, zh ? "删除" : "Delete"]);
           expect(model.calls).toHaveLength(0);
         });
-        await journey.step("6. Cancel and confirm deletion from the menu", "Cancelling preserves the role; confirming deletes it and the real API no longer lists it.", async () => {
+        await journey.step("6. Toggle and repair a role after its selected skill was removed", "Missing skills do not block enablement; the editor names the missing ID and only removes it on an explicit action.", async () => {
+          await page.keyboard.press("Escape");
+          const skill = await api<{ id: string }>(page, "/api/skills", { method: "POST", data: {
+            name: `obsolete-${randomUUID().slice(0, 8)}`, description: "Temporary selected capability", instructions: "Check supplied inputs.",
+          } });
+          temporarySkillId = skill.id;
+          await api(page, `/api/specialists/${created!.id}`, { method: "PUT", data: { enabledSkillIds: [skill.id] } });
+          await api(page, `/api/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+          temporarySkillId = undefined;
+          await page.reload();
+          await openSettings();
+          // Step 5 left it disabled. Both directions must still work with a stale ID.
+          await toggle.click();
+          await expect(toggle).toHaveAttribute("aria-checked", "true");
+          await toggle.click();
+          await expect(toggle).toHaveAttribute("aria-checked", "false");
+          await menuTrigger.click();
+          await menu.getByRole("menuitem", { name: words.edit, exact: true }).click();
+          const editor = page.getByRole("dialog", { name: words.editTitle, exact: true });
+          await expect(editor.getByText(zh ? `不可用技能：${skill.id}` : `Unavailable skill: ${skill.id}`, { exact: true })).toBeVisible();
+          const save = editor.getByRole("button", { name: words.save, exact: true });
+          await expect(save).toBeDisabled();
+          await editor.getByRole("button", { name: `${zh ? "移除" : "Remove"} ${skill.id}`, exact: true }).click();
+          await expect(save).toBeEnabled();
+          await save.click();
+          await expect(editor).toBeHidden();
+          expect(await readCreated()).toMatchObject({ enabled: false, enabledSkillIds: [] });
+          await menuTrigger.click();
+        });
+        await journey.step("7. Cancel and confirm deletion from the menu", "Cancelling preserves the role; confirming deletes it and the real API no longer lists it.", async () => {
           const remove = zh ? "删除" : "Delete";
           await menu.getByRole("menuitem", { name: remove, exact: true }).click();
           const confirmation = page.getByRole("dialog").filter({ has: page.locator("#confirm-title") });
@@ -180,6 +230,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
             // Find a saved row even if a later assertion failed before id capture.
             created ??= (await api<Specialist[]>(page, "/api/specialists")).find(s => s.name === name);
             if (created) await api(page, `/api/specialists/${created.id}`, { method: "DELETE" });
+            if (temporarySkillId) await api(page, `/api/skills/${encodeURIComponent(temporarySkillId)}`, { method: "DELETE" });
           } finally { await model.stop(); }
         }
       }

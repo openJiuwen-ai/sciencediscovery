@@ -4967,10 +4967,10 @@ export class SessionStore {
   async updateSpecialist(specialistId: string, input: UpdateSpecialistRequest): Promise<Specialist> {
     const specialist = this.catalog.specialists.find((candidate) => candidate.id === specialistId);
     if (!specialist) throw new Error("Specialist not found");
+    const touchedCoreField = "name" in input || "description" in input || "instructions" in input
+      || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
     if (specialist.builtIn) {
       // Built-in specialists are read-only except for the on/off `enabled` toggle.
-      const touchedCoreField = "name" in input || "description" in input || "instructions" in input
-        || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
       if (touchedCoreField) {
         throw new Error("Built-in specialists are read-only; only their enabled flag can be toggled");
       }
@@ -4984,6 +4984,15 @@ export class SessionStore {
       return structuredClone(specialist);
     }
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("enabled must be a boolean");
+    // A flag-only patch must remain usable after an installed skill is removed.
+    // Core edits still validate the complete resulting configuration below.
+    if (!touchedCoreField) {
+      if (input.enabled === undefined) return structuredClone(specialist);
+      specialist.enabled = input.enabled;
+      specialist.updatedAt = new Date().toISOString();
+      await this.saveCatalog();
+      return structuredClone(specialist);
+    }
     const normalized = this.normalizeSpecialistInput({ ...specialist, ...input });
     if (this.catalog.specialists.some((candidate) => candidate.id !== specialistId
       && candidate.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {

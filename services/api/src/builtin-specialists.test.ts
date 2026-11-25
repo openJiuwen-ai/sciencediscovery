@@ -157,6 +157,22 @@ test("custom specialist enabled state survives store reload and later edits", as
   }
 });
 
+test("a flag-only patch can toggle a specialist whose selected skill was removed", async () => {
+  await withStore(async store => {
+    store.setAvailableSkillIds(["removed-skill"]);
+    const custom = await store.createSpecialist({ name: "Stale skills", description: "d", instructions: "i", enabledSkillIds: ["removed-skill"] });
+    store.setAvailableSkillIds([]);
+    assert.equal((await store.updateSpecialist(custom.id, { enabled: false })).enabled, false);
+    assert.deepEqual(store.getSpecialist(custom.id)?.enabledSkillIds, ["removed-skill"], "toggling never silently changes capabilities");
+    assert.equal((await store.updateSpecialist(custom.id, { enabled: true })).enabled, true);
+    await assert.rejects(store.updateSpecialist(custom.id, { enabled: "yes" as unknown as boolean }), /enabled must be a boolean/);
+    await assert.rejects(store.updateSpecialist(custom.id, { name: "Still stale" }), /Specialist skills are unavailable/);
+    const repaired = await store.updateSpecialist(custom.id, { enabledSkillIds: [] });
+    assert.deepEqual(repaired.enabledSkillIds, []);
+    assert.equal(repaired.enabled, true);
+  }, "removed-skill-toggle");
+});
+
 test("enabled defaults to enabled when the key is absent (backward compat)", async () => {
   await withStore(async (store) => {
     // A fresh store: built-ins have no `enabled` key but should dispatch.
