@@ -23,6 +23,13 @@
 //   node scripts/perf-gate.mjs <log> --fail-on-regression
 //        (escalate regressions to exit 1 for release runs / two-strike
 //         counting; a wrapper may pass this on the 2nd consecutive run)
+//   node scripts/perf-gate.mjs <log> --hang-only
+//        (CI machines with NO local baseline: judge only the absolute
+//         hang layer — regression lines are baseline-relative and only
+//         meaningful on the machine the baselines were measured on, so
+//         they are reported "no baseline for this machine" instead of
+//         being judged; first-run CI data collection sets a baseline
+//         later, P3-2)
 //
 // Pure reading and judging: this script never mutates the log, never
 // writes baselines (refreshing baselines is the release-run flow, P3-2)
@@ -36,7 +43,7 @@ import { judgeSession, exitCode, BUDGETS, TOLERANCE_RATIO } from "./lib/perf-ver
 const here = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
-  console.log(`usage: node scripts/perf-gate.mjs <shell.log> [--json] [--fail-on-regression]`);
+  console.log(`usage: node scripts/perf-gate.mjs <shell.log> [--json] [--fail-on-regression] [--hang-only]`);
 }
 
 function failUsage(msg) {
@@ -49,6 +56,7 @@ function failUsage(msg) {
 const argv = process.argv.slice(2);
 const jsonOut = argv.includes("--json");
 const failOnRegression = argv.includes("--fail-on-regression");
+const hangOnly = argv.includes("--hang-only");
 const logPath = argv.find((a) => !a.startsWith("--"));
 if (!logPath) failUsage("missing <shell.log> path");
 
@@ -64,7 +72,7 @@ const sessions = splitSessions(parsePerfTimeline(logText));
 if (sessions.length === 0) {
   failUsage(`no perf sessions found in ${logPath} (no [perf] module-load line?)`);
 }
-const judged = sessions.map((s) => judgeSession(s));
+const judged = sessions.map((s) => judgeSession(s, undefined, { hangOnly }));
 const code = exitCode(judged);
 const escalated =
   failOnRegression && judged.some((j) => j.summary.regression > 0) ? 1 : code;
@@ -87,6 +95,7 @@ if (jsonOut) {
 } else {
   console.log(`perf-gate: ${logPath}`);
   console.log(`  budgets: perf-budget.json (tolerance x${TOLERANCE_RATIO})`);
+  if (hangOnly) console.log("  mode: hang-only (no local baseline on this machine — regression layer skipped)");
   for (const [i, j] of judged.entries()) {
     const label = `session ${i + 1} [${j.kind ?? "unknown"}]`;
     if (j.note) {

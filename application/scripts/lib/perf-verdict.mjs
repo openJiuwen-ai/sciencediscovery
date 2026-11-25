@@ -78,10 +78,15 @@ function copyPathSkipped(session) {
 /**
  * Judge one component duration against its budget line.
  * Pure; returns a verdict row (see header for the verdicts).
+ *
+ * hangOnly: skip the regression layer entirely — used on CI machines with
+ * no local baseline (regression lines are baseline-relative and only
+ * meaningful on the machine the baselines were measured on; see the
+ * build-machine-baseline iron rule in README-perf-budget.md). The hang
+ * line is an absolute number, valid on any machine, so it stays enforced.
  */
-export function judgeComponent(component, durationMs, missing, budget, toleranceRatio = TOLERANCE_RATIO) {
+export function judgeComponent(component, durationMs, missing, budget, toleranceRatio = TOLERANCE_RATIO, hangOnly = false) {
   const hangMs = budget.hangMs;
-  const regressionLine = Math.round(budget.baselineMs * toleranceRatio);
   if (durationMs === null || durationMs === undefined) {
     return {
       component,
@@ -94,6 +99,13 @@ export function judgeComponent(component, durationMs, missing, budget, tolerance
   if (durationMs > hangMs) {
     return { component, verdict: "hang", durationMs, budget: hangMs };
   }
+  if (hangOnly) {
+    // No baseline to compare against on this machine: report the measured
+    // duration for visibility, but judge only the hang layer. The row is
+    // still "ok" (it passed the only layer this machine can judge).
+    return { component, verdict: "ok", durationMs, budget: hangMs, note: "no baseline for this machine" };
+  }
+  const regressionLine = Math.round(budget.baselineMs * toleranceRatio);
   if (durationMs > regressionLine) {
     return { component, verdict: "regression", durationMs, budget: regressionLine };
   }
@@ -105,12 +117,18 @@ export function judgeComponent(component, durationMs, missing, budget, tolerance
  *
  * @param {Array} session - one session's PerfEvent[] (splitSessions output)
  * @param {object} [budgets] - budget tables (defaults to perf-budget.json; injectable for tests)
+ * @param {object} [options] - { hangOnly?: boolean } — hang-only mode for
+ *   CI machines with no local baseline: the regression layer is skipped
+ *   (baseline-relative lines are meaningless off the machine the baselines
+ *   were measured on), the hang layer (absolute seconds) stays enforced,
+ *   and rows report "no baseline for this machine".
  * @returns {{ kind: string|null, rows: Array, summary: { hang: number,
  *   regression: number, ok: number, blocked: number }, note?: string }}
  *   kind null (no provisioning flag seen) -> rows: [] with a note: the
  *   verdict layer refuses to guess a session kind it cannot identify.
  */
-export function judgeSession(session, budgets = BUDGETS) {
+export function judgeSession(session, budgets = BUDGETS, options = {}) {
+  const hangOnly = options.hangOnly === true;
   const kind = sessionKind(session);
   const durations = componentDurations(session);
   const table = kind ? budgets[kind] : null;
@@ -131,7 +149,7 @@ export function judgeSession(session, budgets = BUDGETS) {
     // branch which returns before unpack-enter): a missing unpack pair
     // is expected, not a hang (F2).
     if (d.component === "unpack" && skipCopyPair && d.durationMs === null) continue;
-    judgedRows.push(judgeComponent(d.component, d.durationMs, d.missing, budget));
+    judgedRows.push(judgeComponent(d.component, d.durationMs, d.missing, budget, undefined, hangOnly));
   }
   // Subordination (F4), second pass: a missing row whose pair cannot exist
   // because an upstream component's TO event never fired is a cascade,
