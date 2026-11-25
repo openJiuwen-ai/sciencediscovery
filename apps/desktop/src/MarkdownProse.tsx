@@ -32,6 +32,10 @@ interface Props {
    *  shown somewhere with no card surface would otherwise look interactive
    *  and do nothing. */
   onReferenceClick?: (reference: ComposerReference) => void;
+  /** Called for a link that may name a file beside the one being read (a
+   *  Skill's `references/…`). Returning true means the caller handled it and
+   *  the link must not navigate; false leaves the ordinary external link. */
+  onFileLink?: (href: string) => boolean;
   /**
    * The aliases a report cites, from the version's own `references`.
    *
@@ -80,7 +84,7 @@ function preserveGraphChipUrls(url: string): string {
  * evidence or an artifact from the word itself. It is a button rather than a
  * link because it opens a dialog, not a document.
  */
-export const MarkdownProse = memo(function MarkdownProse({ children, onReferenceClick, references }: Props) {
+export const MarkdownProse = memo(function MarkdownProse({ children, onFileLink, onReferenceClick, references }: Props) {
   const chipIndex = useMemo(() => buildChipIndex(references), [references]);
   const byUrl = useMemo(() => referencesByUrl(references), [references]);
   const chipReady = onReferenceClick !== undefined;
@@ -107,7 +111,23 @@ export const MarkdownProse = memo(function MarkdownProse({ children, onReference
               </button>
             );
           }
-          return <a href={href} rel="noreferrer" target="_blank">{label}</a>;
+          // A link to a file beside this one opens that file in the reading
+          // surface instead of putting a 404 on a new tab. The caller decides
+          // what is a package file; everything else stays an ordinary link.
+          return (
+            <a
+              href={href}
+              onClick={onFileLink === undefined || href === undefined
+                ? undefined
+                : (event) => {
+                  if (onFileLink(href)) event.preventDefault();
+                }}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {label}
+            </a>
+          );
         },
         table: ({ children: rows }) => (
           <div className="md-scroll">

@@ -142,7 +142,37 @@ test("a failed first enable stays visible even when the refreshed catalog is emp
   } finally { await act(async () => { view.unmount(); }); }
 });
 
-test("the search field narrows the installed list", async () => {
+test("the tabs split the catalog by origin and narrow the grid", async () => {
+  const mine = { ...skill, id: "mine", name: "mine", description: "Mine to keep." };
+  const official = {
+    ...skill, id: "official", name: "official", description: "Ships with the app.", source: "built-in" as const,
+  };
+  const stub = new StubClient().reply([mine, official]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(stub.asClient());
+  try {
+    const markup = text(view);
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.all(2)), "全部技能 does not count both");
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.mine(1)), "我的技能 does not count the managed package");
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.official(1)), "官方技能 does not count the built-in");
+    const officialTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.official(1)));
+    assert.ok(officialTab, "the 官方技能 tab is not a button");
+    await act(async () => { officialTab.props.onClick(); });
+    const selected = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.official(1)));
+    assert.equal(selected?.props["aria-selected"], true, "the pressed tab is not the selected one");
+    assert.match(text(view), /Ships with the app/);
+    assert.ok(!text(view).includes("Mine to keep"), "a managed package stayed under 官方技能");
+    const mineTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.mine(1)));
+    assert.ok(mineTab);
+    await act(async () => { mineTab.props.onClick(); });
+    assert.match(text(view), /Mine to keep/);
+    assert.ok(!text(view).includes("Ships with the app"), "a built-in stayed under 我的技能");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the search field narrows the installed list by name only", async () => {
   const other = { ...skill, id: "draft", name: "draft", description: "A different package." };
   const stub = new StubClient().reply([skill, other]).reply({ backend: "jiuwenswarm", skills: [] });
   const view = await mount(stub.asClient());
@@ -152,9 +182,62 @@ test("the search field narrows the installed list", async () => {
     const input = view.root.findAllByType("input")
       .find((node) => node.props["aria-label"] === TEXT.settings.skills.search);
     assert.ok(input);
-    await act(async () => { input.props.onChange({ target: { value: "different" } }); });
+    await act(async () => { input.props.onChange({ target: { value: "draft" } }); });
     assert.match(text(view), /A different package/);
     assert.ok(!text(view).includes("Review a draft"), "the non-matching row stayed");
+    // A word that appears only in a description is not a match: the search is
+    // for the name the reader remembers, not for prose inside the package.
+    await act(async () => { input.props.onChange({ target: { value: "different" } }); });
+    assert.ok(!text(view).includes("A different package"), "a description-only match stayed");
+    assert.match(text(view), new RegExp(TEXT.settings.skills.noMatches));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a bulk action covers the tab on screen, not every package on the machine", async () => {
+  const mine = { ...skill, id: "mine", name: "mine", description: "Mine to keep." };
+  const official = {
+    ...skill, id: "official", name: "official", description: "Ships with the app.", source: "built-in" as const,
+  };
+  const page = {
+    backend: "jiuwenswarm",
+    skills: [installedSkill("mine"), installedSkill("official")],
+  };
+  const stub = new StubClient().reply([mine, official]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    const mineTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.mine(1)));
+    assert.ok(mineTab, "the 我的技能 tab is not a button");
+    await act(async () => { mineTab.props.onClick(); });
+    stub.reply({ enabled: false, results: [] }).reply([mine, official]).reply(page);
+    await act(async () => { bulkButton(view, TEXT.settings.disableAll).props.onClick(); });
+    const writes = stub.calls.filter((call) => call.init.method === "PUT");
+    assert.equal(writes.length, 1);
+    const body = json(writes[0]!) as { enabled: boolean; targets: Array<Record<string, unknown>> };
+    assert.equal(body.enabled, false);
+    // 我的技能 shows one card, so the batch carries one target.
+    assert.deepEqual(body.targets, [{ skillId: "mine", name: "mine" }]);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a match is marked in the name and the clear control restores the list", async () => {
+  const other = { ...skill, id: "draft", name: "draft", description: "A different package." };
+  const stub = new StubClient().reply([skill, other]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(stub.asClient());
+  try {
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.search);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: "dra" } }); });
+    const marks = view.root.findAllByType("mark");
+    assert.equal(marks.length, 1, "the matched run is not marked");
+    assert.deepEqual(marks[0]?.children, ["dra"]);
+    const clear = view.root.findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.clearSearch);
+    assert.ok(clear, "the search field has no clear control");
+    await act(async () => { clear.props.onClick(); });
+    assert.match(text(view), /Review a draft/);
+    assert.equal(view.root.findAllByType("mark").length, 0, "a mark survived the clear");
   } finally { await act(async () => { view.unmount(); }); }
 });
 

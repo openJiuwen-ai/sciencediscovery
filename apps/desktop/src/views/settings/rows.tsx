@@ -71,18 +71,21 @@ export function Switch({
   disabled,
   label,
   onChange,
+  small,
   value,
 }: {
   disabled?: boolean;
   label: string;
   onChange: (next: boolean) => void;
+  /** The detail header's 32×16 variant, as the handoff draws it. */
+  small?: boolean;
   value: boolean;
 }) {
   return (
     <button
       aria-checked={value}
       aria-label={label}
-      className={`switch${value ? " is-on" : ""}`}
+      className={`switch${value ? " is-on" : ""}${small ? " is-small" : ""}`}
       disabled={disabled}
       onClick={() => onChange(!value)}
       role="switch"

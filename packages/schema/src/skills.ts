@@ -200,6 +200,31 @@ export interface UpdateSkillFileRequest {
   sourceSessionId?: string;
 }
 
+/** The raw text of SKILL.md, for the editor that shows the whole document. */
+export interface SkillMarkdownContent {
+  content: string;
+  revision: number;
+  skillId: string;
+}
+
+/** Replace SKILL.md with the text the user edited, frontmatter included.
+ *  The server validates the package after writing it, so a broken name or an
+ *  empty description is refused rather than stored. */
+export interface UpdateSkillMarkdownRequest {
+  content: string;
+  expectedRevision: number;
+}
+
+export interface DeleteSkillFileRequest {
+  expectedRevision: number;
+}
+
+/** A file or a whole folder moved in place: `to` is the new path. */
+export interface RenameSkillFileRequest {
+  expectedRevision: number;
+  to: string;
+}
+
 export interface ConfirmSkillReviewDraftRequest {
   expectedUpdatedAt: string;
   files: Array<{

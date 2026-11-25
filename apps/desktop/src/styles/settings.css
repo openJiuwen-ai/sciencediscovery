@@ -129,46 +129,6 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   line-height: 1.5;
 }
 .settings-card-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-/* A Git import that outlives its page. The banner sits under the list's title
-   and reports the job the API is running, so leaving 从 GitHub 导入 does not
-   hide what is still being installed. */
-.skill-import-banner {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0 0 14px;
-  padding: 10px 14px;
-  border: 1px solid var(--primary-border-soft);
-  border-radius: 10px;
-  background: var(--primary-soft);
-  color: var(--text-strong);
-}
-.skill-import-banner.is-error {
-  border-color: var(--danger-soft);
-  background: var(--danger-soft);
-}
-.skill-import-banner-copy { display: grid; gap: 2px; min-width: 0; }
-.skill-import-banner-copy strong { font-size: 12.5px; font-weight: 600; }
-.skill-import-banner-copy small {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-import-banner-close {
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 17px;
-  line-height: 1;
-}
-.skill-import-banner-close:hover { background: var(--surface-hover); color: var(--text-strong); }
 /* A Skill export's own outcome, beside the row that produced it: the page's
    notice is above the list and out of view once the reader has scrolled. */
 .skill-export-status {
@@ -754,6 +714,201 @@ a.secondary-button {
   vertical-align: 4px;
 }
 
+/* ── 技能 list, as the handoff draws it ─────────────────────────────────────
+   The list is a directory of packages rather than a stack of rows: a tab for
+   each origin, a search field and 添加技能 on one line, then cards three to a
+   row. The pane is wider than the other settings pages (the handoff's 1400px
+   column), because three 456px cards and their gutters are exactly that. */
+.settings-group-detail.is-skill-list {
+  padding: 32px max(36px, calc((100% - 1400px) / 2)) 48px;
+}
+.settings-group-detail.is-skill-list .skill-list-head { margin-bottom: 30px; }
+.settings-group-detail.is-skill-list .skill-list-head h3 {
+  font-size: 24px;
+  line-height: 1.5;
+}
+.settings-group-detail.is-skill-list .skill-list-head p { color: #595959; }
+.skill-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin: 0 0 16px;
+}
+.skill-tabs { display: flex; align-items: flex-end; gap: 32px; }
+.skill-tab {
+  position: relative;
+  height: 32px;
+  padding: 0;
+  background: none;
+  color: #191919;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 32px;
+  white-space: nowrap;
+}
+.skill-tab.is-active { font-weight: 600; }
+.skill-tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: #191919;
+  content: "";
+}
+.skill-tab:hover { color: #000; }
+.skill-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+.skill-search-field {
+  position: relative;
+  flex: 1 1 240px;
+  width: 360px;
+  max-width: 360px;
+  min-width: 0;
+}
+.skill-toolbar .skill-search-input {
+  width: 100%;
+  height: 32px;
+  padding-right: 34px;
+  border-color: #c2c2c2;
+  border-radius: 8px;
+  font-size: 12px;
+}
+/* Chromium draws its own cancel button inside a search field. The pane has one
+   clear control of its own, so the native pair is removed rather than shown
+   beside it. */
+.skill-toolbar .skill-search-input::-webkit-search-cancel-button,
+.skill-toolbar .skill-search-input::-webkit-search-decoration {
+  appearance: none;
+  -webkit-appearance: none;
+}
+/* The design's ×: it clears the query, so it appears only while there is one
+   to clear. */
+.skill-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #808080;
+  transform: translateY(-50%);
+}
+.skill-search-clear:hover { background: #f0f0f0; color: #191919; }
+.skill-toolbar .skill-search-input:focus-visible {
+  border-color: #191919;
+  outline: 0;
+  box-shadow: none;
+}
+.skill-toolbar .skill-add-trigger {
+  gap: 6px;
+  padding: 0 20px;
+  font-size: 14px;
+}
+/* `design.css` loads after this sheet and draws `.settings-list` as a column of
+   rows, so the grid names both classes and the cards are addressed through it:
+   the list's own layout is the one thing a later sheet must not repaint. */
+.settings-list.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+/* Three 456px cards + their gutters need a 1400px column, which the window
+   only has at roughly 1920. Below that the cards would truncate their titles,
+   so the grid drops to two and then one rather than squeezing them. */
+@media (max-width: 1500px) {
+  .settings-list.skill-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1150px) {
+  .settings-list.skill-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.settings-list.skill-grid > .skill-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  min-height: 160px;
+  padding: 24px;
+  border: 1px solid #e6e6e6;
+  border-radius: 16px;
+  background: #fff;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.settings-list.skill-grid > .skill-card:hover {
+  border-color: #dedede;
+  box-shadow: 0 4px 16px rgba(25, 25, 25, .08);
+}
+.skill-card-head { display: flex; align-items: center; gap: 16px; }
+.settings-list.skill-grid .skill-card-mark {
+  width: 48px;
+  height: 48px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+/* The five tones the handoff draws. Which package gets which follows its name,
+   so a page keeps its colors between reads. */
+.skill-card-mark.is-blue { border-color: #9dbdfc; background: #e6eeff; color: #0950de; }
+.skill-card-mark.is-green { border-color: #8fe5c2; background: #e7fbf2; color: #058358; }
+.skill-card-mark.is-amber { border-color: #fcce92; background: #fef5e8; color: #c76207; }
+.skill-card-mark.is-violet { border-color: #d9b1fd; background: #f7edfe; color: #8a21bc; }
+.skill-card-mark.is-pink { border-color: #f99ac7; background: #fee5f2; color: #c40054; }
+.settings-list.skill-grid .settings-card-main { display: grid; gap: 4px; }
+.settings-list.skill-grid .settings-card-main.is-static { cursor: default; }
+/* The searched-for run inside a name, as the handoff marks it: the primary
+   blue, in the name's own weight, with the browser's yellow highlight cleared. */
+.skill-card-hit {
+  background: transparent;
+  color: #1476ff;
+  font-weight: inherit;
+}
+.settings-list.skill-grid .settings-card-main strong {
+  display: block;
+  overflow: hidden;
+  color: #191919;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-card-tag {
+  display: inline-flex;
+  align-self: flex-start;
+  justify-self: start;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #f5f5f5;
+  color: #191919;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.settings-list.skill-grid .settings-card-actions { gap: 8px; }
+.skill-card-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: #808080;
+  font-size: 14px;
+  line-height: 22px;
+}
+.settings-list.skill-grid .skill-export-status { margin-top: -8px; }
+
 /* 添加技能. The popover hangs inside the header: the header is pinned to the
    top of a pane that scrolls, so there is nothing a portal would keep in view
    that this does not. */
@@ -1337,8 +1492,8 @@ a.secondary-button {
   overflow-wrap: anywhere;
 }
 
-/* A managed Skill's chevron. Three actions behind one small press, so a row
-   stays a row rather than becoming a toolbar. The popover opens downward
+/* A managed Skill's ellipsis. Three actions behind one small press, so a card
+   stays a card rather than becoming a toolbar. The popover opens downward
    against the trigger with no gap — the pointer crosses straight from one to
    the other, and a gap would make a hover-opened menu close under it. */
 .skill-row-menu { position: relative; display: inline-flex; }
@@ -1346,36 +1501,33 @@ a.secondary-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius-s);
+  border-radius: 4px;
   background: transparent;
-  color: var(--text-faint);
+  color: #191919;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .skill-row-menu-trigger:hover:not(:disabled),
 .skill-row-menu-trigger.is-open {
-  border-color: var(--border);
-  background: var(--surface-soft);
-  color: var(--text-strong);
+  background: #f0f0f0;
+  color: #191919;
 }
 .skill-row-menu-trigger:disabled { opacity: 0.5; cursor: progress; }
-.skill-row-menu-trigger svg { transition: transform 0.15s ease; }
-.skill-row-menu-trigger.is-open svg { transform: rotate(180deg); }
 .skill-row-menu-popover {
   position: absolute;
   top: calc(100% - 2px);
   right: 0;
   z-index: 20;
   display: grid;
-  width: 152px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-m);
+  width: 116px;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 16px 40px rgba(24, 24, 24, 0.14), 0 2px 6px rgba(24, 24, 24, 0.06);
+  box-shadow: 0 12px 32px rgba(24, 24, 24, 0.14), 0 2px 6px rgba(24, 24, 24, 0.06);
   animation: ctxIn 0.12s ease;
 }
 /* A row near the bottom of the pane has no space below it; the menu opens
@@ -1389,18 +1541,725 @@ a.secondary-button {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 9px;
+  height: 34px;
+  padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-s);
+  border-radius: 8px;
   background: transparent;
-  color: var(--text-secondary);
+  color: #191919;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
 }
-.skill-row-menu-item:hover { background: var(--surface-hover); color: var(--text-strong); }
-.skill-row-menu-item.is-danger { color: var(--danger); }
-.skill-row-menu-item.is-danger:hover { background: var(--danger-soft); }
-.skill-row-menu-icon { display: inline-flex; color: var(--text-faint); }
-.skill-row-menu-item.is-danger .skill-row-menu-icon { color: inherit; }
+.skill-row-menu-item:hover { background: #f5f5f5; color: #191919; }
+.skill-row-menu-icon { display: inline-flex; color: inherit; }
 .skill-row-menu-divider { height: 1px; margin: 4px 0; background: var(--border-soft); }
+
+
+/* ── 技能 dialogs, as the handoff draws entering 技能 ────────────────────────
+   Both ways in sit over the list rather than replacing it: the page a reader
+   was scanning keeps its scroll and its rows, and the dialog is one card on a
+   dimmed background. */
+.skill-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, .3);
+}
+.skill-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 550px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 20px 48px rgba(25, 25, 25, .18);
+  outline: 0;
+}
+.skill-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 24px 0;
+}
+.skill-dialog-head h3 {
+  color: #191919;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 28px;
+}
+.skill-dialog-close {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: #808080;
+}
+.skill-dialog-close:hover { background: #f0f0f0; color: #191919; }
+.skill-dialog-body { padding: 16px 24px 24px; overflow-y: auto; }
+.skill-dialog-body .skill-upload,
+.skill-dialog-body .skill-git { width: auto; }
+.skill-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 24px;
+}
+.skill-dialog-actions .primary-button,
+.skill-dialog-actions .secondary-button {
+  height: 28px;
+  min-width: 84px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+/* 上传技能: a notice, the drop target, one file row, and the two exits. */
+.skill-upload-hint {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #deecff;
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+}
+.skill-upload-hint svg { flex: 0 0 auto; margin-top: 3px; color: #1476ff; }
+.skill-upload-section { display: grid; gap: 12px; }
+.skill-upload-label { color: #191919; font-size: 14px; }
+.skill-dialog .skill-drop {
+  gap: 8px;
+  min-height: 170px;
+  justify-content: center;
+  padding: 24px;
+  border: 1px dashed #c2c2c2;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.skill-dialog .skill-drop:hover,
+.skill-dialog .skill-drop.is-dragging {
+  border-color: #1476ff;
+  background: #f0f7ff;
+}
+.skill-dialog .skill-drop-icon {
+  width: auto;
+  height: auto;
+  border: 0;
+  background: none;
+  color: #191919;
+}
+.skill-dialog .skill-drop strong { color: #191919; font-size: 14px; font-weight: 600; }
+.skill-dialog .skill-drop-hint { color: #808080; font-size: 12px; line-height: 18px; }
+.skill-upload-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 74px;
+  padding: 16px 20px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.skill-upload-file-icon { display: inline-flex; flex: 0 0 auto; color: #0745a6; }
+.skill-upload-file-copy { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.skill-upload-file-copy strong {
+  overflow: hidden;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-upload-file-copy small { color: #808080; font-size: 12px; }
+.skill-upload-reselect { height: 24px; padding: 0 12px; border-radius: 999px; font-size: 12px; }
+
+/* 从 GitHub 导入: the two ends of the import, the URL, then what it found. */
+.skill-git-intro { display: grid; justify-items: center; gap: 4px; }
+.skill-git-marks { display: flex; align-items: center; gap: 10px; color: #191919; }
+.skill-git-dots { display: flex; gap: 3px; }
+.skill-git-dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(0, 0, 0, .1); }
+.skill-git-app-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: url("../assets/brand/app-mark.png") center / 32px 32px no-repeat;
+}
+.skill-git-subtitle { color: #808080; font-size: 12px; line-height: 18px; }
+.skill-git-field .settings-field-label { color: #191919; font-size: 14px; }
+.skill-git-url-row { display: flex; align-items: center; gap: 8px; }
+.skill-git-url-row .field-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border-color: #c2c2c2;
+  border-radius: 6px;
+}
+.skill-git-url-row .field-input.is-error { border-color: #f23030; background: #fce3e1; }
+.skill-git-url-row .secondary-button { height: 32px; border-radius: 999px; }
+.skill-git-advanced { margin-top: 4px; }
+.skill-git-advanced summary { margin-bottom: 8px; color: #808080; font-size: 12px; cursor: pointer; }
+.skill-dialog .skill-git-results {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.skill-dialog .skill-candidates { max-height: 220px; overflow-y: auto; }
+.skill-git-progress-block { display: grid; gap: 10px; }
+.skill-git-progress-text { margin: 0; color: #191919; font-size: 14px; line-height: 22px; }
+.skill-git-progress-row { display: flex; align-items: center; gap: 12px; }
+.skill-git-progress-bar {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 100px;
+  background: #e6e6e6;
+}
+.skill-git-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 100px;
+  background: #5cb300;
+  transition: width .2s ease;
+}
+.skill-git-progress-pct { color: #191919; font-size: 14px; }
+
+/* 添加技能 is a short menu in the handoff: one line per source, no second
+   explanatory line. */
+.skill-add-popover { width: 152px; padding: 8px; border-radius: 8px; }
+.skill-add-item {
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+.skill-add-icon { width: 16px; height: 16px; border: 0; background: none; }
+.skill-add-icon svg { width: 16px; height: 16px; }
+.skill-add-item strong { color: #191919; font-size: 12px; font-weight: 400; white-space: nowrap; }
+
+
+/* ── 技能 notices, as the handoff draws them ────────────────────────────────
+   A fixed column at the top-right of the window: results belong above the
+   page, not inside its scroll, and the column is narrow enough to leave the
+   list's own controls reachable. */
+.skill-toasts {
+  position: fixed;
+  top: 32px;
+  right: 32px;
+  z-index: 1500;
+  display: grid;
+  gap: 16px;
+  width: 320px;
+}
+.skill-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(25, 25, 25, .12);
+  color: #191919;
+  font-size: 12px;
+  line-height: 18px;
+}
+.skill-toast.is-success { background: #e6f2d5; }
+.skill-toast.is-progress { background: #f0f0f0; }
+.skill-toast.is-error { background: #fce3e1; color: #f23030; }
+.skill-toast-icon { display: inline-flex; flex: 0 0 auto; }
+.skill-toast.is-success .skill-toast-icon { color: #1a8a5a; }
+.skill-toast.is-error .skill-toast-icon { color: #f23030; }
+.skill-toast-copy { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.skill-toast-copy strong { font-size: 12px; font-weight: 400; }
+.skill-toast-copy small { overflow: hidden; color: #808080; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.skill-toast-retry { flex: 0 0 auto; color: #1476ff; font-size: 12px; white-space: nowrap; }
+.skill-toast-retry:hover { text-decoration: underline; }
+.skill-toast-close {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: #808080;
+}
+.skill-toast-close:hover { background: rgba(0, 0, 0, .06); color: #191919; }
+.skill-toast.is-error .skill-toast-close:hover { background: rgba(242, 48, 48, .1); color: #f23030; }
+.skill-toast-spinner { animation: skill-toast-spin .9s linear infinite; }
+@keyframes skill-toast-spin {
+  to { transform: rotate(360deg); }
+}
+
+
+/* ── 技能 › one package (2-1) ───────────────────────────────────────────────
+   The page reads as the package's own document: 返回 at the top of the column,
+   identity and its actions on one line, the two tabs, then the prose. */
+.settings-group-detail.is-skill-detail {
+  padding: 32px max(36px, calc((100% - 1400px) / 2)) 48px;
+}
+.skill-detail-page { display: block; min-width: 0; }
+.skill-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 32px;
+  padding: 0;
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+}
+.skill-detail-back:hover { color: #1476ff; }
+.skill-detail-page-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 0 32px;
+}
+.skill-detail-page-mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+.skill-detail-page-mark.is-blue { border-color: #9dbdfc; background: #e6eeff; color: #0950de; }
+.skill-detail-page-mark.is-green { border-color: #8fe5c2; background: #e7fbf2; color: #058358; }
+.skill-detail-page-mark.is-amber { border-color: #fcce92; background: #fef5e8; color: #c76207; }
+.skill-detail-page-mark.is-violet { border-color: #d9b1fd; background: #f7edfe; color: #8a21bc; }
+.skill-detail-page-mark.is-pink { border-color: #f99ac7; background: #fee5f2; color: #c40054; }
+.skill-detail-identity { display: grid; flex: 1; gap: 4px; min-width: 0; }
+.skill-detail-identity h3 {
+  color: #191919;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 30px;
+  overflow-wrap: anywhere;
+}
+.skill-detail-page-tag {
+  display: inline-flex;
+  align-self: start;
+  justify-self: start;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #f5f5f5;
+  color: #191919;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.skill-detail-page-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 16px;
+}
+.skill-detail-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+}
+.skill-detail-action:hover { color: #1476ff; }
+.skill-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+/* The header's switch is the handoff's smaller 32×16 control; the list's cards
+   keep the larger one the settings surface uses everywhere else. */
+/* 32×16 with a 12px knob: one border pixel and one padding pixel on each
+   side put the knob on the track's centre line. The larger switch's 2px
+   padding only fits its 22px track. */
+.switch.is-small { width: 32px; height: 16px; padding: 1px; }
+.switch.is-small .switch-knob { width: 12px; height: 12px; }
+.switch.is-small.is-on .switch-knob { transform: translateX(16px); }
+.skill-detail-tabs {
+  display: flex;
+  gap: 32px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.skill-detail-tab {
+  position: relative;
+  height: 32px;
+  padding: 0;
+  color: #191919;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 32px;
+  white-space: nowrap;
+}
+.skill-detail-tab.is-active { font-weight: 600; }
+.skill-detail-tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: #191919;
+  content: "";
+}
+.skill-detail-doc.text {
+  margin-top: 32px;
+  font-size: 14px;
+  line-height: 22px;
+}
+.skill-detail-doc.text h1,
+.skill-detail-doc.text h2 {
+  margin: 24px 0 8px;
+  font-size: 18px;
+  line-height: 28px;
+}
+.skill-detail-doc.text h1:first-child,
+.skill-detail-doc.text h2:first-child { margin-top: 0; }
+.skill-detail-doc.text h3 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+  line-height: 24px;
+}
+.skill-detail-doc.text table { font-size: 14px; }
+.skill-detail-facts {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid #f0f0f0;
+}
+.skill-detail-facts h4 {
+  margin: 0 0 16px;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 技能详情 (2-2): the package's tree on the left, the open file on the right,
+   one hairline between them. */
+.skill-files-layout {
+  display: grid;
+  grid-template-columns: 264px 1px minmax(0, 1fr);
+  column-gap: 32px;
+  margin-top: 32px;
+}
+.skill-file-tree { min-width: 0; }
+.skill-file-tree-title {
+  margin: 0 0 12px;
+  color: #191919;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.skill-file-tree-list,
+.skill-file-tree-list ul { margin: 0; padding: 0; list-style: none; }
+.skill-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding-right: 8px;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+}
+.skill-tree-row:hover { background: #f7f7f7; }
+.skill-tree-row.is-active { background: #f5f5f5; }
+.skill-tree-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #191919;
+}
+.skill-tree-caret-glyph { display: block; }
+.skill-tree-icon { display: inline-flex; flex: 0 0 auto; color: #191919; }
+.skill-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-file-tree-divider { align-self: stretch; background: #ecebeb; }
+.skill-file-pane { min-width: 0; }
+.skill-file-head { display: flex; align-items: center; gap: 8px; }
+.skill-file-head h4 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #191919;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-file-actions { display: flex; flex: 0 0 auto; gap: 16px; }
+.skill-file-action { display: inline-flex; color: #191919; }
+.skill-file-action:hover { color: #1476ff; }
+.skill-file-copied { flex: 0 0 auto; color: #1a8a5a; font-size: 12px; }
+.skill-file-doc.text { margin-top: 16px; font-size: 14px; line-height: 22px; }
+.skill-file-doc.text h1,
+.skill-file-doc.text h2 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+  line-height: 24px;
+}
+.skill-file-doc.text h1:first-child,
+.skill-file-doc.text h2:first-child { margin-top: 0; }
+.skill-file-doc.text h3 { margin: 18px 0 8px; font-size: 15px; line-height: 22px; }
+.skill-file-doc.text table { font-size: 14px; }
+.skill-file-pre {
+  margin: 16px 0 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+  color: #191919;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.skill-file-note { margin: 16px 0 0; color: #808080; font-size: 13px; }
+.skill-file-note.is-error { color: #f23030; }
+
+
+/* ── 技能 › edit (2-3) ──────────────────────────────────────────────────────
+   Same tree and pane as the reading page, with the tree's own tools and an
+   editable document in place of the rendered one. */
+.settings-group-detail.is-skill-file-editor {
+  padding: 32px max(36px, calc((100% - 1400px) / 2)) 48px;
+}
+.skill-editor-page {
+  display: block;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+}
+/* The handoff's hover labels: a white bubble over the control, so an icon-only
+   tree button says what it does without a native title tooltip's delay. */
+.skill-tree-tool,
+.skill-tree-action {
+  position: relative;
+}
+.skill-tree-tool[data-tooltip]::after,
+.skill-tree-action[data-tooltip]::after {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(25, 25, 25, .14), 0 1px 3px rgba(25, 25, 25, .08);
+  color: #191919;
+  content: attr(data-tooltip);
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.skill-tree-tool[data-tooltip]::before,
+.skill-tree-action[data-tooltip]::before {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  z-index: 30;
+  width: 0;
+  height: 0;
+  border-top: 5px solid #fff;
+  border-right: 5px solid transparent;
+  border-left: 5px solid transparent;
+  content: "";
+  pointer-events: none;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.skill-tree-tool[data-tooltip]:hover::after,
+.skill-tree-tool[data-tooltip]:focus-visible::after,
+.skill-tree-action[data-tooltip]:hover::after,
+.skill-tree-action[data-tooltip]:focus-visible::after,
+.skill-tree-tool[data-tooltip]:hover::before,
+.skill-tree-tool[data-tooltip]:focus-visible::before,
+.skill-tree-action[data-tooltip]:hover::before,
+.skill-tree-action[data-tooltip]:focus-visible::before { opacity: 1; }
+.skill-editor-head { padding-bottom: 32px; }
+.skill-editor-divider { height: 1px; background: #f0f0f0; }
+.skill-editor-layout { margin-top: 32px; }
+.skill-file-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.skill-file-tree-head .skill-file-tree-title { margin: 0; }
+.skill-tree-tools { display: flex; flex: 0 0 auto; gap: 16px; }
+.skill-tree-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: #191919;
+}
+.skill-tree-tool:hover { background: #f0f0f0; }
+.skill-tree-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  min-width: 0;
+  text-align: left;
+}
+.skill-tree-row-actions { display: none; flex: 0 0 auto; align-items: center; gap: 8px; }
+.skill-tree-row:hover .skill-tree-row-actions,
+.skill-tree-row.is-active .skill-tree-row-actions { display: inline-flex; }
+.skill-tree-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: #191919;
+}
+.skill-tree-action:hover { background: #f0f0f0; }
+.skill-tree-row.is-editing { gap: 8px; padding-right: 8px; }
+.skill-tree-create { padding-left: 8px; }
+.skill-tree-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #c2c2c2;
+  border-radius: 6px;
+  background: #fff;
+  color: #191919;
+  font-size: 13px;
+}
+.skill-tree-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: #01802b;
+}
+.skill-tree-check:hover { background: #f0f0f0; }
+.skill-file-editor-box {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #1476ff;
+  border-radius: 8px;
+  background: #fff;
+}
+.skill-file-editor-box textarea {
+  display: block;
+  width: 100%;
+  min-height: 520px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #191919;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 22px;
+  outline: 0;
+  resize: vertical;
+}
+.skill-file-editor-box textarea:focus-visible { box-shadow: none; }
+.skill-editor-dirty { flex: 0 0 auto; color: #c76207; font-size: 12px; }
+
+
+/* ── 技能 confirmations (2-4 / 2-5) ──────────────────────────────────────── */
+.skill-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .3);
+}
+.skill-confirm {
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  padding: 24px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 20px 48px rgba(25, 25, 25, .18);
+}
+.skill-confirm header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.skill-confirm h3 {
+  color: #191919;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 28px;
+}
+.skill-confirm p {
+  margin: 8px 0 0;
+  color: #808080;
+  font-size: 14px;
+  line-height: 22px;
+}
+.skill-confirm p.is-compact { font-size: 12px; line-height: 20px; }
+.skill-confirm footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.skill-confirm footer .secondary-button,
+.skill-confirm-accept {
+  height: 28px;
+  min-width: 84px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.skill-confirm-accept {
+  border: 0;
+  background: #191919;
+  color: #fff;
+}
+.skill-confirm-accept:hover:not(:disabled) { background: #000; }
+.skill-confirm-accept:disabled { opacity: .45; cursor: default; }

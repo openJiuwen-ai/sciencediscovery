@@ -22,8 +22,11 @@ import type {
   SkillDescriptor,
   SkillDetail,
 } from "../src/api/types.js";
+import { SkillDetailView } from "../src/views/settings/SkillDetailView.js";
 import { SkillEditorView } from "../src/views/settings/SkillEditorView.js";
 import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
+import { fileTree } from "../src/views/settings/skill-files.js";
+import { SkillToasts } from "../src/views/settings/SkillToasts.js";
 import { SkillUploadView } from "../src/views/settings/SkillUploadView.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
@@ -106,6 +109,43 @@ function textareaWithLabel(view: ReactTestRenderer, label: string) {
   return found;
 }
 
+test("the add menu opens 上传技能 as a dialog, and its close control returns to the list", async () => {
+  const stub = new StubClient().reply([skill]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 1, "上传技能 did not open a dialog");
+    assert.ok(view.root.findAllByType(SkillUploadView), "the dialog has no upload body");
+    // The list stays behind the dialog rather than being swapped out.
+    assert.ok(view.root.findAllByType("button")
+      .some((node) => node.props.className === "settings-card-main"));
+    await act(async () => {
+      const close = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.closeDialog);
+      assert.ok(close, "the dialog has no close control");
+      close.props.onClick();
+    });
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 0);
+    assert.equal(view.root.findAllByType(SkillUploadView).length, 0);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a running Git import shows its progress instead of the form", async () => {
+  const job = {
+    done: 11, failures: [], id: "job-1", imported: [], startedAt: new Date().toISOString(),
+    status: "running" as const, total: 120,
+  };
+  const view = await mount(
+    <SkillGitImportView client={new StubClient().asClient()} job={job} onCancel={() => {}} onStart={async () => {}} />,
+  );
+  try {
+    const markup = JSON.stringify(view.toJSON());
+    assert.match(markup, /正在导入\(11\/120\)/u);
+    assert.match(markup, /9%/u);
+    assert.ok(!markup.includes(TEXT.settings.skills.git.url), "the URL form still paints during the job");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("one SKILL.md goes up as the multipart field the route reads", async () => {
   const stub = new StubClient().reply(detail);
   const imported: SkillDetail[] = [];
@@ -113,7 +153,7 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
     <SkillUploadView
       client={stub.asClient()}
       onImported={(row) => { imported.push(row); }}
-      onWriteInstead={() => {}}
+      onCancel={() => {}}
     />,
   );
   try {
@@ -121,7 +161,7 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
     const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
     assert.ok(input);
     await act(async () => { input.props.onChange({ target: { files: [file] } }); });
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.importAction).props.onClick(); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
 
     const call = stub.calls[0];
     assert.equal(call?.path, "/api/skills/import?onDuplicate=rename");
@@ -130,7 +170,21 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
     assert.ok(form instanceof FormData);
     assert.equal((form.get("file") as File).name, "SKILL.md");
     assert.deepEqual(imported.map((row) => row.id), ["review"]);
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.importSucceeded("review")));
+    assert.equal(stub.calls.length, 1, "a second import was sent");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the drop zone is the label of the file input, so a click opens the picker", async () => {
+  const view = await mount(
+    <SkillUploadView client={new StubClient().asClient()} onCancel={() => {}} onImported={() => {}} />,
+  );
+  try {
+    const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(input, "the dialog has no file input");
+    const drop = view.root.findAllByType("label")
+      .find((node) => String(node.props.className).split(" ").includes("skill-drop"));
+    assert.ok(drop, "the dialog has no drop zone");
+    assert.equal(drop.props.htmlFor, input.props.id, "the drop zone does not point at the file input");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -147,11 +201,10 @@ test("a Git inspection pins the commit and never overwrites without the revision
   };
   const stub = new StubClient().reply(inspection);
   const started: unknown[] = [];
-  let done = 0;
   const view = await mount(
     <SkillGitImportView
       client={stub.asClient()}
-      onDone={() => { done += 1; }}
+      onCancel={() => {}}
       onStart={async (request) => { started.push(request); }}
     />,
   );
@@ -186,7 +239,7 @@ test("a Git inspection pins the commit and never overwrites without the revision
       ],
       repositoryUrl: inspection.repositoryUrl,
     }]);
-    assert.equal(done, 1, "an accepted import does not return to the Skill list");
+    assert.equal(stub.calls.some((call) => call.path === "/api/skills/import-git"), false);
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -210,7 +263,7 @@ function twoPageInspection(): { commit: string; stub: StubClient; url: string } 
 
 test("a repository larger than one page reads the rest on request", async () => {
   const { commit, stub, url } = twoPageInspection();
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onCancel={() => {}} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(input);
@@ -246,7 +299,7 @@ test("a /tree/ URL keeps its subdirectory on the next page", async () => {
   const stub = new StubClient()
     .reply({ candidates: gitRows(0, 3), commit, nextCursor: "skills/skill-2", repositoryUrl: normalized, total: 7 })
     .reply({ candidates: gitRows(3, 7), commit, repositoryUrl: normalized, total: 7 });
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onCancel={() => {}} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(input);
@@ -266,7 +319,7 @@ test("a /tree/ URL keeps its subdirectory on the next page", async () => {
 
 test("loading more does not re-tick what the user unticked", async () => {
   const { stub, url } = twoPageInspection();
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onCancel={() => {}} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(input);
@@ -291,7 +344,7 @@ test("a checkout that cannot reach the repository names the network and the prox
   const stub = new StubClient().fail(
     new Error("Git skill checkout timed out; retry, or narrow the import with a Ref or subdirectory"),
   );
-  const view = await mount(<SkillGitImportView client={stub.asClient()} onStart={async () => {}} />);
+  const view = await mount(<SkillGitImportView client={stub.asClient()} onCancel={() => {}} onStart={async () => {}} />);
   try {
     const input = view.root.findAllByType("input")
       .find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
@@ -319,7 +372,7 @@ test("a slow inspection says what it is doing and can be cancelled", async () =>
       });
     }),
   } as unknown as ApiClient;
-  const view = await mount(<SkillGitImportView client={client} onStart={async () => {}} />);
+  const view = await mount(<SkillGitImportView client={client} onCancel={() => {}} onStart={async () => {}} />);
   try {
     const url = view.root.findAllByType("input").find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
     assert.ok(url);
@@ -530,13 +583,200 @@ test("an import enables a new package and leaves an update's switch alone", asyn
     const upload = view.root.findByType(SkillUploadView);
     await act(async () => { await upload.props.onImported(skill); });
     assert.equal(stub.calls.some((call) => call.path.includes("skills-by-id")), false);
+    assert.equal(view.root.findAllByType(SkillUploadView).length, 0, "the dialog stayed open after the import");
 
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
     const next = view.root.findByType(SkillUploadView);
     await act(async () => { await next.props.onImported({ ...detail, id: "fresh", name: "fresh" }); });
     const enable = stub.calls.find((call) => call.path.includes("skills-by-id"));
     assert.ok(enable);
     assert.equal(enable.path, "/api/jiuwenswarm/skills-by-id/fresh");
     assert.deepEqual(json(enable), { enabled: true });
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("an upload that lands leaves a success notice over the list", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    // afterInstall re-reads the catalog behind the dialog
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    await act(async () => {
+      await view.root.findByType(SkillUploadView).props.onImported(skill);
+    });
+    const markup = JSON.stringify(view.toJSON());
+    assert.ok(markup.includes(TEXT.settings.skills.toastUploadDone(skill.name)), "no success notice");
+    assert.ok(view.root.findAllByProps({ className: "skill-toasts" }).length === 1);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("notices draw all three kinds, close, and retry where offered", async () => {
+  const calls: string[] = [];
+  const view = await mount(
+    <SkillToasts items={[
+      { id: "ok", kind: "success", message: "done", onClose: () => calls.push("close-ok") },
+      { id: "run", kind: "progress", message: "running", onClose: () => calls.push("close-run") },
+      {
+        id: "bad", kind: "error", message: "failed",
+        onClose: () => calls.push("close-bad"),
+        onRetry: () => calls.push("retry"),
+      },
+    ]} />,
+  );
+  try {
+    const markup = JSON.stringify(view.toJSON());
+    for (const message of ["done", "running", "failed"]) {
+      assert.ok(markup.includes(message), `${message} is missing`);
+    }
+    const retry = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.toastRetry));
+    assert.ok(retry, "the failed notice offers no retry");
+    await act(async () => { retry.props.onClick(); });
+    assert.deepEqual(calls, ["retry"]);
+    const closes = view.root.findAllByType("button")
+      .filter((node) => node.props["aria-label"] === TEXT.settings.skills.toastClose);
+    assert.equal(closes.length, 3);
+    await act(async () => { closes[0]!.props.onClick(); });
+    assert.deepEqual(calls, ["retry", "close-ok"]);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+/** The text under a rendered node, for the rows whose label is a child span. */
+function textUnder(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(textUnder).join("");
+  if (node !== null && typeof node === "object" && "children" in node) {
+    return textUnder((node as { children: unknown }).children);
+  }
+  return "";
+}
+
+test("a folder created in the editor stays a folder with no files", () => {
+  const tree = fileTree({ ...detail, resources: [] }, ["xxx"]);
+  const folder = tree.find((node) => node.name === "xxx");
+  assert.ok(folder, "the local folder is missing from the tree");
+  assert.deepEqual(folder.children, []);
+  // SKILL.md is a file at the root, beside the folders — not inside a 文件 group.
+  const skill = tree.find((node) => node.name === "SKILL.md");
+  assert.ok(skill, "SKILL.md is not at the root");
+  assert.equal(skill.children, undefined);
+  assert.ok(!tree.some((node) => node.children?.some((child) => child.name === "SKILL.md")),
+    "SKILL.md is nested under a synthetic group");
+
+  // Root files lead, folders follow: kkk.md sits beside SKILL.md, not after
+  // every folder.
+  const withRootFile = fileTree({
+    ...detail,
+    resources: [
+      { hash: "h1", kind: "script", path: "assets/a.js", size: 1 },
+      { hash: "h2", kind: "other", path: "kkk.md", size: 1 },
+    ],
+  }, ["xxx"]);
+  assert.deepEqual(withRootFile.map((node) => node.name), ["SKILL.md", "kkk.md", "assets", "xxx"]);
+});
+
+test("技能详情 puts the package's tree beside the open file", async () => {
+  const rich: SkillDetail = {
+    ...detail,
+    resources: [
+      { hash: "h1", kind: "script", path: "assets/a.js", size: 20 },
+      { hash: "h2", kind: "reference", path: "references/b.md", size: 30 },
+      { hash: "h3", kind: "other", path: "notes.txt", size: 5 },
+      { hash: "h4", kind: "reference", path: "references/d.md", size: 10 },
+      { hash: "h5", kind: "asset", path: "assets/r.md", size: 12 },
+    ],
+  };
+  const stub = new StubClient()
+    .reply(rich)
+    .reply({
+      content: "# B\n\nBody of B. See [d](./d.md) or [web](https://example.com).",
+      hash: "h2", path: "references/b.md", revision: 1, skillId: "review", size: 30,
+    })
+    .reply({
+      content: "# D\n\nBody of D. [r](assets/r.md).",
+      hash: "h4", path: "references/d.md", revision: 1, skillId: "review", size: 10,
+    })
+    .reply({ content: "# R\n\nBody of R.", hash: "h5", path: "assets/r.md", revision: 1, skillId: "review", size: 12 });
+  const view = await mount(
+    <SkillDetailView
+      client={stub.asClient()}
+      onBack={() => {}}
+      onDelete={() => {}}
+      onEdit={() => {}}
+      onToggle={() => {}}
+      skillId="review"
+      switchesAvailable={false}
+    />,
+  );
+  try {
+    await settle();
+    await act(async () => {
+      const tab = view.root.findAllByType("button")
+        .find((node) => node.children.includes(TEXT.settings.skills.tabs.files));
+      assert.ok(tab, "the 技能详情 tab is missing");
+      tab.props.onClick();
+    });
+    const markup = JSON.stringify(view.toJSON());
+    for (const label of [TEXT.settings.skills.fileTree.list, "SKILL.md", "assets", "a.js", "references", "b.md", "notes.txt"]) {
+      assert.ok(markup.includes(label), `the tree does not show ${label}`);
+    }
+    // SKILL.md is open first, without a resource read.
+    assert.ok(markup.includes("Review carefully"));
+    assert.equal(stub.calls.length, 1, "SKILL.md was fetched as a resource");
+
+    const openB = view.root.findAllByType("button")
+      .find((node) => textUnder(node) === "b.md");
+    assert.ok(openB, "the tree has no b.md row");
+    await act(async () => { openB.props.onClick(); });
+    await settle();
+    assert.equal(stub.calls[1]?.path, "/api/skills/review/resources/references%2Fb.md");
+    assert.match(JSON.stringify(view.toJSON()), /Body of B/u);
+
+    // A link to another package file opens that file in the same pane; a link
+    // to the web is left alone.
+    const anchors = () => view.root.findAllByType("a");
+    const web = anchors().find((node) => textUnder(node) === "web");
+    assert.ok(web, "the external link is missing");
+    let externalPrevented = false;
+    await act(async () => {
+      web.props.onClick({ preventDefault() { externalPrevented = true; } });
+    });
+    assert.equal(externalPrevented, false, "an external link was captured as a package file");
+
+    const dLink = anchors().find((node) => textUnder(node) === "d");
+    assert.ok(dLink, "the package link is missing");
+    let prevented = false;
+    await act(async () => {
+      dLink.props.onClick({ preventDefault() { prevented = true; } });
+    });
+    assert.equal(prevented, true, "the package link was not handled in place");
+    await settle();
+    assert.equal(stub.calls[2]?.path, "/api/skills/review/resources/references%2Fd.md");
+    assert.match(JSON.stringify(view.toJSON()), /Body of D/u);
+
+    // A link written from the package root still finds its file when the
+    // relative reading (references/assets/r.md) does not exist.
+    const rootLink = anchors().find((node) => textUnder(node) === "r");
+    assert.ok(rootLink, "the root-relative link is missing");
+    await act(async () => {
+      rootLink.props.onClick({ preventDefault() {} });
+    });
+    await settle();
+    assert.equal(stub.calls[3]?.path, "/api/skills/review/resources/assets%2Fr.md");
+    assert.match(JSON.stringify(view.toJSON()), /Body of R/u);
+    // Folder carets are glyphs on the row's centre line, not text baselines.
+    assert.ok(view.root.findAllByProps({ className: "skill-tree-caret-glyph" }).length >= 2);
+
+    // A folder collapses its children.
+    const folder = view.root.findAllByType("button")
+      .find((node) => node.props["aria-expanded"] === true && textUnder(node).includes("assets"));
+    assert.ok(folder, "the assets folder has no expand control");
+    await act(async () => { folder.props.onClick(); });
+    assert.ok(!JSON.stringify(view.toJSON()).includes("a.js"), "a collapsed folder still shows its files");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -664,10 +904,11 @@ test("clicking a card opens the Skill's own page and the back control returns to
     assert.equal(stub.calls[2]?.path, "/api/skills/review");
     const headings = view.root.findAllByType("h3").map((node) => JSON.stringify(node.children));
     assert.ok(headings.some((heading) => heading.includes("review")), "the page is not named after the Skill");
-    assert.ok(JSON.stringify(view.toJSON()).includes("Review a draft"));
-    // The body of SKILL.md is on the page, not in an expanded card.
+    // 基本信息 is the body of SKILL.md, as the handoff draws it; the page is
+    // a document under 返回, not an expanded card.
     assert.ok(JSON.stringify(view.toJSON()).includes("Review carefully"));
     assert.ok(!JSON.stringify(view.toJSON()).includes("settings-card is-expandable"));
+    assert.equal(view.root.findAllByProps({ role: "tab" }).length, 2, "the two tabs are missing");
 
     await act(async () => {
       const back = view.root.findAllByType("button")
@@ -684,19 +925,209 @@ test("编辑 in the row menu opens the editor for that package", async () => {
   const stub = new StubClient()
     .reply([skill])
     .reply({ backend: "jiuwenswarm", skills: [] })
-    .reply(detail);
+    .reply(detail)
+    .reply({ content: "---\nname: review\ndescription: Review a draft\n---\n\nReview carefully", revision: 1, skillId: "review" });
   const view = await mount(<SkillsSettings client={stub.asClient()} />);
   try {
     await openRowMenu(view, "review");
     await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
     await settle();
     assert.equal(stub.calls[2]?.path, "/api/skills/review");
-    // The editor is named in the trail bar; the reference editor has no
-    // second title under it.
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.title("review")));
+    assert.equal(stub.calls[3]?.path, "/api/skills/review/skill-md");
+    // The editor opens SKILL.md as the whole document, frontmatter included.
+    const editor = view.root.findAllByType("textarea")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.content);
+    assert.ok(editor, "the file editor has no textarea");
+    assert.match(String(editor.props.value), /name: review/u);
+    assert.match(String(editor.props.value), /Review carefully/u);
   } finally { await act(async () => { view.unmount() }); }
 });
 
+test("the file editor saves the whole SKILL.md under the revision it read", async () => {
+  const nextDetail = { ...detail, currentRevision: 2 };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\ndescription: Review a draft\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .reply(nextDetail)
+    // The editor leaves for the package's page (which reads it again); the
+    // list behind it reloads too.
+    .reply(nextDetail)
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    const editor = () => view.root.findAllByType("textarea")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.content);
+    await act(async () => {
+      editor()!.props.onChange({ target: { value: "---\nname: review\ndescription: Review a draft\n---\n\nReview even more carefully" } });
+    });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    await settle();
+    const write = stub.calls.find((call) => call.path === "/api/skills/review/skill-md" && call.init.method === "PUT");
+    assert.ok(write, "the edited SKILL.md was not written");
+    assert.deepEqual(json(write), {
+      content: "---\nname: review\ndescription: Review a draft\n---\n\nReview even more carefully",
+      expectedRevision: 1,
+    });
+    // Saving leaves edit mode for the package's own page.
+    assert.equal(editor(), undefined, "the editor stayed open after saving");
+    assert.ok(JSON.stringify(view.toJSON()).includes("skill-detail-page"), "the package page did not come back");
+    await settle();
+    await settle();
+    const selectedTab = view.root.findAllByType("button")
+      .find((node) => node.props.role === "tab" && node.props["aria-selected"] === true);
+    const selectedLabel = Array.isArray(selectedTab?.children) ? selectedTab.children.join("") : selectedTab?.children;
+    assert.equal(selectedLabel, TEXT.settings.skills.tabs.files, "saving did not land on 技能详情");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("leaving the editor without changes lands on 技能详情", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    // The package page reads the Skill again when it comes back.
+    .reply(detail);
+  const asks: ConfirmRequest[] = [];
+  const view = await mount(
+    <SkillsSettings client={stub.asClient()} onConfirm={(request) => { asks.push(request); }} />,
+  );
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.exit).props.onClick(); });
+    await settle();
+    assert.equal(asks.length, 0, "an untouched editor asked about unsaved changes");
+    await settle();
+    await settle();
+    const selectedTab = view.root.findAllByType("button")
+      .find((node) => node.props.role === "tab" && node.props["aria-selected"] === true);
+    const selectedLabel = Array.isArray(selectedTab?.children) ? selectedTab.children.join("") : selectedTab?.children;
+    assert.equal(selectedLabel, TEXT.settings.skills.tabs.files, "exit did not land on 技能详情");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("leaving the editor with a draft asks before discarding it", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    // Accepting the notice lands on the package page, which reads it again.
+    .reply(detail);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    const editor = view.root.findAllByType("textarea")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.content);
+    assert.ok(editor);
+    await act(async () => { editor.props.onChange({ target: { value: "changed again" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.exit).props.onClick(); });
+    const dialog = view.root.findAllByProps({ role: "dialog" })
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.unsavedTitle);
+    assert.ok(dialog, "leaving with a draft did not ask");
+    assert.ok(textUnder(dialog).includes(TEXT.settings.skills.editor.unsavedBody));
+    const accept = dialog.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.uploadDialog.confirm));
+    assert.ok(accept, "the notice has no 确定");
+    await act(async () => { accept.props.onClick(); });
+    await settle();
+    await settle();
+    const selectedTab = view.root.findAllByType("button")
+      .find((node) => node.props.role === "tab" && node.props["aria-selected"] === true);
+    const selectedLabel = Array.isArray(selectedTab?.children) ? selectedTab.children.join("") : selectedTab?.children;
+    assert.equal(selectedLabel, TEXT.settings.skills.tabs.files, "accepting the notice did not land on 技能详情");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("deleting a package file asks in the page's own 2-4 dialog", async () => {
+  const rich: SkillDetail = {
+    ...detail,
+    resources: [{ hash: "h2", kind: "reference", path: "references/b.md", size: 30 }],
+  };
+  const after: SkillDetail = { ...rich, currentRevision: 2, resources: [] };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(rich)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .reply(after);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    const remove = view.root.findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.deletePath("references/b.md"));
+    assert.ok(remove, "the file row has no delete action");
+    await act(async () => { remove.props.onClick(); });
+    const dialog = view.root.findAllByProps({ role: "dialog" })
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.deleteTitle);
+    assert.ok(dialog, "deleting a file did not ask");
+    assert.ok(textUnder(dialog).includes(TEXT.settings.skills.editor.deleteBody));
+    const accept = dialog.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.uploadDialog.confirm));
+    assert.ok(accept, "the notice has no 确定");
+    await act(async () => { accept.props.onClick(); });
+    await settle();
+    const write = stub.calls.find((call) => call.path.includes("/files/references%2Fb.md") && call.init.method === "DELETE");
+    assert.ok(write, "the delete was not sent");
+    assert.deepEqual(json(write), { expectedRevision: 1 });
+  } finally { await act(async () => { view.unmount() }); }
+});
+test("a double press on a package file renames it from the reading page", async () => {
+  const rich: SkillDetail = {
+    ...detail,
+    resources: [{ hash: "h2", kind: "reference", path: "references/b.md", size: 30 }],
+  };
+  const renamed: SkillDetail = {
+    ...rich,
+    resources: [{ hash: "h2", kind: "reference", path: "references/c.md", size: 30 }],
+  };
+  const stub = new StubClient().reply(rich).reply(renamed).reply(renamed);
+  const view = await mount(
+    <SkillDetailView
+      client={stub.asClient()}
+      onBack={() => {}}
+      onDelete={() => {}}
+      onEdit={() => {}}
+      onToggle={() => {}}
+      skillId="review"
+      switchesAvailable={false}
+    />,
+  );
+  try {
+    await settle();
+    await act(async () => {
+      const tab = view.root.findAllByType("button")
+        .find((node) => node.children.includes(TEXT.settings.skills.tabs.files));
+      assert.ok(tab);
+      tab.props.onClick();
+    });
+    const row = view.root.findAllByType("button").find((node) => textUnder(node) === "b.md");
+    assert.ok(row, "the tree has no b.md row");
+    await act(async () => { row.props.onDoubleClick(); });
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.editPath("references/b.md"));
+    assert.ok(input, "double press did not open a rename field");
+    await act(async () => { input.props.onChange({ target: { value: "c.md" } }); });
+    await act(async () => { input.props.onKeyDown({ key: "Enter" }); });
+    await settle();
+    const write = stub.calls.find((call) => call.path.includes("/rename"));
+    assert.equal(write?.path, "/api/skills/review/files/references%2Fb.md/rename");
+    assert.deepEqual(json(write!), { expectedRevision: 1, to: "references/c.md" });
+    assert.match(JSON.stringify(view.toJSON()), /c\.md/u);
+  } finally { await act(async () => { view.unmount() }); }
+});
 test("删除 checks the server first, then asks before removing the package", async () => {
   const stub = new StubClient()
     .reply([skill])

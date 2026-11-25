@@ -219,6 +219,9 @@ import type {
   TimeoutKind,
   ScientificEnvironmentSetup,
   SkillDeletionImpact,
+  DeleteSkillFileRequest,
+  RenameSkillFileRequest,
+  UpdateSkillMarkdownRequest,
   UpdateSkillRequest,
   UpdateSkillFileRequest,
   UpdateModelProfileRequest,
@@ -2942,12 +2945,43 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const skillFileRenameMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)\/rename$/);
+      if (skillFileRenameMatch && request.method === "POST") {
+        sendJson(response, 200, await skillCatalog.renameFile(
+          decodeURIComponent(skillFileRenameMatch[1]!),
+          decodeURIComponent(skillFileRenameMatch[2]!),
+          await readJson<RenameSkillFileRequest>(request),
+        ));
+        return;
+      }
+
       const skillFileMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)$/);
       if (skillFileMatch && request.method === "PUT") {
         sendJson(response, 200, await skillCatalog.updateFile(
           decodeURIComponent(skillFileMatch[1]!),
           decodeURIComponent(skillFileMatch[2]!),
           await readJson<UpdateSkillFileRequest>(request),
+        ));
+        return;
+      }
+      if (skillFileMatch && request.method === "DELETE") {
+        sendJson(response, 200, await skillCatalog.deleteFile(
+          decodeURIComponent(skillFileMatch[1]!),
+          decodeURIComponent(skillFileMatch[2]!),
+          await readJson<DeleteSkillFileRequest>(request),
+        ));
+        return;
+      }
+
+      const skillMarkdownMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/skill-md$/);
+      if (skillMarkdownMatch && request.method === "GET") {
+        sendJson(response, 200, skillCatalog.readSkillMarkdown(decodeURIComponent(skillMarkdownMatch[1]!)));
+        return;
+      }
+      if (skillMarkdownMatch && request.method === "PUT") {
+        sendJson(response, 200, await skillCatalog.updateSkillMarkdown(
+          decodeURIComponent(skillMarkdownMatch[1]!),
+          await readJson<UpdateSkillMarkdownRequest>(request),
         ));
         return;
       }

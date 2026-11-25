@@ -1078,6 +1078,8 @@ export const ZH = {
       empty: "没有读到技能。",
       search: "搜索技能",
       searchPlaceholder: "搜索技能…",
+      /** The × inside the search field that puts the whole list back. */
+      clearSearch: "清空搜索",
       noMatches: "没有匹配的技能。",
 
       heading: "技能",
@@ -1085,9 +1087,40 @@ export const ZH = {
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
-      scope: "这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。",
       toggle: (name: string) => `启用或停用「${name}」`,
       installedCount: (count: number) => `已安装 ${count}`,
+      /** The three tabs above the list. The count is part of the label, as in
+       *  the handoff: every row the tab holds, not only those matching the
+       *  current search. */
+      tabs: {
+        label: "技能分类",
+        all: (count: number) => `全部技能（${count}）`,
+        mine: (count: number) => `我的技能（${count}）`,
+        official: (count: number) => `官方技能（${count}）`,
+        basic: "基本信息",
+        files: "技能详情",
+      },
+      /** The way out of a package's own page. */
+      back: "返回",
+      /** 技能详情: the package's files on the left, one of them open on the right. */
+      fileTree: {
+        list: "文件列表",
+        reading: "正在读取文件…",
+        copy: "复制",
+        download: "下载",
+        copied: "已复制",
+      },
+      /** The tag on a card: a package that ships with the app, or one the user
+       *  brought in. */
+      cardTag: {
+        builtIn: "内置",
+        external: "外部",
+      },
+      /** A category the user opened that holds no rows at all. */
+      emptyScope: "这个分类下还没有技能。",
+      /** The list's own subtitle. The directory's entry keeps the shorter line
+       *  it uses as a tooltip; this page says what the page itself does. */
+      listDescription: "管理并安装智能体可用的技能",
       /** The native save dialog a Skill export opens. */
       exportDialog: {
         title: "导出技能",
@@ -1101,11 +1134,8 @@ export const ZH = {
       addMenu: {
         label: "添加技能",
         scratch: "从零开始写",
-        scratchHint: "新建一个技能，自己填写指令",
         upload: "上传技能",
-        uploadHint: "选择 SKILL.md 或包含它的 ZIP 技能包",
         git: "从 GitHub 导入",
-        gitHint: "检查仓库，按提交导入其中的技能包",
       },
       backToList: "返回技能列表",
       createView: {
@@ -1171,16 +1201,41 @@ export const ZH = {
         writeInstead: "改为从零开始写",
       },
       importAction: "导入",
+      /** The close control every 技能 dialog carries. */
+      closeDialog: "关闭",
+      /** 技能 › 上传技能, as the handoff's dialog. */
+      uploadDialog: {
+        hint: "文件夹或者.zip需要包含Skill.md文件，.md 文件需包含 YAML 格式的技能名称和描述。",
+        chooseFile: "选择文件",
+        dropTitle: "选择Skill.md文件",
+        dropHint: "点击或拖动压缩包或文件到此处",
+        reselect: "重新选择",
+        cancel: "取消",
+        confirm: "确定",
+      },
+      /** 技能 › 从 GitHub 导入, as the handoff's dialog. */
+      gitDialog: {
+        subtitle: "从公开的 Github 仓库中导入",
+        advanced: "高级选项",
+        progress: (done: number, total: number) => `正在导入(${done}/${total})`,
+        importing: "导入中",
+        invalidUrl: "URL格式不正确，请重新输入",
+      },
       importBusy: "正在导入…",
-      backgroundImportRunning: (done: number, total: number) => `正在后台导入 ${done} / ${total}…`,
       backgroundImportDone: (count: number) => `已导入 ${count} 个技能。`,
       backgroundImportPartial: (imported: number, failed: number) => `已导入 ${imported} 个，${failed} 个失败。`,
       backgroundImportFailed: "后台导入失败。",
       backgroundImportFailures: (names: string, count: number) =>
         count > 3 ? `失败：${names} 等 ${count} 个` : `失败：${names}`,
-      backgroundImportDismiss: "关闭导入提示",
       importFailed: "导入失败。",
       importSucceeded: (name: string) => `已导入「${name}」。`,
+      /** The 技能 page's own notices (design 1-4). */
+      toastUploadDone: (name: string) => `「${name}」上传成功！`,
+      toastGitDone: "GitHub 技能导入成功！",
+      toastGitFailed: "GitHub 技能导入失败",
+      toastProgress: (done: number, total: number) => `正在导入(${done}/${total})`,
+      toastRetry: "点击重试",
+      toastClose: "关闭提示",
       git: {
         title: "从 GitHub 导入",
         description: "先检查仓库里有哪些技能包，再选择要导入的条目；导入会固定在你看到的那次提交上。",
@@ -1257,6 +1312,26 @@ export const ZH = {
         editingResource: (path: string) => `正在编辑参考文件：${path}`,
         saveFile: "保存文件",
         closeReferenceEditor: "关闭参考文件编辑器",
+        /** 2-3: the file editor. */
+        exit: "退出编辑",
+        unsaved: "未保存",
+        unsavedTitle: "尚未保存更改",
+        unsavedBody: "当前内容尚未保存，返回后所做的更改将会丢失。确定要离开吗？",
+        deleteTitle: "确认删除？",
+        deleteBody: "删除后将无法恢复，确定要删除此内容吗？",
+        newFolder: "新建文件夹",
+        newFile: "新建文件",
+        newFileIn: (path: string) => `在「${path}」下新建文件`,
+        uploadFile: "上传",
+        filePathPlaceholder: "文件名或路径，例如 references/new.md",
+        folderPathPlaceholder: "文件夹名，例如 references",
+        invalidPath: "名称不能为空、不能以 / 开头，也不能包含 . 或 ..。",
+        editPath: (path: string) => `编辑 ${path}`,
+        rename: "编辑名称",
+        deleteAction: "删除",
+        deletePath: (path: string) => `删除 ${path}`,
+        saveFailed: "保存失败。",
+        uploadNotText: (name: string) => `「${name}」不是文本文件，无法作为技能文件上传。`,
         referenceEditingHint: "修改后点「保存文件」。",
         referenceNotText: (name: string) => `「${name}」不是 UTF-8 文本，不能作为参考文件导入。`,
         addReferenceFailed: "没有读入这个参考文件。",

@@ -108,6 +108,59 @@ test("loads legacy managed Skills without descriptions but rejects new packages 
   }
 });
 
+test("SKILL.md, a file and a folder are edited under the revision the editor saw", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const created = await catalog.createPackage({
+      description: "Edited from the file editor.",
+      instructions: "# Start\n\nBegin here.",
+      name: "file-editor",
+      resources: [
+        { content: "# A", path: "references/a.md" },
+        { content: "# B", path: "references/b.md" },
+        { content: "print(1)", path: "scripts/run.py" },
+      ],
+    });
+
+    // The editor reads the whole document, frontmatter included.
+    const raw = catalog.readSkillMarkdown("file-editor");
+    assert.equal(raw.revision, created.currentRevision);
+    assert.match(raw.content, /name: file-editor/u);
+
+    const saved = await catalog.updateSkillMarkdown("file-editor", {
+      content: raw.content.replace("# Start", "# Replaced"),
+      expectedRevision: raw.revision,
+    });
+    assert.equal(saved.currentRevision, raw.revision + 1);
+    assert.match(saved.instructions, /# Replaced/u);
+
+    const afterDelete = await catalog.deleteFile("file-editor", "references/a.md", {
+      expectedRevision: saved.currentRevision,
+    });
+    assert.deepEqual(afterDelete.resources.map((resource) => resource.path).sort(), ["references/b.md", "scripts/run.py"]);
+
+    // A whole folder moves with its files.
+    const afterRename = await catalog.renameFile("file-editor", "references", {
+      expectedRevision: afterDelete.currentRevision,
+      to: "docs",
+    });
+    assert.deepEqual(afterRename.resources.map((resource) => resource.path).sort(), ["docs/b.md", "scripts/run.py"]);
+
+    await assert.rejects(
+      () => catalog.deleteFile("file-editor", "SKILL.md", { expectedRevision: afterRename.currentRevision }),
+      /SKILL\.md cannot be deleted/u,
+    );
+    await assert.rejects(
+      () => catalog.renameFile("file-editor", "docs/b.md", { expectedRevision: 1, to: "x.md" }),
+      /revision conflict/u,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("an exported package is the archive the importer accepts back", async () => {
   const dataDir = await temporaryDataDir();
   try {

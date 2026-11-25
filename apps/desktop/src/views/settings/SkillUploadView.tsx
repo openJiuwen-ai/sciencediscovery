@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
 import { importSkillFile } from "../../api/settings.js";
@@ -21,11 +21,11 @@ import { TEXT } from "../../text.js";
 
 interface Props {
   client: ApiClient;
+  /** Closes the dialog without importing. */
+  onCancel: () => void;
   /** Runs for the package the server installs; the caller enables it, reloads
-   *  the list behind this view and keeps that view mounted. */
+   *  the list behind the dialog and closes the dialog. */
   onImported: (skill: SkillDetail) => void | Promise<void>;
-  /** Leaves for 从零开始写, which the same menu offered one entry up. */
-  onWriteInstead: () => void;
 }
 
 function messageOf(reason: unknown): string {
@@ -33,41 +33,37 @@ function messageOf(reason: unknown): string {
 }
 
 /**
- * 技能 › 上传技能.
+ * 技能 › 上传技能, as the handoff's dialog.
  *
- * One package at a time, from the file picker or a drop. The whole surface is
- * the drop target rather than a bare input: a user who dragged a ZIP from a
- * file window has already chosen the file, and asking them to find the same
- * file through a dialog is the second half of one action. The route is the
- * same multipart upload either way — a SKILL.md and a ZIP differ only in what
- * the server unpacks.
+ * One package at a time, from the file picker or a drop. The drop zone is the
+ * whole target rather than a bare input: a user who dragged a ZIP from a file
+ * window has already chosen the file, and asking them to find the same file
+ * through a dialog is the second half of one action. The route is the same
+ * multipart upload either way — a SKILL.md and a ZIP differ only in what the
+ * server unpacks.
  *
- * Nothing is sent until 导入 is pressed. A wrong file is replaced by dropping
- * another one or by 移除; a failed import keeps the file so a retry does not
- * mean finding it again.
+ * Nothing is sent until 确定 is pressed. A wrong file is replaced by dropping
+ * another one or by 重新选择; a failed import keeps the file so a retry does
+ * not mean finding it again.
  */
-export function SkillUploadView({ client, onImported, onWriteInstead }: Props) {
+export function SkillUploadView({ client, onCancel, onImported }: Props) {
   const [file, setFile] = useState<File>();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const [notice, setNotice] = useState<string>();
   const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
 
   const choose = (next: File | undefined) => {
     setFile(next);
     setFailure(undefined);
-    setNotice(undefined);
   };
 
   const importFile = async () => {
     if (!file || busy) return;
     setBusy(true);
     setFailure(undefined);
-    setNotice(undefined);
     try {
       const detail = await importSkillFile(client, file);
-      setNotice(TEXT.settings.skills.importSucceeded(detail.name));
-      setFile(undefined);
       await onImported(detail);
     } catch (reason) {
       setFailure(messageOf(reason));
@@ -80,83 +76,101 @@ export function SkillUploadView({ client, onImported, onWriteInstead }: Props) {
 
   return (
     <div className="skill-upload">
-      <label
-        className={`skill-drop${dragging ? " is-dragging" : ""}`}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          if (!busy) setDragging(true);
-        }}
-        onDragLeave={(event) => {
-          // A drag over a child fires leave on the parent too; only the pointer
-          // leaving the whole zone ends the highlight.
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          if (busy) return;
-          const dropped = event.dataTransfer.files?.[0];
-          if (dropped) choose(dropped);
-        }}
-      >
+      <p className="skill-upload-hint">
+        <svg
+          aria-hidden="true"
+          fill="currentColor"
+          height="16"
+          viewBox="0 0 24 24"
+          width="16"
+        >
+          <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 5.2a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Zm1.1 10.3h-2.2v-6.2h2.2Z" />
+        </svg>
+        {TEXT.settings.skills.uploadDialog.hint}
+      </p>
+
+      <div className="skill-upload-section">
+        <span className="skill-upload-label">{TEXT.settings.skills.uploadDialog.chooseFile}</span>
         <input
           accept=".md,.markdown,.zip,.skill"
-          aria-label={TEXT.settings.skills.uploadView.dropTitle}
+          aria-label={TEXT.settings.skills.uploadDialog.dropTitle}
           className="sr-only"
           disabled={busy}
+          id="skill-upload-file"
           onChange={(event) => {
             choose(event.target.files?.[0]);
             event.target.value = "";
           }}
+          ref={picker}
           type="file"
         />
-        <span aria-hidden="true" className="skill-drop-icon">
-          <svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="20">
-            <path d="M12 15V4m-4 4 4-4 4 4M5 16v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
-          </svg>
-        </span>
-        <span className="skill-drop-title">
-          {busy ? TEXT.settings.skills.uploadView.reading : TEXT.settings.skills.uploadView.dropTitle}
-        </span>
-        <span className="skill-drop-hint">{TEXT.settings.skills.uploadView.dropHint}</span>
-      </label>
-
-      {file ? (
-        <div className="skill-file-row">
-          <span className="skill-file-name">{file.name}</span>
-          <span className="skill-file-size">
-            {TEXT.settings.skills.uploadView.fileSize(kilobytes)}
-          </span>
-          <button
-            aria-label={TEXT.settings.skills.uploadView.remove}
-            className="skill-file-remove"
-            disabled={busy}
-            onClick={() => choose(undefined)}
-            type="button"
+        {file ? (
+          <div className="skill-upload-file">
+            <span aria-hidden="true" className="skill-upload-file-icon">
+              <svg fill="none" height="30" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="30">
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+                <path d="M14 3v5h5" />
+              </svg>
+            </span>
+            <span className="skill-upload-file-copy">
+              <strong>{file.name}</strong>
+              <small>{TEXT.settings.skills.uploadView.fileSize(kilobytes)}</small>
+            </span>
+            <button
+              className="secondary-button skill-upload-reselect"
+              disabled={busy}
+              onClick={() => picker.current?.click()}
+              type="button"
+            >
+              {TEXT.settings.skills.uploadDialog.reselect}
+            </button>
+          </div>
+        ) : (
+          <label
+            className={`skill-drop${dragging ? " is-dragging" : ""}`}
+            htmlFor="skill-upload-file"
+            onDragEnter={(event) => {
+              event.preventDefault();
+              if (!busy) setDragging(true);
+            }}
+            onDragLeave={(event) => {
+              // A drag over a child fires leave on the parent too; only the
+              // pointer leaving the whole zone ends the highlight.
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              if (busy) return;
+              const dropped = event.dataTransfer.files?.[0];
+              if (dropped) choose(dropped);
+            }}
           >
-            ×
-          </button>
-        </div>
-      ) : null}
+            <span aria-hidden="true" className="skill-drop-icon">
+              <svg fill="none" height="25" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="25">
+                <path d="M12 15V4m-4 4 4-4 4 4M5 16v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
+              </svg>
+            </span>
+            <strong>{TEXT.settings.skills.uploadDialog.dropTitle}</strong>
+            <span className="skill-drop-hint">{TEXT.settings.skills.uploadDialog.dropHint}</span>
+          </label>
+        )}
+      </div>
 
-      <div className="skill-view-actions">
+      {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+
+      <div className="skill-dialog-actions">
+        <button className="secondary-button" disabled={busy} onClick={onCancel} type="button">
+          {TEXT.settings.skills.uploadDialog.cancel}
+        </button>
         <button
           className="primary-button"
           disabled={busy || !file}
           onClick={() => void importFile()}
           type="button"
         >
-          {busy ? TEXT.settings.skills.importBusy : TEXT.settings.skills.importAction}
-        </button>
-      </div>
-
-      {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
-      {notice ? <small className="row-note" role="status">{notice}</small> : null}
-
-      <div className="skill-view-footer">
-        <button className="secondary-button" onClick={onWriteInstead} type="button">
-          {TEXT.settings.skills.uploadView.writeInstead}
+          {busy ? TEXT.settings.skills.importBusy : TEXT.settings.skills.uploadDialog.confirm}
         </button>
       </div>
     </div>

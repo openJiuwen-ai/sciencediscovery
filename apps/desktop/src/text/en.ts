@@ -1041,6 +1041,8 @@ export const EN: Text = {
       empty: "No skills found.",
       search: "Search skills",
       searchPlaceholder: "Search skills…",
+      /** The × inside the search field that puts the whole list back. */
+      clearSearch: "Clear search",
       noMatches: "No skills match your search.",
 
       heading: "Skills",
@@ -1048,9 +1050,40 @@ export const EN: Text = {
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
-      scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       installedCount: (count: number) => `${count} installed`,
+      /** The three tabs above the list. The count is part of the label, as in
+       *  the handoff: every row the tab holds, not only those matching the
+       *  current search. */
+      tabs: {
+        label: "Skill categories",
+        all: (count: number) => `All skills (${count})`,
+        mine: (count: number) => `My skills (${count})`,
+        official: (count: number) => `Official skills (${count})`,
+        basic: "Overview",
+        files: "Files",
+      },
+      /** The way out of a package's own page. */
+      back: "Back",
+      /** 技能详情: the package's files on the left, one of them open on the right. */
+      fileTree: {
+        list: "Files",
+        reading: "Reading the file…",
+        copy: "Copy",
+        download: "Download",
+        copied: "Copied",
+      },
+      /** The tag on a card: a package that ships with the app, or one the user
+       *  brought in. */
+      cardTag: {
+        builtIn: "Built-in",
+        external: "External",
+      },
+      /** A category the user opened that holds no rows at all. */
+      emptyScope: "No skills in this category yet.",
+      /** The list's own subtitle. The directory's entry keeps the shorter line
+       *  it uses as a tooltip; this page says what the page itself does. */
+      listDescription: "Manage and install the skills agents can use",
       /** The native save dialog a Skill export opens. */
       exportDialog: {
         title: "Export Skill",
@@ -1064,11 +1097,8 @@ export const EN: Text = {
       addMenu: {
         label: "Add skill",
         scratch: "Write from scratch",
-        scratchHint: "Start a new skill and write its instructions",
         upload: "Upload skills",
-        uploadHint: "Choose a SKILL.md or a ZIP package",
         git: "Import from GitHub",
-        gitHint: "Inspect a repository and import its packages",
       },
       backToList: "Back to skills",
       createView: {
@@ -1136,16 +1166,41 @@ export const EN: Text = {
         writeInstead: "Write from scratch instead",
       },
       importAction: "Import",
+      /** The close control every 技能 dialog carries. */
+      closeDialog: "Close",
+      /** 技能 › 上传技能, as the handoff's dialog. */
+      uploadDialog: {
+        hint: "A folder or .zip must contain SKILL.md; a .md file must carry the skill name and description in YAML.",
+        chooseFile: "Choose file",
+        dropTitle: "Choose a SKILL.md file",
+        dropHint: "Click, or drag a package or file here",
+        reselect: "Choose again",
+        cancel: "Cancel",
+        confirm: "OK",
+      },
+      /** 技能 › 从 GitHub 导入, as the handoff's dialog. */
+      gitDialog: {
+        subtitle: "Import from a public GitHub repository",
+        advanced: "Advanced options",
+        progress: (done: number, total: number) => `Importing (${done}/${total})`,
+        importing: "Importing",
+        invalidUrl: "That is not a valid URL. Enter it again.",
+      },
       importBusy: "Importing…",
-      backgroundImportRunning: (done: number, total: number) => `Importing in the background ${done} / ${total}…`,
       backgroundImportDone: (count: number) => `Imported ${count} skills.`,
       backgroundImportPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
       backgroundImportFailed: "The background import failed.",
       backgroundImportFailures: (names: string, count: number) =>
         count > 3 ? `Failed: ${names} and ${count - 3} more` : `Failed: ${names}`,
-      backgroundImportDismiss: "Dismiss the import notice",
       importFailed: "The import failed.",
       importSucceeded: (name: string) => `Imported "${name}".`,
+      /** The 技能 page's own notices (design 1-4). */
+      toastUploadDone: (name: string) => `"${name}" uploaded.`,
+      toastGitDone: "GitHub import done.",
+      toastGitFailed: "GitHub import failed.",
+      toastProgress: (done: number, total: number) => `Importing (${done}/${total})`,
+      toastRetry: "Retry",
+      toastClose: "Dismiss notice",
       git: {
         title: "Import from GitHub",
         description:
@@ -1224,6 +1279,26 @@ export const EN: Text = {
         editingResource: (path: string) => `Editing reference file: ${path}`,
         saveFile: "Save file",
         closeReferenceEditor: "Close reference editor",
+        /** 2-3: the file editor. */
+        exit: "Exit editing",
+        unsaved: "Unsaved",
+        unsavedTitle: "Unsaved changes",
+        unsavedBody: "This file is not saved. Any changes made here will be lost after leaving. Leave anyway?",
+        deleteTitle: "Delete this item?",
+        deleteBody: "This cannot be undone. Delete this item?",
+        newFolder: "New folder",
+        newFile: "New file",
+        newFileIn: (path: string) => `New file in "${path}"`,
+        uploadFile: "Upload",
+        filePathPlaceholder: "File name or path, for example references/new.md",
+        folderPathPlaceholder: "Folder name, for example references",
+        invalidPath: "A name cannot be empty, start with /, or contain . or .. segments.",
+        editPath: (path: string) => `Rename ${path}`,
+        rename: "Rename",
+        deleteAction: "Delete",
+        deletePath: (path: string) => `Delete ${path}`,
+        saveFailed: "The file could not be saved.",
+        uploadNotText: (name: string) => `"${name}" is not a text file, so it cannot be uploaded as a skill file.`, 
         referenceEditingHint: "Change it, then press Save file.",
         referenceNotText: (name: string) => `"${name}" is not UTF-8 text and cannot be imported as a reference file.`,
         addReferenceFailed: "The reference file could not be read.",

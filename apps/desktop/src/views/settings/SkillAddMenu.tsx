@@ -24,7 +24,6 @@ export type SkillAddChoice = "create" | "git" | "upload";
 
 interface Entry {
   choice: SkillAddChoice;
-  hint: string;
   icon: ReactNode;
   label: string;
 }
@@ -70,9 +69,9 @@ const WriteGlyph = () => (
 function entries(): Entry[] {
   const menu = TEXT.settings.skills.addMenu;
   return [
-    { choice: "upload", hint: menu.uploadHint, icon: <UploadGlyph />, label: menu.upload },
-    { choice: "git", hint: menu.gitHint, icon: <GitGlyph />, label: menu.git },
-    { choice: "create", hint: menu.scratchHint, icon: <WriteGlyph />, label: menu.scratch },
+    { choice: "upload", icon: <UploadGlyph />, label: menu.upload },
+    { choice: "git", icon: <GitGlyph />, label: menu.git },
+    { choice: "create", icon: <WriteGlyph />, label: menu.scratch },
   ];
 }
 
@@ -154,10 +153,7 @@ export function SkillAddMenu({ onChoose }: { onChoose: (choice: SkillAddChoice) 
               type="button"
             >
               <span aria-hidden="true" className="skill-add-icon">{entry.icon}</span>
-              <span className="skill-add-copy">
-                <strong>{entry.label}</strong>
-                <small>{entry.hint}</small>
-              </span>
+              <strong>{entry.label}</strong>
             </button>
           ))}
         </div>
