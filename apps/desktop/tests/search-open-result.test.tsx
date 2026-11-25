@@ -90,6 +90,35 @@ test("a stored Project selection survives the load, before the listing answers",
   STORE.clear();
 });
 
+test("a stored id the listing no longer names is pruned, and the pruned choice is stored", async () => {
+  // The load-order test above covers the `projectsLoaded` gate; the removal
+  // branch itself was untested, so deleting it left the suite green. Seed an id
+  // absent from the listing and the branch has to run.
+  const api = backend();
+  // The shared stub answers every `/api/projects…` path with the listing; a read
+  // of one Project's Sessions has to answer with Sessions.
+  const client = {
+    ...api.client,
+    request: (path: string, init?: RequestInit) =>
+      path.includes("/sessions?") ? Promise.resolve([]) : api.client.request(path, init),
+  } as ApiClient;
+  STORE.set("sciencediscovery-desktop:search-narrowing",
+    JSON.stringify({ onlyRunning: false, onlyWithArtifacts: false, projectIds: ["p", "gone"], window: "all" }));
+
+  const view = await mount(client);
+  // The harness has no credential, so boot stops before the listing; read it the
+  // way the app does once the workspace is up.
+  await act(async () => { await view.handle.actions.refreshSessions(); await tick(); });
+
+  assert.deepEqual(view.handle.state.narrowing.projectIds, ["p"],
+    "the id the listing no longer names must be pruned");
+  const stored = JSON.parse(STORE.get("sciencediscovery-desktop:search-narrowing") ?? "{}");
+  assert.deepEqual(stored.projectIds, ["p"],
+    "and the pruned choice is written back, so a reload does not resurrect it");
+  await view.close();
+  STORE.clear();
+});
+
 test("an artifact hit for another Session starts that Session's read", async () => {
   // The regression this guards: the artifact branch returned before
   // `openSession`, so the pending wait was registered and then cleared by an
