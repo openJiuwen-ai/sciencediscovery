@@ -24,17 +24,22 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
    * CostSideEffects: Billable model calls that do not pass through the metered proxy; temporary project and model are deleted.
    */
   test("real Idea Tree research completes and its result survives a reload", { tag: "@real" }, async ({ page, journey }, testInfo) => {
-    // Budget, measured rather than guessed. On an isolated Linux stack with a
-    // live model, the same prompt produced the research in 72s and completed it
-    // at 512s (≈440s from appearance to completion; 4 candidates, 4 assessments
-    // and 2 rounds for 271,367 tokens). The waits below are sized from that:
-    // 180s card + 180s new research + 720s terminal poll = 1080s, inside a
-    // 1500s case budget, leaving ~420s for the composer command, the reload,
-    // the second read and cleanup. The terminal poll stays below the case
-    // budget so a slow research fails as "status never settled" instead of
-    // being killed mid-cleanup, and 720s keeps ~60% headroom over the measured
-    // 440s rather than the 9% headroom a 480s cap gave.
-    test.setTimeout(1_500_000);
+    // Budgets measured on this stack with the live model (2026-11-25). One model
+    // call took 45-130s; the research appeared 77s after the command in one run
+    // and 403s in the next; a research that did settle took 12+ minutes of engine
+    // work. A single wall-clock cap sized from a fast sample turns that variance
+    // into red cases, which is why this case used to fail repeatedly.
+    // The waits are therefore bounded by progress, not only by the clock:
+    //   - creating: up to 600s, but a run that ends `failed`/`blocked`/`cancelled`
+    //     fails at once with its own reason instead of waiting out the budget;
+    //   - settling: up to 1800s, but 300s without a single new token, round,
+    //     activity or node fails as "stopped progressing".
+    // A slow provider no longer reds the case; an engine that really stalls still
+    // does, and says what it was doing when it stopped.
+    const CREATE_BUDGET_MS = 600_000;
+    const TERMINAL_BUDGET_MS = 1_800_000;
+    const STALL_MS = 300_000;
+    test.setTimeout(3_000_000);
     journey.scenario({ goal: "Explore a small materials research question and retrieve the result after reload", preconditions: ["Isolated stack and live model credentials"] });
     const real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     await requireRealStack(testInfo);
@@ -73,19 +78,28 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         // interface. Waiting for the card first — as this journey used to — made
         // the two indistinguishable: a research that was created but whose card
         // never appeared looked exactly like a command that started nothing.
-        // 300s, measured rather than guessed: four live runs on this stack
-        // created the research at ~104s, ~46s, and once not at all inside the
-        // 180s this used to allow — the run was still `running` when the window
-        // closed, so the model was slow, not blocked. A window that short turns a
-        // slow preparation into a red case.
+        const latestRun = async () => {
+          const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, { headers, timeout: 10_000, maxRetries: 2 });
+          const body = await response.json();
+          return Array.isArray(body) ? body[0] : undefined;
+        };
+        let run: any;
         try {
-          await expect.poll(async () => (await read()).filter((entry: any) => !existingIds.has(entry.research.id)).length, { timeout: 300_000, message: "the command should start exactly one new research" }).toBe(1);
+          await expect.poll(async () => {
+            const started = (await read()).filter((entry: any) => !existingIds.has(entry.research.id));
+            if (started.length > 0) return started.length;
+            run = await latestRun();
+            // A run that already ended without a research will not start one
+            // afterwards: waiting out the budget would only hide its reason.
+            if (run && ["failed", "cancelled", "blocked"].includes(run.status)) {
+              throw new Error(`run ${run.id} ended as "${run.status}"${run.reason ? `: ${run.reason}` : run.error ? `: ${run.error}` : ""} without starting a research`);
+            }
+            return 0;
+          }, { timeout: CREATE_BUDGET_MS, message: "the command should start exactly one new research" }).toBe(1);
         } catch (failure) {
           // Say what the run was doing: a research that never appeared is either a
           // stalled/failed run or a slow one, and the two need different fixes.
-          const runs = await (await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, { headers, timeout: 10_000 })).json();
-          const latest = Array.isArray(runs) ? runs[0] : undefined;
-          throw new Error(`no research was created in 300s: run=${latest?.id ?? "none"} status=${latest?.status ?? "?"} error=${latest?.error ?? "none"} reason=${latest?.reason ?? "none"}`, { cause: failure });
+          throw new Error(`no research was created in ${CREATE_BUDGET_MS / 1000}s: run=${run?.id ?? "none"} status=${run?.status ?? "?"} error=${run?.error ?? "none"} reason=${run?.reason ?? "none"}`, { cause: failure });
         }
         researchId = (await read()).find((entry: any) => !existingIds.has(entry.research.id)).research.id;
         // Now the card. The interface re-reads the list on its own while it holds
@@ -97,15 +111,32 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         // Read the last view each poll: a timeout has to say what the research
         // was doing, or a stalled engine and a lost record look the same.
         let last: any;
+        let mark = "";
+        let movedAt = Date.now();
+        const progressOf = (view: any) => {
+          const seen = view?.research;
+          if (!seen) return "absent";
+          return [seen.status, seen.phase, seen.round, seen.batchCompleted, seen.tokens, (seen.activities ?? []).length, (view.graph?.nodes ?? []).length].join("|");
+        };
         try {
           await expect.poll(async () => {
             last = await researchById();
-            const status = last?.research.status;
-            return terminalStatuses.includes(status) ? status : null;
-          }, { timeout: 720_000, message: "the research should settle in a terminal status" }).not.toBeNull();
+            const seen = last?.research;
+            if (seen && terminalStatuses.includes(seen.status)) return seen.status;
+            const now = progressOf(last);
+            if (now !== mark) { mark = now; movedAt = Date.now(); }
+            // A live model is slow but it does move: tokens, rounds, activities
+            // and nodes all advance as a research runs. Nothing changing for this
+            // long is a stall, not latency, so fail with the state instead of
+            // waiting out a budget that a slow run legitimately needs.
+            if (Date.now() - movedAt > STALL_MS) {
+              throw new Error(`research ${researchId} stopped progressing: status=${seen?.status ?? "absent from the list"} phase=${seen?.phase ?? "?"} round=${seen?.round ?? "?"} tokens=${seen?.tokens ?? "?"} for ${Math.round((Date.now() - movedAt) / 1000)}s`);
+            }
+            return null;
+          }, { timeout: TERMINAL_BUDGET_MS, message: "the research should settle in a terminal status" }).not.toBeNull();
         } catch (failure) {
           const seen = last?.research;
-          throw new Error(`research ${researchId} never settled: status=${seen?.status ?? "absent from the list"} phase=${seen?.phase ?? "?"} round=${seen?.round ?? "?"} reason=${seen?.reason ?? "none"}`, { cause: failure });
+          throw new Error(`research ${researchId} never settled: status=${seen?.status ?? "absent from the list"} phase=${seen?.phase ?? "?"} round=${seen?.round ?? "?"} tokens=${seen?.tokens ?? "?"} reason=${seen?.reason ?? "none"}`, { cause: failure });
         }
         const { graph, research } = (await researchById())!;
         // A real model can stop short of `completed`; name the persisted reason
