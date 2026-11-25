@@ -287,7 +287,8 @@ test.describe("专家", () => {
     const dialog = await openSettings(browser, "专家");
 
     const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
-    await card.getByRole("button", { name: "编辑" }).click();
+    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
+    await card.getByRole("menuitem", { name: "编辑" }).click();
     const form = browser.getByRole("dialog", { name: "编辑专家" });
     await expect(form).toBeVisible();
     // A specialist with no explicit lists has been inheriting everything, which
@@ -327,7 +328,9 @@ test.describe("专家", () => {
     const dialog = await openSettings(browser, "专家");
 
     const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
-    await card.getByRole("button", { name: "编辑" }).click();
+    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
+    await expect(card.getByRole("menuitem")).toHaveText(["编辑", "删除"]);
+    await card.getByRole("menuitem", { name: "编辑" }).click();
     const form = browser.getByRole("dialog", { name: "编辑专家" });
     await form.getByLabel("名称").fill("晶体专家（改）");
     await form.getByRole("button", { name: "保存", exact: true }).click();
@@ -337,18 +340,12 @@ test.describe("专家", () => {
       name: "晶体专家（改）",
     });
 
-    await dialog
-      .locator(".settings-card")
-      .filter({ hasText: "晶体专家（改）" })
-      .getByRole("button", { name: "删除" })
-      .click();
+    const renamed = dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" });
+    await renamed.getByRole("button", { name: "「晶体专家（改）」的操作" }).click();
+    await renamed.getByRole("menuitem", { name: "删除" }).click();
     const confirm = browser.getByRole("dialog", { name: "删除专家「晶体专家（改）」？" });
     await expect(confirm).toBeVisible();
-    // The settings overlay sits above the confirmation's backdrop, so the
-    // accept button is painted but not clickable. The case drives it by
-    // keyboard, which still exercises the same action; the layering defect is
-    // recorded in TEST-PLAN rather than hidden by a pointer workaround.
-    await confirm.getByRole("button", { name: "删除" }).press("Enter");
+    await confirm.getByRole("button", { name: "删除" }).click();
 
     await expect(dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" })).toHaveCount(0);
     expect(mock.calls.some((call) => call.method === "DELETE" && call.path === "/api/specialists/specialist-1")).toBe(
@@ -380,7 +377,9 @@ test.describe("专家", () => {
     });
     const dialog = await openSettings(browser, "专家");
 
-    await dialog.locator(".settings-card").filter({ hasText: "晶体专家" }).getByRole("button", { name: "编辑" }).click();
+    const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
+    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
+    await card.getByRole("menuitem", { name: "编辑" }).click();
     const form = browser.getByRole("dialog", { name: "编辑专家" });
     await form.getByLabel("名称").fill("重复的专家");
     await form.getByRole("button", { name: "保存", exact: true }).click();

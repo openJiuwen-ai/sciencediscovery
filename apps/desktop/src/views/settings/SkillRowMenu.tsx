@@ -26,6 +26,8 @@ interface Props {
   /** A built-in is read-only but still copyable: it keeps 导出 and loses
    *  both 编辑 and 删除. */
   canDelete?: boolean;
+  /** Specialists reuse this menu for edit/delete without a package export. */
+  canExport?: boolean;
   disabled?: boolean;
   name: string;
   onAction: (action: SkillRowAction) => void;
@@ -77,14 +79,14 @@ const DeleteGlyph = () => (
  * containing block, so scrolling the pane brings it into view, and staying in
  * the tree keeps it usable where there is no document body to portal into.
  */
-export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onAction }: Props) {
+export function SkillRowMenu({ canDelete = true, canEdit, canExport = true, disabled, name, onAction }: Props) {
   const [open, setOpen] = useState(false);
   /** Whether the popover opens upwards, because the row sits too close to the
    *  bottom of the pane to show it below. */
   const [up, setUp] = useState(false);
-  /** Whether a mouse is currently over the control, which is what makes the
-   *  press below mean "keep the menu the hover opened". */
-  const hovered = useRef(false);
+  // An explicit press keeps the menu open while the pane scrolls. Scrolling
+  // may move the trigger away from the pointer before it reaches an entry.
+  const pinned = useRef(false);
   const root = useRef<HTMLDivElement>(null);
 
   /** Open the menu where it fits: 删除 is the last row of a 技能 list that can
@@ -99,13 +101,17 @@ export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onActi
     if (!open) return;
     const dismiss = (event: Event) => {
       const leaves = leavesMenu(event.target, root.current);
-      if (leaves) setOpen(false);
+      if (leaves) {
+        pinned.current = false;
+        setOpen(false);
+      }
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // 设置 listens on `window` for the same key; claiming it here closes the
       // menu without closing the dialog behind it.
       event.preventDefault();
+      pinned.current = false;
       setOpen(false);
     };
     document.addEventListener("pointerdown", dismiss, true);
@@ -117,6 +123,7 @@ export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onActi
   }, [open]);
 
   const choose = (action: SkillRowAction) => {
+    pinned.current = false;
     setOpen(false);
     onAction(action);
   };
@@ -139,12 +146,10 @@ export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onActi
       onPointerEnter={(event) => {
         // Touch has no hover: a press is how the menu opens there.
         if (event.pointerType === "touch") return;
-        hovered.current = true;
         if (!disabled) reveal();
       }}
       onPointerLeave={() => {
-        hovered.current = false;
-        setOpen(false);
+        if (!pinned.current) setOpen(false);
       }}
       ref={root}
     >
@@ -155,11 +160,15 @@ export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onActi
         className={`skill-row-menu-trigger${open ? " is-open" : ""}`}
         disabled={disabled}
         onClick={() => {
-          // Hover has already opened it, so pressing must not close what the
-          // pointer just revealed; keyboard and touch never hover, so there a
-          // press toggles as usual.
-          if (!open) reveal();
-          else if (!hovered.current) setOpen(false);
+          // The first press keeps a hover-opened menu; the next closes it.
+          // Keyboard and touch follow the same explicit press behavior.
+          if (pinned.current && open) {
+            pinned.current = false;
+            setOpen(false);
+          } else {
+            pinned.current = true;
+            reveal();
+          }
         }}
         type="button"
       >
@@ -184,9 +193,9 @@ export function SkillRowMenu({ canDelete = true, canEdit, disabled, name, onActi
           className={`skill-row-menu-popover${up ? " is-up" : ""}`}
           role="menu"
         >
-          {entry("export", <ExportGlyph />, TEXT.settings.skills.rowMenu.export)}
+          {canExport ? entry("export", <ExportGlyph />, TEXT.settings.skills.rowMenu.export) : null}
           {canEdit ? entry("edit", <EditGlyph />, TEXT.settings.skills.rowMenu.edit) : null}
-          {canDelete ? <div className="skill-row-menu-divider" /> : null}
+          {canDelete && (canExport || canEdit) ? <div className="skill-row-menu-divider" /> : null}
           {canDelete ? entry("delete", <DeleteGlyph />, TEXT.settings.skills.rowMenu.delete, true) : null}
         </div>
       ) : null}

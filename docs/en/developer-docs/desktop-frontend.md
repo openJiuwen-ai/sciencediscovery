@@ -44,7 +44,13 @@
 
 Settings › Specialists uses the same header alignment and dark pill action as
 Skills for its create button. Each custom and built-in dispatchable Specialist
-has an enabled switch; custom rows additionally retain edit and delete.
+has an enabled switch. Custom rows use the Skills chevron menu immediately
+before the switch, with Edit and Delete (red, after a divider) only; there is
+no export action. Hover/click opening, outside dismissal, Escape and upward
+placement near the pane edge reuse the Skills menu. Built-ins keep only their
+switch. An explicit click keeps the menu open across pane scrolling and pointer
+leave; hover-only opening remains transient. Delete still requires confirmation;
+cancelling keeps the record.
 Bulk enable/disable includes both kinds and leaves the fixed Review Specialist
 alone. `PUT /api/specialists/:id` persists the custom `enabled` flag, rejects
 non-boolean values, and preserves it when other fields are edited. Existing

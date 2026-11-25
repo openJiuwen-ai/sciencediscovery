@@ -31,6 +31,7 @@ import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "../rows.js";
+import { SkillRowMenu } from "../SkillRowMenu.js";
 import { SpecialistForm } from "./SpecialistForm.js";
 
 interface Props {
@@ -154,19 +155,14 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
                         </div>
                         <div className="settings-card-actions">
                           {specialist.builtIn ? null : (
-                            <>
-                              <button
-                                className="link-button"
-                                disabled={busy}
-                                onClick={() => setEditing(specialist)}
-                                type="button"
-                              >
-                                {TEXT.settings.edit}
-                              </button>
-                              <button
-                                className="link-button is-danger"
-                                disabled={busy}
-                                onClick={() => onConfirm({
+                            <SkillRowMenu
+                              canEdit
+                              canExport={false}
+                              disabled={busy}
+                              name={specialist.name}
+                              onAction={(action) => {
+                                if (action === "edit") setEditing(specialist);
+                                if (action === "delete") onConfirm({
                                   accept: TEXT.menu.delete,
                                   body: TEXT.settings.system.specialists.deleteBody(specialist.name),
                                   eyebrow: TEXT.settings.system.specialists.heading,
@@ -178,12 +174,9 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
                                       });
                                   },
                                   title: TEXT.settings.system.specialists.deleteTitle(specialist.name),
-                                })}
-                                type="button"
-                              >
-                                {TEXT.menu.delete}
-                              </button>
-                            </>
+                                });
+                              }}
+                            />
                           )}
                           <Switch
                             disabled={busy}

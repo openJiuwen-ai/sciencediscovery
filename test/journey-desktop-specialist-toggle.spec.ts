@@ -32,6 +32,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
      *   3. Verify a failed toggle stays disabled, then retry successfully.
      *   4. Bulk disable and enable custom and built-in roles; the fixed reviewer remains unchanged.
      *   5. Check the create action and switch in a narrow window, restoring owned data in finally.
+     *   6. Cancel deletion from the edit/delete-only menu, then confirm and verify removal through the real API.
      * Environment: Immutable isolated API at E2E_BASE_URL; Desktop Vite on 4178; pinned Chromium; 1440x900 and 960x720, DPR 1.
      * Type: mocked
      * LLM: loopback stub for model bootstrap only; no Run submitted or model call expected.
@@ -58,6 +59,8 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
       const settings = page.getByRole("dialog", { name: words.settings, exact: true });
       const card = settings.locator(".settings-card").filter({ hasText: name });
       const toggle = card.getByRole("switch");
+      const menuTrigger = card.getByRole("button", { name: zh ? `「${name}」的操作` : `Actions for "${name}"`, exact: true });
+      const menu = card.getByRole("menu");
       const openSettings = async () => {
         await page.getByRole("button", { name: words.settings, exact: true }).click();
         await settings.getByRole("button", { name: words.specialists, exact: true }).click();
@@ -102,7 +105,14 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await expect(page.locator(".expert-row").filter({ hasText: name })).toHaveCount(0);
           await page.keyboard.press("Escape");
           await openSettings();
-          await card.getByRole("button", { name: words.edit, exact: true }).click();
+          await menuTrigger.click();
+          await expect(menu.getByRole("menuitem")).toHaveText([words.edit, zh ? "删除" : "Delete"]);
+          await expect(menu.getByRole("menuitem", { name: zh ? "导出" : "Export", exact: true })).toHaveCount(0);
+          await page.keyboard.press("Escape");
+          await expect(menu).toHaveCount(0);
+          await expect(settings).toBeVisible();
+          await menuTrigger.click();
+          await menu.getByRole("menuitem", { name: words.edit, exact: true }).click();
           const editor = page.getByRole("dialog", { name: words.editTitle, exact: true });
           await editor.getByLabel(words.description, { exact: true }).fill("Edited while disabled");
           await editor.getByRole("button", { name: words.save, exact: true }).click();
@@ -129,6 +139,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await expect.poll(async () => (await api<Specialist[]>(page, "/api/specialists")).every(s => s.enabled === false)).toBe(true);
           await expect(toggle).toHaveAttribute("aria-checked", "false");
           await expect(settings.getByTestId("built-in-reviewer").getByRole("switch")).toHaveCount(0);
+          await expect(settings.locator(".settings-card").filter({ hasText: "assessment-screener" }).getByRole("button", { name: /的操作|Actions for/u })).toHaveCount(0);
           await settings.getByRole("button", { name: words.enableAll, exact: true }).click();
           await expect.poll(async () => (await api<Specialist[]>(page, "/api/specialists")).every(s => s.enabled !== false)).toBe(true);
           await expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -140,8 +151,25 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await toggle.scrollIntoViewIfNeeded();
           await toggle.click();
           await expect(toggle).toHaveAttribute("aria-checked", "false");
-          await expect(card.getByRole("button", { name: words.edit, exact: true })).toBeInViewport({ ratio: 1 });
+          await menuTrigger.click();
+          await expect(menu.getByRole("menuitem", { name: words.edit, exact: true })).toBeInViewport({ ratio: 1 });
+          await expect(menu.getByRole("menuitem")).toHaveText([words.edit, zh ? "删除" : "Delete"]);
           expect(model.calls).toHaveLength(0);
+        });
+        await journey.step("6. Cancel and confirm deletion from the menu", "Cancelling preserves the role; confirming deletes it and the real API no longer lists it.", async () => {
+          const remove = zh ? "删除" : "Delete";
+          await menu.getByRole("menuitem", { name: remove, exact: true }).click();
+          const confirmation = page.getByRole("dialog").filter({ has: page.locator("#confirm-title") });
+          await expect(confirmation).toBeVisible();
+          await confirmation.locator(".modal-footer").getByRole("button", { name: zh ? "取消" : "Cancel", exact: true }).click();
+          expect(await readCreated()).toBeTruthy();
+          await menuTrigger.click();
+          await menu.getByRole("menuitem", { name: remove, exact: true }).click();
+          const deletedId = created!.id;
+          await confirmation.getByRole("button", { name: remove, exact: true }).click();
+          await expect(card).toHaveCount(0);
+          expect((await api<Specialist[]>(page, "/api/specialists")).some(s => s.id === deletedId)).toBe(false);
+          created = undefined;
         });
       } finally {
         try {
