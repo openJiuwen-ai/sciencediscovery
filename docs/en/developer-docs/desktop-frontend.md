@@ -40,6 +40,21 @@
 
 ## 3. Server communication
 
+### Specialist settings controls (2026-11-25)
+
+Settings › Specialists uses the same header alignment and dark pill action as
+Skills for its create button. Each custom and built-in dispatchable Specialist
+has an enabled switch; custom rows additionally retain edit and delete.
+Bulk enable/disable includes both kinds and leaves the fixed Review Specialist
+alone. `PUT /api/specialists/:id` persists the custom `enabled` flag, rejects
+non-boolean values, and preserves it when other fields are edited. Existing
+records without the flag remain enabled. Disabled roles stay in settings for
+management but are excluded from new Specialist selections and task dispatch.
+This extends the previous built-in-only toggle contract; prior versions are
+retained in Git history. Acceptance: single/bulk toggle, reload persistence,
+edit while disabled, visible save failure and retry, and matching Skills action
+placement/style on desktop and a narrow window.
+
 Requests go through `ApiClient`, which injects `authorization: Bearer <token>` and turns a non-2xx into an `ApiRequestError` carrying the server's own `error`, `code` and `details`. `PUT /api/settings` is a whole-object write, so `setGlobalModel()` always reads first and sends every existing override back with the one field changed; anything omitted would be erased through `store.replaceGlobalSettings`.
 
 Streams use `fetch` plus `body.getReader()`, never `EventSource`, because the token has to travel in a header. `SseFrameDecoder` frames on the blank line, ignores `:` keep-alives, and holds a partial frame until its terminator arrives — a chunk boundary can land anywhere, including between `\r` and `\n`. Frames carry `id: <n>`, which is the `?after=` replay cursor; a reconnect resumes from the largest one seen rather than replaying the whole run.

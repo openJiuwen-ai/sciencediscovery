@@ -28,9 +28,8 @@ export interface Specialist {
   createdAt: string;
   /**
    * Whether the specialist is active. Omitted/undefined means enabled (the
-   * default). Disabled built-ins drop out of the task tool's specialistId
-   * enum so the leader will not dispatch them. User specialists are always
-   * enabled (the field is only meaningful for built-ins).
+   * default). Disabled specialists drop out of the task tool's specialistId
+   * enum so the leader will not dispatch them. Applies to built-in and custom roles.
    */
   enabled?: boolean;
   enabledSkillIds: string[];
@@ -50,6 +49,6 @@ export interface CreateSpecialistRequest {
 }
 
 export interface UpdateSpecialistRequest extends Partial<CreateSpecialistRequest> {
-  /** Toggle a built-in specialist on/off. Only meaningful for built-ins. */
+  /** Toggle a built-in or custom specialist on/off. */
   enabled?: boolean;
 }
