@@ -2040,7 +2040,7 @@ export const ZH = {
         gatewayIdle: "网关空闲超时",
         gatewayIdleHint: "连接一直没有新数据时等待的时间。",
         gatewayTurn: "单轮超时",
-        gatewayTurnHint: "一轮对话允许的最长时间。",
+        gatewayTurnHint: "一轮对话允许的最长时间。两者都设置时，单轮时限不短于网关空闲时限；把其中一项设为不限则不受此限制。",
         kernelIdle: "内核空闲超时",
         kernelIdleHint: "持久内核闲置多久后回收。",
         permissionWait: "授权等待超时",
@@ -2050,6 +2050,7 @@ export const ZH = {
         seconds: "秒",
         unlimited: "不限",
         saved: "已保存",
+        orderError: "单轮超时不能短于网关空闲超时。请调大单轮超时、调小网关空闲超时，或把其中一项设为不限。",
       },
       quotas: {
         heading: "配额",

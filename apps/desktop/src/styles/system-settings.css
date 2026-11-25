@@ -287,6 +287,12 @@
   justify-content: flex-end;
 }
 
+/* A row that carries a note wraps it onto a full-width line under the title
+   and control. The note is a sentence about the row, not another control, so
+   its length must not decide how wide `.row-control` becomes. */
+.settings-group-detail .settings-row.has-note { flex-wrap: wrap; }
+.settings-group-detail .settings-row.has-note > .row-note-line { flex: 1 0 100%; min-width: 0; }
+.settings-group-detail .settings-row.has-note > .row-note-line .row-note { margin-top: 0; }
 .settings-group-detail .settings-row.is-stack {
   flex-direction: column;
   align-items: stretch;
@@ -560,6 +566,9 @@
 .settings-list-heading h3 { margin: 0; font-size: 14px; }
 .settings-number { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
 .settings-number .field-input.is-number { width: 112px; max-width: 100%; }
+/* A value the page refuses to send carries the same danger border the
+   configuration forms use, so it reads as invalid before the note is read. */
+.settings-section .settings-row input[aria-invalid="true"] { border-color: var(--danger); }
 .environment-setup-progress,
 .proxy-diagnostics { display: grid; gap: 12px; font-size: 13px; color: var(--text-secondary); }
 .environment-setup-progress > div,

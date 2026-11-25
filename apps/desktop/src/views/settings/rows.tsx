@@ -38,16 +38,20 @@ export function Group({ children, heading, actions }: {
  * One label-and-control line.
  *
  * The hint is a sibling of the title rather than part of it so that a long
- * explanation wraps on its own line instead of squeezing the control.
+ * explanation wraps on its own line instead of squeezing the control. A note
+ * is a third, full-width line under both: a sentence about the row is read
+ * across the row, and its length must never decide how wide the control is.
  */
 export function Row({
   children,
   hint,
+  note,
   title,
   tone,
 }: {
   children: ReactNode;
   hint?: string;
+  note?: ReactNode;
   title: string;
   /** `stack` puts the control on its own line, for inputs too wide to sit beside their label.
    *  `status` lays the row out as label-left + indicator-right, vertically
@@ -56,7 +60,7 @@ export function Row({
   tone?: "stack" | "status";
 }) {
   return (
-    <div className={`settings-row${tone === "stack" ? " is-stack" : tone === "status" ? " is-status" : ""}`}>
+    <div className={`settings-row${tone === "stack" ? " is-stack" : tone === "status" ? " is-status" : ""}${note ? " has-note" : ""}`}>
       <div className="row-title">
         <div>
           <strong>{title}</strong>
@@ -64,6 +68,7 @@ export function Row({
         </div>
       </div>
       <div className="row-control">{children}</div>
+      {note ? <div className="row-note-line">{note}</div> : null}
     </div>
   );
 }
