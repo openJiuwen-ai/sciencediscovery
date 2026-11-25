@@ -25,7 +25,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { TEXT } from "../src/text.js";
-import { Sidebar } from "../src/views/Sidebar.js";
+import { Sidebar, stamp } from "../src/views/Sidebar.js";
 
 const actions = {
   deleteSession: () => {},
@@ -53,12 +53,30 @@ function render(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
   );
 }
 
+/** A local wall-clock instant N calendar days before today, so the assertion
+ *  does not depend on the hour the suite happens to run. */
+function localDaysAgo(days: number, hour: number, minute = 0): string {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  date.setHours(hour, minute, 0, 0);
+  return date.toISOString();
+}
+
+function sessionAt(time: number) {
+  const iso = new Date(time).toISOString();
+  return { createdAt: iso, updatedAt: iso };
+}
+
+function clock(time: number): string {
+  return new Date(time).toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+}
+
 describe("the session column's dates", () => {
-  it("reads a recent session as a clock time and an older one as days", () => {
-    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const older = new Date(Date.now() - (3.5 * 24 * 60 * 60 * 1000)).toISOString();
+  it("reads a session from today as a clock time and one from three days ago as days", () => {
+    const recent = localDaysAgo(0, 10);
+    const older = localDaysAgo(3, 12);
     const markup = render({
-      recent: [session("s1", "刚才", recent), session("s2", "几天前", older)],
+      recent: [session("s1", "今天", recent), session("s2", "几天前", older)],
     });
 
     assert.ok(markup.includes(TEXT.workspace.daysAgo(3)));
@@ -66,11 +84,51 @@ describe("the session column's dates", () => {
     assert.ok(!markup.includes(TEXT.workspace.daysAgo(0)));
   });
 
+  it("renders yesterday as 昨天 instead of repeating its clock time", () => {
+    const yesterday = localDaysAgo(1, 22);
+    // A neutral title keeps the assertion about the stamp: a title containing
+    // 昨天 would make the positive half pass even with an empty stamp span.
+    const markup = render({ recent: [session("s1", "会话 A", yesterday)] });
+
+    assert.ok(markup.includes(`>${TEXT.workspace.yesterday}<`));
+    // Regression for #1400: at most hours of the day this was the bare clock,
+    // indistinguishable from a Session used at 22:00 today.
+    assert.ok(!markup.includes(`>${clock(Date.parse(yesterday))}<`));
+  });
+
   it("switches to weeks after the first seven days", () => {
-    const older = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const older = localDaysAgo(10, 12);
     const markup = render({ recent: [session("s1", "上周", older)] });
 
     assert.ok(markup.includes(TEXT.workspace.weeksAgo(1)));
+  });
+});
+
+describe("the session stamp's calendar-day boundaries", () => {
+  // A fixed local evening makes the #1400 boundary exact: yesterday 22:00 is
+  // only 22 hours old, yet belongs to a different calendar day.
+  const now = new Date(2026, 10, 25, 20, 0, 0, 0).getTime();
+  const at = (day: number, hour: number, minute = 0) =>
+    new Date(2026, 10, day, hour, minute, 0, 0).getTime();
+
+  it("keeps today's HH:MM and labels yesterday", () => {
+    assert.equal(stamp(sessionAt(at(25, 15, 46)), now), clock(at(25, 15, 46)));
+    assert.equal(stamp(sessionAt(at(24, 22)), now), TEXT.workspace.yesterday);
+  });
+
+  it("counts days from local midnight rather than elapsed hours", () => {
+    assert.equal(stamp(sessionAt(at(24, 23, 55)), now), TEXT.workspace.yesterday);
+    assert.equal(stamp(sessionAt(at(23, 0, 5)), now), TEXT.workspace.daysAgo(2));
+    assert.equal(stamp(sessionAt(at(19, 23, 55)), now), TEXT.workspace.daysAgo(6));
+  });
+
+  it("switches to weeks on the seventh calendar day", () => {
+    assert.equal(stamp(sessionAt(at(18, 23, 55)), now), TEXT.workspace.weeksAgo(1));
+    assert.equal(stamp(sessionAt(at(11, 0, 5)), now), TEXT.workspace.weeksAgo(2));
+  });
+
+  it("leaves an invalid timestamp blank", () => {
+    assert.equal(stamp({ createdAt: "not a date", updatedAt: "not a date" }), "");
   });
 });
 

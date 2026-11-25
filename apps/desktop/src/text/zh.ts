@@ -1940,6 +1940,7 @@ export const ZH = {
     justNow: "刚刚",
     minutesAgo: (minutes: number) => `${minutes} 分钟前`,
     hoursAgo: (hours: number) => `${hours} 小时前`,
+    yesterday: "昨天",
     daysAgo: (days: number) => `${days}天前`,
     weeksAgo: (weeks: number) => `${weeks}周前`,
     open: "打开",
