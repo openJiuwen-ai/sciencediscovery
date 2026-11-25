@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import {
   deleteSkillFile,
   getSkill,
@@ -52,6 +52,11 @@ function validPath(value: string): string | undefined {
 }
 
 function messageOf(reason: unknown): string {
+  // The server's conflict text names revisions a reader cannot act on; the
+  // page says what to do instead.
+  if (reason instanceof ApiRequestError && reason.status === 409) {
+    return TEXT.settings.skills.editor.conflict;
+  }
   return reason instanceof Error ? reason.message : TEXT.settings.skills.editor.saveFailed;
 }
 

@@ -630,9 +630,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       {trail}
       <div className={`settings-group-detail${view.kind === "list" ? " is-skill-list" : ""}${view.kind === "detail" ? " is-skill-detail" : ""}${view.kind === "edit" ? " is-skill-file-editor" : ""}`}>
       {header}
-      {view.kind !== "list" && (failure !== undefined || exportStatus !== undefined) ? (
+      {view.kind !== "list" && (failure !== undefined || notice !== undefined || exportStatus !== undefined) ? (
         <div className="skill-subpage-notices">
           {failure === undefined ? null : <small className="row-note is-error" role="alert">{failure}</small>}
+          {notice === undefined ? null : <small className="row-note" role="status">{notice}</small>}
           {exportStatus === undefined ? null : (
             <span
               className={`skill-export-status${exportStatus.error ? " is-error" : ""}`}

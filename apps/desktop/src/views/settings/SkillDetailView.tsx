@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import { getSkill, readSkillResource, renameSkillFile } from "../../api/settings.js";
 import type { SkillDetail } from "../../api/types.js";
 import { MarkdownProse } from "../../MarkdownProse.js";
@@ -267,7 +267,9 @@ export function SkillDetailView({
             setFailure(undefined);
             loaded.reload();
           } catch (reason) {
-            setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.editor.saveFailed);
+            setFailure(reason instanceof ApiRequestError && reason.status === 409
+              ? TEXT.settings.skills.editor.conflict
+              : reason instanceof Error ? reason.message : TEXT.settings.skills.editor.saveFailed);
           }
         };
         const renameRow = (base: string, depth: number, folder: boolean) => (
