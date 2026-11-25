@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
 import { getSandboxNetwork, updateSandboxNetwork } from "../../api/settings.js";
@@ -65,6 +65,13 @@ function modeLabel(mode: SandboxNetworkMode): string {
  * own. The service refuses an allowlist with no domains, and the box that takes
  * them is disabled until that mode is picked — so picking the mode only stages
  * it, and 保存 writes the mode and the domains in one request.
+ *
+ * 无网络 keeps whatever list is already saved: the service only forbids domains
+ * in 开放网络 mode, and an allowlist stored next to `none` is inert until the
+ * sandbox gets a network again. Keeping it is what makes 无网络 a round trip
+ * rather than an erasure — the draft, including text typed but not yet saved,
+ * comes back unchanged when 域名白名单 is picked again, so a mode toggle can
+ * never be the reason the box reads empty or the reason an entry disappears.
  */
 export function NetworkSettings({ client, onConfirm, toast }: Props) {
   const [busy, setBusy] = useState(false);
@@ -72,8 +79,25 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
   /** The allowlist is the one part of the page with a draft: its mode and its
    *  domains are written together, so neither can be read straight off the
    *  server value while they are being edited. Both are reset whenever a
-   *  confirmed value arrives. */
+   *  confirmed value arrives — except for the text a 无网络 press carries
+   *  through its own refetch, which `parked` names. */
   const [drafts, setDrafts] = useState<{ domains: string; mode: SandboxNetworkMode }>();
+  /** The box's text as it stood before a 无网络 press, and the mode that press
+   *  switched to.
+   *
+   *  The press writes the saved list, and a successful write refetches; the
+   *  arriving value would otherwise replace whatever the user had typed. So the
+   *  press parks its text here, and the effect applies it only to the answer it
+   *  was parked for — the one whose mode is the parked mode.
+   *
+   *  That pairing is what keeps it from outliving its press. A refetch can fail
+   *  (the page keeps the value it had, so no effect runs), and the ref would
+   *  still be armed for the next successful read — a later 保存, whose list must
+   *  win. Anything that writes therefore clears it first, and the effect always
+   *  clears it whatever it decides.
+   *
+   *  Nothing is ever written from it: 保存 stays the only domain write. */
+  const parked = useRef<{ domains: string; mode: SandboxNetworkMode } | undefined>(undefined);
 
   const loaded = useLoaded<SandboxNetworkSettings>(async () => getSandboxNetwork(client));
 
@@ -83,7 +107,12 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
 
   useEffect(() => {
     if (current === undefined) return;
-    setDrafts({ domains: current.allowedDomains.join("\n"), mode: current.mode });
+    // The answer to a 无网络 press's own refetch is the one this text belongs
+    // to; any other answer is a newer policy and replaces it.
+    const draft = parked.current;
+    parked.current = undefined;
+    const carries = draft !== undefined && draft.mode === current.mode;
+    setDrafts({ domains: carries ? draft.domains : current.allowedDomains.join("\n"), mode: current.mode });
   }, [current]);
 
   const mode = drafts?.mode ?? current?.mode;
@@ -115,13 +144,26 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
       setFailure(undefined);
       return;
     }
-    // The pill and the box follow the press at once; a failed write puts them
-    // back on the policy the server still holds. A mode that does not use the
-    // allowlist must not carry one — the service rejects 开放网络 with domains
-    // attached.
-    setDrafts({ domains: "", mode: next });
-    if (await write({ ...current, allowedDomains: [], mode: next })) return;
-    setDrafts({ domains: current.allowedDomains.join("\n"), mode: current.mode });
+    // The pill and the box follow the press at once; a refused write puts the
+    // pill back on the policy the server still holds — but not the box back on
+    // the server's list, because it is the press that was refused, not the
+    // text. Only 开放网络 must not carry a list — the service rejects that mode
+    // with domains attached — so it alone clears them. 无网络 keeps the saved
+    // list on the wire and the box's text on screen, which is what lets the
+    // same hosts — and anything typed but not yet saved — come back when
+    // 域名白名单 is picked again.
+    const draft = drafts?.domains ?? current.allowedDomains.join("\n");
+    if (next === "open") {
+      parked.current = undefined;
+      setDrafts({ domains: "", mode: next });
+      if (await write({ ...current, allowedDomains: [], mode: next })) return;
+    } else {
+      parked.current = { domains: draft, mode: next };
+      setDrafts({ domains: draft, mode: next });
+      if (await write({ ...current, mode: next })) return;
+      parked.current = undefined;
+    }
+    setDrafts({ domains: draft, mode: current.mode });
   };
 
   const saveDomains = async () => {
@@ -132,7 +174,9 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
       return;
     }
     // A refused write keeps the draft: the entry is what has to be corrected,
-    // and reloading would take it away.
+    // and reloading would take it away. The write also ends any claim the last
+    // 无网络 press had on the box: what is saved now is the list to show.
+    parked.current = undefined;
     await write({ ...current, allowedDomains, mode: "domain-allowlist" });
   };
 
