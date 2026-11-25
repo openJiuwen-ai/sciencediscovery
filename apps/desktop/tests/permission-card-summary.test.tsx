@@ -118,3 +118,53 @@ test("every description kind has Chinese and English wording", () => {
   setLanguage("zh-CN");
   assert.equal(formatPermissionRequest(request({ fileCount: 3, kind: "file-copy" }, "summary")), "在已授权的工作区之间复制 3 个选中的文件");
 });
+
+/**
+ * #1383: the configured allowlist is the starting policy, not a boundary. An
+ * approval adds its hosts to the one execution that carries the token, and a
+ * denial neither rewrites the setting nor covers the host path, which runs
+ * outside the sandbox.
+ */
+test("a network card states the per-execution widening and that denial leaves the allowlist alone", () => {
+  const description: PermissionDescription = {
+    hosts: ["eutils.ncbi.nlm.nih.gov:443"],
+    kind: "network",
+    purpose: "Retrieve requested PubMed records.",
+    runnerId: "local",
+  };
+  const value = { ...request(description, "Sandbox network on local"), action: "sandbox_network" as const };
+  const chinese = card(value);
+  assert.match(chinese, /临时加入使用该授权的那一次执行的允许域名/);
+  assert.match(chinese, /不改动设置里的白名单/);
+  assert.match(chinese, /拒绝只拒绝沙箱内的这条通道/);
+  assert.match(chinese, /主机直执行也不受沙箱网络策略约束/);
+  // The host and purpose the decision is about stay on the card.
+  assert.match(chinese, /eutils\.ncbi\.nlm\.nih\.gov:443/);
+  assert.match(chinese, /Retrieve requested PubMed records/);
+  setLanguage("en");
+  const english = card(value);
+  assert.match(english, /adds these hosts to the allowed domains of the single execution/);
+  assert.match(english, /without editing the configured allowlist/);
+  assert.match(english, /Deny blocks only this sandbox channel/);
+  assert.match(english, /direct host execution is not subject to the sandbox network policy/);
+});
+
+test("a direct-host card says the sandbox network policy and its allowlist do not apply", () => {
+  const description: PermissionDescription = {
+    account: "user:1000:1000",
+    command: "curl https://example.org",
+    cwd: "",
+    kind: "direct-host",
+    runnerId: "local",
+    target: "machine:instance",
+    workspaceRoot: "/data/projects/session-1/workspace",
+  };
+  const value = request(description, "DIRECT HOST EXECUTION: Runner local");
+  const chinese = card(value);
+  assert.match(chinese, /沙箱网络模式与域名白名单对它不生效/);
+  assert.match(chinese, /沙箱里刚被拒绝的主机仍可能经此通道访问/);
+  setLanguage("en");
+  const english = card(value);
+  assert.match(english, /sandbox network mode and domain allowlist do not apply/);
+  assert.match(english, /a host just denied in the sandbox may still be reached/);
+});

@@ -250,6 +250,11 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
                   </div>
                 </div>
               </Row>
+
+              {/* The list above is the starting policy, not a boundary (#1383):
+                  an approval widens one execution, a denial and 完全访问 change
+                  nothing here, and host execution ignores this policy. */}
+              <p className="settings-note">{TEXT.settings.network.sandbox.approvalNote}</p>
             </Group>
           ) : null}
 

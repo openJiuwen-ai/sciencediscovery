@@ -21,6 +21,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { SandboxNetworkSettingsEditor } from "../src/RuntimeControls.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 import { en, zhCN } from "../src/i18n/messages.js";
 
 type Settings = Parameters<typeof SandboxNetworkSettingsEditor>[0]["settings"];
@@ -42,6 +43,12 @@ function render(settings: Settings, proxySettings?: ProxySettings): string {
   return renderToStaticMarkup(
     createElement(SandboxNetworkSettingsEditor, { onChange: () => undefined, proxySettings, settings }),
   );
+}
+
+/** The same editor in a named language, so both dictionaries are exercised. */
+function renderAt(locale: "en" | "zh-CN", settings: Settings): string {
+  return renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+    createElement(SandboxNetworkSettingsEditor, { onChange: () => undefined, settings })));
 }
 
 test("renders the sandbox network access modes and allowed domains", () => {
@@ -155,4 +162,42 @@ test("open mode warns, keeps the private-address switch active and disables the 
   // active in open mode, where the switch still means something.
   assert.equal((html.match(/disabled/g) ?? []).length, 1);
   assert.match(html, /<textarea aria-label="Allowed domains" disabled=""/);
+});
+
+/**
+ * The allowlist is the starting policy for each execution, not the boundary
+ * (#1383): an approval adds its hosts to one execution, a denial edits nothing,
+ * host execution ignores the policy, and No network is not absolute either.
+ */
+test("the settings help discloses that approvals widen one execution and denial changes nothing", () => {
+  const settings: Settings = {
+    allowPrivateNetwork: false,
+    allowedDomains: ["api.example.org"],
+    egressProxyPolicy: "inherit",
+    mode: "domain-allowlist",
+  };
+  const english = renderAt("en", settings);
+  assert.match(english, /starting policy for each execution/);
+  assert.match(english, /adds those exact hosts to the single execution that uses that authorization/);
+  assert.match(english, /never writes them into this setting/);
+  assert.match(english, /Denying leaves this setting unchanged/);
+  assert.match(english, /host execution is not subject to the sandbox network policy/);
+  assert.match(english, /Under Always allow approval mode these requests are approved without a card/);
+  // No network is not an absolute boundary either: one approval still hands
+  // that single execution a temporary allowlist of exactly the approved hosts.
+  assert.match(english, /temporary allowlist of exactly those hosts/);
+
+  const chinese = renderAt("zh-CN", settings);
+  assert.match(chinese, /起始策略/);
+  assert.match(chinese, /临时加入使用该授权的那一次执行/);
+  assert.match(chinese, /绝不会写回这里的设置/);
+  assert.match(chinese, /拒绝不会改动这里的设置/);
+  assert.match(chinese, /主机直执行不受沙箱网络策略约束/);
+  assert.match(chinese, /「始终允许」时，这类申请不会弹卡片/);
+  assert.match(chinese, /仅含这些主机的允许域名/);
+
+  // The old absolute-boundary sentences are gone, not merely qualified.
+  for (const html of [english, chinese]) {
+    assert.doesNotMatch(html, /only the listed domains\.|只放行列出的域名。/);
+  }
 });

@@ -50,12 +50,15 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   "direct-host": ({ account, command, cwd, runnerId, subagentId, target, workspaceRoot }) =>
     `DIRECT HOST EXECUTION: Runner ${runnerId}, ${target}, account ${account}, workspace ${workspaceRoot}, cwd ${cwd || "."}`
     + `${subagentId ? `, subagent ${subagentId}` : ""}. No sandbox filesystem, process or network isolation; host credentials may be accessible.`
+    + ` The sandbox network mode and domain allowlist do not apply here, so a host just denied in the sandbox may still be reached through this channel.`
     + ` Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL.`
     + ` Approval does not execute. Command:\n${command}`,
   "specialist-runtime": ({ runtime, workspaceRoot }) =>
     `Run ${runtime} directly on the API host in ${workspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
   network: ({ hosts, purpose, runnerId }) =>
-    `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`,
+    `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`
+    + ` Approval adds these hosts to the allowed domains of the single execution that uses that authorization, without editing the configured allowlist; allowing the same hosts again later in this Agent run stops the card from reappearing.`
+    + ` Deny blocks only this sandbox channel: the configured allowlist is unchanged, and direct host execution is not subject to the sandbox network policy.`,
   environment: ({ environmentId, language, manager, name, operation, runnerId }) => {
     const runner = runnerId ? ` on Runner ${runnerId}` : "";
     switch (operation) {
@@ -1292,7 +1295,12 @@ export const EN: Text = {
         domainsPlaceholder: "example.org\n*.example.org:443",
         emptyDomains: "Add at least one allowed domain.",
         saveDomains: "Save",
-        scope: "Applies only to run_shell and code inside the sandbox.",
+        scope: "Applies only to run_shell and code inside the sandbox; this is the starting policy for each execution, and an approval only widens that one execution.",
+        approvalNote:
+          "Approving a network request in a conversation adds those exact hosts to the single execution that uses that authorization and never writes them into this setting;"
+          + " allowing the same hosts for the rest of this Agent run is what stops the card from reappearing."
+          + " Denying leaves this setting unchanged and blocks only the sandbox channel, because host execution is not subject to the sandbox network policy."
+          + " Under Full access approval mode these requests are approved without a card, and under No network one approval still gives that execution a temporary allowlist of exactly those hosts.",
         /** [mac-direct] Installation-level opt-in. With it on, local code
          *  execution leaves the sandbox: the full local execution stack is
          *  affected — the Agent's own ephemeral Shell/Python and evolution

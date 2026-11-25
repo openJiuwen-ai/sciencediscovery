@@ -32,6 +32,7 @@ import type {
 import type { WorkspaceActions, WorkspaceState } from "../src/app/use-workspace.js";
 import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { writeSettingsCache } from "../src/app/settings-cache.js";
+import type { ReactTestRenderer } from "./support/dom-renderer.js";
 import { StubClient } from "./api-stub.js";
 import { GeneralSettings } from "../src/views/settings/GeneralSettings.js";
 import { SandboxDirectSettings } from "../src/views/settings/SandboxDirectSettings.js";
@@ -1080,5 +1081,60 @@ describe("each settings page", () => {
     assert.ok(sandbox.directExecution.heading && sandbox.directExecution.heading !== sandbox.heading,
       "the opt-in heading must be its own, not the page-level 沙箱网络 heading");
     assert.equal(sandbox.directExecution.heading, "沙箱");
+  });
+});
+
+/**
+ * #1383: 沙箱网络 is the starting policy for each execution, not a boundary.
+ * The page has to say that an approval widens one execution, that a denial and
+ * 完全访问 change nothing here, that host execution ignores the policy, and
+ * that 无网络 is not absolute either. Asserted on the rendered page, because a
+ * sentence that exists only in the dictionary is not on screen.
+ */
+describe("the sandbox network disclosure", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  async function paint(): Promise<string> {
+    const page = new StubClient().reply({
+      allowPrivateNetwork: false,
+      allowedDomains: ["api.example.org"],
+      egressProxyPolicy: "inherit",
+      mode: "domain-allowlist",
+    });
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(
+          <NetworkSettings client={page.asClient()} onConfirm={noConfirm} toast={() => undefined} />,
+        );
+      });
+      return JSON.stringify(renderer.toJSON());
+    } finally {
+      if (renderer) await act(async () => renderer.unmount());
+    }
+  }
+
+  it("states the starting policy, the per-execution widening and what a denial does", async () => {
+    const previous = getLanguage();
+    try {
+      setLanguage("zh-CN");
+      const chinese = await paint();
+      assert.ok(chinese.includes("起始策略"), `the starting-policy wording is missing: ${chinese.slice(0, 400)}`);
+      assert.ok(chinese.includes("临时加入使用该授权的那一次执行的允许域名"), "the per-execution widening is not stated");
+      assert.ok(chinese.includes("拒绝不会改动这里的设置"), "a denial still reads as editing the setting");
+      assert.ok(chinese.includes("主机直执行不受沙箱网络策略约束"), "host execution is not scoped out of the policy");
+      assert.ok(chinese.includes("「完全访问」批准方式下，这类请求不会弹卡片"), "完全访问 auto-approval is not disclosed");
+      assert.ok(chinese.includes("仅含这些主机的允许域名"), "无网络 is still described as absolute");
+      assert.ok(!chinese.includes("只放行列出的域名"), "the old absolute-boundary sentence survived");
+
+      setLanguage("en");
+      const english = await paint();
+      assert.ok(english.includes("starting policy for each execution"), "the starting-policy wording is missing in English");
+      assert.ok(english.includes("adds those exact hosts to the single execution that uses that authorization"));
+      assert.ok(english.includes("Denying leaves this setting unchanged"));
+      assert.ok(english.includes("host execution is not subject to the sandbox network policy"));
+      assert.ok(english.includes("Under Full access approval mode these requests are approved without a card"));
+      assert.ok(english.includes("temporary allowlist of exactly those hosts"));
+    } finally { setLanguage(previous); }
   });
 });
