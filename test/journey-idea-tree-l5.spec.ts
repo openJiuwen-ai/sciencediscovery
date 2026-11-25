@@ -293,7 +293,12 @@ for (const scenario of cases) {
         expect(saved?.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
     } finally {
-      for (const started of startedSessions) await cleanupJourney(page, started).catch(() => undefined);
+      for (const started of startedSessions) {
+        // A failed cleanup leaves a Project, its Session and a research on the shared
+        // stack. It must not fail a case that otherwise passed, but it must not be
+        // invisible either: the delete is the only thing that removes them.
+        await cleanupJourney(page, started).catch((error) => console.warn(`[l5-cleanup] could not remove ${started.project.name}: ${error instanceof Error ? error.message : String(error)}`));
+      }
     }
   });
 }
