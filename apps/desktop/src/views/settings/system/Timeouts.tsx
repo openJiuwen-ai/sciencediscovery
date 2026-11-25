@@ -19,7 +19,7 @@ import type { ApiClient } from "../../../api/client.js";
 import { getTimeoutSettings, updateTimeoutSettings } from "../../../api/settings.js";
 import type { SystemTimeoutSettings } from "../../../api/types.js";
 import { useLoaded } from "../../../app/use-loaded.js";
-import { TEXT } from "../../../text.js";
+import { formatClock, TEXT } from "../../../text.js";
 import { Group, LoadGate, Row, Switch } from "../rows.js";
 
 type TimeoutField = keyof SystemTimeoutSettings;
@@ -88,7 +88,7 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
         try {
           await updateTimeoutSettings(client, next);
           stored.current = next;
-          setSavedAt(new Date().toLocaleTimeString());
+          setSavedAt(formatClock());
           setFailure(undefined);
         } catch (reason) {
           // The fields go back to what the server has; anything queued behind
