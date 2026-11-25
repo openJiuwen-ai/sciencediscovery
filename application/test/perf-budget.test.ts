@@ -286,6 +286,47 @@ test("exitCode: hang anywhere fails the run, regression alone does not, nothing-
 });
 
 // ---------------------------------------------------------------------------
+// verdict: hang-only mode — CI machines with no local baseline
+
+test("hang-only mode judges the hang layer but never reports regression", () => {
+  // CI runner has no baseline measured on ITS hardware: the regression
+  // layer (baseline x tolerance) is machine-relative and must not judge.
+  // Take a session that WOULD be a regression under full judging and
+  // assert it comes out ok under hang-only (hang line still enforced).
+  const warm = syntheticWarmSession();
+  const mutated = warm.map((e) =>
+    e.event === "HEALTH-200" ? { ...e, atMs: e.atMs + 5000, offsetMs: e.offsetMs + 5000 } : e,
+  );
+  const full = judgeSession(mutated);
+  assert.equal(full.rows.find((r) => r.component === "api-ready").verdict, "regression");
+  const hangOnly = judgeSession(mutated, undefined, { hangOnly: true });
+  const apiRow = hangOnly.rows.find((r) => r.component === "api-ready");
+  assert.equal(apiRow.verdict, "ok");
+  assert.match(apiRow.note, /no baseline for this machine/);
+  assert.equal(hangOnly.summary.regression, 0);
+  assert.equal(hangOnly.summary.hang, 0);
+});
+
+test("hang-only mode still fails a hang (absolute line, machine-independent)", () => {
+  // The hang layer is fixed seconds, valid on any machine: a missing
+  // IS-UP must still fail in hang-only mode, and the subordination
+  // cascade must still paint ONE red (not four).
+  const warm = syntheticWarmSession();
+  const filtered = warm.filter(
+    (e) =>
+      !(
+        (e.domain === "jw" && e.event === "IS-UP") ||
+        (e.domain === "shell" && (e.event === "AGENT-READY" || e.event === "loadUi-loadURL" || e.event === "loadUi")) ||
+        (e.domain === "warmup" && e.event === "warmup-first-chat")
+      ),
+  );
+  const judged = judgeSession(filtered, undefined, { hangOnly: true });
+  assert.equal(judged.summary.hang, 1, "the absolute hang line must still fail on a CI machine");
+  assert.equal(judged.summary.blocked, 3, "subordination is mode-independent");
+  assert.equal(exitCode([judged]), 1);
+});
+
+// ---------------------------------------------------------------------------
 // verdict: subordination (F4) — one upstream stall paints ONE red
 
 test("a jw stall cascades to blocked rows, not four hangs", () => {

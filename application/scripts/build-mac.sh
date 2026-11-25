@@ -22,11 +22,17 @@
 #      sd-notary; this script then notarizes + staples the DMG itself
 #      (notarizing a DMG does not notarize the app inside — both need their
 #      own ticket, Apple TN3125), and gates on spctl -a -vv.
+#   6. perf smoke (opt-in) — launch the packed .app, wait for AGENT-READY,
+#      judge shell.log against perf-budget.json (P3-1). SD_PERF_SMOKE=1
+#      enables; SD_PERF_SMOKE_ARGS passes gate flags (CI machines pass
+#      --hang-only: no local baseline — see perf-smoke-mac.sh header).
 #
 # Usage:
 #   ./build-mac.sh             # full gate, ad-hoc smoke packaging
 #   SD_MAC_SIGN=1 ./build-mac.sh   # full gate, signed + notarized release
 #   SKIP_EB=1 ./build-mac.sh    # everything except electron-builder (step 5)
+#   SD_PERF_SMOKE=1 ./build-mac.sh    # + step 6: perf smoke after packaging
+#   SD_PERF_SMOKE=1 SD_PERF_SMOKE_ARGS="--hang-only" ./build-mac.sh   # CI
 #
 # Signing-mode credentials (kept out of git; naming per the account doc §4):
 #   SD_MAC_SIGN=1 requires all of the signing material below; the default
@@ -476,6 +482,28 @@ these bytes, do NOT hand-fix; rerun this gate after checking the notary log
     echo "(update-source URL is frozen from first public release — D4 §5 iron rule;"
     echo " the publish block in electron-builder.yml IS that source of truth)"
   fi
+fi
+
+# --- 6. perf smoke (opt-in): launch the packed .app, judge its first run ------
+# P3-1: the timing gate's build-side wiring. OFF by default (the packaging
+# gate's exit behavior is unchanged for existing callers); CI's macos-desktop
+# job turns it on with SD_PERF_SMOKE=1 + --hang-only (no baseline measured
+# on the runner yet — the regression layer is machine-relative). Local
+# release runs run it WITHOUT --hang-only once baselines exist (P3-2).
+if [ "${SD_PERF_SMOKE:-0}" = "1" ]; then
+  step "6. perf smoke (first launch, judged against perf-budget.json)"
+  if [ "${SKIP_EB:-0}" = "1" ]; then
+    die "SD_PERF_SMOKE=1 needs the packed .app — unset SKIP_EB (a smoke that measures nothing must not report green)"
+  fi
+  # APP was set by step 5's artifact discovery; re-assert its shape so a
+  # half-cleaned release/ dir fails HERE with the smoke's name, not later.
+  [ -d "$APP" ] || die "perf smoke: no packed .app at $APP — step 5 must run first"
+  SMOKE_RC=0
+  # shellcheck disable=SC2086 — SD_PERF_SMOKE_ARGS is word-split on purpose
+  bash "$SCRIPT_DIR/perf-smoke-mac.sh" "$APP" ${SD_PERF_SMOKE_ARGS:-} || SMOKE_RC=$?
+  [ "$SMOKE_RC" = "0" ] \
+    || die "perf smoke FAILED (rc=$SMOKE_RC) — the gate report above names the component; smoke-shell.log kept via SD_SMOKE_KEEP=1"
+  echo "perf smoke OK"
 fi
 
 step "gate passed — payload at $OUT_DIR"

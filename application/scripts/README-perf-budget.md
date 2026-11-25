@@ -14,8 +14,9 @@ node scripts/perf-gate.mjs ~/Library/Logs/sd-shell/shell.log
 # CI / 脚本消费
 node scripts/perf-gate.mjs <log> --json
 node scripts/perf-gate.mjs <log> --fail-on-regression   # 发布跑或两连击时用
+node scripts/perf-gate.mjs <log> --hang-only             # CI 机器无本机基线时
 
-# 单测（18+3 项，fixture 钉死 2026-11-24 真机实数）
+# 单测（18+3+2 项，fixture 钉死 2026-11-24 真机实数）
 node --experimental-strip-types --no-warnings --test test/perf-budget.test.ts
 ```
 
@@ -65,6 +66,11 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
   `bootstrap in-place-fix-enter`（win32 in-place 分支在 unpack 之前
   return）即豁免；provisioning=true + in-place 的健康 win32 首启不会
   误报。
+- **hang-only 模式**（`--hang-only`）：CI 机器没有在本机采过基线时，
+  回归层（基线×容差）无意义（构建机基线铁律：跨机器比较无意义），
+  只判挂死层（绝对秒数跨机器成立），其余行报
+  `no baseline for this machine`；从属归因照常。CI 首采基线（P3-2）
+  落地后换回全量判定。
 
 ### 两层预算的数值出处
 
@@ -100,6 +106,10 @@ shell.log ──parse-perf-timeline.mjs──▶ 事件流（按 module-load 切
 ## 接线状态
 
 - **已就绪**（本 PR）：机制件 + CLI + 单测，纯函数零行为变化。
-- **P3-1**（待拍板后）：`build-mac.sh` step 6 出包冒烟接线
-  `perf-gate.mjs`；两连击计数逻辑届时放 CI wrapper。
+- **已就绪**（本 PR 增补）：`--hang-only` 模式（CI 机器无本机基线时
+  只判挂死层）+ `perf-smoke-mac.sh` 冒烟脚本（出包后真启动 App：
+  隔离 HOME、预种 wizard 状态、等 AGENT-READY、温退出、交门禁判定；
+  超时/中途崩溃不放弃——把日志交给门禁判成 hang 才是冒烟的意义）。
+- **P3-1**（待拍板后）：`build-mac.sh` step 6 接线
+  `perf-smoke-mac.sh`；两连击计数逻辑届时放 CI wrapper。
 - **P3-3**（可选）：Windows 侧 `package-sd-windows.sh` 同构对接。

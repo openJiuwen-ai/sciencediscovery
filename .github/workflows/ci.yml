@@ -1135,6 +1135,15 @@ jobs:
       SD_MAC_SIGN: "0"
       # Compiled into apps/web and apps/desktop by the root `pnpm build`.
       VITE_ACCOUNTS_API: https://sciencediscovery.openjiuwen.com/accounts
+      # Perf timing gate (P3-1): launch the packed .app after packaging and
+      # judge its first-run shell.log against application/scripts/perf-budget.json.
+      # --hang-only: the runner has no baseline measured on ITS hardware, so
+      # only the absolute hang layer is judged; the regression layer needs
+      # machine-local baselines (P3-2 first-collection, then full judging).
+      # The judged log lands at perf-smoke-shell.log for baseline collection.
+      SD_PERF_SMOKE: "1"
+      SD_PERF_SMOKE_ARGS: "--hang-only"
+      SD_SMOKE_LOG_OUT: ${{ github.workspace }}/perf-smoke-shell.log
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1190,6 +1199,19 @@ jobs:
             application/release/ScienceDiscovery-*-mac-arm64.zip
           if-no-files-found: error
           retention-days: 7
+
+      # P3-2 first-collection: the runner's own measured first-run log, one
+      # artifact per run. Baselines are refreshed from release-run logs on
+      # the release machine (README-perf-budget.md rule 2), so this artifact
+      # is the evidence trail, not the baseline source itself.
+      - name: Upload the perf smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-smoke-shell-log-${{ github.sha }}
+          path: perf-smoke-shell.log
+          if-no-files-found: warn
+          retention-days: 14
 
   merge-gate:
     # Keep the required check name for PR and queue events. Manual package
