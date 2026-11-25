@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { EvolveRunStatus } from "@sciencediscovery/schema";
+import type { EvolveRun, EvolveRunFailureCode, EvolveRunStatus } from "@sciencediscovery/schema";
 
 import { TEXT } from "../text.js";
 
@@ -39,4 +39,41 @@ export function evolveStatusTone(status: EvolveRunStatus): string {
     default:
       return "quiet";
   }
+}
+
+/** The category to explain a failed run with.
+ *
+ *  Records written before `failure` existed carry only a free-text `error`.
+ *  Classifying the few sentences the control plane itself wrote keeps those
+ *  records useful; anything else falls back to "no reason recorded" rather
+ *  than showing an untranslated sentence in a Chinese UI. */
+export function evolveFailureCode(
+  run: Pick<EvolveRun, "error" | "failure" | "status">,
+): EvolveRunFailureCode | "unknown" {
+  if (run.failure?.code) return run.failure.code;
+  if (run.error) {
+    if (/control plane restarted/i.test(run.error)) return "service_restart";
+    if (/sidecar disconnected|no terminal event|fetch failed|ECONN|connection/i.test(run.error)) {
+      return "sidecar_disconnected";
+    }
+    if (/authentication failed|not initialized|HTTP 5\d\d|temporarily unavailable/i.test(run.error)) {
+      return "sidecar_unavailable";
+    }
+    return "search_failed";
+  }
+  return "unknown";
+}
+
+/** The localized reason shown beside `失败`, or `undefined` for any other
+ *  terminal status. The persisted `message` stays on the record for diagnostics
+ *  and for the agent; a card renders the translated category so an English
+ *  sentence can never leak into the Chinese UI. */
+export function evolveFailureLabel(
+  run: Pick<EvolveRun, "error" | "failure" | "status">,
+): string | undefined {
+  if (run.status !== "failed") return undefined;
+  const code = evolveFailureCode(run);
+  // A server from a newer build could name a code this client does not know;
+  // an unknown string must not render as an empty pill.
+  return TEXT.evolve.failure[code] ?? TEXT.evolve.failure.unknown;
 }

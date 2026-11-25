@@ -67,6 +67,14 @@ export function stopEvolveRun(client: ApiClient, runId: string): Promise<{ runId
   return client.request(`/api/evolve/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
 }
 
+/** Start a new run from a failed run's persisted goal.
+ *
+ *  The server owns the decision: the client cannot supply a goal here, so the
+ *  frozen scorecard, baseline and budget are the failed record's own. */
+export function retryEvolveRun(client: ApiClient, runId: string): Promise<EvolveRun> {
+  return client.request<EvolveRun>(`/api/evolve/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" });
+}
+
 /**
  * One candidate's text, by the hash the event stream carries.
  *

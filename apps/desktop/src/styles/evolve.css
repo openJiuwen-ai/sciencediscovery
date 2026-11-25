@@ -56,10 +56,70 @@
   transition: border-color .12s ease, background .12s ease;
 }
 
+/* Only the failed Evolve card grows to hold the reason and retry. The base
+   rule is shared with idea cards, which must keep the original 60px single
+   line and their title ellipsis. */
+.evolve-run-card.is-evolve-failed {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-height: 60px;
+  height: auto;
+  padding: 8px 16px;
+}
+
 .evolve-run-card:hover {
   border-color: var(--border-strong);
   background: #f7f7f7;
 }
+
+/* The opening target: the mark, name, clock and state chip. It stays a real
+   button so the card keeps its keyboard behaviour; retry is a sibling, never
+   nested inside it. */
+.evolve-run-open {
+  flex: 1 1 320px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+/* Only the failed card may wrap its inner row: the reason and retry need the
+   second line, while a running/succeeded title must stay inside 60px. */
+.evolve-run-card.is-evolve-failed .evolve-run-open {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.evolve-run-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.evolve-run-retry {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: #fff;
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 26px;
+}
+
+.evolve-run-retry:hover { background: var(--surface-subtle); }
+.evolve-run-retry:disabled { cursor: default; opacity: .6; }
 
 .evolve-run-mark {
   flex: 0 0 auto;
@@ -1123,6 +1183,8 @@
   background: var(--danger-soft);
   color: var(--danger);
 }
+
+.evolve-notice-detail { opacity: .82; }
 
 /* The row of totals. Five cells, because the handoff's five are the five
    questions a reader asks first: how good, how much of it worked, how deep,

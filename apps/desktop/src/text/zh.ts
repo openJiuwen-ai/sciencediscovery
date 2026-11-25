@@ -2163,6 +2163,19 @@ export const ZH = {
       failed: "失败",
     },
 
+    /* 失败卡片只说「失败」时，用户无法判断是自己目标/评估写错，还是服务重启了。
+       原因按机器可读的 code 翻译；没有记录原因的老记录明确说不知道。 */
+    failure: {
+      service_restart: "服务已重启，搜索被中断",
+      sidecar_disconnected: "与搜索进程的连接中断",
+      sidecar_unavailable: "搜索进程暂时不可用",
+      search_failed: "搜索或评估失败",
+      unknown: "未记录失败原因",
+    },
+    retry: "重试",
+    retrying: "正在重试…",
+    retryFailed: "重试失败，请稍后再试",
+
     metric: {
       best: "最优得分",
       baseline: "起点",

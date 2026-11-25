@@ -595,6 +595,31 @@ export function isEvolveRunActive(status: EvolveRunStatus): boolean {
   return !EVOLVE_TERMINAL_STATUSES.includes(status);
 }
 
+/** Why a search ended as `failed`, in a form the client can translate.
+ *
+ * The prose in `error` is kept for diagnostics and older clients, but a card
+ * shown to a person needs a stable category it can render in their language:
+ * "the service restarted" and "the search itself failed" call for different
+ * next steps. Optional because inventing a reason for a record written before
+ * this field existed would be worse than saying none was recorded. */
+export type EvolveRunFailureCode =
+  /** The control plane process restarted while the run was in flight. */
+  | "service_restart"
+  /** The sidecar connection was lost, or the sidecar could not be reached. */
+  | "sidecar_disconnected"
+  /** The sidecar answered, but could not serve the run: bad credentials or a
+   *  service-side error. Distinct from a connection that never reached it. */
+  | "sidecar_unavailable"
+  /** The search or its evaluation failed, for a reason inside the run. */
+  | "search_failed";
+
+export interface EvolveRunFailure {
+  code: EvolveRunFailureCode;
+  /** Human-readable detail, kept in the producer's language for diagnostics and
+   *  for clients that can show it. */
+  message: string;
+}
+
 export interface EvolveRun {
   algorithm: EvolveAlgorithm;
   bestNodeIndex?: number;
@@ -602,6 +627,9 @@ export interface EvolveRun {
   costCents: number;
   createdAt: string;
   error?: string;
+  /** Structured cause of a `failed` terminal status. Absent on older records
+   *  and on runs that ended any other way. */
+  failure?: EvolveRunFailure;
   finishedAt?: string;
   goal: EvolveGoal;
   id: string;
@@ -611,6 +639,8 @@ export interface EvolveRun {
   projectId?: string;
   /** Set when this run continues another run's search (`--resume`). */
   resumedFromRunId?: string;
+  /** Set when this run was created by retrying a failed run. */
+  retryOfRunId?: string;
   sessionId: string;
   startedAt?: string;
   status: EvolveRunStatus;

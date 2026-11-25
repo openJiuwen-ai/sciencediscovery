@@ -273,6 +273,45 @@ test("finishRun stamps a terminal status and refuses an active one", async () =>
   }
 });
 
+test("a structured failure survives a new store instance, and older records still read", async () => {
+  const dataDir = temporaryDataDir("evolution-failure");
+  const store = new EvolutionStore(dataDir);
+  try {
+    await store.initialize();
+    const run = await store.createRun({ goal: goal(), sessionId: "s1" });
+    await store.finishRun(run.id, "failed", {
+      code: "service_restart",
+      message: "the control plane restarted and this search was interrupted",
+    });
+
+    // A fresh store is what the next API process constructs: the reason has to
+    // come off disk, not out of the process that wrote it.
+    const restarted = new EvolutionStore(dataDir);
+    const reloaded = await restarted.readRun(run.id);
+    assert.equal(reloaded?.status, "failed");
+    assert.deepEqual(reloaded?.failure, {
+      code: "service_restart",
+      message: "the control plane restarted and this search was interrupted",
+    });
+    // The old field stays populated so older clients and the agent summary keep
+    // seeing a sentence.
+    assert.match(reloaded?.error ?? "", /control plane restarted/);
+
+    // A record written before `failure` existed must still parse: the field is
+    // additive, and inventing a reason would be worse than the fallback.
+    const recordPath = resolve(store.runDirectory(run.id), "run.json");
+    const legacy = JSON.parse(await readFile(recordPath, "utf8")) as Record<string, unknown>;
+    delete legacy.failure;
+    delete legacy.retryOfRunId;
+    await writeFile(recordPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+    const old = await new EvolutionStore(dataDir).readRun(run.id);
+    assert.equal(old?.status, "failed");
+    assert.equal(old?.failure, undefined);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("run ids that could escape the data directory are refused", async () => {
   const dataDir = temporaryDataDir("evolution-ids");
   const store = new EvolutionStore(dataDir);

@@ -48,12 +48,14 @@ import { EvolveOrchestrator } from "./orchestrator.js";
 import {
   handleGetCandidate,
   handleListRuns,
+  handleRetryRun,
   handleRunEvents,
   handleStopRun,
 } from "./routes.js";
 import { EvolveSidecarClient } from "./sidecar.js";
 import { CandidateSources } from "./candidates.js";
 import { EvolutionStore } from "./store.js";
+import { SessionStoreHttpError, type SessionStore } from "../store.js";
 
 function goal(expansions = 2): EvolveGoal {
   return {
@@ -104,13 +106,16 @@ const SEQUENCE: EvolveEvent[] = [
   { bestNodeIndex: 1, candidates: 2, status: "succeeded", type: "search_finished" },
 ];
 
-async function startFakeSidecar(): Promise<{ close: () => Promise<void>; url: string }> {
-  const server: Server = createServer((request, response) => {
+async function startFakeSidecar(
+  options: { delayMs?: number } = {},
+): Promise<{ close: () => Promise<void>; url: string }> {
+  const server: Server = createServer(async (request, response) => {
     if (request.url?.endsWith("/stop")) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ stopped: true }));
       return;
     }
+    if (options.delayMs) await new Promise((done) => setTimeout(done, options.delayMs));
     response.writeHead(200, { "content-type": "application/x-ndjson" });
     SEQUENCE.forEach((event, index) => {
       response.write(`${JSON.stringify({ createdAt: new Date().toISOString(), event, sequence: index + 1 })}\n`);
@@ -126,15 +131,27 @@ async function startFakeSidecar(): Promise<{ close: () => Promise<void>; url: st
   };
 }
 
+interface ApiOptions {
+  sidecarDelayMs?: number;
+  /** Stand-in for the application store's Session write guard. */
+  sessions?: Pick<SessionStore, "assertSessionWritable">;
+}
+
 /** The same URL shapes `http/index.ts` matches, mounted on a bare server. */
-async function startApi(): Promise<{ orchestrator: EvolveOrchestrator; origin: string }> {
-  const sidecar = await startFakeSidecar();
+async function startApi(
+  options: ApiOptions = {},
+): Promise<{ orchestrator: EvolveOrchestrator; origin: string; store: EvolutionStore }> {
+  const sidecar = await startFakeSidecar({ delayMs: options.sidecarDelayMs });
   const dataDir = resolve(process.cwd(), ".tmp", `evolve-routes-${Date.now()}-${process.pid}-${counter++}`);
   const store = new EvolutionStore(dataDir);
   await store.initialize();
   const orchestrator = new EvolveOrchestrator(
     store,
     new EvolveSidecarClient({ internalToken: "test", url: sidecar.url }),
+    null,
+    // These tests are about the HTTP layer; a fixed capability keeps the retry
+    // isolation check independent of whether this host has bubblewrap.
+    async () => ({ backend: "bwrap", bwrapPath: "bwrap", disableUserns: false, procMode: "proc" }),
   );
 
   const server = createServer((request, response) => {
@@ -151,6 +168,12 @@ async function startApi(): Promise<{ orchestrator: EvolveOrchestrator; origin: s
       const stop = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (stop && request.method === "POST") {
         return handleStopRun(response, store, orchestrator, decodeURIComponent(stop[1]!));
+      }
+      const retry = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/retry$/);
+      if (retry && request.method === "POST") {
+        return handleRetryRun(
+          response, store, orchestrator, decodeURIComponent(retry[1]!), options.sessions,
+        );
       }
       const candidate = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/candidates\/([^/]+)$/);
       if (candidate && request.method === "GET") {
@@ -177,7 +200,7 @@ async function startApi(): Promise<{ orchestrator: EvolveOrchestrator; origin: s
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  return { orchestrator, origin: `http://127.0.0.1:${port}` };
+  return { orchestrator, origin: `http://127.0.0.1:${port}`, store };
 }
 
 let counter = 0;
@@ -289,3 +312,113 @@ test("a candidate's source is served by hash, and anything else is a 404", async
   assert.equal(unknown.status, 404);
 });
 
+
+test("retrying a failed run re-creates it from the persisted goal", async () => {
+  const { origin, store } = await startApi();
+  const original = await store.createRun({ goal: goal(7), projectId: "p1", sessionId: "s-retry" });
+  await store.finishRun(original.id, "failed", {
+    code: "service_restart",
+    message: "the control plane restarted",
+  });
+
+  const response = await fetch(`${origin}/api/evolve/runs/${original.id}/retry`, {
+    headers: auth,
+    method: "POST",
+  });
+  assert.equal(response.status, 201);
+  const created = await response.json() as EvolveRun;
+
+  assert.notEqual(created.id, original.id, "retry starts a new record");
+  assert.deepEqual(created.goal, original.goal, "the frozen goal, budget and scorecard are reused");
+  assert.equal(created.sessionId, original.sessionId);
+  assert.equal(created.projectId, "p1");
+  assert.equal(created.retryOfRunId, original.id);
+
+  // Let the replacement settle so the harness's cleanup is not racing a live
+  // run, and prove it really ran instead of only being created.
+  await (await fetch(`${origin}/api/evolve/runs/${created.id}/events`, {
+    headers: { ...auth, accept: "text/event-stream" },
+  })).text();
+  assert.equal((await store.readRun(created.id))?.status, "succeeded");
+});
+
+test("retry refuses a run that did not fail, or a session that is already busy", async () => {
+  const { origin, store } = await startApi();
+  const finished = await store.createRun({ goal: goal(), sessionId: "s-finished" });
+  await store.finishRun(finished.id, "succeeded");
+
+  const notFailed = await fetch(`${origin}/api/evolve/runs/${finished.id}/retry`, {
+    headers: auth,
+    method: "POST",
+  });
+  assert.equal(notFailed.status, 409);
+  assert.match(await notFailed.text(), /Only a failed search/);
+
+  const failed = await store.createRun({ goal: goal(), sessionId: "s-busy" });
+  await store.finishRun(failed.id, "failed", { code: "search_failed", message: "broken evaluator" });
+  const live = await store.createRun({ goal: goal(), sessionId: "s-busy" });
+  await store.patchRun(live.id, { status: "running" });
+
+  const busy = await fetch(`${origin}/api/evolve/runs/${failed.id}/retry`, {
+    headers: auth,
+    method: "POST",
+  });
+  assert.equal(busy.status, 409);
+  assert.match(await busy.text(), /already has a search running/);
+
+  // Quiet the synthetic live run before the cleanup removes the directory.
+  await store.finishRun(live.id, "stopped");
+});
+
+test("retry of an unknown run is a 404", async () => {
+  const { origin } = await startApi();
+  const response = await fetch(`${origin}/api/evolve/runs/missing/retry`, {
+    headers: auth,
+    method: "POST",
+  });
+  assert.equal(response.status, 404);
+});
+
+
+test("retry refuses an archived or evidence-locked session before creating a run", async () => {
+  const { origin, store } = await startApi({
+    sessions: {
+      assertSessionWritable(sessionId: string) {
+        if (sessionId === "s-archived") throw new Error("Session is archived and read-only");
+        throw new SessionStoreHttpError("导入证据快照为只读，请创建新会话继续研究。", 409, "SESSION_EVIDENCE_LOCKED");
+      },
+    },
+  });
+  for (const [sessionId, expected] of [
+    ["s-archived", /archived and read-only/],
+    ["s-evidence", /只读/],
+  ] as const) {
+    const failed = await store.createRun({ goal: goal(), sessionId });
+    await store.finishRun(failed.id, "failed", { code: "service_restart", message: "interrupted" });
+
+    const response = await fetch(`${origin}/api/evolve/runs/${failed.id}/retry`, {
+      headers: auth,
+      method: "POST",
+    });
+    assert.equal(response.status, 409, sessionId);
+    assert.match(await response.text(), expected, sessionId);
+    assert.equal((await store.listRuns(sessionId)).length, 1, `${sessionId}: no run was created`);
+  }
+});
+
+test("two concurrent retries create only one new run", async () => {
+  const { origin, store } = await startApi({ sidecarDelayMs: 150 });
+  const failed = await store.createRun({ goal: goal(), sessionId: "s-concurrent" });
+  await store.finishRun(failed.id, "failed", { code: "search_failed", message: "broken" });
+
+  const retry = () => fetch(`${origin}/api/evolve/runs/${failed.id}/retry`, {
+    headers: auth,
+    method: "POST",
+  });
+  const responses = await Promise.all([retry(), retry()]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+
+  const runs = await store.listRuns("s-concurrent");
+  assert.equal(runs.length, 2, "the failed record plus exactly one replacement");
+  assert.equal(runs.filter((run) => run.id !== failed.id).length, 1);
+});

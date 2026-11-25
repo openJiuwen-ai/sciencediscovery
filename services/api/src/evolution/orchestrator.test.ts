@@ -38,6 +38,7 @@ import { resolve } from "node:path";
 
 import type { EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 
+import { EvolveUnavailableError } from "./availability.js";
 import { RunTokenRegistry } from "./llm-proxy.js";
 import { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolveSidecarClient } from "./sidecar.js";
@@ -335,6 +336,27 @@ test("a stream that ends without a terminal event fails the run rather than hang
   }, "the run to be failed");
 
   assert.match((await store.readRun(run.id))?.error ?? "", /no terminal event arrived/);
+  assert.equal((await store.readRun(run.id))?.failure?.code, "sidecar_disconnected");
+});
+
+test("a search that fails inside the engine carries its own reason", async () => {
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
+      { level: "error", message: "the held-out set is empty", type: "log" },
+      FINISHED("failed", null),
+    ],
+  });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-engine-failure");
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to fail");
+
+  const failed = await store.readRun(run.id);
+  assert.equal(failed?.failure?.code, "search_failed");
+  assert.match(failed?.failure?.message ?? "", /held-out set is empty/);
+  assert.match(failed?.error ?? "", /held-out set is empty/, "the legacy field still carries the sentence");
 });
 
 test("a record that cannot be persisted stops the search instead of leaving it live", async () => {
@@ -364,6 +386,7 @@ test("an unreachable sidecar fails the run with a readable error", async () => {
 
   const failed = await store.readRun(run.id);
   assert.ok(failed?.error, "the failure carries a message the UI can show");
+  assert.equal(failed?.failure?.code, "sidecar_disconnected", "an unreachable sidecar is a connection loss");
   assert.ok(failed?.finishedAt, "a failed run is still terminal");
 });
 
@@ -375,6 +398,42 @@ test("a refused run surfaces the sidecar's status", async () => {
   const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to fail");
   assert.match((await store.readRun(run.id))?.error ?? "", /400/);
+  assert.equal((await store.readRun(run.id))?.failure?.code, "search_failed", "a refused run is not a lost connection");
+});
+
+test("an unready or unauthenticated service is unavailable, not a search failure", async () => {
+  const dataDir = temporaryDataDir("evolve-unavailable");
+  const store = new EvolutionStore(dataDir);
+  await store.initialize();
+  cleanup(() => rm(dataDir, { force: true, recursive: true }));
+  const orchestrator = new EvolveOrchestrator(
+    store,
+    new EvolveSidecarClient({
+      internalToken: "",
+      url: "",
+      connection: async () => {
+        throw new EvolveUnavailableError("Evolve service is unavailable or authentication failed");
+      },
+    }),
+  );
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to fail");
+  const failed = await store.readRun(run.id);
+  assert.equal(failed?.failure?.code, "sidecar_unavailable");
+  assert.match(failed?.failure?.message ?? "", /unavailable or authentication failed/);
+});
+
+test("an authentication refusal is unavailable, not a lost connection", async () => {
+  const sidecar = await startFakeSidecar({ status: 401 });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-auth-refused");
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to fail");
+  const failed = await store.readRun(run.id);
+  assert.equal(failed?.failure?.code, "sidecar_unavailable");
+  assert.match(failed?.failure?.message ?? "", /authentication failed/);
 });
 
 test("a replayed record is neither re-logged nor re-published", async () => {
@@ -410,6 +469,7 @@ test("runs left running by a previous process are settled at boot", async () => 
   const settled = await store.readRun(run.id);
   assert.equal(settled?.status, "failed");
   assert.match(settled?.error ?? "", /control plane restarted/);
+  assert.equal(settled?.failure?.code, "service_restart");
   assert.equal(await orchestrator.adoptOrphanedRuns(), 0, "already-terminal runs are left alone");
 });
 
@@ -862,6 +922,7 @@ test("an interrupted PUCT run is not told it can resume", async () => {
 
   const adopted = await store.readRun(run.id);
   assert.equal(adopted?.status, "failed");
+  assert.equal(adopted?.failure?.code, "service_restart");
   assert.match(adopted!.error!, /PUCT cannot be resumed/);
   assert.doesNotMatch(adopted!.error!, /it can be resumed/);
 });

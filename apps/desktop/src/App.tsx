@@ -89,7 +89,7 @@ import { CheckpointRefusedProvider, CheckpointReplyProvider, type CheckpointRepl
 import { Composer, type SeededCommand } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
-import { draftEvolveDirection } from "./api/evolve.js";
+import { draftEvolveDirection, retryEvolveRun } from "./api/evolve.js";
 import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
 import { IdeaTreeOverrideDialog } from "./views/idea/IdeaTreeOverrideDialog.js";
 import { defersIdeaSend } from "./idea/send-gate.js";
@@ -1256,6 +1256,11 @@ export function App({ initialToken }: Props) {
   const evolveRun = evolve.runs.find((run) => run.id === evolveRunId)
     ?? evolve.runs.find((run) => isEvolveRunActive(run.status))
     ?? evolve.runs[0];
+  /** Retry writes a new run into the Session, so a read-only Session only
+   *  gets the reason. The server enforces the same rule; this keeps the card
+   *  from offering an action it knows will be refused. */
+  const evolveRetryAllowed = state.detail?.archivedAt === undefined
+    && !isEvidenceSessionReadOnly(state.detail);
 
   /** Open a run in the panel from its card in the transcript: the card should
    *  not have to open the panel first. */
@@ -1271,6 +1276,23 @@ export function App({ initialToken }: Props) {
     setLegacyOpen(false);
     setPanelGroup("task");
     setWorkspaceOpen(true);
+  };
+
+  /** Retry a failed search from the card. The server owns the goal: this only
+   *  names the failed record, so the frozen scorecard/baseline cannot be
+   *  replaced by a client. A refusal is already a localized sentence when it
+   *  comes from this side's own rules; anything else is reported with the
+   *  card's own retry sentence rather than leaking a raw server string. */
+  const retryEvolve = async (id: string) => {
+    try {
+      await retryEvolveRun(client, id);
+      // The new run is active, so the poll picks it up; refreshing now makes
+      // the replacement card appear without waiting for the next three-second
+      // tick.
+      await refreshEvolve();
+    } catch {
+      actions.toast(TEXT.evolve.retryFailed, "error");
+    }
   };
 
   /** The same for a research's card: the panel is the 任务 tab, and the search
@@ -1624,7 +1646,11 @@ export function App({ initialToken }: Props) {
                   // A search keeps running after the turn that started it, so its
                   // card is the last thing the conversation produced. It draws
                   // nothing at all for a session that has no searches.
-                  evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
+                  evolve={<EvolveRuns
+                    onOpen={showEvolveRun}
+                    onRetry={evolveRetryAllowed ? retryEvolve : undefined}
+                    runs={evolve.runs}
+                  />}
                   loading={state.loadingSession}
                   onDecidePermission={decidePermission}
                   onOpenArtifactPanel={openArtifactPanel}

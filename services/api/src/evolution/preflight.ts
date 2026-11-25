@@ -40,6 +40,55 @@ export interface PreflightIssue {
   message: string;
 }
 
+/** Whether a scorecard executes candidates rather than only reading text. */
+export function executesCandidates(goal: EvolveGoal): boolean {
+  return goal.scorecard.criteria.some(
+    (criterion) => criterion.measure.kind !== "llm_judge" && criterion.measure.kind !== "npu_job",
+  );
+}
+
+/** The isolation refusals for a goal against the backend this process probed.
+ *
+ *  Split out because a retry reuses a goal that already passed pre-flight:
+ *  replaying every check would re-read the dataset and the model, but the one
+ *  property that can change under a stored goal is whether the machine still
+ *  has the isolation the goal relied on. */
+export function isolationIssues(
+  goal: EvolveGoal,
+  sandbox: EvolveSandboxCapability,
+): PreflightIssue[] {
+  const issues: PreflightIssue[] = [];
+  const executes = executesCandidates(goal);
+  if (executes && !sandbox.backend) {
+    issues.push({
+      code: "sandbox_unavailable",
+      fix: "install bubblewrap (bwrap) on Linux; macOS ships sandbox-exec; on Windows start the "
+        + "run from the 程序演进 dialog with direct execution allowed",
+      // A candidate is model-written Python and will not be executed without
+      // isolation, and running it unconfined is not a fallback. Windows can
+      // only get past this with the user's own confirmation, which is the
+      // branch below.
+      message: "there is no isolation backend for candidates, and a candidate is model-written "
+        + "code that will not be executed unisolated",
+    });
+  } else if (executes && sandbox.backend === "direct" && goal.allowUnisolated !== true) {
+    // `direct` is the desktop's opt-in for Windows, where neither bwrap nor
+    // Seatbelt exists. It is still not a sandbox: the candidate reads and
+    // writes with the user's own access, reaches the network, and can see the
+    // process environment. The goal carries the user's answer to the warning,
+    // and a goal without it is a run nobody confirmed.
+    issues.push({
+      code: "unisolated_run_unconfirmed",
+      fix: "ask the user to start it again from the 程序演进 dialog with direct execution "
+        + "allowed (`/evolve-design --allow-direct`), and only then create the run",
+      message: "this installation runs candidates without isolation, and the user has not "
+        + "confirmed that for this search — candidate code would run with their full file and "
+        + "network access",
+    });
+  }
+  return issues;
+}
+
 export interface PreflightInput {
   /** Whether a content hash is in the store. Absent skips the dataset checks —
    *  a caller with no content store cannot answer, and guessing "missing" would
@@ -144,35 +193,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   // A judged scorecard executes nothing — the candidate is text and a model
   // reads it — so requiring isolation there would refuse a run that never runs
   // anything, which is the opposite of what the refusal is for.
-  const executes = input.goal.scorecard.criteria.some(
-    (criterion) => criterion.measure.kind !== "llm_judge" && criterion.measure.kind !== "npu_job",
-  );
-  if (executes && !input.sandbox.backend) {
-    issues.push({
-      code: "sandbox_unavailable",
-      fix: "install bubblewrap (bwrap) on Linux; macOS ships sandbox-exec; on Windows start the "
-        + "run from the 程序演进 dialog with direct execution allowed",
-      // A candidate is model-written Python that gets executed, and running it
-      // unconfined is not a fallback. Windows can only get past this with the
-      // user's own confirmation, which is the branch below.
-      message: "there is no isolation backend for candidates, and a candidate is model-written "
-        + "code that will not be executed unisolated",
-    });
-  } else if (executes && input.sandbox.backend === "direct" && input.goal.allowUnisolated !== true) {
-    // `direct` is the desktop's opt-in for Windows, where neither bwrap nor
-    // Seatbelt exists. It is still not a sandbox: the candidate reads and
-    // writes with the user's own access, reaches the network, and can see the
-    // process environment. The goal carries the user's answer to the warning,
-    // and a goal without it is a run nobody confirmed.
-    issues.push({
-      code: "unisolated_run_unconfirmed",
-      fix: "ask the user to start it again from the 程序演进 dialog with direct execution "
-        + "allowed (`/evolve-design --allow-direct`), and only then create the run",
-      message: "this installation runs candidates without isolation, and the user has not "
-        + "confirmed that for this search — candidate code would run with their full file and "
-        + "network access",
-    });
-  }
+  issues.push(...isolationIssues(input.goal, input.sandbox));
 
   // --- the scorecard can decide anything ------------------------------------
 

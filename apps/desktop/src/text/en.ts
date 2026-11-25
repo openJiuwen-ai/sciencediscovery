@@ -2117,6 +2117,20 @@ export const EN: Text = {
       failed: "Failed",
     },
 
+    /* A card that says only "Failed" leaves the user unable to tell their own
+       goal/evaluator from a service restart. The reason is translated from the
+       machine-readable code; an old record with no reason says so plainly. */
+    failure: {
+      service_restart: "The service restarted and interrupted the search",
+      sidecar_disconnected: "Lost the connection to the search process",
+      sidecar_unavailable: "The search process is temporarily unavailable",
+      search_failed: "The search or its evaluation failed",
+      unknown: "No failure reason was recorded",
+    },
+    retry: "Retry",
+    retrying: "Retrying…",
+    retryFailed: "Retry failed; try again in a moment",
+
     metric: {
       best: "Best score",
       baseline: "Baseline",
