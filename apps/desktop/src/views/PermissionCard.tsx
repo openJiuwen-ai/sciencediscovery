@@ -14,7 +14,7 @@
 
 import type { PermissionDecision, PermissionRequest } from "../api/types.js";
 import { formatPermissionRequest } from "../permission-summary.js";
-import { TEXT } from "../text.js";
+import { formatStamp, TEXT } from "../text.js";
 
 /** The three answers, in the order the server ranks them: least to most.
  *
@@ -72,7 +72,7 @@ export function PermissionCard({
               <code>{request.resource}</code>
             </dd>
             <dt>{TEXT.permission.requested}</dt>
-            <dd>{new Date(request.createdAt).toLocaleString()}</dd>
+            <dd>{formatStamp(request.createdAt)}</dd>
             {request.toolCallId === undefined ? null : (
               <>
                 <dt>{TEXT.permission.toolCall}</dt>

@@ -123,4 +123,34 @@ export const TEXT: Text = new Proxy({} as Text, {
   },
 });
 
+/**
+ * A user-facing date and time, in the interface language.
+ *
+ * `toLocaleString()` with no argument formats for the host, so a Chinese
+ * interface on an English-locale machine printed `11/25/2026, 10:31:05 PM`
+ * inside otherwise Chinese text. These two helpers are what the six call
+ * sites that had no locale use; callers that already pass `TEXT.languageTag`
+ * keep their own option set. The locale is read at call time, so rendering
+ * code that calls the helper again after a language switch formats in the
+ * new language.
+ */
+const STAMP_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+export function formatStamp(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleString(TEXT.languageTag, STAMP_OPTIONS);
+}
+
+/** The clock half of `formatStamp`, for a `saved at` line: `09:05`. */
+export function formatClock(value: string | number | Date = new Date()): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleTimeString(TEXT.languageTag, { hour: "2-digit", minute: "2-digit" });
+}
+
 export type { Text };

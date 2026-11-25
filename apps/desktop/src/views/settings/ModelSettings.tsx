@@ -25,7 +25,7 @@ import {
 import type { ModelProfile, ModelProvider, ProviderModelList } from "../../api/types.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import type { WorkspaceActions, WorkspaceState } from "../../app/use-workspace.js";
-import { TEXT } from "../../text.js";
+import { formatStamp, TEXT } from "../../text.js";
 import { ModelForm } from "../ModelForm.js";
 import { providerName } from "../provider-name.js";
 import { ListSelect, type ListChoice } from "./ListSelect.js";
@@ -484,7 +484,7 @@ export function ModelPicker({
         </small>
         <small className="settings-detail-meta model-picker-source">
           {TEXT.settings.model.providerSource}
-          {list ? ` · ${new Date(list.fetchedAt).toLocaleString()}` : ""}
+          {list ? ` · ${formatStamp(list.fetchedAt)}` : ""}
         </small>
       </div>
       {loaded.error ? <small className="row-note is-error">{loaded.error}</small> : null}

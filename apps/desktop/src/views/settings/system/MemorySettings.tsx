@@ -21,7 +21,7 @@ import type {
   UpdateMemoryGraphSettingsRequest,
 } from "../../../api/types.js";
 import { useLoaded } from "../../../app/use-loaded.js";
-import { TEXT } from "../../../text.js";
+import { formatClock, TEXT } from "../../../text.js";
 import { MemoryStatus } from "../../MemoryStatus.js";
 import { Group, LoadGate, Row, Switch } from "../rows.js";
 
@@ -50,7 +50,7 @@ export function MemorySettings({ client }: Props) {
     setFailure(undefined);
     try {
       await updateMemoryGraphSettings(client, body);
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedAt(formatClock());
       loaded.reload();
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);

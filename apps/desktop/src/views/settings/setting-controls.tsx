@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { commitsOnEnter } from "../../app/ime-enter.js";
-import { TEXT } from "../../text.js";
+import { formatClock, TEXT } from "../../text.js";
 
 /** One mutation at a time, including the interval before React paints busy. */
 export function useSettingsWrite() {
@@ -31,7 +31,7 @@ export function useSettingsWrite() {
     setBusy(true); setSaving(markSaved); setFailure(undefined); setSavedAt(undefined);
     try {
       await operation();
-      if (mounted.current && markSaved) setSavedAt(new Date().toLocaleTimeString());
+      if (mounted.current && markSaved) setSavedAt(formatClock());
       return true;
     } catch (reason) {
       if (mounted.current) setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);

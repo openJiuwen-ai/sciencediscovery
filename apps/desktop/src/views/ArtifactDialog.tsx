@@ -52,7 +52,7 @@ import { artifactName } from "../app/artifact-labels.js";
 import { readCachedDocument } from "../app/document-cache.js";
 import { documentPayload } from "../app/document-payload.js";
 import type { PreviewSlot } from "../app/preview-tabs.js";
-import { TEXT } from "../text.js";
+import { formatStamp, TEXT } from "../text.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 import { DocumentPreview } from "./DocumentPreview.js";
 import { ReviewArtifactBody } from "./reviewer/ReviewCard.js";
@@ -408,7 +408,7 @@ export function ArtifactDialog({
   const showVersionSources = new Set(versions.map((candidate) => candidate.sessionId)).size > 1;
 
   const versionOption = (candidate: ScientificArtifactVersion): string => {
-    const when = new Date(candidate.createdAt).toLocaleString();
+    const when = formatStamp(candidate.createdAt);
     if (!showVersionSources || sessions === undefined) return `v${candidate.version} · ${when}`;
     const title = sessions.find((session) => session.id === candidate.sessionId)?.title
       ?? TEXT.memory.artifactDialog.deletedSession;
