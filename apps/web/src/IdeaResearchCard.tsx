@@ -44,6 +44,8 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
    */
   const emptySince = useRef<number | null>(null);
   const expectSince = useRef<number | null>(null);
+  /** How many researches the list held when the expectation was announced. */
+  const expectCount = useRef(0);
   /** Restarts the re-read chain, so a command can open a window after an idle spell. */
   const kick = useRef<() => void>(() => undefined);
   /** Latest availability callback, held in a ref so `load` keeps one identity. */
@@ -55,8 +57,11 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
       setItems(result.items);
       // An item closes the window that was opened for an empty list, so a Session
       // that already has a research is not re-read for the rest of the card's
-      // life. An expectation opened after it (a second research) keeps its own.
+      // life. An expectation is spent once the list has grown past what it held
+      // when the announcement arrived: the research it was waiting for is drawn,
+      // so there is nothing left to ask for.
       if (result.items.length > 0) emptySince.current = null;
+      if (expectSince.current !== null && result.items.length > expectCount.current) expectSince.current = null;
       setError(undefined);
       announce.current?.(result.items.length > 0);
     }
@@ -64,6 +69,8 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   }, [client, sessionId]);
   const loadRef = useRef(load);
   loadRef.current = load;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   useEffect(() => { void load(); }, [load]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
   const [reconnect, setReconnect] = useState(0);
@@ -106,8 +113,12 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
       const started = Math.max(emptySince.current ?? Number.NEGATIVE_INFINITY, expectSince.current ?? Number.NEGATIVE_INFINITY);
       const now = Date.now();
       const waiting = Number.isFinite(started) && now - started <= EMPTY_POLL_WINDOW_MS;
-      if (waiting) void loadRef.current();
-      schedule(waiting && now - started < EMPTY_POLL_FAST_FOR_MS ? EMPTY_POLL_MS : EMPTY_POLL_SLOW_MS);
+      // Nothing left to wait for: the chain ends here rather than idling on a
+      // timer for the rest of the card's life. `kick` restarts it when a command
+      // or an attach opens a new window.
+      if (!waiting) return;
+      void loadRef.current();
+      schedule(now - started < EMPTY_POLL_FAST_FOR_MS ? EMPTY_POLL_MS : EMPTY_POLL_SLOW_MS);
     };
     // A command, or an attach to a run, restarts the chain: the window it opens
     // must be read within seconds even if the previous one was spent.
@@ -130,6 +141,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     const arm = (event: Event) => {
       if (!matches(event)) return;
       expectSince.current = Date.now();
+      expectCount.current = itemsRef.current.length;
       kick.current();
       void loadRef.current();
     };
