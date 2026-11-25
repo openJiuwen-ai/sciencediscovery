@@ -170,8 +170,11 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
     if (d.component === "unpack" && skipCopyPair && d.durationMs === null) continue;
     // An optional sidecar this stack never started (F7): the stack's own
     // *-skipped marker is the evidence — report `skipped`, judge nothing,
-    // never a hang on a documented-supported configuration.
-    if (componentSkipped(session, d.component)) {
+    // never a hang on a documented-supported configuration. Only a MISSING
+    // pair can be skipped this way: a session carrying both a marker and a
+    // real measured pair keeps its measurement (the marker would otherwise
+    // hide live data — nit from round 6).
+    if (componentSkipped(session, d.component) && d.durationMs === null) {
       judgedRows.push({ component: d.component, verdict: "skipped", durationMs: null, budget: budget.hangMs, note: "feature off (evidence: skipped marker)" });
       continue;
     }
@@ -189,7 +192,6 @@ export function judgeSession(session, budgets = BUDGETS, options = {}) {
     if (row.verdict !== "hang" || row.durationMs !== null) return row;
     let upstream = BLOCKED_BY[row.component];
     if (!upstream) return row;
-    const root = (name) => BLOCKED_BY[name] ?? name;
     const upstreamRow = byName.get(upstream);
     const upstreamStalled =
       upstreamRow && upstreamRow.verdict === "hang" && upstreamRow.durationMs === null;

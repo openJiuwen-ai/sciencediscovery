@@ -362,6 +362,42 @@ test("skipped applies in hang-only mode too (CI default)", () => {
   assert.equal(judged.summary.hang, 0);
 });
 
+test("the evolve twin of the skipped exemption works the same (F7)", () => {
+  // SKIPPABLE carries both optional sidecars; only memory-graph had a test.
+  // Pin the evolve entry so a refactor that drops it turns this red.
+  const warm = syntheticWarmSession();
+  const withSkippedMarker = warm.map((e) =>
+    e.event === "evolve-spawn"
+      ? { domain: "stack", event: "evolve-skipped", atMs: e.atMs, offsetMs: e.offsetMs, raw: "[SD-PERF] stack evolve-skipped +2ms" }
+      : e,
+  ).filter((e) => e.event !== "evolve-healthy");
+  const judged = judgeSession(withSkippedMarker);
+  const evRow = judged.rows.find((r) => r.component === "evolve-ready");
+  assert.equal(evRow.verdict, "skipped");
+  assert.equal(judged.summary.hang, 0);
+  assert.equal(judged.summary.skipped, 1);
+});
+
+test("a skipped marker never hides a real measurement (round 6 nit)", () => {
+  // A session carrying BOTH a *-skipped marker and a live measured pair
+  // keeps its measurement: the marker exempts only a MISSING pair, so a
+  // marker-plus-measurement session reports the measured duration, never
+  // a skipped row that would hide live data.
+  const warm = syntheticWarmSession();
+  const withMarkerToo = warm.map((e) =>
+    e.event === "evolve-healthy"
+      ? { ...e, domain: "stack", event: "evolve-skipped", raw: "[SD-PERF] stack evolve-skipped +2ms" }
+      : e,
+  );
+  // inject the marker AFTER the pair so the pair stays intact
+  const withBoth = [...warm, { domain: "stack", event: "evolve-skipped", atMs: 1, offsetMs: 1, raw: "[SD-PERF] stack evolve-skipped +2ms" }];
+  const judged = judgeSession(withBoth);
+  const evRow = judged.rows.find((r) => r.component === "evolve-ready");
+  assert.notEqual(evRow.verdict, "skipped", "a measured pair is never swallowed by a marker");
+  assert.ok(evRow.durationMs !== null && evRow.durationMs !== undefined, "the measurement is preserved");
+  assert.equal(judged.summary.skipped, 0);
+});
+
 // ---------------------------------------------------------------------------
 // verdict: F6 — blockedBy reports the ROOT, not the intermediate hop
 
