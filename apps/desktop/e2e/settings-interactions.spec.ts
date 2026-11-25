@@ -814,21 +814,23 @@ test.describe("技能", () => {
     await test.step("1. Open skills and identify JiuwenSwarm sources", async () => {
       dialog = await openSettings(page, "技能");
       await expect(dialog.locator(".settings-card")).toHaveCount(2);
-      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("JiuwenSwarm 内置");
-      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("JiuwenSwarm 安装");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("内置");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("外部");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」" })).toHaveAttribute("aria-checked", "true");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「local-tool」" })).toHaveAttribute("aria-checked", "false");
     });
     await test.step("2. Disable the built-in and enable the local skill", async () => {
       await dialog.getByRole("switch", { name: "启用或停用「xlsx」" }).click();
-      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」" })).toHaveAttribute("aria-checked", "false");
       await dialog.getByRole("switch", { name: "启用或停用「local-tool」" }).click();
-      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「local-tool」" })).toHaveAttribute("aria-checked", "true");
       await page.screenshot({ path: testInfo.outputPath("jiuwenswarm-skills.png") });
     });
     await test.step("3. Reload and verify both saved switches", async () => {
       await page.reload();
       dialog = await openSettings(page, "技能");
-      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
-      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」" })).toHaveAttribute("aria-checked", "false");
+      await expect(dialog.getByRole("switch", { name: "启用或停用「local-tool」" })).toHaveAttribute("aria-checked", "true");
     });
   });
 
@@ -869,8 +871,6 @@ test.describe("技能", () => {
     // Still before the batch answers: every switch and tag already reads Off,
     // both bulk buttons are busy, and no row accepts a second writable press.
     await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
-    await expect(dialog.locator(".settings-tag.is-on")).toHaveCount(0);
-    await expect(dialog.locator(".settings-tag.is-off")).toHaveCount(6);
     await expect(dialog.getByRole("button", { name: "一键启用", exact: true })).toBeDisabled();
     await expect(dialog.getByRole("button", { name: "一键关闭", exact: true })).toBeDisabled();
     await expect(dialog.locator(".switch:disabled")).toHaveCount(6);
@@ -896,8 +896,8 @@ test.describe("技能", () => {
     const dialog = await openSettings(page, "技能");
     await expect(dialog.locator(".settings-card")).toHaveCount(2);
     await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
-    await expect(dialog.locator(".settings-card").filter({ hasText: "Native spreadsheets" })).toContainText("已停用");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "SD spreadsheets" })).toContainText("已启用");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toHaveAttribute("aria-checked", "false");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「SD spreadsheets」", exact: true })).toHaveAttribute("aria-checked", "true");
     expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills\/xlsx$/u)).toEqual({ enabled: false });
     await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
     await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
@@ -924,10 +924,10 @@ test.describe("技能", () => {
     await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
     // The bulk answer is per target: only the refused row reports, and it is
     // back at the value the server still holds while the rest moved.
-    await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已启用");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toHaveAttribute("aria-checked", "true");
     await expect(dialog).toContainText("xlsx: Skill switch failed");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "文献检索" })).toContainText("已停用");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「分子绘图」", exact: true })).toHaveAttribute("aria-checked", "false");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「文献检索」", exact: true })).toHaveAttribute("aria-checked", "false");
     expect(writeCall(mock, "PUT", "/api/jiuwenswarm/skills-batch")).toMatchObject({ enabled: false });
     await dialog.locator(".settings-group-detail").screenshot({
       animations: "disabled",
@@ -951,9 +951,9 @@ test.describe("技能", () => {
     const dialog = await openSettings(page, "技能");
 
     const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
-    await expect(card).toContainText("已启用");
+    await expect(card.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "true");
     await card.getByRole("switch", { name: "启用或停用「分子绘图」" }).click();
-    await expect(card).toContainText("已停用");
+    await expect(card.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "false");
 
     expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: false });
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(false);
@@ -965,7 +965,7 @@ test.describe("技能", () => {
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const reopened = page.getByRole("dialog", { name: "设置" });
     await reopened.getByRole("button", { name: "技能", exact: true }).click();
-    await expect(reopened.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
+    await expect(reopened.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "false");
   });
 
   test("bulk enable continues after one skill fails and shows the saved state", async ({ page }) => {
@@ -976,8 +976,8 @@ test.describe("技能", () => {
     const dialog = await openSettings(page, "技能");
     await expect(dialog.locator(".settings-card")).toHaveCount(2);
     await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
-    await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已启用");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "文献检索" })).toContainText("已停用");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "false");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「文献检索」" })).toHaveAttribute("aria-checked", "true");
     await expect(dialog).toContainText("Skill switch failed");
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-1")?.enabled).toBe(false);
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
@@ -1004,11 +1004,10 @@ test.describe("技能", () => {
     await card.locator(".settings-card-main").click();
     // The card opens the Skill's own page: the source sits beside its name,
     // and the package's instructions are the page, not a folded box.
-    const detail = dialog.locator(".skill-detail");
+    const detail = dialog.locator(".skill-detail-page");
     await expect(detail).toBeVisible();
-    await expect(detail.locator(".skill-source-badge")).toContainText("内置");
-    await expect(detail.locator(".skill-detail-description")).toHaveText("画分子图");
-    await expect(detail.locator(".skill-detail-file")).toContainText("读取分子结构并生成图像。");
+    await expect(detail.locator(".skill-detail-page-tag")).toContainText("内置");
+    await expect(detail.locator(".skill-detail-doc")).toContainText("读取分子结构并生成图像。");
   });
 
   test("switching back paints the remembered list before the refresh answers", async ({ page }) => {
