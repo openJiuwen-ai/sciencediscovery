@@ -96,7 +96,7 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
   });
 }
 
-for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'transient-provider-error', 'truncated-idea-stage'] as const) test(`${responseKind}: real Python clients preserve model classification and never retry deterministic shape failures`, async () => {
+for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'transient-provider-error', 'truncated-idea-stage'] as const) test(`${responseKind}: real Python clients preserve model classification and retry only what the stage contract allows`, async () => {
   let upstreamCalls = 0;
   const provider = createServer(async (req, res) => {
     for await (const _ of req) {}
@@ -123,9 +123,10 @@ async def run():
   state=dict(id='r',projectId='p',sessionId='s',objective='Synthetic',materials='',modelId='m',settings=dict(maxTokensPerCall=8,maxTokens=100000),status='paused',phase='design',round=0,tokens=0,usageKnown=True,currentNodeId=None,nodes=[node('ROOT',None,'Goal','direction',0)],createdAt=now(),updatedAt=now())
   store=ResearchStore(Path(folder)); engine=IdeaTreeEngine(state,store,dict(url=sys.argv[1],token=sys.argv[2]))
   try: await engine.ask('design',{})
-  except ValueError as e: assert 'empty or truncated model output' in str(e)
+  except ValueError as e:
+   message=str(e); assert 'invalid model result after one correction: empty or truncated model output' in message
   else: raise AssertionError('Empty stage succeeded')
-  persisted=store.read('p','s','r'); assert persisted['tokens']==14 and engine.reserved==0 and persisted['activities'][-1]['status']=='failed'
+  persisted=store.read('p','s','r'); assert persisted['tokens']==28 and engine.reserved==0 and persisted['activities'][-1]['status']=='failed'
 asyncio.run(run())`
       : responseKind === 'truncated-hidden-reasoning'
       ? "from sciencediscovery_evolve.completion import completion_for; usage=[]; failures=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=8,timeout=2,on_usage=usage.append)('synthetic',on_failure=failures.append); assert result == ''; assert failures == []; assert len(usage)==1 and usage[0].total==14 and usage[0].completion==8 and usage[0].capped"
@@ -135,9 +136,14 @@ asyncio.run(run())`
     await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}/internal/evolve-llm/synthetic/v1/chat/completions`, token], {
       timeout: 5000, env: { ...process.env, PYTHONPATH: fileURLToPath(new URL('../../evolve/src/', import.meta.url)) },
     });
-    assert.equal(upstreamCalls, responseKind === 'transient-provider-error' ? 2 : 1);
+    // An empty or truncated idea-stage answer now takes the single correction, so that
+    // shape asks upstream twice; the deterministic shapes above still ask once.
+    assert.equal(upstreamCalls, responseKind === 'transient-provider-error' || responseKind === 'truncated-idea-stage' ? 2 : 1);
     if (responseKind === 'invalid-shape') assert.equal(spend.length, 0, 'No reported counts or zero cost may be invented for a rejected body');
-    else if (responseKind.startsWith('truncated-')) assert.equal(spend[0]?.outputTokens, 8);
+    else if (responseKind.startsWith('truncated-')) {
+      assert.equal(spend[0]?.outputTokens, 8);
+      if (responseKind === 'truncated-idea-stage') assert.equal(spend.length, 2, 'Both corrected calls report their usage');
+    }
     else assert.equal(spend[0]?.usageStatus, 'provider-not-reported');
   } finally {
     tokens.revoke('synthetic');
