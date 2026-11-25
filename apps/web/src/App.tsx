@@ -279,6 +279,7 @@ const CsvArtifactWindow = lazy(() => import("./csv-artifact/CsvArtifactWindow.js
 import type { CsvViewerSource } from "./csv-artifact/types.js";
 import { opensInCsvViewer } from "./csvArtifact.js";
 import { IdeaTreeView } from "./IdeaTreeView.js";
+import { announceAttachedRun, armIdeaResearchCard, asksForIdeaResearch } from "./ideaResearchNotice.js";
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { automaticReviewComposerState } from "./automatic-review-composer.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
@@ -2349,6 +2350,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ]);
     const activeRun = selectSessionMainReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
+    // The Idea Tree card refreshes on `idea_research.created`, but a client that
+    // attaches after the research exists receives that event only in this replay,
+    // and the live subscription starts *after* the last replayed sequence, so the
+    // card would never hear it. Arm the card from the replay (and from an active
+    // run), so a research started here or by another client is drawn instead of
+    // waiting for a re-read window that was anchored at the card's mount.
+    announceAttachedRun(sessionId, replayEvents, activeRun);
     const terminalRuns = sessionRunItems.filter((run) => isTerminalRunStatus(run.status));
     const terminalEvents = await Promise.all(terminalRuns.map(async (run) => {
       try {
@@ -4102,6 +4110,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (evolveCommandBlocked) return;
     if (!activeSessionId || !session || !message.trim() || session.archivedAt || isEvidenceSessionReadOnly(session)) return;
     if (configurationPreflightPendingRef.current) return;
+    if (asksForIdeaResearch(message)) {
+      // The research does not exist yet; this is the first moment the card can be
+      // told to expect one. A Session that has been open for hours gets a fresh
+      // window from here, which is what a mount-anchored window could not give it.
+      armIdeaResearchCard(activeSessionId);
+    }
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();
