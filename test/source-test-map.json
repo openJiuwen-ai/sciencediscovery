@@ -2322,6 +2322,90 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/settings/SkillConfirmDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillFileEditorView.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillToasts.tsx",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-files.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-tone.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skill-parts.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-tree-glyphs.tsx",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skill-parts.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/rows.tsx",
       "risk": "P1",
       "owner": "desktop",
