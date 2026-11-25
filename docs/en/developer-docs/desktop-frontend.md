@@ -55,7 +55,9 @@ Bulk enable/disable includes both kinds and leaves the fixed Review Specialist
 alone. `PUT /api/specialists/:id` persists the custom `enabled` flag, rejects
 non-boolean values, and preserves it when other fields are edited. Existing
 records without the flag remain enabled. Disabled roles stay in settings for
-management but are excluded from new Specialist selections and task dispatch.
+management but are omitted from the session picker and the generated subagent
+tool catalog. This flag controls catalog exposure; explicitly supplied IDs are
+still resolved by the existing subagent request path.
 This extends the previous built-in-only toggle contract; prior versions are
 retained in Git history. Acceptance: single/bulk toggle, reload persistence,
 edit while disabled, visible save failure and retry, and matching Skills action
