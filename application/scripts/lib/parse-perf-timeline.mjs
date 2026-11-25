@@ -25,7 +25,7 @@
 // difference of the two lines.
 //
 // Design mirrors pyc-budget.mjs: pure functions, pinned by
-// application/test/perf-timeline.test.ts against the REAL 2026-11-24
+// application/test/perf-budget.test.ts against the REAL 2026-11-24
 // three-session log of the signed v0.4.0 build — the numbers in the fixtures
 // are the measured values, and any parser change that stops extracting them
 // turns the test red by name.
@@ -186,7 +186,13 @@ const PAIRS = [
   { component: "api-ready", from: ["stack", "api-spawn"], to: ["shell", "HEALTH-200"] },
   { component: "jw-ready", from: ["jw", "spawn-jw-app"], to: ["jw", "IS-UP"] },
   { component: "agent-ready", from: ["shell", "module-load"], to: ["shell", "AGENT-READY"] },
-  { component: "shell-ui", from: ["shell", "AGENT-READY"], to: ["shell", "loadUi"] },
+  // shell-ui pairs AGENT-READY with loadUi-loadURL (not the legacy loadUi
+  // line): loadUi is Date.now()-appStartAt while the SD_PERF lines are
+  // relative to sdPerfT0 — two different origins, so their difference is
+  // biased by appStartAt-sdPerfT0 and can even go negative (F5).
+  // loadUi-loadURL is an SD_PERF line microseconds later sharing the
+  // same origin, so the subtraction is exact.
+  { component: "shell-ui", from: ["shell", "AGENT-READY"], to: ["shell", "loadUi-loadURL"] },
   // Cross-domain: warmup runs in the renderer/api process; only the ISO
   // timestamps line it up with the shell's AGENT-READY.
   { component: "warmup-done", from: ["shell", "AGENT-READY"], to: ["warmup", "warmup-first-chat"] },

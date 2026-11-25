@@ -11,6 +11,11 @@
 //   1  any hang (component over its hangMs budget, or a pair whose
 //      ready/healthy event never arrived — that IS the hang signal)
 //   2  usage error (no log file, unreadable, or no sessions found)
+//   3  sessions exist but NONE was judged (zero verdict rows) — the
+//      gate measured nothing and must not report green (F1: a log with
+//      no recognizable kind flag is evidence of a coverage gap, not a
+//      pass; the wizard/reuse shell paths currently emit no kind flag —
+//      see perf-verdict.mjs sessionKind note)
 //
 // Usage (from application/, or anywhere — paths are argv-based):
 //   node scripts/perf-gate.mjs <path-to-shell.log>
@@ -90,12 +95,14 @@ if (jsonOut) {
     }
     const verdict =
       j.summary.hang > 0 ? "HANG" : j.summary.regression > 0 ? "REGRESSION" : "ok";
-    console.log(`  ${label}: ${verdict}  (ok ${j.summary.ok}, regression ${j.summary.regression}, hang ${j.summary.hang})`);
+    const blockedNote = j.summary.blocked > 0 ? `, blocked ${j.summary.blocked}` : "";
+    console.log(`  ${label}: ${verdict}  (ok ${j.summary.ok}, regression ${j.summary.regression}, hang ${j.summary.hang}${blockedNote})`);
     for (const r of j.rows) {
       const ms = r.durationMs === null ? "missing" : `${r.durationMs}ms`;
       const line = `      ${r.component.padEnd(22)} ${String(ms).padStart(10)}  (budget ${r.budget}ms)`;
       if (r.verdict === "ok") console.log(line);
       else if (r.verdict === "regression") console.log(`  REG ${line}`);
+      else if (r.verdict === "blocked") console.log(`  BLK ${line}  <- blocked by ${r.blockedBy}`);
       else console.log(`  HANG ${line}${r.missing ? `  <- ${r.missing}` : ""}`);
     }
   }

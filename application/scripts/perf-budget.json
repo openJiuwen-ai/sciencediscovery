@@ -40,7 +40,7 @@
       },
       "shell-ui": {
         "hangMs": 15000,
-        "baselineMs": 120
+        "baselineMs": 122
       },
       "warmup-done": {
         "hangMs": 60000,
@@ -78,7 +78,7 @@
       },
       "shell-ui": {
         "hangMs": 15000,
-        "baselineMs": 105
+        "baselineMs": 110
       },
       "warmup-done": {
         "hangMs": 60000,
