@@ -2,14 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { isAuthFailure } from "./api/auth.js";
+import { IDEA_RESEARCH_EXPECTED_EVENT } from "./ideaResearchNotice.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
 import { useLocale } from "./i18n/index.js";
 import { ideaResearchActivityStatusLabel, ideaResearchPhaseLabel, ideaResearchStatusLabel } from "./IdeaResearchLabels.js";
 
 /** How often an empty list is re-read while a research is expected. */
 const EMPTY_POLL_MS = 5_000;
-/** How long that re-read keeps going before the card accepts "nothing started". */
-const EMPTY_POLL_WINDOW_MS = 5 * 60_000;
+/** The slower cadence the same re-read falls back to once the wait is clearly long. */
+const EMPTY_POLL_SLOW_MS = 30_000;
+/** How long the fast cadence lasts before the slow one takes over. */
+const EMPTY_POLL_FAST_FOR_MS = 2 * 60_000;
+/**
+ * How long that re-read keeps going before the card accepts "nothing started".
+ *
+ * As long as the journey itself gives a research to be created
+ * (`CREATE_BUDGET_MS` in `test/journey-idea-tree-real.spec.ts` is 600s, and a
+ * measured run created its research at 403s): a card that stopped asking after
+ * five minutes would leave a Session blank for the rest of a slow start, which
+ * is the bug this poll exists to fix.
+ */
+const EMPTY_POLL_WINDOW_MS = 10 * 60_000;
 
 export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
   const { t } = useLocale();
@@ -21,15 +34,36 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState<string>();
   const [error, setError] = useState<string>();
-  /** When this card first saw an empty list; the bounded re-read is measured from it. */
+  /**
+   * When this card first saw an empty list, and when it last learned that a
+   * research may be on its way (`armIdeaResearchCard`: an `/idea-tree` command
+   * this client sent, or an attach to a run whose replay carried one). The
+   * re-read runs while either anchor is inside its window and the later one wins,
+   * because a Session can stay open for hours before the command arrives: a
+   * window anchored at mount alone would already be spent by then.
+   */
   const emptySince = useRef<number | null>(null);
+  const expectSince = useRef<number | null>(null);
+  /** Restarts the re-read chain, so a command can open a window after an idle spell. */
+  const kick = useRef<() => void>(() => undefined);
   /** Latest availability callback, held in a ref so `load` keeps one identity. */
   const announce = useRef(onResearchAvailability);
   announce.current = onResearchAvailability;
   const load = useCallback(async () => {
-    try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); announce.current?.(result.items.length > 0); }
+    try {
+      const result = await client.listIdeaResearch(sessionId);
+      setItems(result.items);
+      // An item closes the window that was opened for an empty list, so a Session
+      // that already has a research is not re-read for the rest of the card's
+      // life. An expectation opened after it (a second research) keeps its own.
+      if (result.items.length > 0) emptySince.current = null;
+      setError(undefined);
+      announce.current?.(result.items.length > 0);
+    }
     catch (e) { setError(isAuthFailure(e) ? undefined : e instanceof Error ? e.message : String(e)); }
   }, [client, sessionId]);
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useEffect(() => { void load(); }, [load]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
   const [reconnect, setReconnect] = useState(0);
@@ -55,42 +89,57 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
    * Session — which is exactly how the real L4 journey failed: the command ran,
    * the research existed, and the card stayed absent for its whole wait.
    *
-   * Bounded, so an idle Session that never starts a research makes no requests
-   * for long: the timer stops once an item appears or the window is spent.
+   * Bounded, so an idle Session that never starts a research does not ask
+   * forever: five seconds at first, thirty once the wait is clearly long, and
+   * nothing at all once an item appears or the window is spent.
    */
   useEffect(() => {
-    if (items.length > 0) { emptySince.current = null; return undefined; }
-    // Anchored in a ref, not in the effect body: `load`'s identity comes from the
-    // parent's props, so a parent that passed an inline callback would restart the
-    // window on every poll and keep the timer alive for as long as the card is
-    // mounted. `IdeaTreeView` passes a state setter today, but the bound should
-    // not depend on how a caller writes that prop.
-    if (emptySince.current === null) emptySince.current = Date.now();
-    // Bare `setInterval`, like the SSE clock above: this file is a browser
+    if (emptySince.current === null && expectSince.current === null) emptySince.current = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Bare `setTimeout`, like the SSE clock above: this file is a browser
     // component, and a test harness that stubs `window` should not have to stub
-    // its timers as well.
-    const timer = setInterval(() => {
-      const started = emptySince.current;
-      if (started === null || Date.now() - started > EMPTY_POLL_WINDOW_MS) {
-        clearInterval(timer);
-        return;
-      }
-      void load();
-    }, EMPTY_POLL_MS);
-    return () => clearInterval(timer);
-  }, [items.length, load]);
+    // its timers as well. A chain rather than a fixed interval, so the cadence
+    // can slow down without a second timer, and installed once for the card's
+    // life so a parent's re-render cannot restart the window.
+    const schedule = (ms: number) => { timer = setTimeout(tick, ms); };
+    const tick = () => {
+      const started = Math.max(emptySince.current ?? Number.NEGATIVE_INFINITY, expectSince.current ?? Number.NEGATIVE_INFINITY);
+      const now = Date.now();
+      const waiting = Number.isFinite(started) && now - started <= EMPTY_POLL_WINDOW_MS;
+      if (waiting) void loadRef.current();
+      schedule(waiting && now - started < EMPTY_POLL_FAST_FOR_MS ? EMPTY_POLL_MS : EMPTY_POLL_SLOW_MS);
+    };
+    // A command, or an attach to a run, restarts the chain: the window it opens
+    // must be read within seconds even if the previous one was spent.
+    kick.current = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      schedule(EMPTY_POLL_MS);
+    };
+    schedule(EMPTY_POLL_MS);
+    return () => { if (timer !== undefined) clearTimeout(timer); };
+  }, []);
 
   useEffect(() => {
+    const matches = (event: Event) => (event as CustomEvent<{sessionId: string}>).detail?.sessionId === sessionId;
     const refresh = (event: Event) => {
-      if ((event as CustomEvent<{sessionId: string}>).detail.sessionId === sessionId) {
-        setSelected(undefined);
-        void load();
-        element.current?.scrollIntoView({block: "nearest"});
-      }
+      if (!matches(event)) return;
+      setSelected(undefined);
+      void loadRef.current();
+      element.current?.scrollIntoView({block: "nearest"});
+    };
+    const arm = (event: Event) => {
+      if (!matches(event)) return;
+      expectSince.current = Date.now();
+      kick.current();
+      void loadRef.current();
     };
     window.addEventListener("idea-research-updated", refresh);
-    return () => window.removeEventListener("idea-research-updated", refresh);
-  }, [load, sessionId]);
+    window.addEventListener(IDEA_RESEARCH_EXPECTED_EVENT, arm);
+    return () => {
+      window.removeEventListener("idea-research-updated", refresh);
+      window.removeEventListener(IDEA_RESEARCH_EXPECTED_EVENT, arm);
+    };
+  }, [sessionId]);
   async function command(operation: string, researchId: string) {
     setBusy(true);
     try {
