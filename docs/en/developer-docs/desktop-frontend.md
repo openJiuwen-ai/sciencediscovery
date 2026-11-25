@@ -169,8 +169,11 @@ Disabled roles stay manageable. Desktop hides them from new selections and the
 generated subagent tool catalog omits them. Existing session bindings remain:
 the composer keeps the bound role named and marked Disabled, explains that it
 still applies, and offers None to unbind it for subsequent turns. The checked
-disabled row is visible but cannot be chosen as a new binding. Explicit IDs
-continue through the existing subagent resolution path. These Desktop controls
+disabled row is visible but cannot be chosen as a new binding. The explanation
+wraps within a bounded tooltip so the unbind instruction remains visible at
+960×720. Disabled expert rows use muted styling without a selectable hover or
+selected background while retaining their current-binding check mark. Explicit
+IDs continue through the existing subagent resolution path. These Desktop controls
 do not assert parity with the legacy Web UI.
 
 This extends the old built-in-only toggle contract; previous versions remain

@@ -2287,9 +2287,23 @@ body.is-resizing {
   text-align: left;
 }
 
-.expert-row:hover,
-.expert-row.is-selected {
+.expert-row:hover:not(:disabled),
+.expert-row.is-selected:not(:disabled) {
   background: #f5f5f5;
+}
+
+.expert-row:disabled {
+  background: transparent;
+  cursor: default;
+}
+
+.expert-row:disabled .expert-name,
+.expert-row:disabled .session-flyout-check {
+  color: #8c8c8c;
+}
+
+.expert-row:disabled .expert-mark {
+  opacity: 0.5;
 }
 
 .expert-mark {
@@ -2396,7 +2410,10 @@ body.is-resizing {
   color: #fff;
   font-size: 12.5px;
   line-height: 1.35;
-  white-space: nowrap;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 96px));
+  white-space: normal;
+  overflow-wrap: anywhere;
   opacity: 0;
   pointer-events: none;
   transform: translateY(2px);
