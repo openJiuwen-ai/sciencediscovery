@@ -33,13 +33,36 @@ export const PANEL_MIN_WIDTH = 480;
 export const PANEL_MAX_WIDTH = 1100;
 
 /**
- * The two columns the panel shares the window with, mirrored from the grid in
- * `shell.css` (`256px minmax(0, 1fr) var(--panel-width)`). They are repeated
- * here rather than measured because the ceiling has to be knowable on the first
- * render, before anything is laid out — the panel must not open wider than the
- * window can afford and then snap back on the next frame.
+ * What the panel costs the window besides its own width.
+ *
+ * The shell is the flex row in `design.css` — rail, middle column, panel — not
+ * the three-column grid still written down in `shell.css`: `index.css` loads
+ * that older partial first, so its `grid-template-columns` never applies and
+ * the flex row below is what the panel actually sits in. `--d-rail` in
+ * `tokens.css` defines the rail's width; `design.css` repeats it as two
+ * literals (`width: 64px` and `flex: 0 0 64px`) that have to match it.
+ * `.main-area` and `.workspace-panel` each keep a 6px left margin
+ * (`margin: 6px 0 6px 6px`), so 64 + 6 + 6 = 76px of the window is spent on
+ * everything that is not the panel.
+ *
+ * There is deliberately no sidebar column in that sum. While the panel is open
+ * `App` does not render the sidebar at all (`taskSidebar = sidebarOpen &&
+ * !panelOpen`), so the two never share a width budget: the panel takes the
+ * sidebar's place rather than squeezing in beside it. The old 360 matches the
+ * rail plus the 296px `.sidebar` of `design.css`, but that column is not in the
+ * row at all while the panel is open.
+ *
+ * These are mirrored here rather than measured because the ceiling has to be
+ * knowable on the first render, before anything is laid out — the panel must
+ * not open wider than the window can afford and then snap back on the next
+ * frame. The test reads the token, the live `.rail` literals and the two
+ * margins back, and fails if any of them drifts away from these numbers.
  */
-export const PANEL_SIDEBAR_WIDTH = 360;
+export const PANEL_RAIL_WIDTH = 64;
+/** The gap `.main-area` and `.workspace-panel` each keep on their left. */
+export const PANEL_SHELL_GUTTER = 6;
+/** Rail plus both gutters: everything in the row that is not the panel. */
+export const PANEL_SHELL_RESERVE = PANEL_RAIL_WIDTH + 2 * PANEL_SHELL_GUTTER;
 /** The narrowest the conversation column may be squeezed to by a drag. */
 export const PANEL_MIN_CHAT_WIDTH = 512;
 
@@ -69,10 +92,16 @@ export function boundedPanelWidth(width: number): number {
 /**
  * Fold a width into what the current window can actually show.
  *
- * A window too narrow for the floor keeps the floor: the media query in
- * `shell.css` hides the panel altogether below 1100px, so this is only ever
- * reached on the way down, and a panel that is briefly wider than its column
- * beats one that collapses to nothing while the window is being resized.
+ * The panel shares the row with the rail and the two gutters, and the middle
+ * column keeps `PANEL_MIN_CHAT_WIDTH` for the conversation; whatever is left
+ * over is the panel's ceiling.
+ *
+ * A window too narrow for the floor keeps the floor. The panel is not on
+ * screen that narrow anyway: `shell.css` hides it at 1100px and below with
+ * `display: none !important`, which no later `design.css` rule can override
+ * (`design.css` also hides it, with the sidebar, at 820px). So this is only
+ * ever reached on the way down, and a panel that is briefly wider than its
+ * column beats one that collapses to nothing while the window is being resized.
  *
  * This is applied to what is rendered, not to what is remembered. A window that
  * is narrowed and widened again has to give the panel back, and a width that had
@@ -81,7 +110,7 @@ export function boundedPanelWidth(width: number): number {
 export function clampPanelWidth(width: number, viewportWidth: number): number {
   const ceiling = Math.min(
     PANEL_MAX_WIDTH,
-    viewportWidth - PANEL_SIDEBAR_WIDTH - PANEL_MIN_CHAT_WIDTH,
+    viewportWidth - PANEL_SHELL_RESERVE - PANEL_MIN_CHAT_WIDTH,
   );
   return Math.max(PANEL_MIN_WIDTH, Math.min(boundedPanelWidth(width), ceiling));
 }
