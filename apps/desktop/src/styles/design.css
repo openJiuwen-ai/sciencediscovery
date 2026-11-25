@@ -5433,7 +5433,7 @@ body.is-resizing {
    be extra air on top of that rhythm) and no horizontal padding (any would push
    the box 12 px right of the rows it sits between). Its box lines up with a row's
    box, and its 12 px text inset lines up with a row's name. */
-.side-search { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 10px 6px; }
+.side-search { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 6px; }
 .side-search-field {
   box-sizing: border-box;
   flex: 1 1 0;
