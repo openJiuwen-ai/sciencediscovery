@@ -92,8 +92,15 @@ EXE_NAME="${EXE_NAME:-ScienceDiscovery}"
 step "smoke target: $APP"
 
 # --- rail 3: single-instance lock preflight -----------------------------------
-if pgrep -f "ScienceDiscovery.app/Contents/MacOS" >/dev/null 2>&1; then
-  die "a ScienceDiscovery instance is already running — the smoke instance would lose the Electron single-instance lock and exit instantly. Quit it first." 2
+# SD_SMOKE_SKIP_LOCK=1 bypasses this preflight for mock/validation runs
+# only (a mock .app is a plain script and holds no Electron lock, but the
+# pgrep below would still see the developer's real running instance and
+# block the test). CI runners are clean and never need it; a real smoke
+# against a real .app must leave it unset.
+if [ "${SD_SMOKE_SKIP_LOCK:-0}" != "1" ]; then
+  if pgrep -f "ScienceDiscovery.app/Contents/MacOS" >/dev/null 2>&1; then
+    die "a ScienceDiscovery instance is already running — the smoke instance would lose the Electron single-instance lock and exit instantly. Quit it first." 2
+  fi
 fi
 
 # --- throwaway dirs ------------------------------------------------------------
@@ -110,6 +117,14 @@ mkdir -p "$DATA_DIR" "$APP_DIR"
 # of MB per run). The restore must run BEFORE the wipe: the wizard backups
 # live inside $SMOKE_DIR.
 cleanup() {
+  # kill the app first on signal paths: a live Electron child would re-write
+  # wizard-state.json AFTER the restore below and re-point the real install
+  # at the throwaway dir the next line deletes (HongyeZhou's blocking case).
+  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$APP_PID" 2>/dev/null || true
+  fi
   cleanup_wizard
   if [ "$KEEP" = "1" ]; then
     printf '[perf-smoke] KEEP=1 — kept for debugging: %s\n' "$SMOKE_DIR" >&2
@@ -118,6 +133,18 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+# INT/TERM/HUP: Ctrl-C out of a five-minute wait, CI cancellation, a lost
+# terminal — without these traps NONE of the cleanup ran on the signal path
+# (cleanup_wizard was EXIT-only), leaving the real wizard-state.json pointed
+# at the throwaway data dir: the user's next real launch opens on an empty
+# workspace with nothing telling them why (HongyeZhou, blocking). The signal
+# handler kills the app and exits nonzero — the EXIT trap then restores and
+# wipes, so the order and the single-handler rule both hold.
+on_signal() {
+  printf '\n[perf-smoke] caught signal — killing app, restoring, wiping\n' >&2
+  exit 130
+}
+trap on_signal INT TERM HUP
 
 # REALPATH FORM for the data dir: on macOS $TMPDIR is the /var/folders/...
 # spelling while Electron's process.resourcesPath is realpath'd to
@@ -127,8 +154,11 @@ trap cleanup EXIT
 # "hop-to-root + absolute" links that resolve to /private/private/... and
 # DIE (observed live, run 2: start-stack fail-fasted on the broken venv).
 # Seeding the dataDir in the SAME /private spelling the app sees makes the
-# relative hop correct. (This is also an app-side latent bug worth an issue:
-# any dataDir/.app spelling mismatch breaks the first-run venv fix.)
+# relative hop correct. (App-side latent bug worth an issue — trigger,
+# precisely: fixVenvLaunchers only breaks when the symlink's PARENT dir is
+# later resolved under the other spelling (/private added), because
+# posix.relative walks to the root and lands one component short; a dataDir
+# that merely differs from the .app spelling is not enough by itself.)
 DATA_DIR="$(/usr/bin/python3 -c 'import os,sys; sys.stdout.write(os.path.realpath(sys.argv[1]))' "$DATA_DIR")"
 
 # --- rail 1: wizard state — backup, seed, restore-on-exit -----------------------
@@ -161,20 +191,25 @@ done
 step "wizard state seeded (step=done, dataDir=$DATA_DIR, real userData, backups taken)"
 
 # --- rail 2: log offset BEFORE launch (rotation-safe delta) --------------------
-LOG_PATH=""; LOG_OFFSET=0
+# Record the pre-launch offset of EVERY name candidate, not just the first
+# one that exists: the app writes the log dir its packaged package.json
+# name says, and a stale shell.log under the OTHER name (old install, other
+# build) must not steal the run with an empty delta and exit 6 (HongyeZhou
+# rail finding). Evidence-driven: whichever candidate the app actually
+# appends to is the one the delta wait locks onto — same shape as the
+# verdict layer's copyPathSkipped (key on evidence, not on a guess).
+LOG_PATHS=(); LOG_OFFSETS=()
 for NAME in "${NAME_CANDIDATES[@]}"; do
   L="$LOGS_ROOT/$NAME/shell.log"
+  LOG_PATHS+=("$L")
   if [ -f "$L" ]; then
-    LOG_PATH="$L"
-    LOG_OFFSET=$(stat -f%z "$L")
-    break
+    LOG_OFFSETS+=("$(stat -f%z "$L")")
+  else
+    LOG_OFFSETS+=(0)
   fi
 done
-if [ -z "$LOG_PATH" ]; then
-  # nothing exists yet — the first candidate the app creates is the one
-  LOG_PATH="$LOGS_ROOT/${NAME_CANDIDATES[0]}/shell.log"
-fi
-step "log: $LOG_PATH (pre-launch offset $LOG_OFFSET bytes; judging only the delta)"
+LOG_PATH=""; LOG_OFFSET=0   # locked by log_delta_ready once a delta appears
+step "log candidates: ${LOG_PATHS[*]} (offsets ${LOG_OFFSETS[*]}; judging only the appended delta)"
 
 # --- fresh copy of the .app (first-launch shape) --------------------------------
 step "copying .app -> $APP_DIR"
@@ -202,10 +237,57 @@ env -i \
 APP_PID=$!
 printf '[perf-smoke] app pid %s\n' "$APP_PID" >&2
 
-log_delta_ready() {  # true once the app appended perf lines past the offset
-  [ -f "$LOG_PATH" ] || return 1
-  local size; size=$(stat -f%z "$LOG_PATH" 2>/dev/null || printf 0)
-  [ "$size" -gt "$LOG_OFFSET" ]
+# log_delta_ready scans ALL candidates and locks onto the one that BOTH grew
+# past its pre-launch offset AND carries the smoke app's own evidence
+# (AGENT-READY in the delta) — the stale-file race dies here: a stale
+# sd-shell/shell.log that never grows is never picked, and a file growing
+# for unrelated reasons (only possible with the lock preflight bypassed)
+# has no AGENT-READY to offer. LOG_PATH/LOG_OFFSET are locked together so
+# the rest of the script (delta extract, gate, artifact copy) works on the
+# one true file. Evidence-driven, the same shape as the verdict layer's
+# copyPathSkipped: key on evidence, not on a guess.
+log_delta_ready() {
+  local i L size
+  for i in "${!LOG_PATHS[@]}"; do
+    L="${LOG_PATHS[$i]}"
+    [ -f "$L" ] || continue
+    size=$(stat -f%z "$L" 2>/dev/null || printf 0)
+    if [ "$size" -gt "${LOG_OFFSETS[$i]}" ]; then
+      if tail -c +"$((${LOG_OFFSETS[$i]} + 1))" "$L" 2>/dev/null | grep -q 'AGENT-READY'; then
+        LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+# lock_grown_delta: the app DIED before AGENT-READY (exited path) — pick the
+# candidate whose delta still smells like the smoke app ([perf] lines), else
+# the only one that grew. Nothing grew anywhere -> LOG_PATH stays empty and
+# the extract step fails with exit 6, which is the honest verdict there.
+lock_grown_delta() {
+  local i L size
+  for i in "${!LOG_PATHS[@]}"; do
+    L="${LOG_PATHS[$i]}"
+    [ -f "$L" ] || continue
+    size=$(stat -f%z "$L" 2>/dev/null || printf 0)
+    [ "$size" -gt "${LOG_OFFSETS[$i]}" ] || continue
+    if tail -c +"$((${LOG_OFFSETS[$i]} + 1))" "$L" 2>/dev/null | grep -q '\[perf\]'; then
+      LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
+      return 0
+    fi
+  done
+  for i in "${!LOG_PATHS[@]}"; do
+    L="${LOG_PATHS[$i]}"
+    [ -f "$L" ] || continue
+    size=$(stat -f%z "$L" 2>/dev/null || printf 0)
+    if [ "$size" -gt "${LOG_OFFSETS[$i]}" ]; then
+      LOG_PATH="$L"; LOG_OFFSET="${LOG_OFFSETS[$i]}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 DEADLINE=$(( $(date +%s) * 1000 + TIMEOUT_MS ))
@@ -254,9 +336,17 @@ case "$STATE" in
 esac
 wait "$APP_PID" 2>/dev/null || true
 
+# state branches that ended without a locked candidate (app died or timed
+# out before AGENT-READY): lock whatever the app DID write so the partial
+# log still reaches the gate — that is the smoke's whole point. Ready runs
+# are already locked by log_delta_ready's AGENT-READY evidence check.
+if [ -z "$LOG_PATH" ]; then
+  lock_grown_delta || true
+fi
+
 # --- extract the delta and judge --------------------------------------------------
 JUDGE_LOG="$SMOKE_DIR/smoke-shell.log"
-if [ -f "$LOG_PATH" ]; then
+if [ -n "$LOG_PATH" ] && [ -f "$LOG_PATH" ]; then
   SIZE=$(stat -f%z "$LOG_PATH")
   if [ "$SIZE" -lt "$LOG_OFFSET" ]; then
     # rotation happened mid-smoke: the whole file is this run's
@@ -265,7 +355,7 @@ if [ -f "$LOG_PATH" ]; then
     tail -c +"$((LOG_OFFSET + 1))" "$LOG_PATH" > "$JUDGE_LOG"
   fi
 fi
-[ -s "$JUDGE_LOG" ] || die "app produced no log delta at $LOG_PATH (offset was $LOG_OFFSET; see $SMOKE_DIR/app-stdout.log)" 6
+[ -s "$JUDGE_LOG" ] || die "app produced no log delta under any of: ${LOG_PATHS[*]} (see $SMOKE_DIR/app-stdout.log)" 6
 
 if [ -n "${SD_SMOKE_LOG_OUT:-}" ]; then
   mkdir -p "$(dirname "$SD_SMOKE_LOG_OUT")"
