@@ -136,6 +136,27 @@ test("built-in specialist core fields are read-only; only enabled can change", a
   }, "readonly");
 });
 
+test("custom specialist enabled state survives store reload and later edits", async () => {
+  const root = resolve(process.cwd(), ".tmp", `custom-spec-persist-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  try {
+    const store = new SessionStore(root);
+    await store.load();
+    const custom = await store.createSpecialist({ name: "Custom toggle", description: "d", instructions: "i" });
+    assert.equal(custom.enabled, undefined, "old and new custom roles default to enabled");
+    await store.updateSpecialist(custom.id, { enabled: false });
+    const reopened = new SessionStore(root);
+    await reopened.load();
+    assert.equal(reopened.getSpecialist(custom.id)?.enabled, false);
+    const edited = await reopened.updateSpecialist(custom.id, { instructions: "updated instructions" });
+    assert.equal(edited.enabled, false);
+    assert.equal((await reopened.updateSpecialist(custom.id, { enabled: true })).enabled, true);
+    assert.equal(reopened.getSpecialist(custom.id)?.instructions, "updated instructions");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("enabled defaults to enabled when the key is absent (backward compat)", async () => {
   await withStore(async (store) => {
     // A fresh store: built-ins have no `enabled` key but should dispatch.

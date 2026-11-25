@@ -4983,12 +4983,14 @@ export class SessionStore {
       await this.saveCatalog();
       return structuredClone(specialist);
     }
+    if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("enabled must be a boolean");
     const normalized = this.normalizeSpecialistInput({ ...specialist, ...input });
     if (this.catalog.specialists.some((candidate) => candidate.id !== specialistId
       && candidate.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
       throw new Error("Specialist name already exists");
     }
     Object.assign(specialist, normalized, { updatedAt: new Date().toISOString() });
+    if (input.enabled !== undefined) specialist.enabled = input.enabled;
     await this.saveCatalog();
     return structuredClone(specialist);
   }

@@ -290,8 +290,8 @@ export function SystemSettingsDialog({
                     {TEXT.settings.model.add}
                   </button>
                 ) : group === "specialists" ? (
-                  <button className="primary-button" onClick={() => setAddingSpecialist(true)} type="button">
-                    <span aria-hidden="true">＋ </span>{TEXT.settings.system.specialists.add}
+                  <button className="pill-button is-dark" onClick={() => setAddingSpecialist(true)} type="button">
+                    {TEXT.settings.system.specialists.add}
                   </button>
                 ) : null}
               </header>

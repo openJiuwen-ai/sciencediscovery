@@ -36,7 +36,7 @@ Select only needed connectors. For a private data interface, follow the [custom 
 
 Where the editor supports per-role skill selection, select `code-engineer`. With the JiuwenSwarm backend, the editor instead explains that Swarm manages skills; it does not provide the same checkboxes. Check availability in the JiuwenSwarm view under **Skills**. Do not assume hidden settings have taken effect.
 
-Save the role. Built-in roles offer enable/disable controls; create a custom role to change a preset responsibility rather than editing a built-in entry.
+Save the role. Custom and built-in roles offer enable/disable controls, including bulk actions. Disabling keeps the configuration for later use; enable it again to restore availability. Built-in roles remain read-only otherwise; create a custom role to change a preset responsibility rather than editing a built-in entry. Automatic review remains a per-session setting.
 
 ## 3. Verify it in a session
 

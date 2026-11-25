@@ -98,6 +98,29 @@ describe("the Specialist routes answer a rejected input as a client error", () =
     assert.equal(response.body.error, "Built-in specialists cannot be deleted");
   });
 
+  test("a custom Specialist can be disabled, edited while disabled, and enabled again", async () => {
+    const created = await request("POST", "/api/specialists", {
+      name: "custom toggle subject", description: "d", instructions: "i",
+    });
+    assert.equal(created.status, 201);
+    const path = `/api/specialists/${created.body.id}`;
+    const disabled = await request("PUT", path, { enabled: false });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.enabled, false);
+    const edited = await request("PUT", path, { description: "edited while disabled" });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.enabled, false);
+    const listed = await request("GET", "/api/specialists");
+    assert.equal((listed.body as unknown as Array<{ id: string; enabled?: boolean }>).find(s => s.id === created.body.id)?.enabled, false);
+    const invalid = await request("PUT", path, { enabled: "yes" });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.error, "enabled must be a boolean");
+    const enabled = await request("PUT", path, { enabled: true });
+    assert.equal(enabled.status, 200);
+    assert.equal(enabled.body.enabled, true);
+    assert.equal(enabled.body.description, "edited while disabled");
+  });
+
   // One declaration per rejection the settings pane can provoke, driven through
   // the real store: the wording lives in services/api/src/store.ts, so a change
   // there fails this route test instead of only a hand-copied helper list.

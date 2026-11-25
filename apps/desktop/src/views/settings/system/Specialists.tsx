@@ -30,7 +30,6 @@ import type {
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
-import { SettingsModal } from "../SettingsModal.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
 
@@ -58,8 +57,7 @@ interface Page {
  *
  * Built-ins the server seeds as specialist records are read-only; their one
  * editable field is whether they appear in the task tool's enum at all. A
- * user-created specialist is always enabled, so the switch is drawn only where
- * it means something.
+ * user-created specialist has the same enabled switch, alongside edit/delete.
  *
  * The new action and each custom row share a form over the list.
  */
@@ -95,8 +93,7 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
     }
   };
 
-  /** 一键启用 / 一键关闭. Only a built-in has a switch of its own — a specialist
-   *  the user wrote is always on — so those are the rows this writes. */
+  /** 一键启用 / 一键关闭 covers every dispatchable specialist, including custom ones. */
   const setAll = async (next: boolean) => {
     const page = loaded.value;
     if (!page) return;
@@ -104,7 +101,7 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
     setFailure(undefined);
     try {
       for (const specialist of page.specialists) {
-        if (!specialist.builtIn || (specialist.enabled !== false) === next) continue;
+        if ((specialist.enabled !== false) === next) continue;
         await updateSpecialist(client, specialist.id, { enabled: next });
       }
       loaded.reload();
@@ -156,14 +153,7 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
                           <small>{specialist.description}</small>
                         </div>
                         <div className="settings-card-actions">
-                          {specialist.builtIn ? (
-                            <Switch
-                              disabled={busy}
-                              label={`${specialist.name} · ${TEXT.settings.system.specialists.enabled}`}
-                              onChange={(next) => void toggle(specialist, next)}
-                              value={on}
-                            />
-                          ) : (
+                          {specialist.builtIn ? null : (
                             <>
                               <button
                                 className="link-button"
@@ -195,6 +185,12 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
                               </button>
                             </>
                           )}
+                          <Switch
+                            disabled={busy}
+                            label={`${specialist.name} · ${TEXT.settings.system.specialists.enabled}`}
+                            onChange={(next) => void toggle(specialist, next)}
+                            value={on}
+                          />
                         </div>
                       </div>
                     );
