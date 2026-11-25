@@ -133,6 +133,24 @@ test("with no query the same narrowing filters the column itself", () => {
   assert.equal(narrowSessions(rows, DEFAULT_SEARCH_NARROWING, context).some((row) => row.id === "gone"), false);
 });
 
+test("the column keeps the open Session, and one whose artifacts are unread", () => {
+  // 有产物 narrows on a set the prefetch fills *after* the listing answers, so on
+  // the first paint every Session is unread — dropping those would empty the
+  // column until the reads land. The open Session is kept for the same reason:
+  // narrowing must not hide the row the reader is looking at.
+  const rows = [
+    session("open", { projectId: "p2" }),
+    session("unread", { projectId: "p2" }),
+    session("read-empty", { projectId: "p2" }),
+  ];
+  const narrowed = narrowSessions(
+    rows,
+    { ...DEFAULT_SEARCH_NARROWING, onlyWithArtifacts: true, projectIds: ["p2"] },
+    { ...context, artifactsUnread: new Set(["unread"]), keepSessionId: "open" },
+  );
+  assert.deepEqual(narrowed.map((row) => row.id), ["open", "unread"],
+    "an unread list is not an empty one, and the open row stays visible");
+});
 test("a hit this page cannot judge is kept rather than hidden", () => {
   const rows = [hit("session", { sessionId: "unknown-project" })];
   assert.deepEqual(narrowResults(rows, DEFAULT_SEARCH_NARROWING, context).length, 1);

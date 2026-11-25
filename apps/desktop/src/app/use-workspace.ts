@@ -2656,6 +2656,17 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       .map(([id]) => id)),
     [outputs],
   );
+  /** Sessions whose artifact list has not been read yet: 有产物 keeps those rather
+   *  than reading "not read" as "has none". */
+  const unreadArtifacts = useMemo(() => {
+    const unread = new Set<string>();
+    for (const sessions of Object.values(listedByProject)) {
+      for (const session of sessions) {
+        if (artifactsBySession.current[session.id] === undefined) unread.add(session.id);
+      }
+    }
+    return unread;
+  }, [listedByProject, outputs]);
   /** The column's lists under an active narrowing, or `undefined` when the
    *  column shows every active Session. */
   const columnLists = useMemo(() => {
@@ -2664,6 +2675,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       now: filterNow,
       runningSessionId: running ? sessionId : undefined,
       withArtifacts: artifactSessions,
+      artifactsUnread: unreadArtifacts,
+      keepSessionId: sessionId,
       sessionFacts: () => undefined,
     };
     const byProject: Record<string, Session[]> = {};
@@ -2671,7 +2684,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       byProject[projectId] = narrowSessions(sessions, narrowing, context);
     }
     return { byProject, recent: narrowSessions(recent, narrowing, context) };
-  }, [artifactSessions, columnNarrowed, filterNow, listedByProject, narrowing, recent, running, sessionId]);
+  }, [artifactSessions, columnNarrowed, filterNow, listedByProject, narrowing, recent, running, sessionId, unreadArtifacts]);
 
   // Which Project the open Session is in, or the inbox while none is open. The
   // name is derived rather than stored so a rename, a switch and a language
