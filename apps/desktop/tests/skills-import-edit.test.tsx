@@ -586,6 +586,24 @@ test("a managed skill offers export, edit and delete; a built-in only export", a
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a pressed row menu survives pointer leave during scrolling; hover alone stays transient", async () => {
+  const stub = new StubClient().reply([skill]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  const root = () => view.root.findAllByType("div").find(node => node.props.className === "skill-row-menu")!;
+  const entries = () => view.root.findAllByType("button").filter(node => node.props.role === "menuitem");
+  try {
+    await act(async () => { root().props.onPointerEnter({ pointerType: "mouse" }); });
+    assert.equal(entries().length, 3);
+    await act(async () => { root().props.onPointerLeave(); });
+    assert.equal(entries().length, 0, "hover-only menus close on pointer leave");
+    await openRowMenu(view, "review");
+    await act(async () => { root().props.onPointerLeave(); });
+    assert.equal(entries().length, 3, "scrolling away from the trigger must not remove a pressed menu");
+    await act(async () => { rowMenu(view, "review").props.onClick(); });
+    assert.equal(entries().length, 0, "a second press closes the menu");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("Escape and a press outside close the menu the chevron opened", async () => {
   // The menu listens on `document`, which the stub above discards. This test
   // records what the component registers so both ways out of the popover can
