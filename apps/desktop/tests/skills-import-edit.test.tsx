@@ -1084,6 +1084,86 @@ test("deleting a package file asks in the page's own 2-4 dialog", async () => {
     assert.deepEqual(json(write), { expectedRevision: 1 });
   } finally { await act(async () => { view.unmount() }); }
 });
+test("a built-in package's page offers no empty actions menu", async () => {
+  const builtIn: SkillDetail = { ...detail, readOnly: true, source: "built-in" };
+  const stub = new StubClient().reply(builtIn);
+  const view = await mount(
+    <SkillDetailView
+      client={stub.asClient()}
+      onBack={() => {}}
+      onDelete={() => {}}
+      onEdit={() => {}}
+      onToggle={() => {}}
+      skillId="review"
+      switchesAvailable={false}
+    />,
+  );
+  try {
+    await settle();
+    const triggers = view.root.findAllByType("button")
+      .filter((node) => String(node.props.className).includes("skill-row-menu-trigger"));
+    assert.equal(triggers.length, 0, "the built-in page shows a trigger for an empty menu");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("a save that fails part-way keeps the revision it already wrote", async () => {
+  const withResources: SkillDetail = {
+    ...detail,
+    resources: [
+      { hash: "h1", kind: "reference", path: "references/b.md", size: 3 },
+      { hash: "h2", kind: "reference", path: "references/c.md", size: 3 },
+    ],
+  };
+  const afterSkillMd: SkillDetail = { ...withResources, currentRevision: 2 };
+  const afterB: SkillDetail = { ...withResources, currentRevision: 3 };
+  const afterC: SkillDetail = { ...withResources, currentRevision: 4 };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(withResources)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .reply({ content: "# B", hash: "h1", path: "references/b.md", revision: 1, skillId: "review", size: 3 })
+    .reply({ content: "# C", hash: "h2", path: "references/c.md", revision: 1, skillId: "review", size: 3 })
+    .reply(afterSkillMd)
+    .reply(afterB)
+    .fail(new Error("write refused"))
+    .reply(afterC);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    const editor = () => view.root.findAllByType("textarea")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.content);
+
+    await act(async () => { editor()!.props.onChange({ target: { value: "---\nname: review\n---\n\nReview carefully!" } }); });
+    const openResource = (name: string) => view.root.findAllByType("button")
+      .find((node) => textUnder(node) === name);
+    await act(async () => { openResource("b.md")!.props.onClick(); });
+    await settle();
+    await act(async () => { editor()!.props.onChange({ target: { value: "# B edited" } }); });
+    await act(async () => { openResource("c.md")!.props.onClick(); });
+    await settle();
+    await act(async () => { editor()!.props.onChange({ target: { value: "# C edited" } }); });
+
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    await settle();
+    // SKILL.md and b.md landed; c.md was refused. The retry must start from
+    // the revision the server already holds.
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    await settle();
+
+    const skillWrites = stub.calls.filter((call) => call.path === "/api/skills/review/skill-md" && call.init.method === "PUT");
+    assert.equal(skillWrites.length, 1, "SKILL.md was resent on the retry");
+    const cWrites = stub.calls.filter((call) => call.path === "/api/skills/review/files/references%2Fc.md");
+    assert.equal(cWrites.length, 2);
+    for (const write of cWrites) {
+      assert.equal((json(write) as { expectedRevision: number }).expectedRevision, 3,
+        "the retry used a revision from before the writes that landed");
+    }
+  } finally { await act(async () => { view.unmount() }); }
+});
+
 test("a double press on a package file renames it from the reading page", async () => {
   const rich: SkillDetail = {
     ...detail,
