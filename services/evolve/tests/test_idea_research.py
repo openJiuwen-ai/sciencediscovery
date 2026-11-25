@@ -27,7 +27,11 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
 
-    async def test_empty_or_truncated_stage_preserves_usage_without_format_correction(self):
+    async def test_empty_or_truncated_stage_consumes_the_correction_and_preserves_usage(self):
+        # A stage gets one correction, and an empty answer is a content failure like a
+        # malformed one, so it takes that correction instead of ending the stage before
+        # the branch is reached (#1327). Both calls' usage still lands, and the failure
+        # names the stage.
         for raw in (None, '', '  '):
             calls = []
             async def truncated(role, payload):
@@ -35,15 +39,51 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                 return raw, 14
             self.state['tokens'] = 0
             engine = IdeaTreeEngine(self.state, self.store, {}, truncated)
-            with self.assertRaisesRegex(ValueError, 'design: empty or truncated model output'):
+            with self.assertRaisesRegex(ValueError, 'design: invalid model result after one correction: empty or truncated model output'):
                 await engine.ask('design', {})
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(self.state['tokens'], 14)
+            self.assertEqual(len(calls), 2)
+            self.assertIn('empty or truncated', calls[1]['correction'])
+            self.assertEqual(self.state['tokens'], 28)
             self.assertEqual(engine.reserved, 0)
             persisted = self.store.read('p', 's', 'research-test')
-            self.assertEqual(persisted['tokens'], 14)
+            self.assertEqual(persisted['tokens'], 28)
             self.assertEqual(persisted['activities'][-1]['status'], 'failed')
             self.assertIn('empty or truncated', persisted['activities'][-1]['error'])
+
+    async def test_an_empty_answer_is_retried_once_and_can_succeed(self):
+        # #1327: an empty answer used to raise before the correction branch, so the
+        # stage never asked again. One more call is enough when the model was merely
+        # empty once, and the correction tells it what was wrong.
+        calls = []
+        async def flaky(role, payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return '', 14
+            return json.dumps(dict(text='design output')), 14
+        engine = IdeaTreeEngine(self.state, self.store, {}, flaky)
+        result = await engine.ask('design', {})
+        self.assertEqual(result['text'], 'design output')
+        self.assertEqual(len(calls), 2)
+        self.assertIn('empty or truncated', calls[1]['correction'])
+        self.assertEqual(self.state['tokens'], 28)
+
+    async def test_a_research_survives_an_empty_ideation_answer(self):
+        # The run-level shape of #1327: the ideate stage answers empty once, the
+        # correction is enough, and the research completes instead of settling
+        # `interrupted`.
+        self.state['settings'].update(maxRounds=1, candidatesPerRound=1, maxSearchRounds=1)
+        ideate = []
+        async def model(role, payload):
+            raw, tokens = await self.model(role, payload)
+            if role == 'ideate':
+                ideate.append(payload)
+                if len(ideate) == 1:
+                    return '', 14
+            return raw, tokens
+        await IdeaTreeEngine(self.state, self.store, {}, model).run()
+        self.assertEqual(self.state['status'], 'completed', self.state['reason'])
+        self.assertEqual(len(ideate), 2)
+        self.assertIn('empty or truncated', ideate[1]['correction'])
 
     async def model(self, role, payload):
         self.calls.append((role, payload))
