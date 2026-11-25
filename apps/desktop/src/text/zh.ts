@@ -40,12 +40,15 @@ const PERMISSION_DESCRIPTIONS: PermissionDescriptionRenderers = {
   "direct-host": ({ account, command, cwd, runnerId, subagentId, target, workspaceRoot }) =>
     `直接在主机上执行：Runner ${runnerId}，目标 ${target}，账号 ${account}，工作区 ${workspaceRoot}，目录 ${cwd || "."}`
     + `${subagentId ? `，子代理 ${subagentId}` : ""}。不会隔离文件系统、进程或网络，主机凭据可能可被访问；`
+    + `沙箱网络模式与域名白名单对它不生效，沙箱里刚被拒绝的主机仍可能经此通道访问；`
     + `主机上的影响无法全部追踪或回滚。同类授权只覆盖本次 Agent 运行中的这条命令和这个范围，没有固定有效期。`
     + `批准不会执行命令。命令：\n${command}`,
   "specialist-runtime": ({ runtime, workspaceRoot }) =>
     `在 API 主机上直接运行 ${runtime}（${workspaceRoot}）。这会移除本任务的外层沙箱；平台工具仍各自需要授权。`,
   network: ({ hosts, purpose, runnerId }) =>
-    `本次 Agent 运行允许 ${runnerId} 上的沙箱网络访问：${hosts.join("、")}。用途：${purpose}。`,
+    `本次 Agent 运行请求 ${runnerId} 上的沙箱网络访问：${hosts.join("、")}。用途：${purpose}。`
+    + `批准只会把这些主机临时加入使用该授权的那一次执行的允许域名，不改动设置里的白名单；在本次 Agent 运行内继续允许相同主机时，相同请求不再询问。`
+    + `拒绝只拒绝沙箱内的这条通道：设置里的白名单不变，主机直执行也不受沙箱网络策略约束。`,
   environment: ({ environmentId, language, manager, name, operation, runnerId }) => {
     const runner = runnerId ? `（Runner ${runnerId}）` : "";
     switch (operation) {
@@ -1417,7 +1420,16 @@ export const ZH = {
         domainsPlaceholder: "example.org\n*.example.org:443",
         emptyDomains: "至少填写一个允许的域名。",
         saveDomains: "保存",
-        scope: "只作用于 run_shell 与沙箱内的代码。",
+        scope: "只作用于 run_shell 与沙箱内的代码；这是每次执行的起始策略，批准的网络访问只会临时扩充当次执行。",
+        /** Said next to the list, because the list alone reads as a boundary
+         *  (#1383): an approval widens one execution, a denial and 完全访问
+         *  change nothing here, and host execution ignores the policy. */
+        approvalNote:
+          "对话中批准网络访问只会把这些主机临时加入使用该授权的那一次执行的允许域名，不会写回这里的设置；"
+          + "在本次 Agent 运行内持续允许同类请求，才让相同主机不再弹卡片。"
+          + "拒绝不会改动这里的设置，而且只阻止沙箱内的通道——主机直执行不受沙箱网络策略约束。"
+          + "「完全访问」批准方式下，这类请求不会弹卡片、会被自动批准；"
+          + "「无网络」模式下一次批准也会让那次执行临时获得仅含这些主机的允许域名。",
         /** [mac-direct] 安装级 opt-in。开启后本地代码执行不再经过沙箱：
          *  影响范围是整个本地执行栈——Agent 的临时 Shell/Python 与程序
          *  演进的候选程序都以你本人的文件、网络与环境权限运行；持久

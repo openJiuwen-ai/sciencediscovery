@@ -29,7 +29,7 @@ import { activityCardId } from "../src/session/run-activity.js";
 
 const noopToggle = () => undefined;
 
-const SANDBOX_NETWORK_HINT = "Applies only to the listed hosts on this Runner for the current agent run. Other hosts still ask; global sandbox network settings are unchanged.";
+const SANDBOX_NETWORK_HINT = "Applies only to the listed hosts on this Runner for the current agent run: they are added to the allowed domains of the executions that use the grant. Other hosts still ask, and the global sandbox network setting is unchanged.";
 
 function networkRequest(): PermissionRequest {
   return { action: "sandbox_network", createdAt: "2026-10-18T00:00:00.000Z", id: "request-network",
@@ -373,4 +373,55 @@ test("sandbox network grants end with the agent run while other grants keep the 
   const networkLine = html.match(/<small>[^<]*sandbox-network[^<]*<\/small>/)?.[0] ?? "";
   assert.match(networkLine, /· this agent run<\/small>$/);
   assert.match(html, /workspace-code · this Session/);
+});
+
+/**
+ * The configured allowlist is the starting policy, not a boundary (#1383). An
+ * approval widens exactly the one execution that carries the token, and a
+ * denial changes neither the setting nor the host path, which is not sandboxed.
+ */
+test("network consent states the per-execution widening and that denial leaves the allowlist alone", () => {
+  const request: PermissionRequest = {
+    action: "sandbox_network", createdAt: "2026-01-01T00:00:00Z",
+    description: { hosts: ["eutils.ncbi.nlm.nih.gov:443"], kind: "network", purpose: "Retrieve requested PubMed records.", runnerId: "local" },
+    id: "network", resource: "sandbox-network:scoped-digest", sessionId: "s", state: "pending",
+    summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records.",
+  };
+  const render = (locale: "en" | "zh-CN") => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+    createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    })));
+  const english = render("en");
+  assert.match(english, /adds these hosts to the allowed domains of the single execution/);
+  assert.match(english, /without editing the configured allowlist/);
+  assert.match(english, /Deny blocks only this sandbox channel/);
+  assert.match(english, /direct host execution is not subject to the sandbox network policy/);
+  const chinese = render("zh-CN");
+  assert.match(chinese, /临时加入使用该授权的那一次执行的允许域名/);
+  assert.match(chinese, /不改动设置里的白名单/);
+  assert.match(chinese, /拒绝只拒绝沙箱内的这条通道/);
+  assert.match(chinese, /主机直执行也不受沙箱网络策略约束/);
+  // The hosts and the purpose the decision is about stay on the card.
+  assert.match(chinese, /eutils\.ncbi\.nlm\.nih\.gov:443/);
+  assert.match(chinese, /Retrieve requested PubMed records/);
+});
+
+test("the direct-host card says the sandbox network policy and its allowlist do not apply", () => {
+  const request: PermissionRequest = {
+    action: "direct_code", createdAt: "2026-01-01T00:00:00Z",
+    description: { account: "user", command: "curl https://example.org", cwd: "", kind: "direct-host", runnerId: "machine",
+      target: "machine", workspaceRoot: "workspace" },
+    id: "direct", resource: "direct:bound-scope", sessionId: "session", state: "pending",
+    summary: "DIRECT HOST EXECUTION: machine, account user, cwd workspace. No isolation.",
+  };
+  const render = (locale: "en" | "zh-CN") => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+    createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    })));
+  const english = render("en");
+  assert.match(english, /sandbox network mode and domain allowlist do not apply/);
+  assert.match(english, /a host just denied in the sandbox may still be reached/);
+  const chinese = render("zh-CN");
+  assert.match(chinese, /沙箱网络模式与域名白名单对它不生效/);
+  assert.match(chinese, /沙箱里刚被拒绝的主机仍可能经此通道访问/);
 });

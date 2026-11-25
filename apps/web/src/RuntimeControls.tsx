@@ -361,6 +361,10 @@ export function SandboxNetworkSettingsEditor({
       <p>
         {t("runtime.sandbox.helpBefore")}<code>run_shell</code>{t("runtime.sandbox.helpAfter")}
       </p>
+      {/* The setting is a starting policy, not a boundary (#1383): approvals
+          widen one execution, a denial edits nothing, and host execution is not
+          subject to this policy at all. Said here, where the list is set. */}
+      <p>{t("runtime.sandbox.approvalHelp")}</p>
     </div>
     <div className="timeout-grid">
       <fieldset>

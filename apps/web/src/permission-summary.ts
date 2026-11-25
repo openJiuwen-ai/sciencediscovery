@@ -89,18 +89,24 @@ function renderers(zh: boolean): PermissionDescriptionRenderers {
     "direct-host": ({ account, command, cwd, runnerId, subagentId, target, workspaceRoot }) => zh
       ? `直接在主机上执行：Runner ${runnerId}，目标 ${target}，账号 ${account}，工作区 ${workspaceRoot}，目录 ${cwd || "."}`
         + `${subagentId ? `，子代理 ${subagentId}` : ""}。不会隔离文件系统、进程或网络，主机凭据可能可被访问；`
+        + `沙箱网络模式与域名白名单对它不生效，沙箱里刚被拒绝的主机仍可能经此通道访问；`
         + `主机上的影响无法全部追踪或回滚。同类授权只覆盖本次 Agent 运行中的这条命令和这个范围，没有固定有效期。`
         + `批准不会执行命令。命令：\n${command}`
       : `DIRECT HOST EXECUTION: Runner ${runnerId}, ${target}, account ${account}, workspace ${workspaceRoot}, cwd ${cwd || "."}`
         + `${subagentId ? `, subagent ${subagentId}` : ""}. No sandbox filesystem, process or network isolation; host credentials may be accessible.`
+        + ` The sandbox network mode and domain allowlist do not apply here, so a host just denied in the sandbox may still be reached through this channel.`
         + ` Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL.`
         + ` Approval does not execute. Command:\n${command}`,
     "specialist-runtime": ({ runtime, workspaceRoot }) => zh
       ? `在 API 主机上直接运行 ${runtime}（${workspaceRoot}）。这会移除本任务的外层沙箱；平台工具仍各自需要授权。`
       : `Run ${runtime} directly on the API host in ${workspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
     network: ({ hosts, purpose, runnerId }) => zh
-      ? `本次 Agent 运行允许 ${runnerId} 上的沙箱网络访问：${hosts.join("、")}。用途：${purpose}。`
-      : `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`,
+      ? `本次 Agent 运行请求 ${runnerId} 上的沙箱网络访问：${hosts.join("、")}。用途：${purpose}。`
+        + `批准只会把这些主机临时加入使用该授权的那一次执行的允许域名，不改动设置里的白名单；在本次 Agent 运行内继续允许相同主机时，相同请求不再询问。`
+        + `拒绝只拒绝沙箱内的这条通道：设置里的白名单不变，主机直执行也不受沙箱网络策略约束。`
+      : `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.`
+        + ` Approval adds these hosts to the allowed domains of the single execution that uses that authorization, without editing the configured allowlist; allowing the same hosts again later in this Agent run stops the card from reappearing.`
+        + ` Deny blocks only this sandbox channel: the configured allowlist is unchanged, and direct host execution is not subject to the sandbox network policy.`,
     environment: ({ environmentId, language, manager, name, operation, runnerId }) => {
       const runner = runnerId ? (zh ? `（Runner ${runnerId}）` : ` on Runner ${runnerId}`) : "";
       switch (operation) {
