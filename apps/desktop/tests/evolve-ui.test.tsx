@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
 });
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 // The test runner compiles JSX with the classic runtime, so React has to be in
 // scope even though the app itself is built with the automatic one.
 import React from "react";
@@ -27,7 +28,7 @@ import type { ApiClient } from "../src/api/client.js";
 import type { EvolveStatus } from "../src/api/evolve.js";
 import type { EvolveCandidateView, EvolveRunView } from "../src/evolve/model.js";
 import { emptyRunView } from "../src/evolve/model.js";
-import { TEXT } from "../src/text.js";
+import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { CandidateInspector } from "../src/views/evolve/CandidateInspector.js";
 import { EvolveCreateDialog } from "../src/views/evolve/EvolveCreateDialog.js";
 import { EvolveDetail, lastGain } from "../src/views/evolve/EvolveDetail.js";
@@ -183,6 +184,174 @@ test("a live card says it is working rather than repeating its status", () => {
   assert.match(html, /evolve-run-spin/);
 });
 
+test("a failed card explains the interruption, in the user's language, and offers retry", () => {
+  const failure = {
+    code: "service_restart" as const,
+    message: "the control plane restarted and this search was interrupted",
+  };
+  const html = renderToStaticMarkup(
+    <EvolveRuns
+      onOpen={() => {}}
+      onRetry={() => {}}
+      runs={[run({ error: failure.message, failure, status: "failed" })]}
+    />,
+  );
+  assert.match(html, /evolve-run-state is-bad">失败/);
+  assert.match(html, /服务已重启，搜索被中断/);
+  // The explanation is part of the opening button, so clicking the reason
+  // still opens the run; retry remains the only sibling action.
+  assert.match(html, /<button[^>]*class="evolve-run-open"[\s\S]*?服务已重启，搜索被中断[\s\S]*?<\/button>/);
+  assert.match(html, /evolve-run-retry/);
+  assert.match(html, />重试</);
+  // The persisted message is English prose; a zh card renders the translated
+  // category instead of leaking it.
+  assert.doesNotMatch(html, /the control plane restarted/);
+
+  const previous = getLanguage();
+  try {
+    setLanguage("en");
+    const english = renderToStaticMarkup(
+      <EvolveRuns
+        onOpen={() => {}}
+        onRetry={() => {}}
+        runs={[run({ failure, status: "failed" })]}
+      />,
+    );
+    assert.match(english, /The service restarted and interrupted the search/);
+    assert.match(english, />Retry</);
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("an unavailable sidecar has its own translated reason", () => {
+  const failure = { code: "sidecar_unavailable" as const, message: "Evolve service is unavailable or authentication failed" };
+  const zh = renderToStaticMarkup(
+    <EvolveRuns onOpen={() => {}} runs={[run({ failure, status: "failed" })]} />,
+  );
+  assert.match(zh, /搜索进程暂时不可用/);
+  assert.doesNotMatch(zh, /Evolve service is unavailable/);
+
+  const previous = getLanguage();
+  try {
+    setLanguage("en");
+    const en = renderToStaticMarkup(
+      <EvolveRuns onOpen={() => {}} runs={[run({ failure, status: "failed" })]} />,
+    );
+    assert.match(en, /The search process is temporarily unavailable/);
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("only the failed evolve card grows; the shared idea card stays one line", async () => {
+  const css = await readFile(new URL("../src/styles/evolve.css", import.meta.url), "utf8");
+  const rule = (selector: string) => {
+    const start = css.indexOf(`${selector} {`);
+    assert.ok(start >= 0, `${selector} exists`);
+    return css.slice(start, css.indexOf("}", start));
+  };
+  const base = rule(".evolve-run-card");
+  assert.doesNotMatch(base, /flex-wrap/);
+  assert.doesNotMatch(base, /min-height/);
+  assert.doesNotMatch(base, /padding:\s*8px/);
+
+  // The inner open target also lives inside the 60px card. Wrapping there
+  // pushed the status chip below the border on long titles even after the
+  // outer rule was restored, so only the failed card may wrap it.
+  const open = rule(".evolve-run-open");
+  assert.doesNotMatch(open, /flex-wrap:\s*wrap/);
+
+  const failed = rule(".evolve-run-card.is-evolve-failed");
+  assert.match(failed, /flex-wrap:\s*wrap/);
+  assert.match(failed, /min-height:\s*60px/);
+  assert.match(failed, /padding:\s*8px 16px/);
+
+  const failedOpen = rule(".evolve-run-card.is-evolve-failed .evolve-run-open");
+  assert.match(failedOpen, /flex-wrap:\s*wrap/);
+});
+
+test("a read-only failed card keeps the reason but offers no retry", () => {
+  const html = renderToStaticMarkup(
+    <EvolveRuns
+      onOpen={() => {}}
+      runs={[run({
+        failure: { code: "service_restart", message: "interrupted" },
+        status: "failed",
+      })]}
+    />,
+  );
+  assert.match(html, /服务已重启，搜索被中断/);
+  assert.equal(html.includes("evolve-run-retry"), false);
+});
+
+test("a failed record without a reason falls back instead of guessing or leaking prose", () => {
+  const unknown = renderToStaticMarkup(
+    <EvolveRuns onOpen={() => {}} runs={[run({ status: "failed" })]} />,
+  );
+  assert.match(unknown, /未记录失败原因/);
+
+  // A pre-field record carries only free text. It is classified, not printed:
+  // the message is diagnostic, not UI copy.
+  const legacy = renderToStaticMarkup(
+    <EvolveRuns
+      onOpen={() => {}}
+      runs={[run({ error: "something went wrong inside the evaluator", status: "failed" })]}
+    />,
+  );
+  assert.match(legacy, /搜索或评估失败/);
+  assert.doesNotMatch(legacy, /something went wrong inside the evaluator/);
+});
+
+test("the retry button starts a retry for the failed run's id", async () => {
+  const retried: string[] = [];
+  let card: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    card = create(
+      <EvolveRuns
+        onOpen={() => {}}
+        onRetry={(id) => { retried.push(id); }}
+        runs={[run({
+          failure: { code: "sidecar_disconnected", message: "the sidecar disconnected" },
+          id: "broken",
+          status: "failed",
+        })]}
+      />,
+    );
+  });
+  const button = card!.root.findAll((node) =>
+    typeof node.props.className === "string" && node.props.className === "evolve-run-retry")[0];
+  assert.ok(button, "the failed card has a retry action");
+  await act(async () => { (button.props.onClick as () => void)(); });
+  assert.deepEqual(retried, ["broken"]);
+  await act(async () => { card!.unmount(); });
+});
+
+test("clicking the failure reason opens the run", async () => {
+  const opened: string[] = [];
+  let card: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    card = create(
+      <EvolveRuns
+        onOpen={(id) => { opened.push(id); }}
+        onRetry={() => {}}
+        runs={[run({
+          failure: { code: "sidecar_disconnected", message: "the sidecar disconnected" },
+          id: "broken",
+          status: "failed",
+        })]}
+      />,
+    );
+  });
+  const reason = card!.root.findAll((node) =>
+    typeof node.props.className === "string" && node.props.className === "evolve-run-reason")[0];
+  assert.ok(reason, "the failed card explains itself");
+  assert.equal(reason.parent?.props.className, "evolve-run-open", "the reason sits inside the opening target");
+  await act(async () => { (reason.parent!.props.onClick as () => void)(); });
+  assert.deepEqual(opened, ["broken"]);
+  await act(async () => { card!.unmount(); });
+});
+
 test("the transcript shows the running search first and folds the rest", () => {
   const runs = [
     run({ createdAt: "2026-10-01T08:00:00.000Z", id: "old", status: "succeeded" }),
@@ -320,17 +489,53 @@ test("a run past its clock budget marks the row rather than clipping the bar", (
   assert.match(html, /class="is-over"/);
 });
 
-test("a failed record states its error above the totals", () => {
+test("a legacy failed record is translated in the panel, with its detail only in English", () => {
+  const legacy = run({ error: "sidecar exited", status: "failed" });
+  const zh = renderToStaticMarkup(
+    <EvolveDetail
+      client={client}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={legacy}
+    />,
+  );
+  assert.match(zh, /evolve-notice is-error/);
+  assert.match(zh, /搜索或评估失败/);
+  assert.doesNotMatch(zh, /sidecar exited/);
+
+  const previous = getLanguage();
+  try {
+    setLanguage("en");
+    const en = renderToStaticMarkup(
+      <EvolveDetail
+        client={client}
+        onError={() => {}}
+        onRunChanged={() => {}}
+        run={legacy}
+      />,
+    );
+    assert.match(en, /The search or its evaluation failed/);
+    assert.match(en, /sidecar exited/);
+  } finally {
+    setLanguage(previous);
+  }
+});
+
+test("a structured failure is translated in the panel too", () => {
   const html = renderToStaticMarkup(
     <EvolveDetail
       client={client}
       onError={() => {}}
       onRunChanged={() => {}}
-      run={run({ error: "sidecar exited", status: "failed" })}
+      run={run({
+        error: "the control plane restarted and this search was interrupted",
+        failure: { code: "service_restart", message: "the control plane restarted and this search was interrupted" },
+        status: "failed",
+      })}
     />,
   );
-  assert.match(html, /evolve-notice is-error/);
-  assert.match(html, /sidecar exited/);
+  assert.match(html, /服务已重启，搜索被中断/);
+  assert.doesNotMatch(html, /the control plane restarted/);
 });
 
 test("the chart draws a rising line and says what its axes mean", () => {

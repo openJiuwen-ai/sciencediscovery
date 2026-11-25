@@ -45,6 +45,7 @@ import type {
   EvolveEventRecord,
   EvolveGoal,
   EvolveRun,
+  EvolveRunFailure,
   EvolveRunStatus,
 } from "@sciencediscovery/schema";
 import { evolveAlgorithm, isEvolveRunActive } from "@sciencediscovery/schema";
@@ -64,6 +65,8 @@ export interface CreateEvolveRunInput {
   projectId?: string;
   /** Set when this run continues another run's search. */
   resumedFromRunId?: string;
+  /** Set when this run was created by retrying a failed run. */
+  retryOfRunId?: string;
   sessionId: string;
   /** Restore path: the exported run's own timestamp. Defaults to now. */
   createdAt?: string;
@@ -182,6 +185,7 @@ export class EvolutionStore {
       lastSeq: 0,
       ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.resumedFromRunId ? { resumedFromRunId: input.resumedFromRunId } : {}),
+      ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
       sessionId: input.sessionId,
       status: "pending",
       tokens: 0,
@@ -288,13 +292,24 @@ export class EvolutionStore {
     return parseEventLines(content).filter((record) => record.sequence > afterSequence);
   }
 
-  /** Terminal transition helper: stamps `finishedAt` exactly once. */
-  async finishRun(runId: string, status: EvolveRunStatus, error?: string): Promise<EvolveRun> {
+  /** Terminal transition helper: stamps `finishedAt` exactly once.
+   *
+   *  `failure` is either the legacy free-text sentence or the structured
+   *  reason. A structured reason is also mirrored into `error`, so an older
+   *  client (or the agent summary) still sees a sentence while a newer one can
+   *  show a translated category. */
+  async finishRun(
+    runId: string,
+    status: EvolveRunStatus,
+    failure?: string | EvolveRunFailure,
+  ): Promise<EvolveRun> {
     if (isEvolveRunActive(status)) throw new EvolutionStoreError(`Not a terminal status: ${status}`);
+    const reason = typeof failure === "string" ? undefined : failure;
     return this.patchRun(runId, {
       finishedAt: new Date().toISOString(),
       status,
-      ...(error ? { error } : {}),
+      ...(failure ? { error: typeof failure === "string" ? failure : failure.message } : {}),
+      ...(reason ? { failure: reason } : {}),
     });
   }
 

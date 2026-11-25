@@ -109,7 +109,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 演进搜索
 
-`/evolve-design` 运行的只读视图，以及停止一次运行。搜索由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../core/evolve.md)。
+`/evolve-design` 运行的只读视图，以及停止一次运行、从失败运行自己持久化的目标重试。新的搜索通常由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../core/evolve.md)。
 
 | 方法与路径 | 请求/查询 | 成功 |
 |---|---|---|
@@ -117,6 +117,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 | `GET /api/evolve/runs/:runId/events?after=0` | `after` 为非负游标 | `200`，事件数组或 SSE；用最后看到的游标续传 |
 | `GET /api/evolve/runs/:runId/candidates/:codeHash` | 无 | `200`，候选源码及其分数 |
 | `POST /api/evolve/runs/:runId/stop` | 无 | `200`，停止结果 |
+| `POST /api/evolve/runs/:runId/retry` | 无；仅限可写 Session 中 `failed` 的运行 | `201`，复用已存目标的新运行；运行未失败、Session 只读或已有搜索在运行时返回 `409` |
 
 ## 自定义 MCP 服务器与 Inspector
 

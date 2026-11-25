@@ -148,6 +148,7 @@ import { handleEvolveRunner } from "../evolution/runner-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
   handleListRuns as handleEvolveListRuns,
+  handleRetryRun as handleEvolveRetryRun,
   handleRunEvents as handleEvolveRunEvents,
   handleStopRun as handleEvolveStopRun,
 } from "../evolution/routes.js";
@@ -4294,6 +4295,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
         await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        return;
+      }
+
+      const evolveRunRetryMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/retry$/);
+      if (evolveRunRetryMatch && request.method === "POST") {
+        await handleEvolveRetryRun(
+          response, evolutionStore, evolveOrchestrator,
+          decodeURIComponent(evolveRunRetryMatch[1]!), store,
+        );
         return;
       }
 

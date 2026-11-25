@@ -30,7 +30,11 @@ import { useEffect, useState } from "react";
 import { isEvolveRunActive, type EvolveRun } from "@sciencediscovery/schema";
 
 import { elapsedSeconds, evolveShortTitle } from "../../evolve/model.js";
-import { evolveStatusLabel, evolveStatusTone } from "../../evolve/status.js";
+import {
+  evolveFailureLabel,
+  evolveStatusLabel,
+  evolveStatusTone,
+} from "../../evolve/status.js";
 import { TEXT } from "../../text.js";
 import { EvolveTreeGlyph } from "./glyphs.js";
 
@@ -41,10 +45,14 @@ const VISIBLE = 3;
 
 export interface EvolveRunsProps {
   onOpen: (runId: string) => void;
+  /** Re-create a failed search from its persisted goal. Optional so a read-only
+   *  surface (a test, a transcript in a package preview) can render the card
+   *  without offering an action it cannot carry out. */
+  onRetry?: (runId: string) => Promise<void> | void;
   runs: EvolveRun[];
 }
 
-export function EvolveRuns({ onOpen, runs }: EvolveRunsProps) {
+export function EvolveRuns({ onOpen, onRetry, runs }: EvolveRunsProps) {
   const [expanded, setExpanded] = useState(false);
   if (runs.length === 0) return null;
 
@@ -62,7 +70,9 @@ export function EvolveRuns({ onOpen, runs }: EvolveRunsProps) {
 
   return (
     <section aria-label={TEXT.evolve.title} className="evolve-runs">
-      {shown.map((run) => <EvolveRunCard key={run.id} onOpen={onOpen} run={run} />)}
+      {shown.map((run) => (
+        <EvolveRunCard key={run.id} onOpen={onOpen} onRetry={onRetry} run={run} />
+      ))}
       {hidden > 0 ? (
         <button className="evolve-runs-more" onClick={() => setExpanded(true)} type="button">
           {TEXT.evolve.moreRuns(hidden)}
@@ -80,41 +90,83 @@ export function EvolveRuns({ onOpen, runs }: EvolveRunsProps) {
 /** One search as the handoff's card: the mark, what the search is called, how
  *  long it has been running, and what it is doing now. The whole card is the
  *  way into the cockpit — a card this size with a single clickable word in it
- *  would make the rest look decorative. */
-function EvolveRunCard({ onOpen, run }: { onOpen: (runId: string) => void; run: EvolveRun }) {
+ *  would make the rest look decorative.
+ *
+ *  A failed card carries one more thing: why it failed, and a retry that
+ *  starts over from the goal the record already holds. The reason stays
+ *  inside the opening button, so clicking the explanation still opens the
+ *  run; retry is the one sibling outside it, which keeps the two actions from
+ *  depending on which pixel was hit. */
+function EvolveRunCard({
+  onOpen,
+  onRetry,
+  run,
+}: {
+  onOpen: (runId: string) => void;
+  onRetry?: (runId: string) => Promise<void> | void;
+  run: EvolveRun;
+}) {
   const active = isEvolveRunActive(run.status);
+  const [retrying, setRetrying] = useState(false);
   useElapsedClock(active);
   const elapsed = elapsedSeconds(run);
+  const failure = evolveFailureLabel(run);
+  const retry = async () => {
+    if (!onRetry || retrying) return;
+    setRetrying(true);
+    try {
+      await onRetry(run.id);
+    } catch {
+      // The caller owns the error surface (a toast in the app); the card must
+      // only release its pending state and not raise an unhandled rejection.
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
-    <button
-      className="evolve-run-card"
-      onClick={() => onOpen(run.id)}
-      title={[
-        run.goal.statement,
-        evolveStatusLabel(run.status),
-        ...(run.goal.checkpointMode === "auto" ? [TEXT.evolve.autoPaceTitle] : []),
-      ].join(" · ")}
-      type="button"
-    >
-      <span aria-hidden="true" className="evolve-run-mark">
-        <EvolveTreeGlyph size={16} />
-      </span>
-      <span className="evolve-run-text">
-        <span className="evolve-run-title">{evolveShortTitle(run.goal.statement)}</span>
-        <span className="evolve-run-meta">
-          <span className="evolve-run-elapsed">
-            {elapsed === null ? TEXT.evolve.notStarted : TEXT.evolve.elapsed(elapsed)}
-          </span>
-          {run.goal.checkpointMode === "auto"
-            ? <span className="evolve-chip-auto">{TEXT.evolve.autoPace}</span>
-            : null}
+    <article className={`evolve-run-card${failure ? " is-evolve-failed" : ""}`}>
+      <button
+        className="evolve-run-open"
+        onClick={() => onOpen(run.id)}
+        title={[
+          run.goal.statement,
+          evolveStatusLabel(run.status),
+          ...(failure ? [failure] : []),
+          ...(run.goal.checkpointMode === "auto" ? [TEXT.evolve.autoPaceTitle] : []),
+        ].join(" · ")}
+        type="button"
+      >
+        <span aria-hidden="true" className="evolve-run-mark">
+          <EvolveTreeGlyph size={16} />
         </span>
-      </span>
-      <span className={`evolve-run-state is-${evolveStatusTone(run.status)}`}>
-        {active ? <span aria-hidden="true" className="evolve-run-spin"><BurstGlyph /></span> : null}
-        {active ? TEXT.evolve.working : evolveStatusLabel(run.status)}
-      </span>
-    </button>
+        <span className="evolve-run-text">
+          <span className="evolve-run-title">{evolveShortTitle(run.goal.statement)}</span>
+          <span className="evolve-run-meta">
+            <span className="evolve-run-elapsed">
+              {elapsed === null ? TEXT.evolve.notStarted : TEXT.evolve.elapsed(elapsed)}
+            </span>
+            {run.goal.checkpointMode === "auto"
+              ? <span className="evolve-chip-auto">{TEXT.evolve.autoPace}</span>
+              : null}
+          </span>
+        </span>
+        <span className={`evolve-run-state is-${evolveStatusTone(run.status)}`}>
+          {active ? <span aria-hidden="true" className="evolve-run-spin"><BurstGlyph /></span> : null}
+          {active ? TEXT.evolve.working : evolveStatusLabel(run.status)}
+        </span>
+        {failure ? <span className="evolve-run-reason">{failure}</span> : null}
+      </button>
+      {run.status === "failed" && onRetry ? (
+        <button
+          className="evolve-run-retry"
+          disabled={retrying}
+          onClick={() => void retry()}
+          type="button"
+        >
+          {retrying ? TEXT.evolve.retrying : TEXT.evolve.retry}
+        </button>
+      ) : null}
+    </article>
   );
 }
 

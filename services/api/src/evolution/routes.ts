@@ -31,6 +31,7 @@ import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
+import { SessionStoreHttpError, type SessionStore } from "../store.js";
 
 import type { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolutionStoreError, type EvolutionStore } from "./store.js";
@@ -98,6 +99,48 @@ export async function handleStopRun(
   }
   await orchestrator.stop(runId);
   sendJson(response, 202, { runId, stopping: true });
+}
+
+/**
+ * Re-create a failed search from the goal its record already holds.
+ *
+ * The desktop has no create-run route — runs normally come from the agent's
+ * `create_evolve_run` tool after a design turn — so retry has to be its own
+ * narrow route. It only ever starts a run from an existing failed record, so
+ * the frozen scorecard, baseline and budget cannot be replaced by the client
+ * and no new design turn is paid for. The orchestrator decides whether the
+ * goal is still runnable (failed status, one live search per session, current
+ * isolation) and returns a refusal the caller can show. */
+export async function handleRetryRun(
+  response: ServerResponse,
+  store: EvolutionStore,
+  orchestrator: EvolveOrchestrator,
+  runId: string,
+  sessions?: Pick<SessionStore, "assertSessionWritable">,
+): Promise<void> {
+  const run = await readRunOr404(response, store, runId);
+  if (!run) return;
+  // A retry starts a new run, which writes to the Session, so an archived or
+  // evidence-locked Session must be refused before anything is spent. The
+  // stop route does not need this because it cannot create a run; the agent's
+  // create path checks the same property before `create_evolve_run`.
+  try {
+    sessions?.assertSessionWritable(run.sessionId);
+  } catch (error) {
+    if (error instanceof SessionStoreHttpError) {
+      return sendError(response, error.statusCode, error.message, error.code);
+    }
+    if (error instanceof Error && error.message === "Session is archived and read-only") {
+      return sendError(response, 409, error.message);
+    }
+    throw error;
+  }
+  if (run.status !== "failed") {
+    return sendError(response, 409, "Only a failed search can be retried.");
+  }
+  const result = await orchestrator.retry(run);
+  if ("refusedBecause" in result) return sendError(response, 409, result.refusedBecause);
+  sendJson(response, 201, result.run);
 }
 
 /**

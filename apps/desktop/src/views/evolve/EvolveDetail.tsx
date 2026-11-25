@@ -43,7 +43,8 @@ import {
   reduceEvolveRecord,
   type EvolveRunView,
 } from "../../evolve/model.js";
-import { TEXT } from "../../text.js";
+import { evolveFailureLabel } from "../../evolve/status.js";
+import { getLanguage, TEXT } from "../../text.js";
 import { CandidateInspector } from "./CandidateInspector.js";
 import { EvolveNodeList } from "./EvolveNodeList.js";
 import { EvolveTree } from "./EvolveTree.js";
@@ -155,6 +156,12 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   const falling = gain !== undefined && gain < 0;
   const elapsed = elapsedSeconds(run);
   const title = evolveShortTitle(run.goal.statement);
+  // Every failed run gets the translated category here, including records
+  // written before the structured field existed. The producer's sentence is
+  // kept only in English, where it is the diagnostic detail rather than an
+  // untranslated line in a Chinese panel.
+  const failure = evolveFailureLabel(run);
+  const failureDetail = run.status === "failed" ? run.failure?.message ?? run.error : undefined;
   const algorithm = view.algorithm ?? run.algorithm;
   const valid = view.candidates.filter((candidate) => candidate.valid).length;
   const total = view.candidates.length;
@@ -197,7 +204,13 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
         {isPlaceholderGoal(run.goal) ? <p className="evolve-notice is-warn">
           {TEXT.evolve.notice.placeholder}
         </p> : null}
-        {run.error ? <p className="evolve-notice is-error">{run.error}</p> : null}
+        {failure ? <p className="evolve-notice is-error">
+          {failure}
+          {getLanguage() === "en" && failureDetail
+            ? <span className="evolve-notice-detail"> — {failureDetail}</span>
+            : null}
+        </p>
+          : run.error ? <p className="evolve-notice is-error">{run.error}</p> : null}
       </div>
 
       <section className="evolve-overview">

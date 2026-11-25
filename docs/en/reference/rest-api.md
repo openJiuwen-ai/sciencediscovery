@@ -105,9 +105,9 @@ A minimal Run requires only `content`:
 
 ## Evolution searches
 
-Read-only views of `/evolve-design` runs, plus stopping one. Searches are started by the agent through
-the `create_evolve_run` tool, not by this API. See
-[Program evolution](../core/evolve.md).
+Read-only views of `/evolve-design` runs, plus stopping one and retrying a failed one from its own
+persisted goal. New searches are normally started by the agent through the `create_evolve_run`
+tool, not by this API. See [Program evolution](../core/evolve.md).
 
 | Method and path | Request/query | Success |
 |---|---|---|
@@ -115,6 +115,7 @@ the `create_evolve_run` tool, not by this API. See
 | `GET /api/evolve/runs/:runId/events?after=0` | `after` is a non-negative cursor | `200`, event array or SSE; resume with the last cursor seen |
 | `GET /api/evolve/runs/:runId/candidates/:codeHash` | none | `200`, candidate source and its scores |
 | `POST /api/evolve/runs/:runId/stop` | none | `200`, stop result |
+| `POST /api/evolve/runs/:runId/retry` | none; only a `failed` run in a writable Session | `201`, new run reusing the stored goal; `409` when the run did not fail, the Session is read-only, or a search is already live |
 
 ## Custom MCP servers and Inspector
 

@@ -44,7 +44,7 @@ import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { committedWorkspaceSnapshot, materializeWorkspaceSnapshot, type VersionStore } from "@sciencediscovery/cas";
 
-import type { EvolveBudget, EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
+import type { EvolveBudget, EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun, EvolveRunFailure } from "@sciencediscovery/schema";
 import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { apiLog } from "../logging.js";
@@ -53,6 +53,7 @@ import type { MemoryGraphSink } from "@sciencediscovery/memory";
 
 import { DatasetStagingError, casHash, needsData, stageDataset, type DatasetSource } from "./dataset.js";
 import type { RunTokenRegistry } from "./llm-proxy.js";
+import { isolationIssues } from "./preflight.js";
 import { probeEvolveSandbox, toSidecarCapability, type EvolveSandboxCapability } from "./sandbox.js";
 import { EvolveSidecarError, type EvolveSidecarClient } from "./sidecar.js";
 import type { EvolutionStore } from "./store.js";
@@ -73,6 +74,47 @@ export type EvolveRunSubscriber = (record: EvolveEventRecord) => void;
  * still holds exactly what the sidecar produced.
  */
 export type EvolveRunSettled = (status: EvolveRun["status"]) => void;
+
+/** The network shapes that mean the sidecar is gone rather than refusing a
+ *  run: a bare fetch failure, a reset or refused socket, or a DNS/timeout
+ *  error buried in `cause`. */
+function lostConnection(error: unknown): boolean {
+  const codes = new Set([
+    "ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND",
+    "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET",
+  ]);
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && codes.has(code)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|socket hang up|network error|connection (?:refused|reset)/i.test(message);
+}
+
+/** Turn an exception into the structured reason stored on the run. */
+function failureFrom(error: unknown): EvolveRunFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  // `EvolveUnavailableError` comes through the sidecar client's `connection()`
+  // when the configured service is not ready or has rejected auth. Match its
+  // stable code rather than importing the availability module, which would
+  // point the orchestrator back at the composition root.
+  if ((error as { code?: unknown } | null)?.code === "EVOLVE_UNAVAILABLE") {
+    return { code: "sidecar_unavailable", message };
+  }
+  if (error instanceof EvolveSidecarError) {
+    // The sidecar answered, so this is not a lost connection. Bad credentials
+    // and service-side failures are their own category; a 4xx refusal of the
+    // run (a bad spec or a stage it could not build) is the run's own failure.
+    const unavailable = error.status === 401 || error.status === 403
+      || (error.status ?? 0) >= 500;
+    return { code: unavailable ? "sidecar_unavailable" : "search_failed", message };
+  }
+  return { code: lostConnection(error) ? "sidecar_disconnected" : "search_failed", message };
+}
+
+export type RetryEvolveRunResult = { refusedBecause: string } | { run: EvolveRun };
 
 /** Whether this goal is scored by running the project's tests. */
 function gatedByTests(goal: EvolveGoal): boolean {
@@ -182,6 +224,8 @@ export interface StartEvolveRunInput {
   goal: EvolveGoal;
   projectId?: string;
   resumedFromRunId?: string;
+  /** Set when this run was created by retrying a failed run. */
+  retryOfRunId?: string;
   sessionId: string;
 }
 
@@ -194,6 +238,9 @@ interface InFlight {
   budgetGate?: string;
   /** Set once a stop has been requested so a second stop is a no-op. */
   stopping: boolean;
+  /** The sidecar's last `level: "error"` log, used as the reason when the run
+   *  then reports `failed` without a sentence of its own. */
+  lastError?: string;
   /** Cleared when the run settles; a wall-clock gate that fires after the run
    *  is over would stop an unrelated search with the same id. */
   wallClockTimer?: NodeJS.Timeout;
@@ -214,6 +261,10 @@ export class EvolveOrchestrator {
   private readonly subscribers = new Map<string, Set<EvolveRunSubscriber>>();
   private readonly settleListeners = new Map<string, Set<EvolveRunSettled>>();
   private readonly inFlight = new Map<string, InFlight>();
+  /** Sessions with a retry between its permission check and the new run being
+   *  created. The guard exists because the check is asynchronous; without it
+   *  two concurrent retries both see "no live search" and both spend. */
+  private readonly retriesInFlight = new Set<string>();
 
   constructor(
     store: EvolutionStore,
@@ -464,12 +515,15 @@ export class EvolveOrchestrator {
       // The banner used to promise "it can be resumed" to every run regardless, so a
       // user who lost fifteen candidates to a restart went looking for a resume
       // that does not exist.
-      await this.store.finishRun(run.id, "failed", run.algorithm === "puct"
-        ? "the control plane restarted and this search was interrupted. PUCT cannot be "
-          + "resumed (the tree cannot be rebuilt from the event log); the candidates it "
-          + "already produced can be read, but continuing means starting again with the "
-          + "same design"
-        : "the control plane restarted and this search was interrupted; it can be resumed");
+      await this.store.finishRun(run.id, "failed", {
+        code: "service_restart",
+        message: run.algorithm === "puct"
+          ? "the control plane restarted and this search was interrupted. PUCT cannot be "
+            + "resumed (the tree cannot be rebuilt from the event log); the candidates it "
+            + "already produced can be read, but continuing means starting again with the "
+            + "same design"
+          : "the control plane restarted and this search was interrupted; it can be resumed",
+      });
       adopted += 1;
     }
     if (adopted) apiLog.info("evolve_runs_adopted", { count: adopted });
@@ -511,6 +565,56 @@ export class EvolveOrchestrator {
     const run = await this.store.createRun(input);
     void this.drive(run);
     return run;
+  }
+
+  /**
+   * Start a fresh run from a failed run's persisted goal.
+   *
+   * This deliberately does not repeat the design turn or the discrimination
+   * probe: both were paid for by the original run, and the goal already froze
+   * the scorecard, baseline CAS, budget and model. The one precondition that
+   * can have changed under it is whether the machine still provides the
+   * isolation the goal relied on, so that is re-checked here. Nothing about
+   * the permission decision is delegated to the model.
+   */
+  async retry(attempt: Pick<EvolveRun, "id" | "sessionId">): Promise<RetryEvolveRunResult> {
+    // Claim the session synchronously, before the first await. The route has
+    // already read the run, so the session id needs no I/O to check; a second
+    // concurrent retry is refused here rather than after both have spent.
+    if (this.retriesInFlight.has(attempt.sessionId)) {
+      return {
+        refusedBecause: "another retry is already starting a search for this session; "
+          + "wait for it to appear before retrying again.",
+      };
+    }
+    this.retriesInFlight.add(attempt.sessionId);
+    try {
+      const run = await this.store.readRun(attempt.id);
+      if (!run) throw new Error(`Unknown evolve run: ${attempt.id}`);
+      if (run.status !== "failed") {
+        return { refusedBecause: `Only a failed search can be retried; this one is ${run.status}.` };
+      }
+      const active = (await this.store.listRuns(run.sessionId))
+        .filter((item) => isEvolveRunActive(item.status));
+      if (active.length) {
+        return {
+          refusedBecause: `this session already has a search running: ${active[0]!.id}. `
+            + "Wait for it to finish, or stop it, before retrying this one.",
+        };
+      }
+      const isolation = isolationIssues(run.goal, await this.sandboxCapability());
+      if (isolation.length) return { refusedBecause: isolation[0]!.message };
+      return {
+        run: await this.start({
+          goal: run.goal,
+          ...(run.projectId ? { projectId: run.projectId } : {}),
+          retryOfRunId: run.id,
+          sessionId: run.sessionId,
+        }),
+      };
+    } finally {
+      this.retriesInFlight.delete(attempt.sessionId);
+    }
   }
 
   /** Ask the sidecar to stop; the terminal event still comes over the stream. */
@@ -632,19 +736,20 @@ export class EvolveOrchestrator {
         // killed mid-run. Either way the run is over and must say so.
         const gate = entry.budgetGate;
         if (gate) await this.finish(run.id, "budget_exhausted", gate);
-        else await this.finish(run.id, "failed", "the search sidecar disconnected before finishing; no terminal event arrived");
+        else await this.finish(run.id, "failed", {
+          code: "sidecar_disconnected",
+          message: "the search sidecar disconnected before finishing; no terminal event arrived",
+        });
       }
     } catch (error) {
-      const message = error instanceof EvolveSidecarError || error instanceof Error
-        ? error.message
-        : String(error);
-      apiLog.warn("evolve_run_failed", { reason: message, runId: run.id });
+      const failure = failureFrom(error);
+      apiLog.warn("evolve_run_failed", { reason: failure.message, runId: run.id });
       // Whatever ended the loop, the search behind it is no longer being
       // recorded. A failure to persist a record used to leave the sidecar
       // expanding and spending with nobody reading it; aborting closes the
       // connection, which is the sidecar's wind-down signal.
       abort.abort();
-      await this.finish(run.id, "failed", message).catch((reason: unknown) => {
+      await this.finish(run.id, "failed", failure).catch((reason: unknown) => {
         // The run is failed in memory but not on disk. Saying so beats a
         // silent swallow, which is what made a stuck "running" run look like
         // a live one.
@@ -723,13 +828,32 @@ export class EvolveOrchestrator {
         if (run) await this.checkSpendBudget(runId, run.goal.budget, event.tokens, event.cents);
         return false;
       }
+      case "log": {
+        // The engines put the one actionable sentence about a refusal on a
+        // preceding `log` event. Keep it so a `failed` terminal event that
+        // carries no sentence of its own is not recorded as "it broke".
+        if (event.level === "error") {
+          const entry = this.inFlight.get(runId);
+          if (entry) entry.lastError = event.message;
+        }
+        return false;
+      }
       case "search_finished": {
-        const gate = this.inFlight.get(runId)?.budgetGate;
+        const entry = this.inFlight.get(runId);
+        const gate = entry?.budgetGate;
         const reported = event.status === "running" || event.status === "pending" ? "failed" : event.status;
         // A budget-tripped run reaches the sidecar as an ordinary stop; the
         // control plane is the only side that knows why it was asked to stop.
         const status = gate && reported === "stopped" ? "budget_exhausted" : reported;
-        await this.finish(runId, status, gate, event.bestNodeIndex ?? undefined);
+        const failure = status === "failed"
+          ? {
+            code: "search_failed" as const,
+            message: entry?.lastError
+              ?? gate
+              ?? (event.stopReason ? `the search stopped: ${event.stopReason}` : "the search failed before finishing"),
+          }
+          : gate;
+        await this.finish(runId, status, failure, event.bestNodeIndex ?? undefined);
         return true;
       }
       default:
@@ -740,13 +864,13 @@ export class EvolveOrchestrator {
   private async finish(
     runId: string,
     status: EvolveRun["status"],
-    error?: string,
+    failure?: string | EvolveRunFailure,
     bestNodeIndex?: number,
   ): Promise<void> {
     const current = await this.store.readRun(runId);
     if (current && !isEvolveRunActive(current.status)) return; // already terminal
     if (bestNodeIndex !== undefined) await this.store.patchRun(runId, { bestNodeIndex });
-    await this.store.finishRun(runId, status, error);
+    await this.store.finishRun(runId, status, failure);
     if (status === "succeeded" && bestNodeIndex !== undefined) {
       await this.publishWinner(runId, bestNodeIndex);
     }
