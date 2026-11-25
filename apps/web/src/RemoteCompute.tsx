@@ -47,6 +47,16 @@ export function effectiveRemoteRunnerHostIds(project: Project | undefined, sessi
   return project ? effectiveRunnerIds(project, session, registeredRunnerIds).filter((id) => id !== "local") : [];
 }
 
+// The API's machine-name rule (services/api/src/store.ts) applied before the
+// request, so a rejected name is explained in the user's locale instead of
+// arriving as the server's English sentence. The server keeps its own copy as
+// defence in depth for non-UI callers.
+const REMOTE_HOST_ALIAS_PATTERN = /^[A-Za-z0-9._-]{1,255}$/;
+
+function isValidRemoteHostAlias(value: string): boolean {
+  return REMOTE_HOST_ALIAS_PATTERN.test(value.trim());
+}
+
 function resourceBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
@@ -526,6 +536,14 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   }
 
   async function submitSshForm(trustHostKey?: RemoteHostKeyInfo, registeredHostId?: string): Promise<void> {
+    // Validate the name this attempt submitted before any request. The trust
+    // retry below carries the same alias this check already accepted, and trust
+    // itself works from the host id the API returned, so an edit made while the
+    // trust card is open can neither block it nor post a second registration.
+    if (!isValidRemoteHostAlias(alias)) {
+      onError(t("remote.errorInvalidAlias"));
+      return;
+    }
     setBusyId("new");
     try {
       const port = sshPort.trim();

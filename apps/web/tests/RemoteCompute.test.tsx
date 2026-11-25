@@ -26,6 +26,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
+import { LocaleProvider, setActiveLocale } from "../src/i18n/index.js";
 import { ConnectLogPanel, NpuDeviceSelector, ProjectRemoteSettings, SessionRemoteSettings, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
@@ -228,6 +229,49 @@ async function renderHost(
   return { output: JSON.stringify(renderer!.toJSON()), renderer: renderer! };
 }
 
+const sshAliasPlaceholder = "institution-hpc or 192.168.1.20";
+
+interface SshFormHarness {
+  renderer: ReactTestRenderer;
+  errors: (string | Error)[];
+  registered: RegisterRemoteHostRequest[];
+  typeAlias: (value: string) => Promise<void>;
+  submit: () => Promise<void>;
+  unmount: () => Promise<void>;
+}
+
+/** The SSH add form with recording API doubles, optionally pinned to a locale. */
+async function openSshForm(locale?: "en" | "zh-CN"): Promise<SshFormHarness> {
+  const errors: (string | Error)[] = [];
+  const registered: RegisterRemoteHostRequest[] = [];
+  const client = {
+    listRunners: async () => [],
+    listRunnerNpuDevices: noNpu,
+    registerRemoteHost: async (body: RegisterRemoteHostRequest) => {
+      registered.push(body);
+      return buildHost({ alias: body.alias });
+    },
+  } as unknown as ApiClient;
+  const manager = createElement(RemoteHostManager, { client, addMode: true, onError: (error) => errors.push(error) });
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(locale ? createElement(LocaleProvider, { initialLocale: locale }, manager) : manager);
+  });
+  const mounted = renderer!;
+  return {
+    renderer: mounted,
+    errors,
+    registered,
+    typeAlias: async (value) => {
+      const field = mounted.root.findAllByType("input").find((node) => node.props.placeholder === sshAliasPlaceholder);
+      assert.ok(field, "SSH alias field");
+      await act(async () => field.props.onChange({ target: { value } }));
+    },
+    submit: async () => { await act(async () => mounted.root.findByType("form").props.onSubmit({ preventDefault() {} })); },
+    unmount: async () => { await act(async () => mounted.unmount()); },
+  };
+}
+
 test("SSH add form groups connection login and runner details without hiding username", async () => {
   const { renderer } = await renderHost(buildHost(), undefined, true);
   const click = async (name: string) => {
@@ -417,13 +461,79 @@ test("generated-key registration resumes trust by host id without resubmitting t
   await click("SSH key (optional)");
   await click("Generate a key pair");
   assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);
+  const aliasField = renderer!.root.findAllByType("input").find((node) => node.props.placeholder === sshAliasPlaceholder);
+  assert.ok(aliasField);
+  await act(async () => aliasField.props.onChange({ target: { value: "generated-key-host" } }));
   await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(registered[0]?.alias, "generated-key-host");
   assert.equal(registered[0]?.privateKeyPath, "generated-once.key");
+  // The trust card leaves the alias field editable, and resuming trust works
+  // from the host id the 409 carried rather than from the name typed since:
+  // an invalid name entered while the card is open must neither block the
+  // trust call nor post a second registration. Pinned because the retry runs
+  // on the name the failed attempt submitted, which this form already checked.
+  const aliasWhileTrusting = renderer!.root.findAllByType("input").find((node) => node.props.placeholder === sshAliasPlaceholder);
+  assert.ok(aliasWhileTrusting);
+  await act(async () => aliasWhileTrusting.props.onChange({ target: { value: "bad host !!" } }));
+  assert.equal(renderer!.root.findAllByType("input").find((node) => node.props.placeholder === sshAliasPlaceholder)?.props.value, "bad host !!");
   await click("Trust and continue");
   assert.deepEqual(trusted, ["saved-host"]);
   assert.equal(registered.length, 1);
   assert.deepEqual(errors, []);
   await act(async () => renderer!.unmount());
+});
+
+test("a rejected SSH alias is explained in Chinese and registers nothing", async () => {
+  const harness = await openSshForm("zh-CN");
+  try {
+    await harness.typeAlias("bad host !!");
+    await harness.submit();
+    // The defect this pins: the form used to post the name and echo the
+    // server's English sentence, so nothing was localized and a request went out.
+    assert.deepEqual(harness.registered, []);
+    assert.equal(harness.errors.length, 1);
+    const message = String(harness.errors[0]);
+    assert.match(message, /只能包含字母、数字、点、下划线和连字符/);
+    assert.match(message, /不能包含空格/);
+    assert.doesNotMatch(message, /A machine name must be an alias/);
+  } finally {
+    await harness.unmount();
+    setActiveLocale("en");
+  }
+});
+
+test("the same SSH alias rejection reads as English in the English UI", async () => {
+  const harness = await openSshForm();
+  try {
+    await harness.typeAlias("bad host !!");
+    await harness.submit();
+    assert.deepEqual(harness.registered, []);
+    assert.equal(harness.errors.length, 1);
+    const message = String(harness.errors[0]);
+    assert.match(message, /only letters, numbers, dots, underscores, and hyphens/);
+    assert.match(message, /Spaces are not allowed/);
+    assert.doesNotMatch(message, /[\u4e00-\u9fff]/);
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("valid SSH aliases still reach the registration request in both locales", async () => {
+  for (const locale of ["en", "zh-CN"] as const) {
+    for (const alias of ["institution-hpc", "192.168.1.20", "lab_runner.node-1"]) {
+      // Surrounding whitespace is trimmed, exactly like the API's own check.
+      const harness = await openSshForm(locale);
+      try {
+        await harness.typeAlias(`  ${alias}  `);
+        await harness.submit();
+        assert.deepEqual(harness.registered.map((body) => body.alias), [alias], `${locale} ${alias}`);
+        assert.deepEqual(harness.errors, [], `${locale} ${alias}`);
+      } finally {
+        await harness.unmount();
+      }
+    }
+  }
+  setActiveLocale("en");
 });
 
 test("connect runner presents a changed host key and resumes from the settings trust action", async () => {
