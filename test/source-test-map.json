@@ -3566,6 +3566,69 @@
           "complexity": "C1"
         }
       ]
+    },
+    {
+      "source": "apps/desktop/src/views/AccountPage.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-reward-progress.test.ts",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/account-format.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/text/en.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/text/zh.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
     }
   ]
 }

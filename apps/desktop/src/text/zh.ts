@@ -218,6 +218,9 @@ export const ZH = {
     creditsUnit: "积分",
     tokenEstimate: "约合 Token",
     tokensUnit: "tokens",
+    /** 大额 Token 数以万为单位：1.5万、2400万。英文表用 K/M/B，单位随语言变。 */
+    tokenCount: (value: number) =>
+      value >= 10_000 ? `${(value / 10_000).toFixed(value >= 100_000 ? 0 : 1)}万` : Math.round(value).toLocaleString("zh-CN"),
     conversations: "可对话轮数",
     conversationsUnit: "轮",
     earned: "累计获得",
@@ -232,6 +235,15 @@ export const ZH = {
     ledgerCapped: (rows: number) => `仅显示最近 ${rows} 条流水，更早的记录不再列出。`,
     filter: { all: "全部", earned: "获得", spent: "消耗" },
     ledgerEmpty: "还没有积分流水。",
+    /** 流水的业务类型，键是服务端的 bizType；未知类型回退为原始值。 */
+    biz: {
+      REGISTER: "注册赠送",
+      CHECKIN: "每日签到",
+      BONUS: "累计签到奖励",
+      LLM_USAGE: "模型调用",
+      ADMIN: "人工调整",
+      REFUND: "退还",
+    },
     afterBalance: (balance: string) => `余额 ${balance}`,
     perPage: "每页",
     perPageUnit: "条",

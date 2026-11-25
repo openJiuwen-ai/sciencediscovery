@@ -98,6 +98,27 @@ function runSpan(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/**
+ * Large counts the way English reads them: 15K, 24M, 1.5B.
+ *
+ * This is the counterpart of the Chinese table's 万 scale (#1394): the unit is
+ * part of the sentence, so each dictionary states its own. Both switch at
+ * 10 000, below which the plain grouped number is clearer in either language.
+ */
+function compactCount(value: number): string {
+  if (value < 10_000) return Math.round(value).toLocaleString("en-US");
+  const tiers = [[1_000_000_000, "B"], [1_000_000, "M"], [1_000, "K"]] as const;
+  for (const [divisor, unit] of tiers) {
+    const scaled = value / divisor;
+    // A value that would print as four digits belongs to the next unit up (or,
+    // above B, to the plain grouped number) — never to "1000K".
+    if (scaled < 1 || scaled >= 999.5) continue;
+    const rounded = scaled >= 100 ? Math.round(scaled) : Math.round(scaled * 10) / 10;
+    return `${rounded}${unit}`;
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+
 export const EN: Text = {
   configurationLegacy: {
     title: "Enable connector", awaiting: "Awaiting confirmation", change: "Change", scope: "Scope", session: "This session only",
@@ -211,6 +232,7 @@ export const EN: Text = {
     creditsUnit: "credits",
     tokenEstimate: "Approx. tokens",
     tokensUnit: "tokens",
+    tokenCount: compactCount,
     conversations: "Conversations",
     conversationsUnit: "turns",
     earned: "Total earned",
@@ -225,6 +247,14 @@ export const EN: Text = {
     ledgerCapped: (rows: number) => `Showing the latest ${rows} rows; older activity is no longer listed.`,
     filter: { all: "All", earned: "Earned", spent: "Spent" },
     ledgerEmpty: "No credit activity yet.",
+    biz: {
+      REGISTER: "Sign-up bonus",
+      CHECKIN: "Daily check-in",
+      BONUS: "7-day check-in bonus",
+      LLM_USAGE: "Model usage",
+      ADMIN: "Manual adjustment",
+      REFUND: "Refund",
+    },
     afterBalance: (balance: string) => `Balance ${balance}`,
     perPage: "Rows per page",
     perPageUnit: "",
