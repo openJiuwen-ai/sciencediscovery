@@ -728,6 +728,41 @@ test.describe("超时", () => {
     await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
   });
 
+  test("a sub-second timeout can be typed through its leading zero", async ({ page }) => {
+    const mock = await installMockApi(page, { models: MODELS });
+    const dialog = await openSettings(page, "超时");
+    const idle = dialog.getByRole("spinbutton", { name: "网关空闲超时" });
+
+    // "0" is the first key of "0.5". Turned into a draft it means 不限, which
+    // disabled the field and swallowed the rest of the number.
+    await idle.click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("0");
+    await expect(idle).toBeEnabled();
+    await expect(idle).toHaveValue("0");
+    expect(writeCall(mock, "PUT", "/api/timeout-settings")).toBeUndefined();
+
+    await page.keyboard.type(".5");
+    await expect(idle).toHaveValue("0.5");
+    await idle.blur();
+    await expect
+      .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
+      .toMatchObject({ gatewayIdleTimeoutMs: 500 });
+    await expect(idle).toHaveValue("0.5");
+
+    // A zero typed on its own is refused: 不限 belongs to the switch, so the
+    // field keeps what was typed and the saved value does not change.
+    await idle.click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("0");
+    await idle.blur();
+    await expect(idle).toBeEnabled();
+    await expect(dialog.locator(".row-note.is-error")).toHaveText("请输入有效的数值。");
+    await expect
+      .poll(() => lastWriteCall(mock, "PUT", "/api/timeout-settings"))
+      .toMatchObject({ gatewayIdleTimeoutMs: 500 });
+  });
+
   test("refuses a turn limit below the idle limit at the field, without a write", async ({ page }) => {
     const { dialog, mock } = await openTimeouts(page, {
       timeouts: { gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 60_000 },

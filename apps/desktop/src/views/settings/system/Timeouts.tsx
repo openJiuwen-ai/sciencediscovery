@@ -24,6 +24,13 @@ import { Group, LoadGate, Row, Switch } from "../rows.js";
 
 type TimeoutField = keyof SystemTimeoutSettings;
 
+/** The smallest timeout a field may hold, in seconds. Zero is not a duration:
+ *  it is the stored meaning of 不限, and only the switch may write it. */
+const MIN_SECONDS = 0.001;
+
+/** What sits in one box while it is being typed, before it is committed. */
+type Edit = { invalid: boolean; text: string };
+
 function fields(): { field: TimeoutField; hint: string; label: string }[] {
   const text = TEXT.settings.system.timeouts;
   return [
@@ -108,6 +115,13 @@ function seedMilliseconds(field: TimeoutField, base: SystemTimeoutSettings): num
 export function TimeoutSettings({ client }: { client: ApiClient }) {
   const loaded = useLoaded<SystemTimeoutSettings>(async () => getTimeoutSettings(client));
   const [draft, setDraft] = useState<SystemTimeoutSettings>();
+  /** Per-field text that has been typed but not committed. A keystroke stays
+   *  here: writing it to the draft would make the "0" on the way to "0.5" a
+   *  real 0 — that is 不限 — and disable the box being typed in. */
+  const [edits, setEdits] = useState<Partial<Record<TimeoutField, Edit>>>({});
+  /** The same text as of this instant: the blur after a keystroke has to send
+   *  what was typed, not the copy the last render happened to capture. */
+  const typed = useRef<Partial<Record<TimeoutField, Edit>>>({});
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<string>();
   const [failure, setFailure] = useState<string>();
@@ -117,16 +131,12 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
   /** The draft as of this instant: a field's blur has to send what was typed,
    *  not what the last render happened to capture. */
   const latest = useRef<SystemTimeoutSettings | undefined>(undefined);
-  /** What the server last confirmed. Kept for the "nothing changed" test on
-   *  blur; a refusal no longer restores it over the reader's draft. */
-  const stored = useRef<SystemTimeoutSettings | undefined>(undefined);
   /** At most one write on the wire; a newer draft replaces anything queued. */
   const queued = useRef<SystemTimeoutSettings | undefined>(undefined);
   const writing = useRef(false);
 
   useEffect(() => {
     if (loaded.value === undefined) return;
-    stored.current = loaded.value;
     latest.current = loaded.value;
     setDraft(loaded.value);
   }, [loaded.value]);
@@ -149,7 +159,6 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
         queued.current = undefined;
         try {
           await updateTimeoutSettings(client, next);
-          stored.current = next;
           setFailure(undefined);
           // A success describes the current draft only while that draft is
           // still valid. If the reader produced an invalid pair while this
@@ -205,20 +214,50 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
     void flush();
   };
 
-  const setMilliseconds = (field: TimeoutField, value: string) => {
-    const text = value.trim();
-    // An empty box is a field mid-edit, not a request to disable the timeout:
-    // Number("") is 0, and 0 means 不限.
-    if (text === "") return;
-    const parsed = Number(text);
+  const dropEdit = (field: TimeoutField) => {
+    if (!(field in typed.current)) return;
+    const next = { ...typed.current };
+    delete next[field];
+    typed.current = next;
+    setEdits(next);
+  };
+
+  const putEdit = (field: TimeoutField, edit: Edit) => {
+    typed.current = { ...typed.current, [field]: edit };
+    setEdits(typed.current);
+  };
+
+  const typeMilliseconds = (field: TimeoutField, text: string) => {
+    putEdit(field, { invalid: false, text });
+  };
+
+  /** Leaving the box (or Enter, which leaves it) is what writes the number.
+   *  Zero and anything below one millisecond are refused and stay on screen to
+   *  be corrected: 不限 is the switch's job, not a value to type. */
+  const commitMilliseconds = (field: TimeoutField) => {
+    const edit = typed.current[field];
     const base = latest.current;
-    if (base === undefined || !Number.isFinite(parsed) || parsed < 0) return;
-    update({ ...base, [field]: Math.round(parsed * 1000) } as SystemTimeoutSettings);
+    if (edit === undefined || base === undefined) return;
+    const parsed = Number(edit.text.trim());
+    const milliseconds = Math.round(parsed * 1000);
+    if (edit.text.trim() === "" || !Number.isFinite(parsed) || parsed < MIN_SECONDS
+      || !Number.isSafeInteger(milliseconds)) {
+      putEdit(field, { invalid: true, text: edit.text });
+      return;
+    }
+    dropEdit(field);
+    if (milliseconds === base[field]) return;
+    const next = { ...base, [field]: milliseconds } as SystemTimeoutSettings;
+    update(next);
+    commit(next);
   };
 
   const setUnlimited = (field: TimeoutField, unlimited: boolean) => {
     const base = latest.current;
     if (base === undefined) return;
+    // The box goes empty or shows the stored seconds again, so a half-typed
+    // number must not come back with it.
+    dropEdit(field);
     const next = {
       ...base,
       [field]: unlimited ? 0 : seedMilliseconds(field, base),
@@ -236,40 +275,60 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
             <p className="settings-note">{TEXT.settings.system.timeouts.help}</p>
             {fields().map(({ field, hint, label }) => {
               const unlimited = current[field] === 0;
+              const edit = edits[field];
               const refused = refusedField === field;
+              const invalid = edit?.invalid === true;
+              // One row can carry two different refusals: the pair it would
+              // make is out of order, or what was typed is not a duration.
+              // Both sentences name this row, so both are drawn and announced.
+              // The ids are per field where a row of its own can carry the
+              // sentence: two boxes can hold unparseable text at once, while
+              // only the turn limit can be the out-of-order side of a pair.
+              const invalidId = `timeout-invalid-${field}`;
+              const describedBy = [
+                refused ? "timeout-order-error" : undefined,
+                invalid ? invalidId : undefined,
+              ].filter((id): id is string => id !== undefined).join(" ");
               return (
                 <Row
                   hint={hint}
                   key={field}
-                  note={refused
-                    ? <small className="row-note is-error" id="timeout-order-error" role="alert">
-                      {TEXT.settings.system.timeouts.orderError}
-                    </small>
+                  note={refused || invalid
+                    ? <>
+                      {refused
+                        ? <small className="row-note is-error" id="timeout-order-error" role="alert">
+                          {TEXT.settings.system.timeouts.orderError}
+                        </small>
+                        : null}
+                      {invalid
+                        ? <small className="row-note is-error" id={invalidId} role="alert">
+                          {TEXT.settings.system.migrated.common.invalidNumber}
+                        </small>
+                        : null}
+                    </>
                     : undefined}
                   title={label}
                 >
                   <div className="row-inline-control">
                     <input
-                      aria-describedby={refused ? "timeout-order-error" : undefined}
-                      aria-invalid={refused}
+                      aria-describedby={describedBy === "" ? undefined : describedBy}
+                      aria-invalid={refused || invalid}
                       aria-label={label}
                       className="field-input is-number"
+                      // Only 不限 disables the box, and only the switch can
+                      // make that true while the box is being typed in.
                       disabled={unlimited}
-                      min="0.001"
-                      onBlur={() => {
-                        // Leaving the field commits it, unless nothing changed.
-                        const next = latest.current;
-                        if (next !== undefined && next !== stored.current) commit(next);
-                      }}
-                      onChange={(event) => setMilliseconds(field, event.target.value)}
+                      min={String(MIN_SECONDS)}
+                      onBlur={() => commitMilliseconds(field)}
+                      onChange={(event) => typeMilliseconds(field, event.target.value)}
                       onKeyDown={(event) => {
                         if (!commitsOnEnter(event)) return;
                         event.preventDefault();
                         event.currentTarget.blur();
                       }}
-                      step="0.001"
+                      step={String(MIN_SECONDS)}
                       type="number"
-                      value={unlimited ? "" : seconds(current[field])}
+                      value={unlimited ? "" : (edit?.text ?? seconds(current[field]))}
                     />
                     <small>{TEXT.settings.system.timeouts.seconds}</small>
                     <label className="settings-toggle-line">

@@ -2525,6 +2525,11 @@
           "complexity": "C2"
         },
         {
+          "source": "apps/desktop/tests/timeouts-settings.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
           "layer": "ui-st",
           "complexity": "C3"
