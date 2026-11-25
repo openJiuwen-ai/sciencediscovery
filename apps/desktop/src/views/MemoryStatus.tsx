@@ -21,8 +21,17 @@
  * reader who cares is the one looking at the switch. So the reading lives next
  * to that switch, and it is read only when there is something to read —
  * turning memory on is what starts a check, and turning it off takes the line
- * away. There is no timer: a page left open asks again when the reader presses
- * 重新检查, rather than every twenty seconds in the background.
+ * away.
+ *
+ * While the line is on screen it re-reads on its own every
+ * MEMORY_STATUS_POLL_MS. A service that was down when the pane opened is the
+ * case this line exists for, and a reading that changes only when the reader
+ * presses 重新检查 cannot show it come back: whoever restarted the memory
+ * service would keep being told it is still broken. The timer stays gated by
+ * `enabled`, the next read is scheduled only once the previous one has
+ * answered (so a slow service cannot stack requests), and it is cleared when
+ * the line goes away. A background read leaves the last answer on screen until
+ * the new one arrives; only the first read and a press show 检查中.
  */
 
 import { useEffect, useState } from "react";
@@ -41,6 +50,12 @@ import { TEXT } from "../text.js";
  *  so naming it would point the reader at a step they cannot take from here.
  *  It reads as any other service that is not working: `degraded`. */
 export type MemoryState = "checking" | "degraded" | "healthy" | "unknown";
+
+/** How often a line left on screen asks `/api/health` again. Slower than the
+ *  polls that follow a running job: the memory service answers within seconds
+ *  of its restart, and 15 s is short enough to notice that without turning a
+ *  settings pane into a busy poller. */
+export const MEMORY_STATUS_POLL_MS = 15_000;
 
 /** The control plane's words, or this app's when the route did not say. */
 function statusOf(value: string | undefined): MemoryState {
@@ -71,23 +86,37 @@ interface Props {
 
 export function MemoryStatus({ client, enabled }: Props) {
   const [status, setStatus] = useState<MemoryState>("checking");
-  /** Bumped by 重新检查, which is the only way a second read happens. */
+  /** Bumped by 重新检查, which reads again at once rather than waiting for the
+   *  timer's next turn. */
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!enabled) return;
-    let alive = true;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // One read at a time: the next one is scheduled by this one's answer, so a
+    // service slower than the interval cannot pile up requests behind itself.
+    const read = async (): Promise<void> => {
+      try {
+        const report = await getHealth(client);
+        if (!cancelled) setStatus(statusOf(report.memoryGraph));
+      } catch {
+        if (!cancelled) setStatus("unknown");
+      }
+      if (cancelled) return;
+      timer = setTimeout(() => void read(), MEMORY_STATUS_POLL_MS);
+    };
+
+    // Turning the switch on, or a press, is a fresh question and says so. A
+    // background re-read is not: the previous answer stays until the next one
+    // arrives, so the line does not blink 检查中 every interval.
     setStatus("checking");
-    getHealth(client).then(
-      (report) => {
-        if (alive) setStatus(statusOf(report.memoryGraph));
-      },
-      () => {
-        if (alive) setStatus("unknown");
-      },
-    );
+    void read();
+
     return () => {
-      alive = false;
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [attempt, client, enabled]);
 

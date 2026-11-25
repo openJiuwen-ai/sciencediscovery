@@ -41,6 +41,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { MEMORY_STATUS_POLL_MS } from "../src/views/MemoryStatus.js";
 import {
   TOKEN,
   TOKEN_STORAGE_KEY,
@@ -797,7 +798,7 @@ test("the memory state reads beside the switch, and only while the switch is on"
   await expect(status).toContainText("运行正常");
   expect(healthCalls(mock)).toBeGreaterThan(probes);
 
-  // A second reading is the reader's press, not a timer.
+  // 重新检查 asks at once rather than waiting for the line's own next turn.
   mock.state.memorySettings.memoryGraphStatus = "degraded";
   await status.getByRole("button", { name: "重新检查" }).click();
   await expect(status).toHaveClass(/is-degraded/u);
@@ -812,6 +813,14 @@ test("the memory state reads beside the switch, and only while the switch is on"
   await expect(status).toHaveClass(/is-degraded/u);
   await expect(status).toContainText("连接失败");
   await expect(dialog.getByText("需要密码")).toHaveCount(0);
+
+  // Recovery is not the reader's job either (Issue #1384): the line the reader
+  // is looking at asks again on its own, so a service that comes back while
+  // this pane stays open stops reading 连接失败 within one interval, without a
+  // reload and without another press.
+  mock.state.memorySettings.memoryGraphStatus = "healthy";
+  await expect(status).toHaveClass(/is-healthy/u, { timeout: MEMORY_STATUS_POLL_MS + 5_000 });
+  await expect(status).toContainText("运行正常");
 
   // Turning it off takes the line, and the question, away again.
   await enabled.click();
