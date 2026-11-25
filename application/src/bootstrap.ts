@@ -277,6 +277,22 @@ function posixRelative(fromDir: string, toPath: string): string {
   return posix.relative(fromDir, toPath);
 }
 
+/** realpath of a path, or the path unchanged when it cannot be resolved.
+ *  #1376: the W17 hop target must be computed from PHYSICAL paths — dataDir
+ *  and resourcesPath can name the same tree through two spellings
+ *  (/var/... vs /private/var/..., /tmp vs /private/tmp), and posix.relative
+ *  over mixed spellings emits a target one directory short
+ *  (/private/private/...). A side realpath cannot resolve (missing
+ *  payload/venv directory) falls back to the given spelling — the
+ *  pre-#1376 behaviour — instead of throwing on first run. */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 /** Whether a directory is writable, by probe (a real create+delete of a
  *  unique temp file — access(W_OK) lies on macOS: it checks the READ-ONLY
  *  mount flag path but not sandbox/ACL reality, and DMG volumes report
@@ -980,6 +996,16 @@ export async function bootstrapPackaged(
  * inside the payload keep their (correct) baked links untouched — the
  * rewrite is idempotent and only fires for links that do not already
  * resolve to the right interpreter.
+ *
+ * #1376: the hop target is computed from REALPATHS of both sides. A data
+ * dir handed to us as /tmp/... (or /var/...) while resourcesPath is the
+ * resolved /private/tmp/... (/private/var/...) has no textual common
+ * prefix with it, and a plain posix.relative then counts the shorter
+ * textual depth: the link resolves one directory short, as
+ * /private/private/... which does not exist (live #1374 failure:
+ * "SHARED_ENV is missing"). Normalizing only the arithmetic keeps the
+ * relative target — and the realpath-based gate below then also repairs
+ * installs that already carry the broken string.
  */
 async function fixVenvLaunchers(
   paths: PackagedPaths,
@@ -1006,15 +1032,30 @@ async function fixVenvLaunchers(
       // lands the link one directory short (measured in W15) — use the same
       // relative() the build side uses, not hand-counted "../" repeats.
       const venvBinDir = join(venvDir, "bin");
-      const relTarget = posixRelative(venvBinDir, join(paths.python, "bin", "python3"));
+      const bundledPython = join(paths.python, "bin", "python3");
+      // #1376: normalize BOTH sides to physical paths before relative().
+      // dataDir may reach us in a symlinked spelling (/tmp, /var) while
+      // resourcesPath is the resolved one (/private/tmp, /private/var);
+      // mixing them makes relative() count the TEXTUAL depth, so the link
+      // lands one directory short (/private/private/...) and dies. The
+      // target stays RELATIVE (the relocation property W17 exists for), and
+      // an unresolvable side falls back to its given spelling.
+      const relTarget = posixRelative(
+        realpathOrSelf(venvBinDir),
+        join(realpathOrSelf(join(paths.python, "bin")), "python3"),
+      );
       const names = pythonNamesFor(minor);
       // Does the venv's python already resolve to the bundled interpreter?
       // (in-place mode: the baked 3-hop link is correct; idempotence gate
       // for the copy mode: a relaunch re-runs this fix on the copied venvs.)
+      // Unchanged by #1376 — it is a realpath comparison, so an install that
+      // carries the old broken target falls through to the rewrite below and
+      // heals on its next launch (the short-circuit branch always calls this
+      // fix, and the corrected target differs from the stored one).
       const venvPythonLink = join(venvBinDir, names[0]);
       let alreadyResolves = false;
       try {
-        alreadyResolves = realpathSync(venvPythonLink) === realpathSync(join(paths.python, "bin", "python3"));
+        alreadyResolves = realpathSync(venvPythonLink) === realpathSync(bundledPython);
       } catch { /* dead link — falls through to the rewrite */ }
       if (alreadyResolves) continue;
       const n = await replaceVenvSymlinks([venvDir], "bin", relTarget, log, names);

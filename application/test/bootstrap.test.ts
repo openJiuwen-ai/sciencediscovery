@@ -3,10 +3,10 @@
 // functions under test here.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile, chmod, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readlink, rm, writeFile, chmod, symlink } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep, dirname } from "node:path";
+import { join, sep, dirname, posix } from "node:path";
 
 import {
   bootstrapPackaged, compileallArgs, copyTreeConcurrent, countBytecode, dirWritable, needsUnpack, packagedEnv, packagedPaths,
@@ -659,6 +659,104 @@ if (IS_DARWIN) {
       "darwin must announce the seal-preserving copy fallback");
   });
 }
+
+// --- #1376: the relink must resolve through either spelling of one directory --
+//
+// dataDir and resourcesPath can name the same tree through two spellings:
+// macOS hands out /var/... and /tmp/... while the resolved form is
+// /private/var/... and /private/tmp/.... The relink target used to be a plain
+// posix.relative over the two as-given strings, so it counted the TEXTUAL
+// depth and the written link resolved one directory short
+// (/private/private/...) — start-stack then fail-fast with "SHARED_ENV is
+// missing". The fixture makes the data dir reach the code through a symlinked
+// alias whose realpath is one component deeper, which is exactly that shape.
+// POSIX-gated: the fixture needs real symlinks and the darwin venv layout
+// (bin/, relative links), so it skips on win32. Where it runs: application/test
+// is not collected by the Linux ut layer (test/support/tagged/profiles.mjs);
+// `pnpm --dir application test` runs in the windows-desktop job (this case
+// skips there), and application/scripts/build-mac.sh runs it on macOS. The
+// platform is injected as "darwin", so whichever POSIX host collects it
+// exercises the darwin branch.
+test("venv relink resolves when dataDir and resources use two spellings of one dir (#1376)", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlinked alias spelling is POSIX-only; win32 venvs carry trampolines");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "sd-shell-bootstrap-1376-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // Physical tree: <root>/private/v/resources — and <root>/v as an alias that
+  // adds the "private" component when resolved, like /var -> /private/var.
+  const physicalRoot = join(root, "private", "v");
+  const resources = join(physicalRoot, "resources");
+  const template = join(resources, "envs-template");
+  const bundledPython = join(resources, "python", "bin", "python3");
+  const names = ["python", "python3", "python3.12"];
+
+  const tmplVenv = join(template, "sd-services");
+  await mkdir(join(tmplVenv, "bin"), { recursive: true });
+  await writeFile(join(tmplVenv, "pyvenv.cfg"), `home = ${join(resources, "python")}\nversion_info = 3.12.7\n`, "utf8");
+  await mkdir(dirname(bundledPython), { recursive: true });
+  await writeFile(bundledPython, "#!/bin/sh\n", "utf8");
+  // The in-payload baked hops (3 hops) — dead once copied out, as in W17.
+  for (const name of names) {
+    await symlink("../../../python/bin/python3", join(tmplVenv, "bin", name));
+  }
+  await symlink(physicalRoot, join(root, "v"));
+
+  // The data dir arrives in the ALIAS spelling; resourcesPath is the real one.
+  const dataDir = join(root, "v", "data");
+  const paths = packagedPaths(resources);
+  const lines: string[] = [];
+  const log = (line: string) => lines.push(line);
+
+  await bootstrapPackaged(paths, dataDir, log, "darwin");
+
+  const copiedVenv = join(dataDir, "envs", "sd-services");
+  assert.equal(existsSync(copiedVenv), true, "copy fallback unpacked the venv");
+  // THE #1376 assertion: opened through the alias spelling (as the app does),
+  // every link must still resolve to the bundled interpreter.
+  for (const name of names) {
+    const link = join(copiedVenv, "bin", name);
+    assert.equal(existsSync(link), true, `${name} must resolve (start-stack's gate)`);
+    assert.equal(realpathSync(link), realpathSync(bundledPython),
+      `${name} must resolve to the bundled interpreter`);
+    // The contract keeps the RELATIVE form (the W17 relocation property): an
+    // absolute target would resolve today but break when the install moves,
+    // and it must not pass this test.
+    const target = await readlink(link);
+    assert.equal(posix.isAbsolute(target), false,
+      `${name} target must stay relative, not ${target}`);
+  }
+  assert.ok(lines.some((l) => l.includes("W17")),
+    "the re-point was announced in the first-run log");
+
+  // Self-heal: an install whose first run used the pre-#1376 code carries the
+  // textual target for the same two spellings. The stamp stays valid, so the
+  // next launch takes the short-circuit path and must repair the links there.
+  const brokenTarget = posix.relative(join(copiedVenv, "bin"), bundledPython);
+  for (const name of names) {
+    const link = join(copiedVenv, "bin", name);
+    await rm(link, { force: true });
+    await symlink(brokenTarget, link);
+  }
+  assert.equal(existsSync(join(copiedVenv, "bin", names[0])), false,
+    "fixture reproduces #1376: the old textual target dangles");
+
+  const secondLines: string[] = [];
+  const second = await bootstrapPackaged(paths, dataDir, (line) => secondLines.push(line), "darwin");
+  assert.equal(second.unpacked, false, "a valid stamp short-circuits to the relink path");
+  assert.ok(secondLines.some((l) => l.includes("W17")),
+    "the relaunch re-pointed the dead links (this is the self-heal path)");
+  for (const name of names) {
+    const link = join(copiedVenv, "bin", name);
+    assert.equal(existsSync(link), true, `${name} must be healed on relaunch`);
+    assert.equal(realpathSync(link), realpathSync(bundledPython),
+      `${name} must resolve to the bundled interpreter after the heal`);
+    const target = await readlink(link);
+    assert.equal(posix.isAbsolute(target), false,
+      `${name} healed target must stay relative, not ${target}`);
+  }
+});
 
 test("packagedEnv uses in-place venv paths when SCIENCE_AGENT_IN_PLACE_ENVS=1", async (t) => {
   const original = process.env.SCIENCE_AGENT_IN_PLACE_ENVS;
