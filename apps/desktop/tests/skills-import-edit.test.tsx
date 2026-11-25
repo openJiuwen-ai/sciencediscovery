@@ -986,6 +986,30 @@ test("the file editor saves the whole SKILL.md under the revision it read", asyn
   } finally { await act(async () => { view.unmount() }); }
 });
 
+test("a revision conflict in the editor is explained in the page's language", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .fail(new ApiRequestError("Skill revision conflict: expected 1, current 2", 409));
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+    const editor = view.root.findAllByType("textarea")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.content);
+    assert.ok(editor);
+    await act(async () => { editor.props.onChange({ target: { value: "changed" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
+    await settle();
+    const markup = JSON.stringify(view.toJSON());
+    assert.ok(markup.includes(TEXT.settings.skills.editor.conflict));
+    assert.ok(!markup.includes("Skill revision conflict"), "the server's developer text reached the page");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
 test("leaving the editor without changes lands on 技能详情", async () => {
   const stub = new StubClient()
     .reply([skill])
