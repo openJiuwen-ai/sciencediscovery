@@ -142,9 +142,11 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
   const [abilityTab, setAbilityTab] = useState<AbilityTab>("skills");
   const [picking, setPicking] = useState<AbilityTab>();
   const creating = specialist === undefined;
-  const canSave = [draft.name, draft.description, draft.instructions].every((value) => value.trim() !== "");
-
   const selectedSkills = skills.filter((skill) => draft.enabledSkillIds.includes(skill.id));
+  const unavailableSkillIds = draft.access === "all" ? []
+    : draft.enabledSkillIds.filter((id) => !skills.some((skill) => skill.id === id));
+  const canSave = unavailableSkillIds.length === 0
+    && [draft.name, draft.description, draft.instructions].every((value) => value.trim() !== "");
   const selectedConnectors = connectors.filter((connector) => draft.connectorIds.includes(connector.id));
   const showingSkills = abilityTab === "skills";
 
@@ -330,7 +332,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
             </div>
 
             {showingSkills ? (
-              selectedSkills.length === 0 ? (
+              selectedSkills.length === 0 && unavailableSkillIds.length === 0 ? (
                 <p className="settings-ability-empty">{TEXT.settings.system.specialists.noSkills}</p>
               ) : (
                 <ul className="settings-ability-list">
@@ -342,6 +344,20 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
                         className="settings-ability-remove"
                         disabled={busy}
                         onClick={() => removeSkill(skill.id)}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                  {unavailableSkillIds.map((id) => (
+                    <li className="settings-ability-item" key={id}>
+                      <span className="settings-ability-item-name">{TEXT.settings.system.specialists.unavailableSkill(id)}</span>
+                      <button
+                        aria-label={`${TEXT.settings.system.specialists.remove} ${id}`}
+                        className="settings-ability-remove"
+                        disabled={busy}
+                        onClick={() => removeSkill(id)}
                         type="button"
                       >
                         ×
@@ -371,6 +387,9 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
               </ul>
             )}
 
+            {unavailableSkillIds.length > 0 ? (
+              <p className="row-note is-error" role="status">{TEXT.settings.system.specialists.unavailableSkillsHint}</p>
+            ) : null}
             <p className="settings-ability-note">
               <span aria-hidden="true" className="settings-ability-note-icon">i</span>
               <span>

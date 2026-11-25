@@ -337,6 +337,17 @@ test("the 专家 row names the bound expert rather than saying 无", () => {
   assert.doesNotMatch(markup, />无</);
 });
 
+test("a disabled bound expert stays named with a truthful session hint", () => {
+  const expert = { description: "Searches the literature", id: "e2", name: "literature-searcher", enabled: false } as never;
+  const markup = renderToStaticMarkup(<SessionSettingsMenu experts={[expert]} onClose={() => {}} selectedSpecialistId="e2" />);
+  assert.ok(markup.includes(`literature-searcher · ${TEXT.composer.expertsDisabled}`));
+  assert.ok(markup.includes(TEXT.composer.boundExpertDisabledHint));
+  assert.doesNotMatch(markup, />无</);
+  const flyout = renderToStaticMarkup(<ExpertFlyout loading={false} onClose={() => {}} onSelect={() => {}} selectedId="e2" specialists={[expert]} />);
+  assert.match(flyout, /aria-current="true"[^>]*disabled=""/);
+  assert.ok(flyout.includes(`literature-searcher · ${TEXT.composer.expertsDisabled}`));
+});
+
 test("the search matches names, not words inside a description", () => {
   const experts = [
     { description: "Screens candidates", id: "a", name: "assessment-screener" },

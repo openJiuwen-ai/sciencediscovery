@@ -572,7 +572,8 @@ export function SessionSettingsMenu({
             <span className="session-menu-label">{TEXT.composer.experts}</span>
             <span className="session-menu-value">
               <span className="session-menu-value-text">
-                {selectedExpert?.name ?? TEXT.composer.expertsNone}
+                {selectedExpert === undefined ? TEXT.composer.expertsNone
+                  : `${selectedExpert.name}${selectedExpert.enabled === false ? ` · ${TEXT.composer.expertsDisabled}` : ""}`}
               </span>
               <ChevronRightGlyph />
             </span>
@@ -581,10 +582,12 @@ export function SessionSettingsMenu({
                 part of the row's name; the hidden sentence below carries the
                 same words to assistive technology. */}
             <span aria-hidden="true" className="session-menu-tip">
-              {TEXT.composer.expertsHint}
+              {selectedExpert?.enabled === false ? TEXT.composer.boundExpertDisabledHint : TEXT.composer.expertsHint}
             </span>
           </button>
-          <span className="sr-only" id="session-experts-hint">{TEXT.composer.expertsHint}</span>
+          <span className="sr-only" id="session-experts-hint">
+            {selectedExpert?.enabled === false ? TEXT.composer.boundExpertDisabledHint : TEXT.composer.expertsHint}
+          </span>
         </div>
 
         {panel === "reviewer" ? (
@@ -741,6 +744,7 @@ export function ExpertFlyout({
             <button
               aria-current={selected ? "true" : undefined}
               className={`expert-row${selected ? " is-selected" : ""}`}
+              disabled={specialist.enabled === false}
               key={specialist.id}
               onClick={() => onSelect(specialist.id)}
               type="button"
@@ -749,7 +753,9 @@ export function ExpertFlyout({
                 {specialist.name.slice(0, 1)}
               </span>
               <span className="expert-text">
-                <span className="expert-name">{specialist.name}</span>
+                <span className="expert-name">
+                  {specialist.name}{specialist.enabled === false ? ` · ${TEXT.composer.expertsDisabled}` : ""}
+                </span>
                 {specialist.description === "" ? null : (
                   <span className="expert-desc">{specialist.description}</span>
                 )}
@@ -1290,7 +1296,7 @@ export function Composer({
               automaticReviewEnabled={automaticReviewEnabled}
               reviewerEnabled={reviewerEnabled}
               reviewerRunning={reviewerRunning}
-              experts={experts.value?.filter((expert) => expert.enabled !== false) ?? []}
+              experts={experts.value?.filter((expert) => expert.enabled !== false || expert.id === selectedSpecialistId) ?? []}
               expertsLoading={experts.loading}
               onAutomaticReview={onAutomaticReview}
               onReviewLevel={onReviewLevel}

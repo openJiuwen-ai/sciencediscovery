@@ -121,6 +121,24 @@ describe("the Specialist routes answer a rejected input as a client error", () =
     assert.equal(enabled.body.description, "edited while disabled");
   });
 
+  test("a removed skill cannot block a custom Specialist's flag-only PUT", async () => {
+    const skill = await request("POST", "/api/skills", { name: "removed-toggle-skill", description: "temporary", instructions: "Check data." });
+    assert.equal(skill.status, 201);
+    assert.equal(typeof skill.body.id, "string");
+    const skillId = String(skill.body.id);
+    const created = await request("POST", "/api/specialists", { name: "Removed skill HTTP subject", description: "d", instructions: "i", enabledSkillIds: [skillId] });
+    assert.equal(created.status, 201);
+    assert.equal((await request("DELETE", `/api/skills/${encodeURIComponent(skillId)}`)).status, 200);
+    const path = `/api/specialists/${created.body.id}`;
+    const disabled = await request("PUT", path, { enabled: false });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.enabled, false);
+    assert.equal((await request("PUT", path, { enabled: true })).body.enabled, true);
+    const repaired = await request("PUT", path, { enabledSkillIds: [] });
+    assert.equal(repaired.status, 200);
+    assert.deepEqual(repaired.body.enabledSkillIds, []);
+  });
+
   // One declaration per rejection the settings pane can provoke, driven through
   // the real store: the wording lives in services/api/src/store.ts, so a change
   // there fails this route test instead of only a hand-copied helper list.

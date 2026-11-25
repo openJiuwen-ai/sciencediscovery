@@ -105,10 +105,11 @@ export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props
         if ((specialist.enabled !== false) === next) continue;
         await updateSpecialist(client, specialist.id, { enabled: next });
       }
-      loaded.reload();
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
+      // Earlier rows may already have been saved when a later request failed.
+      loaded.reload();
       setBusy(false);
     }
   };

@@ -370,6 +370,19 @@ test.describe("专家", () => {
     expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toEqual({ enabled: false });
   });
 
+  test("a partial bulk failure reloads the rows already saved", async ({ page: browser }) => {
+    await installMockApi(browser, {
+      ...page(),
+      specialists: [specialist({ id: "custom-a", name: "先保存的专家" }), specialist({ id: "custom-b", name: "保存失败的专家" })],
+      fail: { message: "Bulk save refused", method: "PUT", path: "/api/specialists/custom-b", status: 500 },
+    });
+    const dialog = await openSettings(browser, "专家");
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    await expect(dialog.locator(".row-note.is-error")).toHaveText("Bulk save refused");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "先保存的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "保存失败的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+
   test("a rejected save keeps the form and names the reason", async ({ page: browser }) => {
     await installMockApi(browser, {
       ...page(),

@@ -440,6 +440,14 @@ describe("the specialist form", () => {
     assert.doesNotMatch(markup, /disabled=""[^>]*>保存<\/button>/, "保存 is disabled for a complete specialist");
   });
 
+  it("shows an unavailable selected skill with an explicit repair control", () => {
+    const markup = form({ ...existing, enabledSkillIds: ["removed-skill"] });
+    assert.ok(markup.includes(TEXT.settings.system.specialists.unavailableSkill("removed-skill")));
+    assert.ok(markup.includes(`${TEXT.settings.system.specialists.remove} removed-skill`));
+    assert.ok(markup.includes(TEXT.settings.system.specialists.unavailableSkillsHint));
+    assert.match(markup, /disabled=""[^>]*>保存<\/button>/);
+  });
+
   it("shows the counters and placeholders the design asks for", () => {
     const markup = form().replaceAll("<!-- -->", "");
     assert.ok(markup.includes("0 / 80"), "the name counter is missing");

@@ -40,29 +40,6 @@
 
 ## 3. Server communication
 
-### Specialist settings controls (2026-11-25)
-
-Settings › Specialists uses the same header alignment and dark pill action as
-Skills for its create button. Each custom and built-in dispatchable Specialist
-has an enabled switch. Custom rows use the Skills chevron menu immediately
-before the switch, with Edit and Delete (red, after a divider) only; there is
-no export action. Hover/click opening, outside dismissal, Escape and upward
-placement near the pane edge reuse the Skills menu. Built-ins keep only their
-switch. An explicit click keeps the menu open across pane scrolling and pointer
-leave; hover-only opening remains transient. Delete still requires confirmation;
-cancelling keeps the record.
-Bulk enable/disable includes both kinds and leaves the fixed Review Specialist
-alone. `PUT /api/specialists/:id` persists the custom `enabled` flag, rejects
-non-boolean values, and preserves it when other fields are edited. Existing
-records without the flag remain enabled. Disabled roles stay in settings for
-management but are omitted from the session picker and the generated subagent
-tool catalog. This flag controls catalog exposure; explicitly supplied IDs are
-still resolved by the existing subagent request path.
-This extends the previous built-in-only toggle contract; prior versions are
-retained in Git history. Acceptance: single/bulk toggle, reload persistence,
-edit while disabled, visible save failure and retry, and matching Skills action
-placement/style on desktop and a narrow window.
-
 Requests go through `ApiClient`, which injects `authorization: Bearer <token>` and turns a non-2xx into an `ApiRequestError` carrying the server's own `error`, `code` and `details`. `PUT /api/settings` is a whole-object write, so `setGlobalModel()` always reads first and sends every existing override back with the one field changed; anything omitted would be erased through `store.replaceGlobalSettings`.
 
 Streams use `fetch` plus `body.getReader()`, never `EventSource`, because the token has to travel in a header. `SseFrameDecoder` frames on the blank line, ignores `:` keep-alives, and holds a partial frame until its terminator arrives — a chunk boundary can land anywhere, including between `\r` and `\n`. Frames carry `id: <n>`, which is the `?after=` replay cursor; a reconnect resumes from the largest one seen rather than replaying the whole run.
@@ -153,7 +130,7 @@ A preset supplies `apiProtocol` and `apiVariant`; only the custom branch asks fo
 
 The data directory is fixed by the shell before launch, and the wizard's workspace step only records it: no route reports or changes the live data directory, which comes from the service's launch arguments, so editing this field never moves existing data.
 
-The settings dialog is three groups over five pages — 通用 under 系统, model and skills under 智能, network and remote under 连接 — and every page other than 通用 reads its own data on mount through `useLoaded`. 通用 is this browser's page rather than the service's: its one row is the interface language (简体中文 or English), applied on the pick and stored under `sciencediscovery-desktop:locale`, the same immediate-apply behaviour as `apps/web`. The default is Chinese rather than the browser's own preference, because this UI ships for a Chinese-first deployment and an English browser would otherwise open it in English without saying that a setting exists. Nothing in `TEXT` is read at module scope: `TEXT` is a proxy over the current dictionary, App subscribes to the store so a switch re-renders the tree, and strings that used to be literals in components or captured in module-level label tables (the notice kinds, the sandbox modes, the run status words, the workspace's relative times, 未命名会话, 你, 第 N 轮) are all dictionary entries now, and even the fold's 展开/收起 hint, which CSS prints from `details[open]`, carries its translated words in `data-expand`/`data-collapse` instead of a literal `content`. `<html lang>` follows the choice, set before the first paint and on every switch. A section heading stands alone: every page used to print one sentence under its headings explaining what the block was for, and those are gone — the heading is the introduction. A page whose read fails renders the reason and a retry rather than an empty list, because on a settings screen an empty list is a claim about the server and not about the request.
+The settings dialog groups its pages under System, Intelligence, Connection and Workspace. Every page other than 通用 reads its own data on mount through `useLoaded`. 通用 is this browser's page rather than the service's: its one row is the interface language (简体中文 or English), applied on the pick and stored under `sciencediscovery-desktop:locale`, the same immediate-apply behaviour as `apps/web`. The default is Chinese rather than the browser's own preference, because this UI ships for a Chinese-first deployment and an English browser would otherwise open it in English without saying that a setting exists. Nothing in `TEXT` is read at module scope: `TEXT` is a proxy over the current dictionary, App subscribes to the store so a switch re-renders the tree, and strings that used to be literals in components or captured in module-level label tables (the notice kinds, the sandbox modes, the run status words, the workspace's relative times, 未命名会话, 你, 第 N 轮) are all dictionary entries now, and even the fold's 展开/收起 hint, which CSS prints from `details[open]`, carries its translated words in `data-expand`/`data-collapse` instead of a literal `content`. `<html lang>` follows the choice, set before the first paint and on every switch. A section heading stands alone: every page used to print one sentence under its headings explaining what the block was for, and those are gone — the heading is the introduction. A page whose read fails renders the reason and a retry rather than an empty list, because on a settings screen an empty list is a claim about the server and not about the request.
 
 Which layer a write lands in is not uniform, and the difference is not visible from the UI:
 
@@ -169,7 +146,38 @@ The composer used to carry 会话配置 between the model pill and the paperclip
 
 Idea Tree's parameters — research template, exploration intensity, score direction, maximum depth, maximum nodes — can also be changed for one **Session** at a time. The `idea-tree` row under 程序演进实验 in 会话设置 opens the parameters card; the card opens on the deployment settings with this Session's pins applied, shows the **deployment value** beside every field and marks the ones this Session has moved away from (`已覆盖`), so putting a field back to the deployment value is the undo — no need to remember the global number. The card has exactly three actions: `确认`, `取消` and `覆盖全局设置`. `确认` **sends nothing**: it writes `ideaTreeOverride` through `PATCH /api/sessions/:id` (carrying the fields that differ from the deployment; putting every field back writes the empty override, which inherits again) and then places the Idea Tree command in the composer as a **token** (the blue `/idea-tree-team`, removable with ✕; a typed `/idea-tree` keeps its own command). The reader completes the research task and presses send — the research starts on that send, and the parameters are read at creation through `resolveIdeaTreeSettings(sessionId)`, so the card cannot start anything by itself and nothing can be silently dropped while a turn runs. `覆盖全局设置` carries only the fields this visit actually changed, and writes nothing when nothing changed. The scope is `system` and `session` only: a Global or Project write has the field stripped, so one deployment-wide edit cannot silently become every Session's research parameters. With no conversation open, or after a failed settings read, `确认` is disabled: that press is also the write, so there is nothing to write to and no value worth seeding a token on.
 
-What is absent from the panel is absent by request, not because the capability is gone: settings no longer carries the specialists, connectors, permissions and feedback pages, 通用 carries only the interface language (the recorded data directory it once showed is gone, not a setting), network keeps only the sandbox policy — 无网络, 域名白名单 and 开放网络: the allowlist carries a domain box and a 保存 of its own, because the service refuses an empty allowlist and the box is grey and disabled in the other modes, so picking that mode only stages it and the save writes the mode and the domains together; 无网络 and 开放网络 are written on the pick, with 开放网络 still asking first; the private-network switch, the egress route and the save warning are still not offered, and the proxy server list is no longer read here — remote keeps only the Runner and no longer offers the 测试连接 button on its cards (connecting, trusting a host key and saving credentials still probe), the composer has no 会话配置 button, and sessions are no longer archived or restored from this app: the sidebar row menu is 重命名 and 删除. The session bar no longer hangs a ⋯ menu either — renaming is the double-click on the title, or the row menu in the sidebar.
+What is absent from the panel is absent by request, not because the capability is gone: settings includes Specialists, MCP servers, Scientific Memory and Timeouts, while separate legacy connector, permission and feedback pages remain absent; 通用 carries only the interface language (the recorded data directory it once showed is gone, not a setting), network keeps only the sandbox policy — 无网络, 域名白名单 and 开放网络: the allowlist carries a domain box and a 保存 of its own, because the service refuses an empty allowlist and the box is grey and disabled in the other modes, so picking that mode only stages it and the save writes the mode and the domains together; 无网络 and 开放网络 are written on the pick, with 开放网络 still asking first; the private-network switch, the egress route and the save warning are still not offered, and the proxy server list is no longer read here — remote keeps only the Runner and no longer offers the 测试连接 button on its cards (connecting, trusting a host key and saving credentials still probe), the composer has no 会话配置 button, and sessions are no longer archived or restored from this app: the sidebar row menu is 重命名 and 删除. The session bar no longer hangs a ⋯ menu either — renaming is the double-click on the title, or the row menu in the sidebar.
+
+### Specialist settings controls (2026-11-25)
+
+Desktop Settings › Specialists uses the Skills header alignment and dark pill
+create action. Custom and built-in dispatchable roles have enabled switches;
+bulk actions cover both and leave the fixed Review Specialist alone. Custom
+rows reuse the Skills chevron menu before the switch, with Edit and red Delete
+only. A clicked menu stays open during scrolling; hover-only opening remains
+transient. Delete requires confirmation, and cancelling preserves the role.
+
+`PUT /api/specialists/:id` validates and persists custom `enabled` flags;
+omission continues to mean enabled. Flag-only patches do not revalidate core
+fields or old skill references, so an unavailable skill cannot prevent a role
+from being disabled. Core edits still validate the resulting configuration.
+The editor shows unavailable selected skill IDs with explicit Remove controls;
+it does not silently drop them or broaden capabilities. Bulk actions refresh
+the list after a partial failure so previously saved rows show their real state.
+
+Disabled roles stay manageable. Desktop hides them from new selections and the
+generated subagent tool catalog omits them. Existing session bindings remain:
+the composer keeps the bound role named and marked Disabled, explains that it
+still applies, and offers None to unbind it for subsequent turns. The checked
+disabled row is visible but cannot be chosen as a new binding. Explicit IDs
+continue through the existing subagent resolution path. These Desktop controls
+do not assert parity with the legacy Web UI.
+
+This extends the old built-in-only toggle contract; previous versions remain
+in Git history. Acceptance includes bound-role visibility after disabling,
+removed-skill toggling and explicit repair, partial bulk failure refresh,
+reload persistence, save failure/retry, and matching Skills controls in both
+languages at desktop and narrow-window sizes.
 
 ### The remote page's execution machines
 
