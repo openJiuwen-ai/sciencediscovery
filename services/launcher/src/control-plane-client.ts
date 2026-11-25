@@ -203,7 +203,7 @@ export class ControlPlaneClient {
     sessionId: string,
     runId: string,
     after: number,
-    onEvent: (event: RunStreamEvent, sequence: number) => void,
+    onEvent: (event: RunStreamEvent, sequence?: number) => void,
     signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(
@@ -222,7 +222,6 @@ export class ControlPlaneClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let sequence = after;
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -234,8 +233,8 @@ export class ControlPlaneClient {
           const payload = frame.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
           if (payload) {
             const parsedSequence = eventId ? Number(eventId) : Number.NaN;
-            sequence = Number.isFinite(parsedSequence) && parsedSequence > sequence ? parsedSequence : sequence + 1;
-            onEvent(JSON.parse(payload) as RunStreamEvent, sequence);
+            // Live payloads without an id do not advance the durable replay cursor.
+            onEvent(JSON.parse(payload) as RunStreamEvent, Number.isSafeInteger(parsedSequence) ? parsedSequence : undefined);
           }
         }
         if (done) break;
