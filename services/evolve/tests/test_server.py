@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import json
 import time
+import unittest.mock
 
 import pytest
 
@@ -42,6 +43,38 @@ def test_health_needs_no_auth(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+
+
+def test_startup_settles_a_research_a_previous_process_left_running(tmp_path) -> None:
+    """#1456: the restart verdict lands at boot, before any read request.
+
+    It goes through the app's own startup rather than calling the lifespan
+    function directly, so this asserts the `lifespan=` wiring: without it the
+    startup hook never runs in production and this test fails.
+    """
+    from sciencediscovery_evolve.vendor.idea_tree import research_service
+    from sciencediscovery_evolve.vendor.idea_tree.research import ResearchStore, now
+
+    store = ResearchStore(tmp_path)
+    store.save(dict(id="research-1", projectId="p", sessionId="s", status="running",
+                    activities=[dict(role="design", nodeId="ROOT", round=1, status="running",
+                                     startedAt=now(), finishedAt=None, error=None)],
+                    createdAt=now(), updatedAt=now()))
+    module = importlib.import_module("sciencediscovery_evolve.server")
+
+    # Both patches have to be active before the context manager starts the
+    # lifespan: `TestClient.__enter__` is what runs the startup hook.
+    with unittest.mock.patch.object(research_service, "_store", store), \
+            unittest.mock.patch.object(research_service.log, "info") as info:
+        with TestClient(module.app) as client:
+            assert client.get("/health").status_code == 200
+
+    info.assert_called_once_with("settled %d research(es) interrupted by a service restart", 1)
+    settled = store.read("p", "s", "research-1")
+    assert settled["status"] == "interrupted"
+    assert settled["reason"] == "Service restarted; continue manually"
+    assert settled["activities"][0]["status"] == "stopped"
+    assert settled["activities"][0]["error"] == "Service restarted"
 
 
 def test_a_run_streams_ndjson_records(client: TestClient) -> None:

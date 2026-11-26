@@ -12,9 +12,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ...auth import require_internal_token
+from ...logging_config import get_logger
 from .research import IdeaTreeEngine, ResearchStore, node, now
 from .prompts import DEFAULTS, CRITERIA
 from .templates import INTENSITIES, TEMPLATES, apply_intensity, snapshot
+
+log = get_logger('idea_research')
 
 
 class Settings(BaseModel):
@@ -76,21 +79,74 @@ def store():
     return _store
 
 
+RESTART_REASON = 'Service restarted; continue manually'
+ACTIVE_STATUSES = ('running', 'pausing')
+
+
 def state_for(project, session, identifier):
+    """The research as it is; a read, never a recovery step.
+
+    `list`, `get` and `events` (once per streamed frame) all call this, and a
+    read of an archived, read-only Session reaches it too, so it must not
+    write. A research a previous process left `running` is settled once at boot
+    by `reconcile_orphaned_researches()`, not by whichever request reads first.
+    """
     active = _running.get(identifier)
     if active:
         s = active[0].state
         if s['projectId'] != project or s['sessionId'] != session:
             raise HTTPException(404, 'Research not found')
         return s
-    s = store().read(project, session, identifier)
-    if s['status'] in ['running', 'pausing']:
-        s.update(status='interrupted', reason='Service restarted; continue manually')
-        for activity in s.get('activities', []):
-            if activity['status'] == 'running':
-                activity.update(status='stopped', finishedAt=now(), error='Service restarted')
-        store().save(s)
-    return s
+    return store().read(project, session, identifier)
+
+
+def settle_after_restart(state):
+    """The restart verdict for one research: interrupted, its activities closed."""
+    state.update(status='interrupted', reason=RESTART_REASON)
+    for activity in state.get('activities', []):
+        if activity.get('status') == 'running':
+            activity.update(status='stopped', finishedAt=now(), error='Service restarted')
+
+
+def reconcile_orphaned_researches():
+    """Settle researches a previous process left running; called once at startup.
+
+    The engine lives in this process, so a `running`/`pausing` research found
+    on disk cannot still be driven: it is a restart orphan. The transition has
+    to happen at the restart itself instead of on a read, because reads happen
+    per streamed frame and for archived Sessions, where persisting a status
+    turns an observation into an irreversible write. Returns how many were
+    settled, so the caller can log a count and tests can assert on it.
+    """
+    root = store().root
+    if not root.is_dir():
+        return 0
+    settled = 0
+    for path in sorted(root.glob('*/*/*.json')):
+        project, session, identifier = path.parts[-3], path.parts[-2], path.stem
+        # Never settle a research this process is driving, even if this pass is
+        # invoked again: it is not an orphan.
+        if identifier in _running:
+            continue
+        try:
+            s = store().read(project, session, identifier)
+        except (OSError, ValueError) as error:
+            log.warning('restart reconciliation skipped unreadable research %s/%s/%s: %s',
+                        project, session, identifier, error)
+            continue
+        if s.get('status') not in ACTIVE_STATUSES:
+            continue
+        settle_after_restart(s)
+        try:
+            store().save(s)
+        except (OSError, ValueError) as error:
+            log.warning('restart reconciliation could not save research %s/%s/%s: %s',
+                        project, session, identifier, error)
+            continue
+        settled += 1
+    if settled:
+        log.info('settled %d research(es) interrupted by a service restart', settled)
+    return settled
 
 
 def view(s):
