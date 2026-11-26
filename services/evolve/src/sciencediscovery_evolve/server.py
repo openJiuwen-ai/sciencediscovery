@@ -38,8 +38,10 @@ in idea-research/. Run this service with one ASGI worker.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
+from contextlib import asynccontextmanager
 from queue import Empty, Queue
 from typing import Any, Iterator
 
@@ -61,9 +63,27 @@ log = get_logger("server")
 
 from .vendor.idea_tree.idea_tree_service import router as idea_tree_router
 
-from .vendor.idea_tree.research_service import router as idea_research_router
+from .vendor.idea_tree.research_service import reconcile_orphaned_researches, router as idea_research_router
 
-app = FastAPI(title="sciencediscovery-evolve")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Settle Idea Tree researches a previous process left running, once.
+
+    A read may not do this: `list`/`get`/`events` run per streamed frame and
+    also for archived, read-only Sessions, so persisting the restart verdict
+    there turned an observation into a write. Here it lands at the restart
+    itself, before the first request is served. A failure is logged rather than
+    raised so a damaged data directory cannot stop the sidecar from booting.
+    """
+    try:
+        await asyncio.to_thread(reconcile_orphaned_researches)
+    except Exception:  # noqa: BLE001 - boot must survive a data-directory problem
+        log.exception("idea research restart reconciliation failed")
+    yield
+
+
+app = FastAPI(title="sciencediscovery-evolve", lifespan=lifespan)
 app.include_router(idea_tree_router)
 app.include_router(idea_research_router)
 

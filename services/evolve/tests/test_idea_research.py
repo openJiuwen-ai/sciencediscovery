@@ -3,6 +3,7 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 import asyncio
+import copy
 import io
 import json
 import tempfile
@@ -724,14 +725,91 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await task
             self.assertEqual(service.state_for('p', 's', identifier)['status'], 'paused')
-            # A persisted running flag after a process restart is never an auto-resume instruction.
+            # A persisted running flag after a process restart is never an auto-resume
+            # instruction, but the read path may not settle it: the verdict belongs to
+            # the startup reconciliation, not to whichever request reads first (#1456).
             saved = self.store.read('p', 's', identifier)
             saved['status'] = 'running'
             self.store.save(saved)
+            path = self.store.path('p', 's', identifier)
+            before = path.read_bytes()
+            self.assertEqual(service.state_for('p', 's', identifier)['status'], 'running')
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+            restarted = self.store.read('p', 's', identifier)
+            self.assertEqual(restarted['status'], 'interrupted')
+            self.assertEqual(restarted['reason'], 'Service restarted; continue manually')
             self.assertEqual(service.state_for('p', 's', identifier)['status'], 'interrupted')
+            # Already settled: a second boot has nothing to do.
+            self.assertEqual(service.reconcile_orphaned_researches(), 0)
             ended = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
             self.assertEqual(ended['research']['status'], 'ended')
             self.assertNotIn(identifier, service._running)
+
+    async def test_reading_a_research_never_writes_it(self):
+        # #1456: list/get/events are reads. A `running` record with no engine in
+        # this process is a restart orphan, but only the startup reconciliation may
+        # settle it: the old read path persisted `interrupted` and closed the running
+        # activities, once per streamed frame and even for an archived Session.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        self.state.update(status='running', activities=[
+            dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None)])
+        self.store.save(self.state)
+        path = self.store.path('p', 's', 'research-test')
+        before = path.read_bytes()
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}):
+            listed = await service.command(service.Command(projectId='p', sessionId='s', operation='list'))
+            self.assertEqual([item['research']['status'] for item in listed['items']], ['running'])
+            self.assertEqual(path.read_bytes(), before, 'list must not rewrite the research')
+            fetched = await service.command(service.Command(projectId='p', sessionId='s', researchId='research-test', operation='get'))
+            self.assertEqual(fetched['research']['status'], 'running')
+            self.assertEqual(path.read_bytes(), before, 'get must not rewrite the research')
+            # The events path reads once before streaming and again on every frame.
+            response = await service.events(service.Command(projectId='p', sessionId='s', researchId='research-test', operation='events'))
+            frame = await response.body_iterator.__anext__()
+            await response.body_iterator.aclose()
+            self.assertEqual(json.loads(frame.split('data: ', 1)[1])['research']['status'], 'running')
+            self.assertEqual(path.read_bytes(), before, 'the events stream must not rewrite the research')
+
+    def test_startup_reconciliation_settles_only_orphans(self):
+        # #1456: the restart verdict is one boot-time pass, not a read side effect.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        activity = dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None)
+        for identifier, status in [('research-running', 'running'), ('research-pausing', 'pausing'),
+                                   ('research-paused', 'paused'), ('research-completed', 'completed')]:
+            state = copy.deepcopy(self.state)
+            state.update(id=identifier, status=status, activities=[dict(activity)])
+            self.store.save(state)
+        paused_bytes = self.store.path('p', 's', 'research-paused').read_bytes()
+        completed_bytes = self.store.path('p', 's', 'research-completed').read_bytes()
+        with patch.object(service, '_store', self.store), patch.object(service.log, 'info') as info:
+            # A research this process is driving is not an orphan, even if this pass
+            # is invoked again.
+            with patch.object(service, '_running', {'research-running': (None, None)}):
+                self.assertEqual(service.reconcile_orphaned_researches(), 1)
+                info.assert_called_once_with('settled %d research(es) interrupted by a service restart', 1)
+                still_running = self.store.read('p', 's', 'research-running')
+                self.assertEqual(still_running['status'], 'running')
+                self.assertEqual(still_running['activities'][0]['status'], 'running')
+            info.reset_mock()
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+            info.assert_called_once_with('settled %d research(es) interrupted by a service restart', 1)
+            info.reset_mock()
+            self.assertEqual(service.reconcile_orphaned_researches(), 0)
+            info.assert_not_called()
+        for identifier in ('research-running', 'research-pausing'):
+            settled = self.store.read('p', 's', identifier)
+            self.assertEqual(settled['status'], 'interrupted')
+            self.assertEqual(settled['reason'], 'Service restarted; continue manually')
+            self.assertEqual(settled['activities'][0]['status'], 'stopped')
+            self.assertTrue(settled['activities'][0]['finishedAt'])
+            self.assertEqual(settled['activities'][0]['error'], 'Service restarted')
+        # Terminal and user-paused researches are left exactly as they were.
+        self.assertEqual(self.store.path('p', 's', 'research-paused').read_bytes(), paused_bytes)
+        self.assertEqual(self.store.path('p', 's', 'research-completed').read_bytes(), completed_bytes)
+        self.assertEqual(self.store.read('p', 's', 'research-paused')['activities'][0]['status'], 'running')
 
     async def test_service_refuses_to_continue_a_budget_exhausted_research(self):
         # The Python lifecycle must reject the terminal budget state too, even if a
