@@ -293,6 +293,44 @@ function useAfter(flag: boolean, delayMs: number): boolean {
   return flag && elapsed;
 }
 
+/** The tool-call prefix the window mints for a review the reader started. It
+ *  is not a run's tool call, so the running turn does not hold its card back. */
+const MANUAL_REVIEW_PREFIX = "manual-review:";
+
+/** One persisted message and the position it held in stored order — what
+ *  `answeredAfter` is keyed by, so it survives being drawn somewhere else. */
+interface PlacedMessage {
+  index: number;
+  message: ChatMessage;
+}
+
+/**
+ * Put each review checkpoint at the end of the turn whose artifacts it read.
+ *
+ * A checkpoint message is written when the review starts, mid-turn, and the
+ * run's answer is only written when the run ends — so stored order would draw
+ * the card above the thinking and tool calls it reviews, directly under the
+ * question it is not answering. The card is the verdict on what the turn
+ * produced, so it belongs after that turn's answer. A turn is the messages
+ * between two of the reader's own: checkpoints are held back to the boundary
+ * before the next question, keep their own order, and a checkpoint that
+ * precedes the first question stays at the head of the transcript.
+ */
+function placeCheckpoints(messages: readonly ChatMessage[]): PlacedMessage[] {
+  const placed: PlacedMessage[] = [];
+  const held: PlacedMessage[] = [];
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "user" && held.length > 0) {
+      placed.push(...held);
+      held.length = 0;
+    }
+    if (message.kind === "reviewer_checkpoint") held.push({ index, message });
+    else placed.push({ index, message });
+  }
+  placed.push(...held);
+  return placed;
+}
+
 /**
  * The transcript.
  *
@@ -304,6 +342,9 @@ function useAfter(flag: boolean, delayMs: number): boolean {
  * what brings its thinking and its tool calls back after a reload without
  * printing the answer twice. A session that took several turns has one replay
  * per turn, and the run still streaming has none yet, so it goes at the end.
+ *
+ * Review checkpoint messages are written mid-turn, before the answer they
+ * belong after; `placeCheckpoints` is what draws them at the turn's end.
  */
 export function Conversation({
   onOpenConfigurationSettings,
@@ -421,6 +462,9 @@ export function Conversation({
     return byToolCall;
   }, [reviews]);
   const { following, replacing, trailing } = placeReplays(failures.replays, messages);
+  /** The transcript in the order it is drawn: checkpoints at their turn's end,
+   *  the persisted order otherwise. */
+  const placed = useMemo(() => placeCheckpoints(messages), [messages]);
   const visibleRun = failures.run;
   /** A chip opens the card for this session; the transcript is the session's
    *  own, so the id is not a per-row value. Stable so the memoised turns under
@@ -481,6 +525,10 @@ export function Conversation({
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
   const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
+  /** When the turn now streaming began. A review card stamped after it belongs
+   *  to that unfinished turn and waits for its answer; without a start time the
+   *  card is drawn as stored rather than guessed at. */
+  const liveSince = liveRun ? visibleRun.startedAt : undefined;
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -526,15 +574,22 @@ export function Conversation({
   return (
     <section className="conversation" onScroll={onScroll} ref={scroller}>
       <div className="messages" ref={content}>
-        {messages.map((message, index) => {
+        {placed.map(({ index, message }) => {
           if (failures.hiddenNoticeIds.has(message.id) || presentation.suppressedNoticeIds.has(message.id)
             || legacyPresentation.suppressedNoticeIds.has(message.id)) return null;
-          // The checkpoint is where the Reviewer's verdict belongs: the message
-          // is written when artifacts are submitted, so the card sits under the
-          // turn that produced them rather than after the whole conversation.
+          // The card is drawn at the end of its turn, after the answer it is a
+          // verdict on; `placeCheckpoints` is what puts it there.
           if (message.kind === "reviewer_checkpoint") {
             const checkpoint = message.reviewerCheckpoint;
             if (checkpoint === undefined) return null;
+            // A card written while this turn is still being written is a
+            // message between the agents, not a verdict for the reader: drawing
+            // it now would put it above the reply it is a verdict on. It waits
+            // for the turn to end. A card the coordinator wrote after an
+            // earlier turn is drawn at once, and so is one the reader started
+            // themselves — only what the run wrote is held.
+            if (liveSince !== undefined && !checkpoint.toolCallId.startsWith(MANUAL_REVIEW_PREFIX)
+              && Date.parse(message.createdAt) >= liveSince) return null;
             return (
               <ReviewCard
                 checkpoint={checkpoint}
