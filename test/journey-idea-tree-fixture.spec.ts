@@ -93,9 +93,11 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       // first provider request. Allow a cold start while still requiring that
       // the exact pinned design prompt reaches the model.
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE")), { timeout: 30_000 }).toBe(true);
-      // The API appends this assistant turn when the research is created, so the line is a
-      // lasting signal rather than the timeline card's loading placeholder (研究思路树已启动,
-      // which only renders until the first view lands).
+      // This line is the mocked model's own reply (test/helpers/idea-research-model.ts), not
+      // the API's appended sentence: the research here is created by the agent's
+      // `create_idea_research` tool, which emits `idea_research.created` and appends no
+      // message, and no client posts the route's `operation: "create"` with `content` either.
+      // The service sentence is therefore copy-only in this PR and has no test on this path.
       await expect(page.getByText(/已启动研究思路树/)).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();
       await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");
