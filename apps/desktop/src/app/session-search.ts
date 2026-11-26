@@ -144,3 +144,24 @@ export function artifactHitPlan(
   }
   return { pending };
 }
+
+/** Newest first inside a group. Each row carries its own `updatedAt`; a row
+ *  without one sorts last rather than first, so an unknown stamp cannot
+ *  outrank a known one. */
+function newestFirst(results: readonly WorkbenchSearchResult[]): WorkbenchSearchResult[] {
+  const at = (result: WorkbenchSearchResult) => {
+    const stamp = result.updatedAt === undefined ? NaN : Date.parse(result.updatedAt);
+    return Number.isNaN(stamp) ? Number.NEGATIVE_INFINITY : stamp;
+  };
+  return [...results].sort((left, right) => at(right) - at(left));
+}
+
+/** The dialog's rows: 全部 groups every kind, a kind shows only itself, and
+ *  every group is newest first. */
+export function groupsFor(
+  results: readonly WorkbenchSearchResult[],
+  kind: "all" | WorkbenchSearchResultKind,
+): SearchGroup[] {
+  const kept = kind === "all" ? results : results.filter((result) => result.kind === kind);
+  return groupSearchResults(kept).map((group) => ({ ...group, results: newestFirst(group.results) }));
+}

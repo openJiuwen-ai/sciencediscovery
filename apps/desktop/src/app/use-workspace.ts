@@ -32,8 +32,6 @@ import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./sess
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
 import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
-import { readSearchNarrowing, rememberSearchNarrowing } from "./search-narrowing-preference.js";
-import { hasActiveNarrowing, narrowResults, narrowSessions, type SearchNarrowing, type SearchSessionFacts } from "./search-narrowing.js";
 
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
@@ -210,8 +208,6 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
-  /** How the search results are narrowed: projects, running, artifacts, window. */
-  narrowing: SearchNarrowing;
   /** The query the search field holds, and what `GET /api/search` answered. */
   searchQuery: string;
   searchResults?: WorkbenchSearchResponse;
@@ -248,8 +244,6 @@ export interface WorkspaceActions {
   deleteSession: (session: Session, onSettled?: () => void) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => Promise<void>;
-  /** The search results' narrowing: projects, running, artifacts, window. */
-  setSearchNarrowing: (next: Partial<SearchNarrowing>) => void;
   /** The sidebar's search field: debounced `GET /api/search`. */
   search: (query: string) => void;
   /** Open what a result names. */
@@ -408,26 +402,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // The listing is unfiltered now — archived Sessions are read for membership
   // and the sidebar draws the active subset — so there is no three-way state to
   // keep here any more.
-  /** How the search results are narrowed; read before the first paint, because
-   *  #1251 asks for the choice to survive a reload. */
-  const [narrowing, setNarrowingState] = useState<SearchNarrowing>(() => readSearchNarrowing());
-
-  // A stored selection can outlive the Project it named. The picker only lists the
-  // Projects that still exist, so a stale id would keep filtering everything out
-  // with the folder control lit and no visible way to clear it — prune instead,
-  // and write the pruned choice back so a reload does not resurrect it.
-  useEffect(() => {
-    // Wait for the listing: before it answers, `projects` is empty and every id
-    // looks stale, which wrote the stored selection away on the first commit.
-    if (!projectsLoaded.current) return;
-    if (narrowing.projectIds.length === 0) return;
-    const known = new Set(projects.map((project) => project.id));
-    const kept = narrowing.projectIds.filter((id) => known.has(id));
-    if (kept.length === narrowing.projectIds.length) return;
-    const updated = { ...narrowing, projectIds: kept };
-    rememberSearchNarrowing(updated);
-    setNarrowingState(updated);
-  }, [narrowing, projects]);
 
   /** The query the field holds, the answer it produced and why it failed. */
   const [searchQuery, setSearchQuery] = useState("");
@@ -2597,45 +2571,18 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   }, [sessionsByProject]);
 
   /**
-   * The route's answer, narrowed by the `...` settings and by the two rules that
-   * make a search a search: an archived Session is not searchable — and neither
-   * are its artifacts — while an imported read-only snapshot is, because 活跃 is
-   * archived versus live rather than writable versus read-only.
-   *
-   * The facts come from the Sessions this page holds, so a hit for a Session it
-   * has not read is kept rather than hidden.
+   * The route's answer with the one rule a search keeps: an archived Session is
+   * not searchable — and neither are its artifacts — while an imported read-only
+   * snapshot is, because 活跃 is archived versus live rather than writable versus
+   * read-only. A hit whose Session this page never read is kept.
    */
   const searchResults = useMemo(() => {
     if (searchAnswer === undefined) return undefined;
-    // The column holds the active set, so `sessionsByProject` cannot answer
-    // "archived" for anything — and artifact hits carry no archived flag of their
-    // own. The listing read that filled it also saw the archived Sessions, and
-    // those ids are kept for exactly this question.
-    const facts = new Map<string, SearchSessionFacts>();
-    for (const sessions of Object.values(sessionsByProject)) {
-      for (const session of sessions) {
-        const stamp = Date.parse(session.updatedAt ?? session.createdAt);
-        facts.set(session.id, {
-          archived: archivedIds.current.has(session.id),
-          stamp: Number.isNaN(stamp) ? undefined : stamp,
-        });
-      }
-    }
-    for (const id of archivedIds.current) {
-      if (!facts.has(id)) facts.set(id, { archived: true });
-    }
-    const results = narrowResults(searchAnswer.results, narrowing, {
-      now: filterNow,
-      runningSessionId: running ? sessionId : undefined,
-      withArtifacts: new Set(Object.entries(artifactsBySession.current)
-        .filter(([, outputs]) => outputs.length > 0)
-        .map(([id]) => id)),
-      sessionFacts: (id) => facts.get(id),
-    });
-    // The route keeps `total` and `hasMore`: a client-side narrowing cannot count
-    // what the route did not send, and a narrowed page is not an empty answer.
+    const archived = archivedIds.current;
+    const results = searchAnswer.results.filter((result) =>
+      result.sessionId === undefined || !archived.has(result.sessionId));
     return { ...searchAnswer, results };
-  }, [filterNow, narrowing, outputs, running, searchAnswer, sessionId, sessionsByProject]);
+  }, [searchAnswer]);
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
@@ -2643,48 +2590,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     () => (inboxProject === undefined ? [] : byRecency(listedByProject[inboxProject.id] ?? [])),
     [inboxProject, listedByProject],
   );
-
-  // #1251's fourth criterion asks that the list itself be narrowable. With no
-  // query in the field the `...` settings narrow the column, so 运行中 / 有产物 /
-  // 指定时间 / the Project selection all apply to what the folds draw; with a
-  // query they narrow its results and the column keeps every active Session,
-  // because the field is then the thing being narrowed.
-  const columnNarrowed = hasActiveNarrowing(narrowing) && searchQuery.trim() === "";
-  const artifactSessions = useMemo(
-    () => new Set(Object.entries(artifactsBySession.current)
-      .filter(([, outputs]) => outputs.length > 0)
-      .map(([id]) => id)),
-    [outputs],
-  );
-  /** Sessions whose artifact list has not been read yet: 有产物 keeps those rather
-   *  than reading "not read" as "has none". */
-  const unreadArtifacts = useMemo(() => {
-    const unread = new Set<string>();
-    for (const sessions of Object.values(listedByProject)) {
-      for (const session of sessions) {
-        if (artifactsBySession.current[session.id] === undefined) unread.add(session.id);
-      }
-    }
-    return unread;
-  }, [listedByProject, outputs]);
-  /** The column's lists under an active narrowing, or `undefined` when the
-   *  column shows every active Session. */
-  const columnLists = useMemo(() => {
-    if (!columnNarrowed) return undefined;
-    const context = {
-      now: filterNow,
-      runningSessionId: running ? sessionId : undefined,
-      withArtifacts: artifactSessions,
-      artifactsUnread: unreadArtifacts,
-      keepSessionId: sessionId,
-      sessionFacts: () => undefined,
-    };
-    const byProject: Record<string, Session[]> = {};
-    for (const [projectId, sessions] of Object.entries(listedByProject)) {
-      byProject[projectId] = narrowSessions(sessions, narrowing, context);
-    }
-    return { byProject, recent: narrowSessions(recent, narrowing, context) };
-  }, [artifactSessions, columnNarrowed, filterNow, listedByProject, narrowing, recent, running, sessionId, unreadArtifacts]);
 
   // Which Project the open Session is in, or the inbox while none is open. The
   // name is derived rather than stored so a rename, a switch and a language
@@ -2739,13 +2644,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearAttachments,
       closeTab,
       confirmAction,
-      setSearchNarrowing: (next) =>
-        setNarrowingState((current) => {
-          // Written on every change: the stored copy is what a reload reads.
-          const updated = { ...current, ...next };
-          rememberSearchNarrowing(updated);
-          return updated;
-        }),
       search,
       openSearchResult,
       createProject: createProjectAndOpen,
@@ -2944,7 +2842,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     presets,
     projects,
     providers,
-    recent: columnLists === undefined ? recent : columnLists.recent,
+    recent,
     replays,
     reviews,
     reviewerEnabled,
@@ -2953,12 +2851,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
-    narrowing,
     searchQuery,
     searchResults,
     searchError,
     sessionId,
-    sessionsByProject: columnLists === undefined ? listedByProject : columnLists.byProject,
+    sessionsByProject: listedByProject,
     tabs,
     toasts,
     uploadLimit,
