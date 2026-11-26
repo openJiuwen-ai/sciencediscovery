@@ -152,7 +152,7 @@ test("mounted Session composer refreshes effective MCP status on terminal events
     if (path === "/api/projects") return jsonResponse([{id: "project-1", name: "Alpha", remoteRunnerHostIds: [], localRunnerEnabled: true}]);
     if (path === "/api/projects/project-1/sessions") return jsonResponse([session]);
     if (path === "/api/sessions/session-1") return jsonResponse(session);
-    if (path === "/api/specialists") return jsonResponse([{id: "specialist", name: "Literature", connectorIds: ["arxiv"]}]);
+    if (path === "/api/specialists") return jsonResponse([{id: "specialist", name: "Literature", connectorIds: ["arxiv"]}, {id: "everything", name: "Everything", capabilityAccess: "all", connectorIds: ["arxiv"]}]);
     if (path === "/api/connectors") return jsonResponse([manifest, {...manifest, id: "arxiv", displayName: "arXiv"}]);
     if (path === "/api/mcp/sources") {
       reads++;
@@ -175,6 +175,9 @@ test("mounted Session composer refreshes effective MCP status on terminal events
     assert.deepEqual(subscriptions, [{ sessionId: session.id, runId: run.id }]);
     const picker = () => view.root.findByType(ConnectorPicker);
     assert.deepEqual(picker().props.specialistIds, ["arxiv"]);
+    // The picker receives the mode the run resolves, so a legacy record with a
+    // list is reported as replacing the Session's sources (#1438 review).
+    assert.equal(picker().props.specialistAccess, "specific");
     assert.equal(picker().props.sourceStatuses.pubmed.status, "unavailable");
     const before = reads;
     await act(async () => onEvent({type: "run.status", status: "running", run}));
@@ -196,7 +199,10 @@ test("mounted Session composer refreshes effective MCP status on terminal events
     await act(async () => {await serverSettings.props.onChanged();});
     assert.equal(reads, settingsBefore + 1);
     assert.equal(picker().props.sourceStatuses.pubmed.status, "degraded");
+    await act(async () => onEvent({type: "session.updated", session: {...session, specialistId: "everything"}} as unknown as RunStreamEvent));
+    assert.equal(picker().props.specialistAccess, "all", "an all-access Specialist still extends the Session's selection");
     await act(async () => onEvent({type: "session.updated", session: {...session, specialistId: undefined}} as unknown as RunStreamEvent));
     assert.deepEqual(picker().props.specialistIds, [], "removing the Specialist removes its inherited selection");
+    assert.equal(picker().props.specialistAccess, "all", "no Specialist leaves the Session's own selection in effect");
   } finally {await act(async () => view?.unmount()); globalThis.fetch = previousFetch;}
 });

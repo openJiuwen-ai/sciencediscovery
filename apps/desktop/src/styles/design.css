@@ -2285,6 +2285,21 @@ body.is-resizing {
   padding: 8px;
 }
 
+/* Below this width the session menu itself reaches past the rail, and a
+   flyout anchored to its right edge would lose its rows and its binding hint.
+   The catalog becomes a viewport sheet instead. */
+@media (max-width: 760px) {
+  .session-menu-flyout.is-experts {
+    position: fixed;
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-height: min(78vh, 560px);
+  }
+}
+
 .expert-search {
   display: flex;
   align-items: center;
@@ -2446,6 +2461,15 @@ body.is-resizing {
   color: #8c8c8c;
   font-size: 12px;
   text-align: center;
+}
+
+/* Binding applies the role's instructions; the external runtime only starts
+   for an explicit delegation. One quiet line under the catalog says so. */
+.expert-binding-hint {
+  flex: 0 0 auto;
+  border-top: 1px solid #ededed;
+  text-align: left;
+  line-height: 17px;
 }
 
 .expert-row .session-flyout-check {

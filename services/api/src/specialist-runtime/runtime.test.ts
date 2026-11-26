@@ -44,10 +44,16 @@ test("runtime validation rejects credentials, argv, unsupported adapters and inv
   }
 });
 
-test("native/omitted hashes exactly match legacy; non-native runtime changes hash", () => {
-  const legacy = ideaTreeFingerprint({ builtIn: false, connectorIds: [], description: "Code", enabled: true, enabledSkillIds: [], id: "custom", instructions: "Solve it", name: "Coder" });
+test("native/omitted hashes exactly match legacy; resolved mode and non-native runtime change hash", () => {
+  // The payload is the executable configuration, so it carries the resolved
+  // capability mode. A record with no lists and no mode resolves to `all`.
+  const legacy = ideaTreeFingerprint({ capabilityAccess: "all", builtIn: false, connectorIds: [], description: "Code", enabled: true, enabledSkillIds: [], id: "custom", instructions: "Solve it", name: "Coder" });
   assert.equal(specialistConfigHash(specialist), legacy);
+  // Normalizing the mode on load must not look like a configuration change.
+  assert.equal(specialistConfigHash({ ...specialist, capabilityAccess: "all" }), legacy);
   assert.equal(specialistConfigHash({ ...specialist, runtime: { kind: "native" } }), legacy);
+  // Exclusivity changes how the role contributes, so it changes the identity.
+  assert.notEqual(specialistConfigHash({ ...specialist, capabilityAccess: "specific" }), legacy);
   const codex = { ...specialist, runtime: { kind: "codex" as const } };
   assert.notEqual(specialistConfigHash(codex), legacy);
   assert.notEqual(specialistConfigHash(codex), specialistConfigHash({ ...codex, runtime: { kind: "codex", model: "other" } }));

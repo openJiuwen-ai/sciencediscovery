@@ -155,6 +155,39 @@ test("Specialist sources are checked with readiness, explained and cannot be des
   assert.match(markup, /1 of 2 enabled/);
 });
 
+test("a specific Specialist reports only its own sources and marks the Session's rows as not applied", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], specialistIds: ["uniprot"], specialistAccess: "specific", onToggle: () => undefined,
+  }));
+  const rows = markup.match(/<li>[\s\S]*?<\/li>/g) ?? [];
+  const row = (name: string) => rows.find((item) => item.includes(`<strong>${name}</strong>`)) ?? "";
+  // The run replaces the Session's set, so the count and the checked box must
+  // be the Specialist's list alone. Showing the union would tick PubMed, and a
+  // user could then enable a source that the next run ignores.
+  assert.match(markup, /1 of 2 enabled/);
+  assert.match(markup, /role="note"/);
+  assert.match(markup, /replaces the Session/);
+  assert.match(row("UniProt"), /checked=""/);
+  assert.match(row("UniProt"), /Included by the selected Specialist/);
+  assert.doesNotMatch(row("PubMed"), /checked=""/);
+  assert.match(row("PubMed"), /Not applied: this Specialist replaces/);
+  assert.match(row("PubMed"), /disabled=""/);
+});
+
+test("an all-access Specialist keeps the Session's selection additive and editable", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], specialistIds: ["uniprot"], specialistAccess: "all", onToggle: () => undefined,
+  }));
+  const rows = markup.match(/<li>[\s\S]*?<\/li>/g) ?? [];
+  const row = (name: string) => rows.find((item) => item.includes(`<strong>${name}</strong>`)) ?? "";
+  assert.match(markup, /2 of 2 enabled/);
+  assert.doesNotMatch(markup, /Not applied/);
+  assert.doesNotMatch(markup, /role="note"/);
+  assert.match(row("PubMed"), /checked=""/);
+  assert.doesNotMatch(row("PubMed"), /disabled=""/);
+  assert.match(row("UniProt"), /checked=""/);
+});
+
 test("missing discovery data is visible rather than implying ready", () => {
   const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
     connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,

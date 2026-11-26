@@ -125,3 +125,13 @@ test("the one built-in workflow needs no metadata while legacy Specialist snapsh
     (error: unknown) => error instanceof IdeaTreeCompositionError && error.code === "EXECUTOR_SPECIALIST_DRIFT",
   );
 });
+
+test("the Specialist config hash identifies the capability mode it resolved", () => {
+  const role = specialists[1]!;
+  const legacyHash = specialistConfigHash(role);
+  // Resolving the mode keeps a legacy record and its normalized copy on one
+  // hash, so catalog normalization alone is not drift.
+  assert.equal(specialistConfigHash({ ...role, capabilityAccess: "all" }), legacyHash);
+  // The mode decides replace-vs-inherit, so it must change the payload.
+  assert.notEqual(specialistConfigHash({ ...role, capabilityAccess: "specific" }), legacyHash);
+});

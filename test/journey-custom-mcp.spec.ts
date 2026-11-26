@@ -268,13 +268,24 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       expect((await invocations()).some((item) => item.sourceId === first.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "FIRST MCP VERIFIED" }).last()).toBeVisible();
     });
-    await journey.step("选择挂载第二个 MCP 的专家", "专家来源自动选中且显示挂载原因，不能单独取消", async () => {
+    await journey.step("选择挂载第二个 MCP 的专家", "专家来源自动选中且显示挂载原因；无模式且带来源的专家按 specific 解析，会话自己的来源列出但不生效", async () => {
       await page.getByRole("combobox", { name: "专家", exact: true }).selectOption(specialist.id);
       await page.locator(".connector-picker-trigger").click();
-      const source = page.locator(".connector-picker-popover li").filter({ hasText: second.name });
+      const popover = page.locator(".connector-picker-popover");
+      const source = popover.locator("li").filter({ hasText: second.name });
       await expect(source).toContainText("由当前专家挂载");
       await expect(source.getByRole("checkbox")).toBeChecked();
       await expect(source.getByRole("checkbox")).toBeDisabled();
+      // The role was created with connectorIds and no capabilityAccess, so it
+      // resolves to specific and replaces the Session's set: the Session-only
+      // `first` source stays listed but is neither applied nor togglable, and
+      // the trigger counts only what the next run uses.
+      const sessionOnly = popover.locator("li").filter({ hasText: first.name });
+      await expect(sessionOnly).toContainText("未生效");
+      await expect(sessionOnly.getByRole("checkbox")).not.toBeChecked();
+      await expect(sessionOnly.getByRole("checkbox")).toBeDisabled();
+      await expect(popover.getByRole("note")).toContainText("只使用自己挂载的来源");
+      await expect(page.locator(".connector-picker-count")).toHaveText("1");
       await page.keyboard.press("Escape");
     });
     await journey.step("调用新加入的 MCP", "新运行也能执行工具并保存成功调用记录", async () => {

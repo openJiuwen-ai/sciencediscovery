@@ -15,7 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 
@@ -50,8 +50,52 @@ test("SessionStore seeds all built-in specialists on first load", async () => {
     for (const b of builtins) {
       assert.ok(b.description, `${b.id} must have a description`);
       assert.ok(b.instructions, `${b.id} must have instructions`);
+      // Built-ins stay additive: binding one inherits the Session's connectors
+      // and Skill Libraries instead of replacing them.
+      assert.equal(b.capabilityAccess, "all", `${b.id} must inherit the Session's capabilities`);
     }
   }, "seed");
+});
+
+test("a legacy custom Specialist without capabilityAccess is normalized on load", async () => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `legacy-specialist-access-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const now = new Date().toISOString();
+  await writeFile(resolve(tempRoot, "catalog.json"), `${JSON.stringify({
+    specialists: [
+      {
+        connectorIds: ["pubmed"],
+        createdAt: now,
+        description: "legacy with a list",
+        enabledSkillIds: [],
+        id: "legacy-specific",
+        instructions: "i",
+        name: "Legacy specific",
+        updatedAt: now,
+      },
+      {
+        connectorIds: [],
+        createdAt: now,
+        description: "legacy with no list",
+        enabledSkillIds: [],
+        id: "legacy-all",
+        instructions: "i",
+        name: "Legacy all",
+        updatedAt: now,
+      },
+    ],
+  }, null, 2)}\n`, "utf8");
+  const store = new SessionStore(tempRoot);
+  try {
+    await store.load();
+    assert.equal(store.getSpecialist("legacy-specific")?.capabilityAccess, "specific",
+      "a non-empty legacy list keeps its restrictive meaning");
+    assert.equal(store.getSpecialist("legacy-all")?.capabilityAccess, "all",
+      "two empty legacy lists keep the inherited meaning");
+  } finally {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  }
 });
 
 test("built-in specialists cannot be deleted", async () => {

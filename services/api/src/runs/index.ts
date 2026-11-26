@@ -32,7 +32,7 @@ import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
-import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { isEvidenceSessionReadOnly, specialistCapabilityAccess } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -470,6 +470,44 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
   const requestedSpecialistId = input.specialistId?.trim();
   if (requestedSpecialistId) return store.getSpecialist(requestedSpecialistId);
   return store.getSpecialist(sessionSpecialistId);
+}
+
+/**
+ * The connector and skill sets a Specialist contributes to a Session or child
+ * task. A `specific` Specialist replaces the inherited sets, so selection can
+ * only narrow what is available; `all` keeps the inherited sets and may add
+ * the Specialist's own. Installed and enabled sources are the upper bound in
+ * both cases, which keeps a stale or globally disabled entry unavailable.
+ */
+export function resolveSpecialistCapabilities(
+  specialist: Pick<Specialist, "capabilityAccess" | "connectorIds" | "enabledSkillIds"> | undefined,
+  inherited: { connectorIds: readonly string[]; skillIds: readonly string[] },
+  options: {
+    installedConnectorIds?: ReadonlySet<string>;
+    installedSkillIds?: ReadonlySet<string>;
+    plugins?: Readonly<Record<string, { enabled?: boolean }>>;
+    extraSkillIds?: readonly string[];
+    skillsEnabled?: boolean;
+  } = {},
+): { connectorIds: string[]; skillIds: string[] } {
+  const specificSpecialist = specialist !== undefined && specialistCapabilityAccess(specialist) === "specific"
+    ? specialist
+    : undefined;
+  const connectorIds = specificSpecialist
+    ? specificSpecialist.connectorIds
+    : [...inherited.connectorIds, ...(specialist?.connectorIds ?? [])];
+  const skillIds = specificSpecialist
+    ? specificSpecialist.enabledSkillIds
+    : [...inherited.skillIds, ...(specialist?.enabledSkillIds ?? [])];
+  return {
+    connectorIds: filterEnabledMcpSources([...new Set(connectorIds)].filter((id) => (
+      options.installedConnectorIds === undefined || options.installedConnectorIds.has(id)
+    )), options.plugins),
+    skillIds: options.skillsEnabled === false ? [] : [...new Set([
+      ...skillIds.filter((id) => options.installedSkillIds === undefined || options.installedSkillIds.has(id)),
+      ...(options.extraSkillIds ?? []),
+    ])],
+  };
 }
 
 /** Empty match-response shape with a degradation reason (feature off / unreachable). */
@@ -1904,12 +1942,18 @@ async function executeAgentRun(
           });
           await emit({ subagent, type: "subagent.updated" });
           const roleSkillId = skillIdForSubagentType(skillCatalog, subagent.input.subagentType);
-          const subagentSkillIds = !pluginEnabled(settingsSnapshot.plugins, "skill") ? [] : [...new Set([
-            ...settingsSnapshot.enabledSkillIds,
-            ...(specialist?.enabledSkillIds ?? []),
-            ...(roleSkillId ? [roleSkillId] : []),
-          ])];
-          const subagentConnectorIds = filterEnabledMcpSources([...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])], settingsSnapshot.plugins);
+          const childCapabilities = resolveSpecialistCapabilities(specialist, {
+            connectorIds: settingsSnapshot.enabledConnectorIds,
+            skillIds: settingsSnapshot.enabledSkillIds,
+          }, {
+            extraSkillIds: roleSkillId ? [roleSkillId] : [],
+            installedConnectorIds: new Set(store.configurationConnectorResources().ids),
+            installedSkillIds: new Set(store.configurationSkillResources().ids),
+            plugins: settingsSnapshot.plugins,
+            skillsEnabled: pluginEnabled(settingsSnapshot.plugins, "skill"),
+          });
+          const subagentSkillIds = childCapabilities.skillIds;
+          const subagentConnectorIds = childCapabilities.connectorIds;
           const subagentWorkspaceRoot = store.agentWorkspacePath(sessionId, subagent.id);
           const subagentSnapshots = scopeRuntimeSkills(skillCatalog.resolve(subagentSkillIds), "subagent");
           const subagentSkillPackagesRoot = subagentSnapshots.length
@@ -3366,11 +3410,27 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   const session = store.assertSessionWritable(sessionId);
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const resolved = store.resolveRuntimeSettings(sessionId).effective;
+  const capabilities = resolveSpecialistCapabilities(sessionSpecialist, {
+    connectorIds: resolved.enabledConnectorIds,
+    skillIds: resolved.enabledSkillIds,
+  }, {
+    installedConnectorIds: new Set(store.configurationConnectorResources().ids),
+    installedSkillIds: new Set(store.configurationSkillResources().ids),
+    plugins: resolved.plugins,
+    skillsEnabled: pluginEnabled(resolved.plugins, "skill"),
+  });
   const snapshot: SessionRun["settingsSnapshot"] = {
     ...structuredClone(resolved),
-    enabledConnectorIds: [...new Set([...resolved.enabledConnectorIds, ...(sessionSpecialist?.connectorIds ?? [])])],
-    enabledSkillIds: [...new Set([...resolved.enabledSkillIds, ...(sessionSpecialist?.enabledSkillIds ?? [])])],
+    enabledConnectorIds: capabilities.connectorIds,
+    enabledSkillIds: capabilities.skillIds,
   };
+  // A specific Specialist's skill set is its own list. Pinned libraries are a
+  // separate Session-level way to recall skills, so they cannot remain in the
+  // snapshot or an empty specific selection would still receive their skills.
+  // Explicit per-message `skillLibraryRefs` are resolved later from the request.
+  if (sessionSpecialist !== undefined && specialistCapabilityAccess(sessionSpecialist) === "specific") {
+    snapshot.enabledSkillLibraries = [];
+  }
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);
   const model = store.getModel(snapshot.modelId);

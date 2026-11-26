@@ -34,6 +34,25 @@ Record limitations when information is insufficient. Do not infer treatment effe
 
 Select only needed connectors. For a private data interface, follow the [custom MCP guide](configure-custom-mcp.md), test it, then return to select it for the role.
 
+The capability mode is chosen in the Desktop **Settings → Specialists** form.
+Specific capability selection is exclusive: a Session bound to the role uses
+only the connectors and skills listed there, intersected with installed and
+enabled sources, and choosing specific with nothing selected means none. Session
+Skill Libraries are not applied while the role is specific, though a library
+explicitly attached to one message still is. Full access keeps the Session's
+set and may add the role's own. In the Web composer, the Session's own sources
+are listed as not applied and cannot be toggled while such a role is bound, so
+the connector count matches what the next run uses. The API writes this explicitly as
+`capabilityAccess: "specific" | "all"`. Records created before that field
+existed are read as `specific` when either list is non-empty, and as `all` when
+both are empty.
+
+Built-in roles are all `all`: binding one adds its own skill to the Session and
+inherits the Session's connectors and Skill Libraries rather than replacing
+them. Exclusivity is a choice for a custom role, where the Desktop form sets the
+mode. The legacy Web specialist editor has no mode control, so a new role created
+there is `all`; a role loaded there keeps the mode it was stored with.
+
 Where the editor supports per-role skill selection, select `code-engineer`. With the JiuwenSwarm backend, the editor instead explains that Swarm manages skills; it does not provide the same checkboxes. Check availability in the JiuwenSwarm view under **Skills**. Do not assume hidden settings have taken effect.
 
 Save the role. Custom and built-in roles offer enable/disable controls, including bulk actions. Disabling hides the role from new choices and keeps its configuration. Existing session bindings remain visible and marked Disabled; choose None in session settings to stop applying that role in subsequent turns. Built-in roles remain read-only otherwise; create a custom role to change a preset responsibility rather than editing a built-in entry. Automatic review remains a per-session setting.

@@ -32,12 +32,20 @@ import type { Specialist } from "@sciencediscovery/schema";
  * methodology (SKILL.md) is injected alongside these instructions. Only
  * literature-searcher mounts governed literature MCP connectors.
  *
+ * `capabilityAccess: "all"` is deliberate: these read-only roles are dispatched
+ * inside a Session that may already hold the connectors and Skill Libraries the
+ * work needs, and before the mode existed binding one inherited them. Keeping
+ * them additive means binding a built-in does not silently empty a Session;
+ * exclusivity is a choice a user makes for their own custom role in the Desktop
+ * 专家 form.
+ *
  * ids are stable strings (not UUIDs): catalog migration keys off them, so
  * they must not change across runs.
  */
 export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: ["pubmed", "arxiv", "europe-pmc", "biorxiv", "medrxiv"],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -55,6 +63,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -74,6 +83,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -91,6 +101,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -109,6 +120,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -127,6 +139,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -145,6 +158,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:
@@ -161,6 +175,7 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
   },
   {
     builtIn: true,
+    capabilityAccess: "all",
     connectorIds: [],
     createdAt: "1970-01-01T00:00:00.000Z",
     description:

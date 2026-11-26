@@ -776,6 +776,12 @@ describe("the specialist form", () => {
     assert.doesNotMatch(markup, /type="radio"[^>]*checked=""/, "完全访问 is still selected for a specific list");
   });
 
+  it("keeps an empty specific selection specific instead of full access", () => {
+    const markup = form({ ...existing, capabilityAccess: "specific" });
+    assert.doesNotMatch(markup, /type="radio"[^>]*checked=""/, "完全访问 is selected for an explicitly specific record");
+    assert.ok(markup.includes(TEXT.settings.system.specialists.noSkills), "the specific list is not shown");
+  });
+
   it("lists every capability in the picker", () => {
     const pick = (tab: "skills" | "connectors") =>
       renderToStaticMarkup(

@@ -19,7 +19,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
-import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds, isEvidenceSessionReadOnly, normalizePermissionDescription } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds, isEvidenceSessionReadOnly, normalizePermissionDescription, specialistCapabilityAccess } from "@sciencediscovery/schema";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -1199,7 +1199,11 @@ export class SessionStore {
     // (every other field is overwritten by the pinned definition on each load,
     // so pinned upgrades always propagate).
     const specialists = [
-      ...savedSpecialists.filter((specialist) => !specialist.builtIn).map(specialist => ({ ...specialist, runtime: normalizeSpecialistRuntime(specialist.runtime) })),
+      ...savedSpecialists.filter((specialist) => !specialist.builtIn).map(specialist => ({
+        ...specialist,
+        capabilityAccess: specialistCapabilityAccess(specialist),
+        runtime: normalizeSpecialistRuntime(specialist.runtime),
+      })),
       ...BUILTIN_SPECIALISTS.map((builtin) => {
         const existing = savedSpecialists.find((candidate) => candidate.id === builtin.id);
         return existing?.builtIn
@@ -2540,6 +2544,11 @@ export class SessionStore {
   /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
   configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
+  }
+
+  /** Installed connector ids, so a Specialist's list can narrow but never grant one. */
+  configurationConnectorResources(): { ids: string[] } {
+    return { ids: [...this.connectorIds].sort() };
   }
 
   private configurationMcpHeaderCredentialSource?: (target: string) => import("./configuration/mcp-header-credential-adapter.js").McpHeaderCredentialSnapshot;
@@ -4949,7 +4958,11 @@ export class SessionStore {
     const connectorIds = [...new Set(input.connectorIds ?? [])];
     const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
-    return { connectorIds, description, enabledSkillIds, instructions, name, runtime: normalizeSpecialistRuntime(input.runtime) };
+    if (input.capabilityAccess !== undefined && input.capabilityAccess !== "all" && input.capabilityAccess !== "specific") {
+      throw new Error("Specialist capabilityAccess must be all or specific");
+    }
+    const capabilityAccess = specialistCapabilityAccess({ capabilityAccess: input.capabilityAccess, connectorIds, enabledSkillIds });
+    return { capabilityAccess, connectorIds, description, enabledSkillIds, instructions, name, runtime: normalizeSpecialistRuntime(input.runtime) };
   }
 
   async createSpecialist(input: CreateSpecialistRequest): Promise<Specialist> {
@@ -4968,7 +4981,7 @@ export class SessionStore {
     const specialist = this.catalog.specialists.find((candidate) => candidate.id === specialistId);
     if (!specialist) throw new Error("Specialist not found");
     const touchedCoreField = "name" in input || "description" in input || "instructions" in input
-      || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
+      || "connectorIds" in input || "enabledSkillIds" in input || "capabilityAccess" in input || "runtime" in input;
     if (specialist.builtIn) {
       // Built-in specialists are read-only except for the on/off `enabled` toggle.
       if (touchedCoreField) {

@@ -44,9 +44,10 @@ interface Props {
 type RuntimeKind = "native" | "codex" | "claude-code" | "acp";
 
 /**
- * 完全访问 keeps no explicit lists: the specialist inherits the main agent's
- * capabilities, so anything enabled later is included without editing it
- * again. 特定能力 is the explicit pair of lists the API stores.
+ * 完全访问 inherits the main agent's capabilities and may add the role's own
+ * lists, so anything enabled later is included without editing it again.
+ * 特定能力 stores a pair of lists that replaces the inherited set. Switching
+ * to 完全访问 clears the lists; an untouched role keeps them.
  */
 type CapabilityAccess = "all" | "specific";
 
@@ -62,9 +63,13 @@ interface Draft {
   description: string;
   enabledSkillIds: string[];
   instructions: string;
+  /** The runtime object as stored, so advanced options survive an edit. */
+  loadedRuntime?: SpecialistRuntime;
   model: string;
   name: string;
   runtime: RuntimeKind;
+  /** Whether the kind or model was edited; untouched fields omit `runtime`. */
+  runtimeChanged: boolean;
 }
 
 function emptyDraft(): Draft {
@@ -77,51 +82,62 @@ function emptyDraft(): Draft {
     model: "",
     name: "",
     runtime: "native",
+    runtimeChanged: false,
   };
 }
 
 function draftOf(specialist: Specialist): Draft {
   return {
-    // An explicit list on the record is what 特定能力 looks like when the form
-    // opens; a specialist with none has been leaving capabilities to the main
-    // agent all along, which is 完全访问.
-    access: specialist.connectorIds.length === 0 && specialist.enabledSkillIds.length === 0
-      ? "all"
-      : "specific",
+    // A record written before capabilityAccess existed is read the same way
+    // the store reads it: a list means 特定能力, two empty lists mean 完全访问.
+    // An empty specific selection still opens as specific, not full access.
+    access: specialist.capabilityAccess
+      ?? (specialist.connectorIds.length === 0 && specialist.enabledSkillIds.length === 0 ? "all" : "specific"),
     connectorIds: [...specialist.connectorIds],
     description: specialist.description,
     enabledSkillIds: [...specialist.enabledSkillIds],
     instructions: specialist.instructions,
+    ...(specialist.runtime === undefined ? {} : { loadedRuntime: specialist.runtime }),
     model: specialist.runtime !== undefined && specialist.runtime.kind !== "native"
       ? (specialist.runtime.model ?? "")
       : "",
     name: specialist.name,
     runtime: specialist.runtime?.kind ?? "native",
+    runtimeChanged: false,
   };
 }
 
-function runtimeOf(draft: Draft): SpecialistRuntime {
+/**
+ * The runtime to write, or `undefined` when the editor did not touch kind or
+ * model. An edit merges into the loaded object, so `fallback`, `timeoutSeconds`,
+ * `reasoningEffort` and `execution` survive; clearing the model drops only
+ * `model`.
+ */
+function runtimeOf(draft: Draft): SpecialistRuntime | undefined {
+  if (!draft.runtimeChanged) return undefined;
   const model = draft.model.trim();
-  switch (draft.runtime) {
-    case "codex":
-      return { kind: "codex", ...(model === "" ? {} : { model }) };
-    case "claude-code":
-      return { kind: "claude-code", ...(model === "" ? {} : { model }) };
-    case "acp":
-      return { kind: "acp", ...(model === "" ? {} : { model }) };
-    default:
-      return { kind: "native" };
-  }
+  if (draft.runtime === "native") return { kind: "native" };
+  const loaded = draft.loadedRuntime;
+  const { model: _loadedModel, ...advanced } = loaded && loaded.kind !== "native" ? loaded : {};
+  return {
+    ...advanced,
+    kind: draft.runtime,
+    ...(model === "" ? {} : { model }),
+  } as SpecialistRuntime;
 }
 
 function bodyOf(draft: Draft): CreateSpecialistRequest {
+  const runtime = runtimeOf(draft);
   return {
-    connectorIds: (draft.access === "all" ? [] : draft.connectorIds) as CreateSpecialistRequest["connectorIds"],
+    capabilityAccess: draft.access,
+    // Full access keeps the role's own additions; its radio clears them only
+    // when the user explicitly switches to it.
+    connectorIds: draft.connectorIds as CreateSpecialistRequest["connectorIds"],
     description: draft.description.trim(),
-    enabledSkillIds: draft.access === "all" ? [] : draft.enabledSkillIds,
+    enabledSkillIds: draft.enabledSkillIds,
     instructions: draft.instructions.trim(),
     name: draft.name.trim(),
-    runtime: runtimeOf(draft),
+    ...(runtime === undefined ? {} : { runtime }),
   };
 }
 
@@ -143,8 +159,9 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
   const [picking, setPicking] = useState<AbilityTab>();
   const creating = specialist === undefined;
   const selectedSkills = skills.filter((skill) => draft.enabledSkillIds.includes(skill.id));
-  const unavailableSkillIds = draft.access === "all" ? []
-    : draft.enabledSkillIds.filter((id) => !skills.some((skill) => skill.id === id));
+  // Both modes can carry stored skill ids, so a skill removed from the
+  // catalog must stay repairable after an all-mode role keeps its own lists.
+  const unavailableSkillIds = draft.enabledSkillIds.filter((id) => !skills.some((skill) => skill.id === id));
   const canSave = unavailableSkillIds.length === 0
     && [draft.name, draft.description, draft.instructions].every((value) => value.trim() !== "");
   const selectedConnectors = connectors.filter((connector) => draft.connectorIds.includes(connector.id));
@@ -240,7 +257,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
             <Select
               disabled={busy}
               label={TEXT.settings.system.specialists.runtime}
-              onChange={(value) => setDraft({ ...draft, runtime: value as RuntimeKind })}
+              onChange={(value) => setDraft({ ...draft, runtime: value as RuntimeKind, runtimeChanged: true })}
               options={[
                 { label: TEXT.settings.system.specialists.runtimeNative, value: "native" },
                 { label: "Codex", value: "codex" },
@@ -255,10 +272,15 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
               <input
                 className="field-input"
                 disabled={busy}
-                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                onChange={(event) => setDraft({ ...draft, model: event.target.value, runtimeChanged: true })}
                 value={draft.model}
               />
             </Row>
+          )}
+          {draft.runtime === "native" ? null : (
+            <p className="settings-field-hint specialist-runtime-note" role="note">
+              {TEXT.settings.system.specialists.runtimeExternalNote}
+            </p>
           )}
           <div className="settings-ability">
             <span className="settings-field-label">{TEXT.settings.system.specialists.capabilities}</span>

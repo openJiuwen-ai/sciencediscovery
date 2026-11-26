@@ -800,6 +800,7 @@ export function ExpertFlyout({
           <p className="expert-note">{TEXT.composer.expertsEmpty}</p>
         ) : null}
       </div>
+      <p className="expert-note expert-binding-hint">{TEXT.composer.expertsBindingHint}</p>
     </div>
   );
 }

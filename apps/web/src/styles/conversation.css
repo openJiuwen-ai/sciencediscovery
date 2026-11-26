@@ -251,6 +251,10 @@ button.session-bar-project:hover { color: var(--accent-strong); }
    the localized sentence was clipped at the popover's 340px width and drawn
    in the muted colour instead of the warning colour (#1102 review). */
 .connector-picker-popover label .connector-picker-outage { color: var(--warning-accent); white-space: normal; }
+/* A Session source that a `specific` Specialist replaces is listed but not
+   applied. It wraps like the status lines instead of being clipped. */
+.connector-picker-popover label .connector-picker-not-applied { white-space: normal; }
+.connector-picker-replaces { margin: 0 0 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
