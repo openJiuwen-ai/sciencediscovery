@@ -93,7 +93,13 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       // first provider request. Allow a cold start while still requiring that
       // the exact pinned design prompt reaches the model.
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE")), { timeout: 30_000 }).toBe(true);
-      await expect(page.getByText(/研究思路树已启动|Idea Tree research started/)).toBeVisible();
+      // The started words are not a lasting signal: 研究思路树已启动 is the timeline card's
+      // loading placeholder (IdeaResearchTimelineCard.tsx:26), which only renders until its
+      // first view lands, and the transcript announcement is the API's fixed Chinese copy,
+      // which still carries the old name. The card region is named from the message table
+      // (研究思路树控制 / Idea Tree research controls) and stays on screen, so it is the
+      // signal that this step actually shows the renamed copy.
+      await expect(card).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();
       await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");
     });
