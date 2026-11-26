@@ -363,6 +363,11 @@ class OpenEvolveEngine:
             # empty/capped reply must not be paid for again unchanged here.
             reply = complete(prompt, lambda spent: reporter.note_usage(iteration, spent),
                              lambda reason: reporter.note_failure(iteration, reason))
+            if should_stop():
+                archive = reporter.archive
+                if archive is not None:
+                    archive.candidate_limit = 0
+                return "", ""
             code, summary = extract_program_reply(reply)
             if not code.strip():
                 spent = usage.of(iteration)

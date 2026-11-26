@@ -481,6 +481,9 @@ class PuctEngine:
                 lambda spent: usage.add(iteration, spent),
                 lambda reason: reporter.note_failure(iteration, reason),
             )
+            if should_stop():
+                tree.candidate_limit = 0
+                return "", "", None
             # A prompt or an abstract has no module docstring and may arrive
             # unfenced; reading it with the program parser would discard it.
             code, summary = (extract_text(reply) if _mode_of(spec) == "llm_judge"
