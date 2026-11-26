@@ -174,8 +174,10 @@ interface Props {
   seededCommand?: SeededCommand;
   /** The surface this composer draws, named the way the shell names the page it
    *  is on. A seed whose `owner` is another surface belongs to the composer
-   *  that surface draws, not to this one (#1434). */
-  surfaceKey?: string;
+   *  that surface draws, not to this one (#1434). Required rather than derived
+   *  from `seededCommand`, so a mount that forgot it is a compile error and not
+   *  a card whose confirm silently does nothing. */
+  surfaceKey: string;
   /** Told when the reader drops that token. The seed is owned by the shell, so
    *  the composer cannot clear it alone: the other mount would keep drawing it. */
   onClearCommand?: () => void;
