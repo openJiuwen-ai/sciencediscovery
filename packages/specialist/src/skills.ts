@@ -1037,6 +1037,11 @@ function stripArchiveRoot(files: ReadonlyMap<string, Buffer>): { directoryName?:
   }
   const directoryName = [...firstSegments][0]!;
   const prefix = `${directoryName}/`;
+  if (![...files.keys()].some((path) => path.startsWith(prefix))) {
+    // The one top-level entry is a file, not a directory: an archive of loose
+    // files has no package root at all, rather than files outside one.
+    throw refused(validationError("Skill ZIP package root must contain SKILL.md"), { reason: "missing-root" });
+  }
   const stripped = new Map<string, Buffer>();
   for (const [path, bytes] of files) {
     if (!path.startsWith(prefix)) {

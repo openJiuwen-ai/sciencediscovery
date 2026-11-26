@@ -78,6 +78,14 @@ test("a repository ZIP with no root SKILL.md says the package shape is wrong", (
   assert.deepEqual(refusal.skillRefusal, { reason: "missing-root" });
 });
 
+test("an archive of loose files has no package root to grow outside of", () => {
+  const refusal = refusalOf("loose-files.zip", {
+    "hello.md": strToU8("# Hello"),
+  });
+  assert.equal(refusal.code, "SKILL_VALIDATION");
+  assert.deepEqual(refusal.skillRefusal, { reason: "missing-root" });
+});
+
 test("several top-level directories are refused as several package roots", () => {
   const refusal = refusalOf("two-skills.zip", {
     "alpha/SKILL.md": strToU8("---\nname: alpha\ndescription: One.\n---\n"),
