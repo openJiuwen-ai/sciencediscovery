@@ -122,7 +122,7 @@
   min-height: 40px;
   padding: 0 20px;
   border: 1px solid var(--login-line);
-  border-radius: 6px;
+  border-radius: 999px;
   background: #fff;
   color: var(--login-ink);
   font: inherit;
@@ -231,7 +231,7 @@
   min-height: 40px;
   padding: 0 24px;
   border: 1px solid var(--login-line);
-  border-radius: 6px;
+  border-radius: 999px;
   background: #fff;
   color: var(--login-ink);
   font: inherit;
@@ -264,7 +264,7 @@
   min-height: 40px;
   padding: 0 24px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--login-ink);
   color: #fff;
   font: inherit;
@@ -290,7 +290,7 @@
   min-height: 40px;
   padding: 0 24px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--login-ink);
   color: #fff;
   font: inherit;
