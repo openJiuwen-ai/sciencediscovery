@@ -112,7 +112,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         // Now the card. The interface re-reads the list on its own while it holds
         // nothing, so this is short: a card that misses a created event no longer
         // has to wait for a reload.
-        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible({ timeout: 60_000 });
+        await expect(page.getByRole("region", { name: /^(Idea Tree research controls|研究思路树控制)$/ })).toBeVisible({ timeout: 60_000 });
       });
       await journey.step("Inspect completed research", "A terminal status is reached and at least one candidate has a score and insight", async () => {
         // Read the last view each poll: a timeout has to say what the research
@@ -156,7 +156,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
       });
       await journey.step("Reload the session", "The API still returns the same completed research after a reload", async () => {
         await page.reload();
-        await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible();
+        await expect(page.getByRole("region", { name: /^(Idea Tree research controls|研究思路树控制)$/ })).toBeVisible();
         const saved = await researchById();
         expect(saved?.research.status).toBe("completed");
         expect(saved.graph.nodes.some((node: any) => node.kind === "candidate" && typeof node.score === "number" && node.insight?.trim())).toBeTruthy();
