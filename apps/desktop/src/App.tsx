@@ -42,6 +42,7 @@ import type {
   SubagentStep,
 } from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
+import { resumeGitSkillImport } from "./app/git-skill-import-job.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
 import { canExportSession } from "./app/session-export.js";
@@ -228,6 +229,12 @@ export function App({ initialToken }: Props) {
   // token change is rare enough that re-creating it is cheaper than threading
   // a mutable header through every call site.
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
+  // A Git Skill import keeps running in the API across a reload, but switching
+  // its new packages on is the client's work. Pick the job back up as soon as
+  // there is a client to read it with, before the reader opens 设置 again.
+  useEffect(() => {
+    void resumeGitSkillImport(client);
+  }, [client]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   // Signing out drops the account, not the machine's credential: a workspace
   // running on a custom model keeps working, and the user surface turns into a
