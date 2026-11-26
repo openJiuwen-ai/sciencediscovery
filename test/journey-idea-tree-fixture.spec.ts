@@ -38,10 +38,12 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   test.setTimeout(180_000);
   const stub = await ideaResearchModel();
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
-  const card = page.getByRole("region", { name: "Idea Tree 研究控制" });
+  // The control region is named from the message table, so it follows the reader's
+  // language: the zh-CN name is 研究思路树控制, the English one "Idea Tree research controls".
+  const card = page.getByRole("region", { name: /^(Idea Tree research controls|研究思路树控制)$/ });
   // The explorer's accessible name follows the reader's language, so match
   // both spellings rather than pinning one locale's wording.
-  const explorerName = /Idea Tree (explorer|浏览器)/;
+  const explorerName = /(Idea Tree explorer|研究思路树浏览器)/;
   const panel = page.getByRole("dialog", {name: explorerName});
   const read = async () => {
     // Retry connection resets only for this idempotent status read. HTTP
@@ -67,7 +69,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       expect(pinned.ok()).toBe(true);
       await page.getByRole("button", {name: /^(System configuration|系统设置)/}).click();
       const dialog = page.getByRole("dialog", {name: /System configuration|系统设置/});
-      await dialog.getByRole("button", {name: /^Idea Tree/}).click();
+      await dialog.getByRole("button", {name: /^(Idea Tree|研究思路树)/}).click();
       const settings = dialog.locator(".idea-tree-settings");
       // Both choices are load-bearing for the rest of the journey. The
       // assessors it walks through — 活性 / 稳定性 / 可持续性 — exist only in the
@@ -91,7 +93,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       // first provider request. Allow a cold start while still requiring that
       // the exact pinned design prompt reaches the model.
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE")), { timeout: 30_000 }).toBe(true);
-      await expect(page.getByText(/已启动 Idea Tree 研究/)).toBeVisible();
+      await expect(page.getByText(/研究思路树已启动|Idea Tree research started/)).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();
       await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");
     });
