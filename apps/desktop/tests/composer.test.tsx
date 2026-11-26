@@ -177,13 +177,13 @@ test("会话设置 carries the way into program evolution above its own settings
 
 test("会话设置 carries the idea-tree entry under 程序演进实验", () => {
   const markup = settingsMenu(true, true);
-  assert.match(markup, />idea-tree</);
+  assert.match(markup, />研究思路树</);
   // It sits below the evolve entry and above the expert row, the order the
   // handoff gives the menu.
-  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("idea-tree"));
-  assert.ok(markup.indexOf("idea-tree") < markup.indexOf(">专家<"));
+  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("研究思路树"));
+  assert.ok(markup.indexOf("研究思路树") < markup.indexOf(">专家<"));
   // A settings menu that cannot open the card does not offer the row.
-  assert.doesNotMatch(settingsMenu(true), /idea-tree/);
+  assert.doesNotMatch(settingsMenu(true), /研究思路树/);
 });
 
 test("会话设置 can ask for a review now, and the same row stops one under way", async () => {

@@ -233,7 +233,7 @@ test("keeps an autonomous Idea Tree research card in the conversation timeline",
   assert.deepEqual(entries.map(entry => entry.type), ["idea-research", "assistant"]);
   const timeline = createElement(RunTimeline, { entries, isRunning: false, onToggle: () => undefined });
   assert.match(renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" as const }, timeline)), /Idea Tree research started/);
-  assert.match(renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, timeline)), /Idea Tree 研究已启动/);
+  assert.match(renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, timeline)), /研究思路树已启动/);
 });
 
 test("renders completed activity as collapsible disclosures", () => {

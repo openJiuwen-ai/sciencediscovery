@@ -86,7 +86,7 @@ describe("the settings tree", () => {
     assert.deepEqual(Object.values(TEXT.settings.system.categories), ["系统", "智能", "连接", "工作区"]);
     assert.deepEqual(
       Object.values(TEXT.settings.system.groups).map((group) => group.label),
-      ["通用", "科学记忆", "模型", "模型用量", "技能", "MCP 服务器", "专家", "沙箱网络", "运行环境", "运行配额", "联网搜索", "网络代理", "超时", "会话管理", "导出记录", "Idea Tree"],
+      ["通用", "科学记忆", "模型", "模型用量", "技能", "MCP 服务器", "专家", "沙箱网络", "运行环境", "运行配额", "联网搜索", "网络代理", "超时", "会话管理", "导出记录", "研究思路树"],
     );
   });
 });
