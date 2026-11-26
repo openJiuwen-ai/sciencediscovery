@@ -730,8 +730,15 @@ export function summariseRun(
       // way in — which is the first thing anyone asks on seeing the tree. The
       // engine deliberately keeps quiet in the log about ordinary endings, so
       // this is where the shortfall becomes sayable.
+      //
+      // Measured in attempts, the population the round budget counts: a model
+      // call that never returned still spent a round, so counting archive
+      // growth called a completed six-round run truncated (#1457). Events
+      // persisted before `attempts` existed fall back to the old arithmetic.
       const planned = typeof event.expansionsPlanned === "number" ? event.expansionsPlanned : null;
-      const made = typeof event.candidates === "number" ? event.candidates - 1 : null;
+      const made = typeof event.attempts === "number"
+        ? event.attempts
+        : typeof event.candidates === "number" ? event.candidates - 1 : null;
       if (planned !== null && made !== null && made < planned) {
         const why = typeof event.stopReason === "string" && event.stopReason
           ? event.stopReason

@@ -472,6 +472,34 @@ test("a run that stopped early states the reason and the shortfall", () => {
   assert.equal(legacy.stopReason, undefined);
 });
 
+test("the terminal attempt count decides the shortfall, not how many records arrived", () => {
+  // #1457: a run can reach the end without every `expanded` record in this
+  // fold (a resumed stream starts at a watermark), and one failed call still
+  // spends a round. The panel judges the shortfall on the engine's own attempt
+  // count when the finish event carries it.
+  const view = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, SEED),
+    record(3, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.62, type: "expanded", valid: true }),
+    record(4, {
+      archiveNodes: 6, attempts: 6, bestNodeIndex: 1, candidates: 6, evaluated: 5,
+      expansionsPlanned: 6, generated: 5, status: "succeeded", stopReason: "rounds",
+      type: "search_finished",
+    }),
+  ]);
+
+  assert.equal(view.attempts, 6);
+  assert.equal(view.expansions, 1, "only one expanded record reached this fold");
+  assert.equal(view.attempts, view.expansionsPlanned, "all six rounds were used, so no shortfall");
+
+  // An older finish event has no attempts; the view keeps working without it.
+  const legacy = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, { bestNodeIndex: null, candidates: 1, expansionsPlanned: 6, status: "succeeded", type: "search_finished" }),
+  ]);
+  assert.equal(legacy.attempts, undefined);
+});
+
 test("the model's promise rating reaches the candidate view", () => {
   // A prior that moves where the budget goes and leaves no trace on screen is a
   // run nobody can explain afterwards: the panel is the only place a user can

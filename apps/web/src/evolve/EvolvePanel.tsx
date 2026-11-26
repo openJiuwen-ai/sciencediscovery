@@ -223,10 +223,10 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
             "why did it stop early" is the first question every such run gets.
             The engine records the framework's own stop reason on the finish
             event; without this line the panel had the answer and never said. */}
-        {!active && view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned
+        {!active && view.expansionsPlanned !== undefined && (view.attempts ?? view.expansions) < view.expansionsPlanned
           ? <p className="evolve-notice">
             {t("evolve.panel.stoppedShort", {
-              made: view.expansions,
+              made: view.attempts ?? view.expansions,
               planned: view.expansionsPlanned,
               reason: view.stopReason ?? "?",
             })}

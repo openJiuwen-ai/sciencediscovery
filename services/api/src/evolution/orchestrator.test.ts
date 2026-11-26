@@ -294,6 +294,32 @@ test("a full run is persisted, published and settled", async () => {
   assert.ok(seen.length > 0, "a live subscriber saw records too");
 });
 
+test("the terminal attempt count is the count the run record keeps", async () => {
+  // The live fold increments on every `expanded` it applies, but a resumed or
+  // replayed stream can begin past some of them. The sidecar names the
+  // population the expansion budget measures on `search_finished`; the persisted
+  // run has to agree with that statement rather than with how many events this
+  // process happened to fold.
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "openevolve", scorecardHash: "sha256:card", type: "search_started" },
+      EXPANDED,
+      {
+        archiveNodes: 6, attempts: 6, bestNodeIndex: 1, candidates: 6,
+        evaluated: 5, expansionsPlanned: 6, generated: 5, status: "succeeded",
+        stopReason: "rounds", type: "search_finished",
+      },
+    ],
+  });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-attempts");
+
+  const run = await orchestrator.start({ goal: goal(6), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+
+  assert.equal((await store.readRun(run.id))?.candidates, 6, "six rounds, not one folded event");
+});
+
 test("stop is carried through to the sidecar and leaves a resumable watermark", async () => {
   const sidecar = await startFakeSidecar({
     events: [

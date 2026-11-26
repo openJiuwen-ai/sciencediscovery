@@ -22,7 +22,7 @@ that mirrors ``era_engine._mode``, and the ``_Reporter`` dispatch that turns
 the vendor's ``on_event`` calls into the ``events.*`` NDJSON stream.
 
 Mirrors ``test_era_engine.py``'s structure (Harness + refusal + event tests),
-adapted for OpenEvolve's archive model (iteration as node_index, island as
+adapted for OpenEvolve's archive model (iteration as node_index, ancestry as
 depth, parent_id → parent's iteration as parent_index).
 """
 
@@ -47,7 +47,12 @@ from sciencediscovery_evolve.openevolve_engine import (
     _mode,
     _refuse_unrunnable,
 )
-from sciencediscovery_evolve.vendor.openevolve import INITIAL_PROGRAM, Program, program_id
+from sciencediscovery_evolve.vendor.openevolve import (
+    INITIAL_PROGRAM,
+    OpenEvolveArchive,
+    Program,
+    program_id,
+)
 
 
 # --- RunSpec factory --------------------------------------------------------
@@ -258,6 +263,25 @@ def _make_archive_with(programs: List[Program]) -> MagicMock:
     return archive
 
 
+def _real_archive() -> OpenEvolveArchive:
+    """A real archive seeded with the iteration-0 baseline, as a run has it."""
+    archive = OpenEvolveArchive(archive_size=20, num_islands=3, feature_bins=4)
+    archive.add_program(Program(
+        program_id(INITIAL_PROGRAM), 0, 0, None, INITIAL_PROGRAM, "",
+        {"score": 0.5}, True, "",
+    ), baseline=True)
+    return archive
+
+
+def _add(reporter: _Reporter, archive: OpenEvolveArchive, program: Program) -> None:
+    """Add a program to the archive and report it, as the aggregator does."""
+    archive.add_program(program)
+    reporter.on_event("node", {
+        "program": program, "metrics": program.metrics, "valid": program.valid,
+        "cell_changed": True,
+    })
+
+
 # --- selected ---------------------------------------------------------------
 
 
@@ -294,11 +318,14 @@ def test_node_emits_expanded_and_evaluated():
     assert "evaluated" in types
     expanded = next(e for e in collector.events if e["type"] == "expanded")
     assert expanded["nodeIndex"] == 3
-    assert expanded["depth"] == 3  # depth = iteration for openevolve
+    # No parent means the root's generation, not the attempt ordinal.
+    assert expanded["depth"] == 0
     assert expanded["score"] == pytest.approx(1.2)
     evaluated = next(e for e in collector.events if e["type"] == "evaluated")
     assert evaluated["nodeIndex"] == 3
     assert evaluated["gateScore"] == pytest.approx(1.2)
+    # The gate score is not a rollout measurement; the UIs fall back to `score`.
+    assert "rolloutScore" not in evaluated
 
 
 def test_node_invalid_emits_expanded_without_evaluated():
@@ -320,6 +347,74 @@ def test_node_looked_up_parent_index_from_archive():
     reporter.on_event("node", {"program": child, "metrics": child.metrics, "valid": True, "cell_changed": False})
     expanded = next(e for e in collector.events if e["type"] == "expanded")
     assert expanded["parentIndex"] == 2
+
+
+def test_expanded_depth_is_ancestry_not_the_iteration_ordinal():
+    """#1457: a node at iteration 4 parented by the root has depth 1."""
+    archive = _real_archive()
+    root_id = archive.baseline().program_id
+    child = _make_program(
+        "def child_algo(o,b,r,bounds):\n  return 0.0, 0.0\n", iteration=4, parent_id=root_id,
+    )
+    reporter, collector = _make_reporter(archive=archive)
+    reporter.on_event("selected", {
+        "iteration": 4, "island": 0, "parent_id": root_id,
+        "best_id": root_id, "inspiration_id": root_id,
+    })
+    _add(reporter, archive, child)
+
+    expanded = next(e for e in collector.events if e["type"] == "expanded")
+    assert expanded["nodeIndex"] == 4
+    assert expanded["parentIndex"] == 0
+    assert expanded["depth"] == 1
+    assert expanded["iteration"] == 4  # attempts keep their own number
+
+
+def test_expanded_depth_follows_the_parent_chain():
+    """The report's chain 3 → 2 → 0 puts node 3 at depth 2, not 3."""
+    archive = _real_archive()
+    root_id = archive.baseline().program_id
+    node2 = _make_program(
+        "def node2_algo(o,b,r,bounds):\n  return 0.0, 0.0\n", iteration=2, parent_id=root_id,
+    )
+    node3 = _make_program(
+        "def node3_algo(o,b,r,bounds):\n  return 0.0, 0.0\n", iteration=3, parent_id=node2.program_id,
+    )
+    archive.add_program(node2)
+    reporter, collector = _make_reporter(archive=archive)
+    _add(reporter, archive, node3)
+
+    expanded = next(e for e in collector.events if e["type"] == "expanded")
+    assert expanded["parentIndex"] == 2
+    assert expanded["depth"] == 2
+
+
+def test_unknown_parent_is_depth_zero_not_an_invented_generation():
+    archive = _real_archive()
+    orphan = _make_program(
+        "def orphan_algo(o,b,r,bounds):\n  return 0.0, 0.0\n", iteration=9, parent_id="missing",
+    )
+    reporter, collector = _make_reporter(archive=archive)
+    _add(reporter, archive, orphan)
+    expanded = next(e for e in collector.events if e["type"] == "expanded")
+    assert expanded["depth"] == 0
+
+
+def test_failed_attempt_depth_comes_from_its_selected_parent():
+    """A call that never returned has no node, but its parent was selected."""
+    archive = _real_archive()
+    root_id = archive.baseline().program_id
+    reporter, collector = _make_reporter(archive=archive)
+    reporter.on_event("selected", {
+        "iteration": 4, "island": 0, "parent_id": root_id,
+        "best_id": root_id, "inspiration_id": root_id,
+    })
+    reporter.note_failure(4, "the model call timed out")
+
+    failed = next(e for e in collector.events if e["type"] == "expanded")
+    assert failed["valid"] is False
+    assert failed["depth"] == 1
+    assert failed["depth"] != failed["iteration"]
 
 
 # --- best → merged + cost --------------------------------------------------
@@ -410,6 +505,88 @@ def test_finish_carries_why_the_run_stopped_early():
     finished = next(e for e in collector.events if e["type"] == "search_finished")
     assert finished["stopReason"] == "target_reward"
     assert finished["expansionsPlanned"] == 8
+
+
+def test_a_completed_run_with_one_failed_call_does_not_report_a_shortfall():
+    """#1457: six attempts, one call never returned, five programs — full round budget.
+
+    ``done = len(history) - 1`` counted the five programs and called a healthy
+    six-round run truncated. Attempts are what the round budget measures, and a
+    failed call spent one of them.
+    """
+    archive = _real_archive()
+    root_id = archive.baseline().program_id
+    reporter, collector = _make_reporter(archive=archive)
+    for iteration in range(1, 7):
+        reporter.on_event("selected", {
+            "iteration": iteration, "island": 0, "parent_id": root_id,
+            "best_id": root_id, "inspiration_id": root_id,
+        })
+    reporter.note_failure(1, "the model call timed out")
+    for iteration in range(2, 7):
+        _add(reporter, archive, _make_program(
+            f"def search_algorithm(o,b,r,bounds):\n  return {iteration}.0, 0.0\n",
+            iteration=iteration, parent_id=root_id, score=0.6 + iteration / 100,
+        ))
+
+    reporter.note_outcome(SimpleNamespace(stop_reason="rounds"), 6)
+    reporter.finish("succeeded")
+
+    shortfall = [
+        e["message"] for e in collector.events
+        if e["type"] == "log" and "planned" in e["message"]
+    ]
+    assert shortfall == []
+    finished = next(e for e in collector.events if e["type"] == "search_finished")
+    assert finished["attempts"] == 6
+    assert finished["generated"] == 5
+    assert finished["evaluated"] == 5
+    assert finished["archiveNodes"] == 6  # five generated programs + baseline
+    assert finished["candidates"] == 6  # existing consumers keep this population
+    assert finished["expansionsPlanned"] == 6
+    assert finished["stopReason"] == "rounds"
+
+
+def test_a_real_shortfall_is_still_reported():
+    """The fix is about counting attempts, not about silencing the warning."""
+    archive = _real_archive()
+    reporter, collector = _make_reporter(archive=archive)
+    reporter.attempted = 4
+    reporter.note_outcome(SimpleNamespace(stop_reason="patience"), 6)
+    reporter.finish("succeeded")
+    logs = [
+        e["message"] for e in collector.events
+        if e["type"] == "log" and "planned" in e["message"]
+    ]
+    assert logs == ["planned 6 expansions, ran 4, stopped because patience."]
+
+
+def test_regenerating_identical_code_is_two_attempts_but_one_generated_program():
+    """#1457: the archive refuses a duplicate program_id, so count it once."""
+    archive = _real_archive()
+    root_id = archive.baseline().program_id
+    reporter, collector = _make_reporter(archive=archive)
+    code = "def search_algorithm(o,b,r,bounds):\n  return 1.0, 2.0\n"
+    for iteration in (1, 2):
+        reporter.on_event("selected", {
+            "iteration": iteration, "island": 0, "parent_id": root_id,
+            "best_id": root_id, "inspiration_id": root_id,
+        })
+        _add(reporter, archive, _make_program(code, iteration=iteration, parent_id=root_id))
+
+    reporter.note_outcome(SimpleNamespace(stop_reason="rounds"), 2)
+    reporter.finish("succeeded")
+
+    finished = next(e for e in collector.events if e["type"] == "search_finished")
+    assert finished["attempts"] == 2
+    assert finished["generated"] == 1
+    assert finished["archiveNodes"] == 2  # the one program + the baseline
+    assert finished["candidates"] == 2
+    # Not a shortfall: both rounds were used.
+    assert [
+        e["message"] for e in collector.events
+        if e["type"] == "log" and "planned" in e["message"]
+    ] == []
 
 
 def test_rollouts_are_never_skipped_as_solved():

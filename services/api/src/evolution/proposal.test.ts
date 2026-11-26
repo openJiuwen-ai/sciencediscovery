@@ -656,6 +656,25 @@ test("a run that spent its plan says nothing about it", async () => {
   assert.equal(summary.stoppedEarly, undefined);
 });
 
+test("one failed call in a completed run is not reported as stopping early", async () => {
+  // #1457: six attempts, one model call never returned, five programs landed.
+  // Counting archive growth made that read "made 5 of 6" and told the user a
+  // healthy six-round run had stopped early. `attempts` is the population the
+  // round budget counts, and it says all six rounds were used.
+  const summary = summariseRun(
+    { candidates: 6, id: "r", status: "succeeded", tokens: 11_000 },
+    [{
+      event: {
+        archiveNodes: 6, attempts: 6, bestNodeIndex: 3, candidates: 6,
+        evaluated: 5, expansionsPlanned: 6, generated: 5, stopReason: "rounds",
+        type: "search_finished",
+      },
+    }],
+  );
+
+  assert.equal(summary.stoppedEarly, undefined);
+});
+
 test("the summary quotes the split the search never saw", async () => {
   const summary = summariseRun(
     { candidates: 12, id: "r", status: "succeeded", tokens: 11_000 },
