@@ -332,7 +332,7 @@ test("Quick computation review reports an Artifact alias without a persisted Evi
   assert.equal(result.findings[0]?.code, "CITATION_EVIDENCE_ALIAS_UNRESOLVED");
 });
 
-test("Quick computation review distinguishes missing Evidence nodes and broken Paper links", async () => {
+test("Quick computation review distinguishes missing Evidence nodes and broken source links", async () => {
   const artifactVersion = version({
     references: [
       { id: "evidence-1", kind: "evidence", label: "ev1" },
@@ -340,8 +340,8 @@ test("Quick computation review distinguishes missing Evidence nodes and broken P
     ],
   });
   const traces: Record<string, EvidenceReferenceTraceResult> = {
-    "evidence-1": { evidenceFound: false, paperLinked: false },
-    "evidence-2": { evidenceFound: true, paperLinked: false },
+    "evidence-1": { evidenceFound: false, sourceLinked: false },
+    "evidence-2": { evidenceFound: true, sourceLinked: false },
   };
   const result = await quickEvidenceReferenceReview(
     evidenceContent,
@@ -362,7 +362,7 @@ test("Quick computation review passes Evidence nodes linked to Papers", async ()
   const result = await quickEvidenceReferenceReview(
     Buffer.from("Claim [ev1]."),
     artifactVersion,
-    async () => ({ evidenceFound: true, paperLinked: true }),
+    async () => ({ evidenceFound: true, sourceLinked: true }),
   );
 
   assert.deepEqual(result.findings, []);
@@ -378,7 +378,7 @@ test("Quick computation review marks unavailable or truncated Evidence queries a
     artifactVersion,
     async () => ({
       evidenceFound: true,
-      paperLinked: false,
+      sourceLinked: false,
       reason: "memory_graph_unreachable",
       truncated: true,
     }),
@@ -414,9 +414,78 @@ test("Quick computation Evidence tracer reuses one extracts edge query", async (
   } as unknown as MemoryGraphClient;
   const trace = createEvidenceReferenceTracer(client, "session-1");
 
-  assert.equal((await trace({ alias: "ev1", evidenceId: "evidence-1" })).paperLinked, true);
-  assert.equal((await trace({ alias: "ev2", evidenceId: "evidence-2" })).paperLinked, true);
+  assert.equal((await trace({ alias: "ev1", evidenceId: "evidence-1" })).sourceLinked, true);
+  assert.equal((await trace({ alias: "ev2", evidenceId: "evidence-2" })).sourceLinked, true);
   assert.equal(edgeQueries, 1);
+});
+
+test("Quick computation Evidence tracer accepts a WebPage as a news Evidence's source", async () => {
+  // A news task's Evidence comes from a web page, so its extracts edge runs
+  // WebPage → Evidence. Reading only Paper sources called that chain broken
+  // even though the provenance was complete.
+  const client = {
+    byEdgeType: async () => ({
+      edges: [{ source: "web-1", target: "evidence-1", type: "extracts" as const }],
+      nodes: [
+        { id: "evidence-1", label: "Evidence" as const, extra: { content: "Nvidia shares rose 30% after the board restored the CEO." } },
+        {
+          extra: {
+            identifier: "cqvq2947xvx0o",
+            identifier_type: "bbc-article",
+            title: "黄仁勋辞职11天后重掌Nvidia",
+            url: "https://www.bbc.com/zhongwen/articles/cqvq2947xvx0o/simp",
+          },
+          id: "web-1",
+          label: "WebPage" as const,
+        },
+      ],
+      total: 1,
+      truncated: false,
+    }),
+  } as unknown as MemoryGraphClient;
+  const trace = await createEvidenceReferenceTracer(client, "session-1")({ alias: "evidence1", evidenceId: "evidence-1" });
+
+  assert.equal(trace.sourceLinked, true);
+  assert.equal(trace.evidence?.content, "Nvidia shares rose 30% after the board restored the CEO.");
+  // The page is the source document; the Deep prompt reads it in `paper`.
+  assert.equal(trace.paper?.title, "黄仁勋辞职11天后重掌Nvidia");
+  assert.equal(trace.paper?.link, "https://www.bbc.com/zhongwen/articles/cqvq2947xvx0o/simp");
+  assert.equal(trace.paper?.identifier, "cqvq2947xvx0o");
+  assert.equal(trace.paper?.identifierType, "bbc-article");
+});
+
+test("Quick computation Evidence tracer accepts an uploaded PDF as the source", async () => {
+  const client = {
+    byEdgeType: async () => ({
+      edges: [{ source: "file-1", target: "evidence-1", type: "extracts" as const }],
+      nodes: [
+        { id: "evidence-1", label: "Evidence" as const },
+        { extra: { file_id: "file-1", name: "cohort-results.pdf" }, id: "file-1", label: "SourceFile" as const },
+      ],
+      total: 1,
+      truncated: false,
+    }),
+  } as unknown as MemoryGraphClient;
+  const trace = await createEvidenceReferenceTracer(client, "session-1")({ alias: "evidence1", evidenceId: "evidence-1" });
+
+  assert.equal(trace.sourceLinked, true);
+  assert.equal(trace.paper?.title, "cohort-results.pdf");
+  assert.equal(trace.paper?.identifier, "file-1");
+  assert.equal(trace.paper?.identifierType, "file");
+});
+
+test("Quick computation review passes Evidence extracted from a web page", async () => {
+  const artifactVersion = version({
+    references: [{ id: "evidence-1", kind: "evidence", label: "evidence1" }],
+  });
+  const result = await quickEvidenceReferenceReview(
+    Buffer.from("Nvidia shares rose 30% [evidence1]."),
+    artifactVersion,
+    async () => ({ evidenceFound: true, sourceLinked: true }),
+  );
+
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.evidenceIds, ["evidence-1"]);
 });
 
 test("Deep computation review validates value mismatches inside the Computation capability", () => {

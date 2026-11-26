@@ -160,7 +160,7 @@ test("Evidence Bundle resolves only aliases present in the locked Artifact", asy
         evidence: { content: "TP53 frequency was 39.7%.", locator: "Results" },
         evidenceFound: true,
         paper: { identifier: "12345678", identifierType: "PMID", title: "TP53 in NSCLC" },
-        paperLinked: true,
+        sourceLinked: true,
       };
     },
   );
