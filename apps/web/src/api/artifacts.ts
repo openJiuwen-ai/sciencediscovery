@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { applyIdeaResearchFrame, reconcileIdeaResearchFrame } from "@sciencediscovery/schema";
 import type {
   AnalyzePaperVisionRequest,
   CancelRunResult,
@@ -153,6 +154,12 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify(body)});
   }
 
+  /** Follow one research's stream, folding its deltas into the view it reports.
+   *
+   * The first frame of a stream is the whole tree; every later frame carries only
+   * the nodes and edges that changed. A frame the held tree is too old for means a
+   * frame was lost, so one whole read answers it — and that read is newer than the
+   * frame, so its state and revision win rather than being merged with it. */
   async subscribeIdeaResearch(sessionId: string, researchId: string, onView: (view: import("@sciencediscovery/schema").IdeaResearchView) => void, signal: AbortSignal): Promise<void> {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research/${encodeURIComponent(researchId)}/events`, {
       headers: {accept: "text/event-stream", authorization: `Bearer ${this.token}`}, signal,
@@ -165,6 +172,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let view: import("@sciencediscovery/schema").IdeaResearchView | undefined;
     try {
       for (;;) {
         const {done, value} = await reader.read();
@@ -173,7 +181,21 @@ export class ArtifactsApiClient extends RunsApiClient {
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
           const data = frame.split("\n").filter(line => line.startsWith("data: ")).map(line => line.slice(6)).join("\n");
-          if (data) onView(JSON.parse(data));
+          if (!data) continue;
+          let payload: import("@sciencediscovery/schema").IdeaResearchFrame;
+          // A torn frame is stepped over: the frame after it no longer applies, and
+          // that gap is what fetches a whole view.
+          try { payload = JSON.parse(data) as import("@sciencediscovery/schema").IdeaResearchFrame; } catch { continue; }
+          let next = applyIdeaResearchFrame(view, payload);
+          if (next === undefined) {
+            // The read that fills the gap is newer than the frame that exposed it,
+            // so it wins over the superseded frame rather than being merged with it.
+            const restored = await this.ideaResearchCommand(sessionId, {operation: "get", researchId});
+            next = reconcileIdeaResearchFrame(restored, payload);
+          }
+          if (next === undefined) continue;
+          view = next;
+          onView(next);
         }
         if (done) break;
       }

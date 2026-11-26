@@ -147,6 +147,10 @@ class ResearchStore:
     def save(self, state: dict) -> None:
         path = self.path(state['projectId'], state['sessionId'], state['id'])
         path.parent.mkdir(parents=True, exist_ok=True)
+        # One durable checkpoint, one revision. A live frame names the revision its
+        # changes were computed from, so the counter has to move with every save
+        # rather than with the tree shape: token counts and activities change too.
+        state['revision'] = int(state.get('revision', 0)) + 1
         state['updatedAt'] = now()
         with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False, encoding='utf-8') as out:
             temporary = out.name
@@ -184,6 +188,52 @@ def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth:
     return dict(id=identifier, parentId=parent, hypothesis=hypothesis, kind=kind, depth=depth,
                 status='pending', score=None, insight=None, insightRecords=[], stages={}, childrenIds=[],
                 searchStatus='active', priority=0.0, createdAt=now(), updatedAt=now())
+
+
+def graph_node(n: dict, heavy: bool = True) -> dict:
+    """One node in the shape the read models expose.
+
+    `heavy=False` is the shape a live frame carries: `result` is a serialisation of
+    `stages` the tree view never draws (it duplicates, it does not summarise), and
+    `insightRecords` is the engine's own learning log. Both grow with the research
+    rather than with what changed, so a frame leaves them out; both stay available
+    on an explicit `get`.
+    """
+    view = {**n, 'searchStatus': n.get('searchStatus', 'active'), 'priority': n.get('priority', 0),
+            'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None,
+            'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': n.get('pruneReason')}
+    if heavy:
+        # Serialised only for an explicit `get`: a frame never builds the string it
+        # would drop, which is the whole point of the lean shape.
+        view['result'] = json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None
+    else:
+        view.pop('insightRecords', None)
+    return view
+
+
+def node_signature(n: dict) -> tuple:
+    """Everything a frame's node carries, as something cheap to compare.
+
+    A delta frame only serialises a node whose signature moved, so every mutable
+    node field has to be named here: a field this misses is a change no connected
+    client would ever see. A stage object is compared by its own text and score, so
+    a rewritten stage is still a change; stages hold opaque strings, which compare
+    in O(1) when they are the same object and by length first when they are not.
+    """
+    return (n.get('parentId'), n.get('hypothesis'), n.get('kind'), n.get('depth'), n.get('status'),
+            n.get('score'), n.get('insight'), n.get('searchStatus', 'active'), n.get('priority', 0),
+            n.get('pruneReason'), n.get('attemptCount', 0), tuple(n['childrenIds']),
+            tuple((role, value.get('text'), value.get('score')) for role, value in n['stages'].items()),
+            n.get('createdAt'), n.get('updatedAt'),
+            n.get('cycleComplete'), tuple(n.get('propagatedTo', ())), n.get('trimmedDirection'),
+            tuple(n.get('derivedFromCandidateIds', ())), tuple(n.get('addressesInsightIds', ())),
+            n.get('targetedWeakness'), n.get('explorationType'))
+
+
+def graph_edges(nodes: list[dict], only: set[str] | None = None) -> list[dict]:
+    """The tree's child edges, in node order; `only` limits them to the given targets."""
+    return [dict(source=n['parentId'], target=n['id'], type='child', ordinal=i)
+            for i, n in enumerate(nodes) if n['parentId'] and (only is None or n['id'] in only)]
 
 
 def is_permanent_quota(detail: str) -> bool:
@@ -780,9 +830,32 @@ class IdeaTreeEngine:
                 s.pop('pendingStop', None)
             self.save()
 
-    def graph(self):
+    @property
+    def revision(self) -> int:
+        return int(self.state.get('revision', 0))
+
+    def graph(self, heavy: bool = True):
+        """The whole tree, as a command answer (`heavy`) or as a frame's first read."""
         s = self.state
-        nodes = []
-        for n in s['nodes']:
-            nodes.append({**n, 'searchStatus': n.get('searchStatus', 'active'), 'priority': n.get('priority', 0), 'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None, 'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': n.get('pruneReason'), 'result': json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None})
-        return dict(treeId=s['id'], objective=s['objective'], revision=0, updatedAt=s['updatedAt'], nodes=nodes, edges=[dict(source=n['parentId'], target=n['id'], type='child', ordinal=i) for i, n in enumerate(nodes) if n['parentId']])
+        return dict(treeId=s['id'], objective=s['objective'], revision=self.revision, updatedAt=s['updatedAt'],
+                    nodes=[graph_node(n, heavy) for n in s['nodes']], edges=graph_edges(s['nodes']))
+
+    def graph_frame(self, seen: tuple[int, dict] | None):
+        """The graph part of the next live frame, and the state the next one compares with.
+
+        A new stream (`seen is None`) gets the whole compact tree. After that only the
+        nodes whose signature moved since the previous frame are serialised, and
+        `since` names the revision they moved from, so one frame carries the change
+        instead of the tree. The service keeps the returned cursor per stream: a
+        listener that attaches later starts from the whole tree again.
+        """
+        s = self.state
+        nodes = s['nodes']
+        signatures = {n['id']: node_signature(n) for n in nodes}
+        head = dict(treeId=s['id'], objective=s['objective'], revision=self.revision, updatedAt=s['updatedAt'])
+        if seen is None:
+            return dict(head, full=True, nodes=[graph_node(n, False) for n in nodes],
+                        edges=graph_edges(nodes), removed=[]), (self.revision, signatures)
+        changed = {n['id'] for n in nodes if seen[1].get(n['id']) != signatures[n['id']]}
+        return dict(head, full=False, since=seen[0], nodes=[graph_node(n, False) for n in nodes if n['id'] in changed],
+                    edges=graph_edges(nodes, changed), removed=[i for i in seen[1] if i not in signatures]), (self.revision, signatures)

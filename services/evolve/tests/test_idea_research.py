@@ -13,6 +13,7 @@ import unittest.mock
 import urllib.error
 from pathlib import Path
 
+from sciencediscovery_evolve.vendor.idea_tree import research as research_module
 from sciencediscovery_evolve.vendor.idea_tree.research import BudgetReached, IdeaTreeEngine, Interrupted, ResearchStore, node, now, parse_json
 from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
 from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
@@ -1310,3 +1311,164 @@ def test_a_research_with_non_ascii_content_reads_on_a_non_utf8_host(tmp_path):
     # Both the single read and the directory scan: `get` after a restart goes
     # through read(), `list` always goes through the scan (research_service.py).
     assert read_on_a_host_with_ascii_as_the_default_codec(tmp_path, RESEARCH_READ_SCRIPT) == "ok"
+
+
+class LiveFrameTests(unittest.IsolatedAsyncioTestCase):
+    """#1454: a live frame carries the change, not the whole tree."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = ResearchStore(Path(self.temp.name))
+        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='Compare directions.',
+                          materials='material', modelId='m', settings=Settings(candidatesPerRound=1, maxDepth=6).model_dump(),
+                          template=snapshot('scientific-hypothesis-general/v1'), status='running', phase='ideate',
+                          round=0, batch=[], batchCompleted=0, tokens=0, usageKnown=True, reason=None,
+                          currentNodeId=None, createdAt=now(), updatedAt=now(),
+                          nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
+
+    def grow(self, count, first=1):
+        """`count` candidates, each with a design stage big enough to show in a payload."""
+        for index in range(first, first + count):
+            added = node(str(index), 'ROOT', f'Candidate {index}', 'candidate', 1)
+            added['stages'] = {'design': {'text': 'a long design ' * 400}}
+            self.state['nodes'].append(added)
+            self.state['nodes'][0]['childrenIds'].append(str(index))
+
+    def test_a_lean_node_never_builds_the_stage_serialisation_it_omits(self):
+        # Building `result` and then deleting it was the expensive half of the frame:
+        # for a designed candidate the string is as large as the node itself.
+        from unittest.mock import patch
+        self.grow(1)
+        self.state['nodes'][1]['stages'] = {'design': {'text': 'x' * 8000}}
+        engine = IdeaTreeEngine(self.state, self.store, {})
+        calls = []
+        real = json.dumps
+
+        def counting(*args, **kwargs):
+            calls.append(args[0] if args else kwargs)
+            return real(*args, **kwargs)
+
+        with patch.object(research_module.json, 'dumps', counting):
+            lean = research_module.graph_node(self.state['nodes'][1], False)
+            self.assertEqual(calls, [], 'a frame node serialises no stages')
+            heavy = research_module.graph_node(self.state['nodes'][1], True)
+        self.assertNotIn('result', lean)
+        self.assertEqual(len(calls), 1, 'the read model still serialises stages once')
+        self.assertEqual(json.loads(heavy['result']), {'design': {'text': 'x' * 8000}})
+
+    def test_a_get_answer_still_carries_result_and_the_insight_log(self):
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        self.grow(1)
+        self.state['nodes'][1]['insightRecords'] = [dict(id='insight-1', summary='lesson')]
+        self.store.save(self.state)
+        with patch.object(service, '_store', self.store):
+            answer = service.view(self.state)
+        node = answer['graph']['nodes'][1]
+        self.assertEqual(json.loads(node['result']), {'design': {'text': 'a long design ' * 400}})
+        self.assertEqual(node['insightRecords'], [dict(id='insight-1', summary='lesson')])
+        self.assertNotIn('nodes', answer['research'])
+
+    def test_the_first_frame_is_the_whole_tree_without_the_fields_the_view_does_not_draw(self):
+        self.grow(12)
+        self.store.save(self.state)
+        graph, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(None)
+        self.assertTrue(graph['full'])
+        self.assertEqual(graph['revision'], self.state['revision'])
+        self.assertEqual([n['id'] for n in graph['nodes']], [n['id'] for n in self.state['nodes']])
+        self.assertEqual(len(graph['edges']), 12)
+        for item in graph['nodes']:
+            self.assertNotIn('result', item)
+            self.assertNotIn('insightRecords', item)
+            self.assertIn('stages', item)  # the node detail still renders it
+        assert cursor[0] == self.state['revision']
+
+    def test_a_frame_grows_with_the_change_not_with_the_tree(self):
+        sizes = []
+        totals = []
+        for count in (4, 40):
+            self.setUp()
+            self.grow(count)
+            self.store.save(self.state)
+            full, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(None)
+            self.state['nodes'][1]['status'] = 'done'
+            self.state['nodes'][1]['score'] = 7.5
+            self.store.save(self.state)
+            delta, _ = IdeaTreeEngine(self.state, self.store, {}).graph_frame(cursor)
+            self.assertFalse(delta['full'])
+            self.assertEqual(delta['since'], cursor[0], 'the frame names the revision it was computed from')
+            self.assertEqual([n['id'] for n in delta['nodes']], ['1'], 'only the node that changed')
+            self.assertLess(len(json.dumps(delta)) * 2, len(json.dumps(full)),
+                            'a whole frame is not a stand-in for a delta')
+            sizes.append(len(json.dumps(delta)))
+            totals.append(len(json.dumps(full)))
+        self.assertEqual(sizes[0], sizes[1], 'the same one-node change costs the same in a 4-node and a 40-node tree')
+        self.assertGreater(totals[1], totals[0] * 5, 'the whole tree does grow with the tree, which is what the delta avoids')
+
+    def test_a_new_node_arrives_with_its_edge_and_no_old_node(self):
+        self.store.save(self.state)
+        _, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(None)
+        self.grow(1)
+        self.store.save(self.state)
+        delta, _ = IdeaTreeEngine(self.state, self.store, {}).graph_frame(cursor)
+        # ROOT's child list moved, so it travels too; the other candidates do not exist.
+        self.assertEqual([n['id'] for n in delta['nodes']], ['ROOT', '1'])
+        self.assertEqual(delta['edges'], [dict(source='ROOT', target='1', type='child', ordinal=1)])
+        self.assertEqual(delta['removed'], [])
+
+    def test_a_rewritten_stage_travels_and_an_unchanged_node_does_not(self):
+        self.grow(1)
+        self.store.save(self.state)
+        _, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(None)
+        # Nothing moved: the frame carries no node at all, only the research fields.
+        quiet, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(cursor)
+        self.assertEqual(quiet['nodes'], [])
+        self.assertEqual(quiet['edges'], [])
+        self.state['nodes'][1]['stages']['design'] = {'text': 'rewritten design'}
+        self.store.save(self.state)
+        delta, cursor = IdeaTreeEngine(self.state, self.store, {}).graph_frame(cursor)
+        self.assertEqual([n['id'] for n in delta['nodes']], ['1'])
+        self.assertEqual(delta['nodes'][0]['stages'], {'design': {'text': 'rewritten design'}})
+
+    async def test_the_stream_sends_a_whole_tree_then_deltas_then_the_terminal_frame(self):
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        self.grow(20)
+        self.store.save(self.state)
+        engine = IdeaTreeEngine(self.state, self.store, {})
+        with patch.object(service, '_store', self.store), \
+                patch.object(service, '_running', {'research-test': (engine, None)}):
+            response = await service.events(service.Command(projectId='p', sessionId='s', researchId='research-test', operation='get'))
+            frames = response.body_iterator
+            first = json.loads((await anext(frames))[len('data: '):])
+            self.assertTrue(first['graph']['full'], 'a fresh stream starts from the whole tree')
+            self.assertEqual(len(first['graph']['nodes']), 21)
+            self.assertNotIn('result', first['graph']['nodes'][0])
+            self.assertEqual(first['research']['status'], 'running')
+            self.assertNotIn('nodes', first['research'])
+
+            self.state['nodes'][2]['status'] = 'done'
+            self.state['nodes'][2]['insight'] = 'candidate insight'
+            self.store.save(self.state)
+            second = json.loads((await anext(frames))[len('data: '):])
+            self.assertFalse(second['graph']['full'])
+            self.assertEqual([n['id'] for n in second['graph']['nodes']], ['2'])
+            self.assertEqual(second['graph']['nodes'][0]['insight'], 'candidate insight')
+            self.assertEqual(second['graph']['since'], first['graph']['revision'])
+
+            self.state['status'] = 'completed'
+            self.store.save(self.state)
+            last = json.loads((await anext(frames))[len('data: '):])
+            self.assertEqual(last['research']['status'], 'completed')
+            self.assertFalse(last['graph']['full'])
+            with self.assertRaises(StopAsyncIteration):
+                await anext(frames)
+
+    def test_a_revision_moves_with_every_durable_checkpoint(self):
+        self.store.save(self.state)
+        first = self.state['revision']
+        self.state['status'] = 'paused'
+        self.store.save(self.state)
+        self.assertEqual(self.state['revision'], first + 1)
+        self.assertEqual(self.store.read('p', 's', 'research-test')['revision'], first + 1)
