@@ -447,6 +447,7 @@ test.describe("MCP 服务器", () => {
     await journey.step("Open and discard a new MCP configuration", "The empty list offers a blank form with the documented defaults.", async () => {
       await expect(settings.getByText("暂无可用的内置或自定义 MCP 来源。")).toBeVisible();
       await create.click();
+      await settings.getByRole("menuitem", { name: "手动填写", exact: true }).click();
       await expect(form.getByRole("checkbox", { name: "启用服务" })).not.toBeChecked();
       await expect(form.getByRole("spinbutton", { name: "超时（秒）" })).toHaveValue("60");
       await expect(transport).toHaveValue("http");
@@ -457,6 +458,7 @@ test.describe("MCP 服务器", () => {
 
     await journey.step("Create a local MCP server after a refused save", "The draft survives the error, and a retry creates exactly one server.", async () => {
       await create.click();
+      await settings.getByRole("menuitem", { name: "手动填写", exact: true }).click();
       await expect(name).toHaveValue("");
       await name.fill("Local Echo");
       await transport.selectOption("stdio");
@@ -484,9 +486,10 @@ test.describe("MCP 服务器", () => {
 
     await journey.step("Test the saved connection", "The server can be tested without changing which sources sessions use by default.", async () => {
       const card = settings.locator(".settings-card").filter({ hasText: "Local Echo" });
-      await card.getByRole("button", { name: "测试", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "测试", exact: true }).click();
       await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
-      await expect(card.getByRole("switch", { name: "Local Echo · 默认使用" })).not.toBeChecked();
+      await expect(card.getByRole("checkbox", { name: "Local Echo · 默认使用" })).not.toBeChecked();
       expect(mock.state.mcpServers[0]?.enabled).toBe(false);
     });
   });
@@ -501,7 +504,8 @@ test.describe("MCP 服务器", () => {
     await expect(dialog.locator(".settings-card").filter({ hasText: "内置检索" })).toBeVisible();
 
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
-    await card.getByRole("button", { name: "编辑" }).click();
+    await card.locator(".skill-row-menu-trigger").click();
+    await card.getByRole("menuitem", { name: "编辑" }).click();
     const form = page.getByRole("dialog", { name: "编辑服务器" });
     await form.locator(".settings-row", { hasText: "说明" }).locator("input").fill("跑在本地");
     await form.getByLabel("传输方式").selectOption("stdio");
@@ -534,24 +538,26 @@ test.describe("MCP 服务器", () => {
     const dialog = await openSettings(page, "MCP 服务器");
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
 
-    await card.getByRole("button", { name: "测试" }).click();
+    await card.locator(".skill-row-menu-trigger").click();
+    await card.getByRole("menuitem", { name: "测试" }).click();
     await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
     expect(mock.calls.some((call) => call.method === "POST" && call.path === "/api/mcp/servers/mcp-1/test")).toBe(
       true,
     );
 
-    const selection = card.getByRole("switch", { name: "检索服务 · 默认使用" });
-    await expect(selection).toHaveAttribute("aria-checked", "false");
+    const selection = card.getByRole("checkbox", { name: "检索服务 · 默认使用" });
+    await expect(selection).not.toBeChecked();
     for (const enabled of [false, true]) {
-      await card.getByRole("button", { name: "编辑" }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "编辑" }).click();
       const form = page.getByRole("dialog", { name: "编辑服务器" });
       await form.getByRole("checkbox", { name: "启用服务", exact: true }).setChecked(enabled);
       await form.getByRole("button", { name: "保存", exact: true }).click();
       await expect(form).toBeHidden();
-      await expect(card.getByRole("button", { name: "编辑" })).toBeEnabled();
+      await expect(card.locator(".skill-row-menu-trigger")).toBeEnabled();
       expect(lastWriteCall(mock, "PUT", "/api/mcp/servers/mcp-1")).toMatchObject({ enabled });
       expect(mock.state.mcpServers[0]?.enabled).toBe(enabled);
-      await expect(selection).toHaveAttribute("aria-checked", "false");
+      await expect(selection).not.toBeChecked();
     }
     expect(mock.calls.filter((call) => call.method === "PUT" && call.path === "/api/settings")).toHaveLength(0);
   });
@@ -564,13 +570,13 @@ test.describe("MCP 服务器", () => {
       overrides: { plugins },
     });
     let dialog = await openSettings(page, "MCP 服务器");
-    const builtin = () => dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
-    const custom = () => dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
-    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    const builtin = () => dialog.getByRole("checkbox", { name: "内置检索 · 默认使用" });
+    const custom = () => dialog.getByRole("checkbox", { name: "检索服务 · 默认使用" });
+    await expect(builtin()).not.toBeChecked();
     await builtin().click();
-    await expect(builtin()).toHaveAttribute("aria-checked", "true");
+    await expect(builtin()).toBeChecked();
     await custom().click();
-    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    await expect(custom()).toBeChecked();
     expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
       enabledConnectorIds: ["web", "builtin-search", "mcp-1"], plugins,
     });
@@ -580,15 +586,15 @@ test.describe("MCP 服务器", () => {
     // A fresh page reads the stored selection, including a source whose
     // permission still prohibits calls. Selection never grants permission.
     dialog = await openSettings(page, "MCP 服务器");
-    await expect(builtin()).toHaveAttribute("aria-checked", "true");
-    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    await expect(builtin()).toBeChecked();
+    await expect(custom()).toBeChecked();
     await builtin().click();
-    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await expect(builtin()).not.toBeChecked();
     await custom().click();
-    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    await expect(custom()).not.toBeChecked();
     dialog = await openSettings(page, "MCP 服务器");
-    await expect(builtin()).toHaveAttribute("aria-checked", "false");
-    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    await expect(builtin()).not.toBeChecked();
+    await expect(custom()).not.toBeChecked();
     expect(mock.state.overrides.enabledConnectorIds).toEqual(["web"]);
     expect(mock.state.overrides.plugins).toEqual(plugins);
   });
@@ -600,17 +606,17 @@ test.describe("MCP 服务器", () => {
       overrides: { enabledConnectorIds: ["unlisted"], plugins },
     });
     const dialog = await openSettings(page, "MCP 服务器");
-    const builtin = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
-    const custom = dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
-    await dialog.getByRole("button", { name: "全部选用", exact: true }).click();
-    await expect(builtin).toHaveAttribute("aria-checked", "true");
-    await expect(custom).toHaveAttribute("aria-checked", "true");
+    const builtin = dialog.getByRole("checkbox", { name: "内置检索 · 默认使用" });
+    const custom = dialog.getByRole("checkbox", { name: "检索服务 · 默认使用" });
+    await dialog.getByRole("button", { name: "全部默认选用", exact: true }).click();
+    await expect(builtin).toBeChecked();
+    await expect(custom).toBeChecked();
     expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
       enabledConnectorIds: ["unlisted", "builtin-search", "mcp-1"], plugins,
     });
-    await dialog.getByRole("button", { name: "取消全选", exact: true }).click();
-    await expect(builtin).toHaveAttribute("aria-checked", "false");
-    await expect(custom).toHaveAttribute("aria-checked", "false");
+    await dialog.getByRole("button", { name: "取消默认选用", exact: true }).click();
+    await expect(builtin).not.toBeChecked();
+    await expect(custom).not.toBeChecked();
     expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
       enabledConnectorIds: ["unlisted"], plugins,
     });
@@ -624,15 +630,15 @@ test.describe("MCP 服务器", () => {
     };
     const mock = await installMockApi(page, options);
     const dialog = await openSettings(page, "MCP 服务器");
-    const selection = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    const selection = dialog.getByRole("checkbox", { name: "内置检索 · 默认使用" });
     await selection.click();
     await expect(dialog.locator(".row-note.is-error")).toHaveText("selection save refused");
-    await expect(selection).toHaveAttribute("aria-checked", "false");
+    await expect(selection).not.toBeChecked();
     await expect(selection).toBeEnabled();
     expect(mock.state.overrides.enabledConnectorIds).toBeUndefined();
     options.fail.path = "/not-this-request";
     await selection.click();
-    await expect(selection).toHaveAttribute("aria-checked", "true");
+    await expect(selection).toBeChecked();
     await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
     expect(mock.state.overrides.enabledConnectorIds).toEqual(["web", "builtin-search"]);
   });
@@ -646,7 +652,8 @@ test.describe("MCP 服务器", () => {
     const dialog = await openSettings(page, "MCP 服务器");
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
 
-    await card.getByRole("button", { name: "测试" }).click();
+    await card.locator(".skill-row-menu-trigger").click();
+    await card.getByRole("menuitem", { name: "测试" }).click();
     await expect(page.locator(".toast")).toContainText("connection refused");
   });
 
@@ -654,7 +661,9 @@ test.describe("MCP 服务器", () => {
     const mock = await installMockApi(page, { mcpServers: [mcpServer()], mcpSources: sources });
     const dialog = await openSettings(page, "MCP 服务器");
 
-    await dialog.locator(".settings-card").filter({ hasText: "检索服务" }).getByRole("button", { name: "编辑" }).click();
+    const row = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
+    await row.locator(".skill-row-menu-trigger").click();
+    await row.getByRole("menuitem", { name: "编辑", exact: true }).click();
     const form = page.getByRole("dialog", { name: "编辑服务器" });
     await form.getByLabel("传输方式").selectOption("stdio");
     await form.getByRole("button", { name: "新增一项" }).click();
@@ -674,7 +683,8 @@ test.describe("MCP 服务器", () => {
     const dialog = await openSettings(page, "MCP 服务器");
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
 
-    await card.getByRole("button", { name: "删除" }).click();
+    await card.locator(".skill-row-menu-trigger").click();
+    await card.getByRole("menuitem", { name: "删除" }).click();
     const confirm = page.getByRole("dialog", { name: "删除服务器「检索服务」？" });
     // See the note on the 专家 delete case: the settings overlay covers the
     // confirmation's backdrop, so the button is activated by keyboard.

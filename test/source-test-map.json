@@ -2442,6 +2442,89 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/settings/SettingsRowMenu.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-row-menu.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-controls.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillRowMenu.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/McpRowMenu.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-row-menu.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/mcp-servers-create.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-controls.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/McpAddMenu.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/mcp-servers-create.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-import.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-controls.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/system/McpServers.tsx",
       "risk": "P1",
       "owner": "desktop",
@@ -2455,6 +2538,21 @@
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
           "layer": "ui-st",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/tests/mcp-servers-create.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-controls.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e-stack/custom-mcp.spec.ts",
+          "layer": "e2e",
+          "complexity": "C4"
         }
       ]
     },

@@ -37,9 +37,11 @@ async function openMcp(page: Page) {
 }
 
 async function upload(page: Page, content: string) {
-  await page.getByRole("button", { name: "导入", exact: true }).click();
+  await page.getByRole("button", { name: "添加服务器", exact: true }).click();
+  await page.getByRole("menuitem", { name: "导入 JSON", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("menuitem", { name: "上传 JSON 文件", exact: true }).click();
+  await form.getByRole("button", { name: "上传 JSON 文件", exact: true }).click();
   await (await chooser).setFiles({ name: "mcp-servers.json", mimeType: "application/json", buffer: Buffer.from(content) });
   return page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
 }
@@ -62,15 +64,15 @@ test.describe("MCP 服务器 JSON 导入", () => {
   test("paste remains editable and keyboard dismissal keeps settings open", { tag: "@mocked" }, async ({ page, journey }) => {
     const mock = await installMockApi(page);
     const settings = await openMcp(page);
-    const trigger = settings.getByRole("button", { name: "导入", exact: true });
-    const menu = settings.getByRole("menu", { name: "导入", exact: true });
+    const trigger = settings.getByRole("button", { name: "添加服务器", exact: true });
+    const menu = settings.getByRole("menu", { name: "添加服务器", exact: true });
     journey.scenario({ goal: "Paste JSON without importing on navigation", preconditions: ["Empty custom MCP list"] });
     await journey.step("Open and dismiss the import menu", "Arrow keys reach both sources and Escape closes only the menu.", async () => {
       await trigger.focus();
       await page.keyboard.press("ArrowDown");
-      await expect(menu.getByRole("menuitem", { name: "粘贴 JSON" })).toBeFocused();
+      await expect(menu.getByRole("menuitem", { name: "手动填写" })).toBeFocused();
       await page.keyboard.press("ArrowDown");
-      await expect(menu.getByRole("menuitem", { name: "上传 JSON 文件" })).toBeFocused();
+      await expect(menu.getByRole("menuitem", { name: "导入 JSON" })).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(menu).toBeHidden();
       await expect(settings).toBeVisible();
@@ -78,24 +80,28 @@ test.describe("MCP 服务器 JSON 导入", () => {
     });
     await journey.step("Paste, preview and discard JSON", "The old card remains available and cancellation writes nothing.", async () => {
       await trigger.click();
-      await menu.getByRole("menuitem", { name: "粘贴 JSON" }).click();
+      await menu.getByRole("menuitem", { name: "导入 JSON" }).click();
       const form = page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
       await form.getByRole("textbox", { name: "JSON", exact: true }).fill(JSON.stringify({ mcpServers: { Pasted: { command: "node" } } }));
       await form.getByRole("button", { name: "预览", exact: true }).click();
       await expect(form.getByRole("list", { name: "预览", exact: true })).toContainText("Pasted");
       await form.getByRole("button", { name: "取消", exact: true }).click();
       await trigger.click();
-      await menu.getByRole("menuitem", { name: "粘贴 JSON" }).click();
+      await menu.getByRole("menuitem", { name: "导入 JSON" }).click();
       await expect(form.getByRole("textbox", { name: "JSON", exact: true })).toHaveValue("");
       await form.getByRole("button", { name: "取消", exact: true }).click();
       expect(mock.calls.filter((call) => call.path === "/api/mcp/servers/import")).toHaveLength(0);
     });
-    await journey.step("Cancel file selection", "An empty selection opens no import card and writes nothing.", async () => {
+    await journey.step("Cancel file selection", "An empty selection keeps the import dialog unchanged and writes nothing.", async () => {
       await trigger.click();
+      await menu.getByRole("menuitem", { name: "导入 JSON" }).click();
+      const form = page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
       const chooser = page.waitForEvent("filechooser");
-      await menu.getByRole("menuitem", { name: "上传 JSON 文件" }).click();
+      await form.getByRole("button", { name: "上传 JSON 文件", exact: true }).click();
       await (await chooser).setFiles([]);
-      await expect(page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true })).toBeHidden();
+      await expect(form).toBeVisible();
+      await expect(form.getByRole("textbox", { name: "JSON", exact: true })).toHaveValue("");
+      await form.getByRole("button", { name: "取消", exact: true }).click();
       await expect(settings).toBeVisible();
       expect(mock.calls.filter((call) => call.path === "/api/mcp/servers/import")).toHaveLength(0);
     });

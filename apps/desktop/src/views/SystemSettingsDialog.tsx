@@ -278,7 +278,7 @@ export function SystemSettingsDialog({
               <SidebarToggle onClick={() => setNavOpen(true)} open={false} />
             </div>
           )}
-          {group === "skills" ? pane : (
+          {group === "skills" || group === "mcp" ? pane : (
             <div className="settings-group-detail" key={group}>
               <header className="settings-detail-header">
                 <div>

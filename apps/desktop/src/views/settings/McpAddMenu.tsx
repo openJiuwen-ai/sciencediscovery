@@ -5,9 +5,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { TEXT } from "../../text.js";
 import { leavesMenu } from "../RowMenu.js";
 
-export function McpImportMenu({ disabled, onChoose }: {
+export function McpAddMenu({ disabled, onChoose }: {
   disabled: boolean;
-  onChoose: (source: "paste" | "file") => void;
+  onChoose: (source: "manual" | "json") => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -54,24 +54,24 @@ export function McpImportMenu({ disabled, onChoose }: {
         aria-controls={open ? id : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="secondary-button mcp-import-trigger"
+        className="pill-button is-dark mcp-import-trigger"
         disabled={disabled}
         onClick={() => { focusLast.current = false; setOpen((value) => !value); }}
         ref={trigger}
         type="button"
       >
-        {TEXT.settings.system.mcp.importServers}<span aria-hidden="true">▾</span>
+        {TEXT.settings.system.mcp.addServer}<span aria-hidden="true">▾</span>
       </button>
       {open ? (
-        <div aria-label={TEXT.settings.system.mcp.importServers} className="mcp-import-popover" id={id} role="menu">
-          {(["paste", "file"] as const).map((source) => (
+        <div aria-label={TEXT.settings.system.mcp.addServer} className="mcp-import-popover" id={id} role="menu">
+          {(["manual", "json"] as const).map((source) => (
             <button
               key={source}
               onClick={() => { close(); onChoose(source); }}
               role="menuitem"
               type="button"
             >
-              {source === "paste" ? TEXT.settings.system.mcp.importPaste : TEXT.settings.system.mcp.importFile}
+              {source === "manual" ? TEXT.settings.system.mcp.manualEntry : TEXT.settings.system.mcp.importChoice}
             </button>
           ))}
         </div>

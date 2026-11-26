@@ -42,7 +42,8 @@ import { useLoaded } from "../../../app/use-loaded.js";
 import { writeSettingsCache } from "../../../app/settings-cache.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
-import { McpImportMenu } from "../McpImportMenu.js";
+import { McpAddMenu } from "../McpAddMenu.js";
+import { McpRowMenu, type McpRowAction } from "../McpRowMenu.js";
 import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
 
 interface Props {
@@ -643,9 +644,88 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     return page ? page.enabledConnectorIds.includes(id) : false;
   };
 
+  const rowAction = (server: CustomMcpServerDetails, action: McpRowAction) => {
+    if (busy) return;
+    if (action === "tools") {
+      setToolsOpen(toolsOpen === server.id ? undefined : server.id);
+    } else if (action === "edit") {
+      openEdit(server);
+    } else if (action === "authorize") {
+      void authorize(server);
+    } else if (action === "cancelAuthorization" || action === "clearAuthorization") {
+      void endAuthorization(server, action === "cancelAuthorization" ? "cancel" : "clear");
+    } else if (action === "delete") {
+      onConfirm({
+        accept: TEXT.menu.delete,
+        body: TEXT.settings.system.mcp.deleteBody(server.name),
+        eyebrow: TEXT.settings.system.mcp.heading,
+        onAccept: () => {
+          void deleteMcpServer(client, server.id)
+            .then(() => loaded.reload())
+            .catch((reason: unknown) => setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic));
+        },
+        title: TEXT.settings.system.mcp.deleteTitle(server.name),
+      });
+    } else if (action === "test") {
+      setBusy(true);
+      void testMcpServer(client, server.id)
+        .then((next) => {
+          loaded.reload();
+          const authorizationProblem = next.authorization && next.authorization.state !== "authorized"
+            ? next.authorization.state === "expired"
+              ? TEXT.settings.system.mcp.authorizationExpired : TEXT.settings.system.mcp.unauthorized
+            : undefined;
+          const passed = !next.error && !authorizationProblem && (next.status === "ready" || next.status === "disabled");
+          onToast(next.error ?? authorizationProblem
+            ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)), passed ? "info" : "error");
+        })
+        .catch((reason: unknown) => setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic))
+        .finally(() => setBusy(false));
+    }
+  };
+
+  const toggleService = async (server: CustomMcpServerDetails) => {
+    if (busy) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      // Reuse editing's credential/argument retention instead of rebuilding
+      // a partial configuration that could discard stored values.
+      await saveMcpServer(client, { ...inputOf(draftOf(server)), enabled: !server.enabled }, server.id);
+      loaded.reload();
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <>
+    <div className="settings-group-detail">
+      <header className="settings-detail-header">
+        <div>
+          <h3>{TEXT.settings.system.groups.mcp.label}</h3>
+          <p>{TEXT.settings.system.groups.mcp.description}</p>
+        </div>
+        <McpAddMenu disabled={busy} onChoose={(source) => {
+          if (source === "manual") openCreate();
+          else openImport();
+        }} />
+      </header>
       <p className="settings-note">{TEXT.settings.system.mcp.help}</p>
+      <input
+        accept=".json,application/json"
+        aria-label={TEXT.settings.system.mcp.importFile}
+        disabled={busy}
+        hidden
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) void loadImportFile(file);
+        }}
+        ref={importFileInput}
+        type="file"
+      />
 
       <LoadGate loaded={loaded}>
         {(page) => (
@@ -653,28 +733,6 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
             {/* Creating and importing are the two ways in for a server this
                 machine has never seen; both write through the same routes the web
                 client uses, so the two clients cannot drift. */}
-            <div className="mcp-toolbar-actions">
-              <button className="secondary-button" disabled={busy} onClick={openCreate} type="button">
-                {TEXT.settings.system.mcp.addServer}
-              </button>
-              <McpImportMenu disabled={busy} onChoose={(source) => {
-                if (source === "paste") openImport();
-                else importFileInput.current?.click();
-              }} />
-              <input
-                accept=".json,application/json"
-                aria-label={TEXT.settings.system.mcp.importFile}
-                disabled={busy}
-                hidden
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  event.currentTarget.value = "";
-                  if (file) void loadImportFile(file);
-                }}
-                ref={importFileInput}
-                type="file"
-              />
-            </div>
             {page.custom.length === 0 && page.builtins.length === 0 ? (
               <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
             ) : (
@@ -688,7 +746,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                   </button>
                 </div>
                 {(servers ?? page.custom).map((server) => (
-                  <div className="settings-card" key={server.id}>
+                  <div className="settings-card mcp-server-row" key={server.id}>
                     <span className="settings-card-mark">{initialOf(server.name)}</span>
                     <div className="settings-card-main">
                       <strong>
@@ -721,125 +779,22 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                         </span>
                       ) : null}
                     </div>
-                    <div className="settings-card-actions">
-                      <button
-                        className="link-button"
-                        disabled={busy}
-                        onClick={() => setToolsOpen(toolsOpen === server.id ? undefined : server.id)}
-                        type="button"
-                      >
-                        {TEXT.settings.system.mcp.tools}
-                      </button>
-                      <button
-                        className="link-button"
-                        disabled={busy}
-                        onClick={() => {
-                          setBusy(true);
-                          void testMcpServer(client, server.id)
-                            .then((next) => {
-                              loaded.reload();
-                              const authorizationProblem = next.authorization && next.authorization.state !== "authorized"
-                                ? next.authorization.state === "expired"
-                                  ? TEXT.settings.system.mcp.authorizationExpired
-                                  : TEXT.settings.system.mcp.unauthorized
-                                : undefined;
-                              const passed = !next.error && !authorizationProblem
-                                && (next.status === "ready" || next.status === "disabled");
-                              onToast(
-                                next.error ?? authorizationProblem
-                                  ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)),
-                                passed ? "info" : "error",
-                              );
-                            })
-                            .catch((reason: unknown) => {
-                              setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                            })
-                            .finally(() => setBusy(false));
-                        }}
-                        type="button"
-                      >
-                        {TEXT.settings.system.mcp.test}
-                      </button>
-                      <button
-                        className="link-button"
-                        disabled={busy}
-                        onClick={() => openEdit(server)}
-                        type="button"
-                      >
-                        {TEXT.settings.edit}
-                      </button>
-                      {/* A server that needs OAuth says so instead of looking
-                          broken; the three controls are the ones the route pair
-                          offers, and 清除 is what removes a stored grant. */}
-                      {server.authorization !== undefined ? (
-                        <>
-                          <button
-                            className="link-button"
-                            disabled={busy || server.authorization.state === "authorizing"}
-                            onClick={() => void authorize(server)}
-                            type="button"
-                          >
-                            {TEXT.settings.system.mcp.authorize}
-                          </button>
-                          {server.authorization.state === "authorizing" ? (
-                            <>
-                              <button
-                                className="link-button"
-                                disabled={busy}
-                                onClick={() => void endAuthorization(server, "cancel")}
-                                type="button"
-                              >
-                                {TEXT.settings.system.mcp.cancelAuthorization}
-                              </button>
-                              {/* A blocked popup leaves the minted URL only here. */}
-                              {authorizingUrl?.id === server.id ? (
-                                <a
-                                  className="link-button"
-                                  href={authorizingUrl.url}
-                                  rel="noopener noreferrer"
-                                  target="_blank"
-                                >
-                                  {TEXT.settings.system.mcp.openAuthorization}
-                                </a>
-                              ) : null}
-                            </>
-                          ) : null}
-                          <button
-                            className="link-button is-danger"
-                            disabled={busy}
-                            onClick={() => void endAuthorization(server, "clear")}
-                            type="button"
-                          >
-                            {TEXT.settings.system.mcp.clearAuthorization}
-                          </button>
-                        </>
-                      ) : null}
-                      <button
-                        className="link-button is-danger"
-                        disabled={busy}
-                        onClick={() => onConfirm({
-                          accept: TEXT.menu.delete,
-                          body: TEXT.settings.system.mcp.deleteBody(server.name),
-                          eyebrow: TEXT.settings.system.mcp.heading,
-                          onAccept: () => {
-                            void deleteMcpServer(client, server.id)
-                              .then(() => loaded.reload())
-                              .catch((reason: unknown) => {
-                                setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                              });
-                          },
-                          title: TEXT.settings.system.mcp.deleteTitle(server.name),
-                        })}
-                        type="button"
-                      >
-                        {TEXT.menu.delete}
-                      </button>
-                      <Switch
-                        disabled={busy}
-                        label={`${server.name} · ${TEXT.settings.system.mcp.useByDefault}`}
-                        onChange={() => void toggleDefaultUse(server.id)}
-                        value={isSelected(server.id)}
-                      />
+                    <div className="settings-card-actions mcp-source-actions">
+                      <label className="settings-check mcp-default-choice">
+                        <input type="checkbox" disabled={busy}
+                          aria-label={`${server.name} · ${TEXT.settings.system.mcp.useByDefault}`}
+                          checked={isSelected(server.id)} onChange={() => void toggleDefaultUse(server.id)} />
+                        {TEXT.settings.system.mcp.useByDefault}
+                      </label>
+                      <McpRowMenu authorization={server.authorization}
+                        authorizationUrl={authorizingUrl?.id === server.id ? authorizingUrl.url : undefined}
+                        disabled={busy} name={server.name} onAction={(action) => rowAction(server, action)} />
+                      <span className="mcp-service-choice">
+                        <span>{TEXT.settings.system.mcp.enableService}</span>
+                        <Switch disabled={busy}
+                          label={`${server.name} · ${TEXT.settings.system.mcp.enableService}`}
+                          onChange={() => void toggleService(server)} value={server.enabled} />
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -854,7 +809,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                   ].filter((part) => part !== undefined && part !== "").join(" · ");
                   return (
                     <div
-                      className={`settings-card is-expandable${open ? " is-open" : ""}${on ? "" : " is-off"}`}
+                      className={`settings-card mcp-server-row is-expandable${open ? " is-open" : ""}${on ? "" : " is-off"}`}
                       key={source.manifest.id}
                     >
                       <span className="settings-card-mark">
@@ -893,12 +848,12 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                         ) : null}
                       </button>
                       <div className="settings-card-actions">
-                        <Switch
-                          disabled={busy}
-                          label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.useByDefault}`}
-                          onChange={() => void toggleDefaultUse(source.manifest.id)}
-                          value={on}
-                        />
+                        <label className="settings-check mcp-default-choice">
+                          <input type="checkbox" disabled={busy}
+                            aria-label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.useByDefault}`}
+                            checked={on} onChange={() => void toggleDefaultUse(source.manifest.id)} />
+                          {TEXT.settings.system.mcp.useByDefault}
+                        </label>
                       </div>
                     </div>
                   );
@@ -1143,6 +1098,9 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
           <section className="settings-card is-form mcp-import-card">
             <div className="settings-card-form">
               {importFileName ? <p className="settings-note">{TEXT.settings.system.mcp.importFileLoaded(importFileName)}</p> : null}
+              <button className="secondary-button" disabled={busy} onClick={() => importFileInput.current?.click()} type="button">
+                {TEXT.settings.system.mcp.importFile}
+              </button>
               <Row hint={TEXT.settings.system.mcp.importHint} title={TEXT.settings.system.mcp.importJson} tone="stack">
                 <textarea
                   aria-label={TEXT.settings.system.mcp.importJson}
@@ -1212,7 +1170,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
           </section>
         </SettingsModal>
       ) : null}
-    </>
+    </div>
   );
 }
 

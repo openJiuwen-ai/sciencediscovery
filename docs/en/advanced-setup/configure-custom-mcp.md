@@ -14,11 +14,11 @@ This guide covers custom MCP management in system settings. Existing built-in so
 
 ## Add and manage a server
 
-1. In the desktop UI, open **Settings → MCP servers** and choose **Add server**. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
+1. In the desktop UI, open **Settings → MCP servers → Add server → Manual entry** using the dark header menu. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
 2. Enter a name and optional description, select a transport, and complete its fields.
 3. Set **Tool timeout (seconds)**. The default is 60, with an allowed integer range of 1-600. This timeout cannot be disabled.
-4. The enable checkbox controls the entire server and is unchecked for a new configuration. Edit the server to change it later. The Web UI also has a toggle in the list.
-5. In the desktop UI, creation automatically tests the connection and shows the result in the dialog. Choose **Done** to return to the list, or **Test** on a saved server card to retry. In the Web UI, expand the server and select **Test connection** to see the discovered tools, descriptions and input schemas. If a test fails, correct the configuration and retry.
+4. The enable checkbox controls the entire server and is unchecked for a new configuration. The desktop list's **Enable service** switch and the edit checkbox update the same saved value. **Use by default** is a separate checkbox for session source selection: selecting a default does not enable a disabled server. Bulk default selection does not change service enablement. The Web UI also has an enable toggle in the list.
+5. In the desktop UI, creation automatically tests the connection and shows the result in the dialog. Choose **Done** to return to the list. A saved server's chevron menu provides **Tools**, **Test**, **Edit**, **Delete** and applicable OAuth actions, matching the Skills menu style. In the Web UI, expand the server and select **Test connection** to see the discovered tools, descriptions and input schemas. If a test fails, correct the configuration and retry.
 
 | Transport | Fields |
 |---|---|
@@ -32,7 +32,7 @@ Testing a disabled server does not enable it, but STDIO testing does start the c
 
 ### Import JSON
 
-On desktop, choose **Import → Paste JSON** for the existing text dialog, or **Import → Upload JSON file** to read a UTF-8 `.json` file (maximum 1.5 MB). Upload fills the JSON and generates the preview automatically; inspect it and choose **Import servers** to save. Selecting a file does not save a server. The Web UI retains **Import JSON**. Provide a `mcpServers` object, for example:
+On desktop, choose **Add server → Import JSON**. Paste JSON into the dialog or choose **Upload JSON file** to read a UTF-8 `.json` file (maximum 1.5 MB). Upload fills the JSON and generates the preview automatically; inspect it and choose **Import servers** to save. Selecting a file does not save a server. The Web UI retains **Import JSON**. Provide a `mcpServers` object, for example:
 
 ```json
 {

@@ -425,6 +425,17 @@
 
 .mcp-import-menu { position: relative; }
 .mcp-import-trigger { display: inline-flex; align-items: center; gap: 7px; }
+.mcp-server-row { flex-wrap: wrap; }
+.mcp-server-row > .settings-card-main { flex: 1 1 220px; }
+.mcp-server-row > .settings-card-main strong { flex-wrap: wrap; }
+.mcp-server-row > .settings-card-main small { overflow-wrap: anywhere; }
+.mcp-server-row .settings-tag { white-space: nowrap; }
+.mcp-source-actions { flex: 0 1 auto; max-width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+.mcp-default-choice, .mcp-service-choice { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 12px; }
+.mcp-default-choice input { margin: 0; }
+.mcp-service-choice { margin-left: 8px; }
+.mcp-row-menu .skill-row-menu-popover { width: 196px; }
+.skill-row-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .mcp-import-popover {
   position: absolute;
   top: calc(100% + 6px);
