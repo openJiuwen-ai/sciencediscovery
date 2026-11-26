@@ -370,6 +370,11 @@ export function App({ initialToken }: Props) {
    *  token that outlived its session would turn the next ordinary message into
    *  a long, costly search the reader never asked for. */
   const [seededCommand, setSeededCommand] = useState<SeededCommand>();
+  /** The surface this render's composer draws: a Session by its id, a draft by
+   *  its landing key. Every seed is tagged with it, and the composer ignores a
+   *  seed tagged with another surface — the switch to that surface mounts the
+   *  next composer before the effect below can clear the seed (#1434). */
+  const composerSurface = landingKey(state);
 
   // An open panel belongs to one session's searches, like a selected
   // subagent. The create dialog is deliberately left alone: it starts a run
@@ -377,8 +382,10 @@ export function App({ initialToken }: Props) {
   // opening as it boots is not a reason to close a dialog the user just opened.
   //
   // The seeded command is not left alone: the dialog collected its goal for
-  // the session it was opened in, and the composer it would land in survives
-  // the switch.
+  // the session it was opened in, and the composer it would land in is
+  // keyed by session, so the next one must not inherit it. The tag on the seed
+  // is the belt to this effect's braces: it is read during the switch render,
+  // before this effect runs.
   useEffect(() => {
     setEvolveRunId(undefined);
     // A research id is the previous session's, so it goes with the run id.
@@ -1344,7 +1351,7 @@ export function App({ initialToken }: Props) {
     setIdeaTreeStart(false);
     setIdeaTreeOpen(false);
     setIdeaTreeTask("");
-    setSeededCommand({ command, nonce: Date.now(), text: task });
+    setSeededCommand({ command, nonce: Date.now(), owner: composerSurface, text: task });
   };
 
   const seedIdeaTree = () => seedIdeaCommand(IDEA_TREE_TEAM_COMMAND, ideaTreeTask);
@@ -1366,7 +1373,7 @@ export function App({ initialToken }: Props) {
     const pending = pendingIdeaSendRef.current;
     rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(false);
-    if (pending !== undefined) setSeededCommand({ nonce: Date.now(), text: pending });
+    if (pending !== undefined) setSeededCommand({ nonce: Date.now(), owner: composerSurface, text: pending });
   };
 
   /**
@@ -1531,6 +1538,9 @@ export function App({ initialToken }: Props) {
       || Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     unavailableModelText: creditsModelSignedOut ? TEXT.errors.modelSignInRequired : undefined,
     selectedSpecialistId: state.detail?.specialistId,
+    // The composer's own surface, for the seed tag it compares against: a
+    // draft's key changes with its epoch, a Session's with its id.
+    surfaceKey: composerSurface,
     uploading: state.uploading,
   };
 
@@ -1673,7 +1683,10 @@ export function App({ initialToken }: Props) {
             <p className="session-archived-banner" role="status">{TEXT.errors.archivedBanner}</p>
           ) : null}
           {isEvidenceSessionReadOnly(state.detail) ? null : (
-            <Composer {...composerProps} />
+            /* Keyed by session: a draft belongs to the conversation it was
+               written in, so switching sessions starts the next composer empty
+               instead of carrying the previous draft across (#1434). */
+            <Composer {...composerProps} key={`conversation:${landingKey(state)}`} />
           )}
             </>
           )}
@@ -1821,7 +1834,7 @@ export function App({ initialToken }: Props) {
             // when the dialog closes: the design usually needs a sentence of
             // its own added after the task.
             const draft = splitEvolveCommand(command);
-            setSeededCommand({ command: draft.command, direction, nonce: Date.now(), text: draft.goal });
+            setSeededCommand({ command: draft.command, direction, nonce: Date.now(), owner: composerSurface, text: draft.goal });
           }}
           running={state.running}
           status={evolve.status}

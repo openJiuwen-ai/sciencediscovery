@@ -67,6 +67,11 @@ export interface SeededCommand {
   direction?: EvolveDirectionInput;
   /** Bumped on every seed, so choosing the same design twice still lands. */
   nonce: number;
+  /** The surface that created the seed: a Session's id, or a draft's landing
+   *  key. The shell keeps the seed while a Session is switched away from, so a
+   *  composer drawing another surface has to ignore it — otherwise the
+   *  sentence would arrive in a conversation that never asked for it (#1434). */
+  owner?: string;
   /** What the dialog collected, written after the token for the user to
    *  finish or replace. */
   text: string;
@@ -137,6 +142,9 @@ interface Props {
   onSelectModel: (modelId: string) => void;
   /** Point the next conversation at a Project, or at none (`undefined`). */
   onSelectProject: (projectId?: string) => void;
+  /** The Session or draft this composer draws — the same key the shell tags a
+   *  seed with. A seed owned by another surface is ignored here. */
+  surfaceKey?: string;
   /** Binds an expert to the session, or clears the binding. */
   onSelectSpecialist?: (specialistId?: string) => void;
   /** Empty the attachment tray. */
@@ -919,6 +927,7 @@ export function Composer({
   seededCommand,
   selectedModelId,
   skillsEpoch = 0,
+  surfaceKey,
   unavailableModel = false,
   unavailableModelText,
   selectedSpecialistId,
@@ -930,12 +939,22 @@ export function Composer({
   // there is no third "follow settings" state (#1204 owner decision).
   const mode = approvalMode ?? "ask_for_dangerous";
   const fullAccess = mode === "always_allow";
-  const [text, setText] = useState(seededCommand?.text ?? "");
+  // A seed is only valid where it was created. The shell clears it after a
+  // Session switch, but the next composer mounts in the same commit that
+  // switches, before that effect runs: reading the seed then would turn the
+  // sentence collected in the session that was left into this session's draft
+  // (#1434). An unowned seed (or a composer with no surface) keeps the old
+  // behaviour, since there is nothing to compare.
+  const ownedSeed = seededCommand !== undefined
+    && (seededCommand.owner === undefined || surfaceKey === undefined || seededCommand.owner === surfaceKey)
+    ? seededCommand
+    : undefined;
+  const [text, setText] = useState(ownedSeed?.text ?? "");
   /** The dialog's flags, kept apart from the sentence so the token cannot be
    *  edited into something the agent no longer understands. Seeded in the
    *  initial state as well as in the effect below, so a composer mounted with
    *  a token already in hand draws it on the first frame. */
-  const [command, setCommand] = useState<string | undefined>(seededCommand?.command);
+  const [command, setCommand] = useState<string | undefined>(ownedSeed?.command);
   const [menu, setMenu] = useState<Menu>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -1077,21 +1096,24 @@ export function Composer({
   // is the whole point of placing it in the input instead of sending it.
   //
   // A seed that is taken away takes the token with it. The shell drops it when
-  // the session changes, and this composer outlives that switch, so a token
+  // the session changes, and this composer may outlive that switch, so a token
   // left behind would turn the next ordinary message into a search in a
-  // session that never asked for one. The sentence stays: it is the reader's,
-  // and the only thing the dialog contributed is the flags.
+  // session that never asked for one. A seed owned by another surface is not
+  // this composer's either: it is treated as absent, so the switch starts empty
+  // instead of taking the sentence over (#1434). The sentence stays when this
+  // composer's own seed is removed: it is the reader's, and the only thing the
+  // dialog contributed is the flags.
   useEffect(() => {
-    if (seededCommand === undefined) {
+    if (ownedSeed === undefined) {
       setCommand(undefined);
       return;
     }
-    setCommand(seededCommand.command);
-    setText(seededCommand.text);
+    setCommand(ownedSeed.command);
+    setText(ownedSeed.text);
     const node = area.current;
     if (!node) return;
     return focusAtEnd(node);
-  }, [seededCommand]);
+  }, [ownedSeed]);
 
   useEffect(() => {
     if (!menu) return;
@@ -1115,7 +1137,7 @@ export function Composer({
     // The token and the sentence are one message; the parameters the dialog
     // confirmed belong to that token, so they leave with it and with nothing
     // else.
-    sendDraft(text, command, command === undefined ? undefined : seededCommand?.direction);
+    sendDraft(text, command, command === undefined ? undefined : ownedSeed?.direction);
   };
 
   /** Drop the dialog's flags and keep the sentence: the reader changed their

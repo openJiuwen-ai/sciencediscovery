@@ -39,7 +39,8 @@ function render(
     limit?: string;
     projectName?: string;
     projects?: { id: string; name: string }[];
-    seededCommand?: { command: string; nonce: number; text: string };
+    seededCommand?: { command: string; nonce: number; owner?: string; text: string };
+    surfaceKey?: string;
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
     modelName?: string;
@@ -73,6 +74,7 @@ function render(
       running={running}
       seededCommand={options.seededCommand}
       selectedModelId={options.selectedModelId === null ? undefined : options.selectedModelId ?? "m1"}
+      surfaceKey={options.surfaceKey}
       unavailableModel={options.unavailableModel}
       tag={options.tag === undefined ? undefined : { ...options.tag, onClear: () => {} }}
       uploading={options.uploading ?? false}
@@ -612,14 +614,70 @@ test("a design's flags can be taken back without losing the sentence", async () 
     assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "让压缩比更高");
     assert.deepEqual(cleared, ["cleared"]);
 
-    // The shell dropping the seed takes the token with it — this is what a
-    // session switch does, and the composer survives that switch.
+    // The shell dropping the seed takes the token with it, whether the
+    // composer survived the switch or was remounted for the next session.
     await act(async () => { view.update(element({ ...seeded, nonce: 2 })); });
     assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), true);
     await act(async () => { view.update(element(undefined)); });
     assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
   } finally {
     await act(async () => { view.unmount(); });
+  }
+});
+
+test("a seed owned by another session leaves this composer empty", async () => {
+  // Switching back to a session that is still running remounts its composer
+  // before the shell's session effect clears the seed. A seed created in the
+  // session that was left must not become this session's draft (#1434): the
+  // session-switch path starts empty, and the owning session still shows the
+  // token and the sentence it collected.
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  const mounted: Array<ReturnType<typeof create>> = [];
+  const element = (surfaceKey: string, seededCommand: { command?: string; nonce: number; owner?: string; text: string }) => (
+    <Composer
+      attachments={[]}
+      models={[{ id: "m1", name: "测试模型" } as never]}
+      onApprovalMode={() => {}}
+      onClearAttachments={() => {}}
+      onClearCommand={() => {}}
+      onCreateProject={() => {}}
+      onOpenSettings={() => {}}
+      onRemoveAttachment={() => {}}
+      onRetryAttachment={() => {}}
+      onSelectModel={() => {}}
+      onSelectProject={() => {}}
+      onSend={() => true}
+      onStop={() => {}}
+      onUpload={() => {}}
+      projects={[]}
+      running={false}
+      seededCommand={seededCommand}
+      selectedModelId="m1"
+      surfaceKey={surfaceKey}
+      uploading={false}
+    />
+  );
+  const foreign = { command: "/idea-tree-team", nonce: 1, owner: "session-b", text: "只在会话 B 输入过的句子" };
+  try {
+    await act(async () => { mounted.push(create(element("session-a", foreign))); });
+    const target = mounted[0];
+    assert.equal(target.root.findByProps({ id: "composer-textarea" }).props.value, "",
+      "the composer of the session switched to starts empty");
+    assert.equal(target.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false,
+      "another session's command token is not drawn here");
+
+    await act(async () => { mounted.push(create(element("session-b", foreign))); });
+    const owner = mounted[1];
+    assert.equal(owner.root.findByProps({ id: "composer-textarea" }).props.value, "只在会话 B 输入过的句子",
+      "the owning session keeps the sentence the card collected");
+    const token = owner.root.findAllByType("span").find((node) => node.props.className === "composer-command");
+    assert.ok(token, "the owning session keeps the command token");
+    assert.equal(token.findAllByType("span").some((node) => node.props.className === "composer-command-text" && node.props.children === "/idea-tree-team"), true);
+  } finally {
+    for (const view of mounted) await act(async () => { view.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
   }
 });
 
