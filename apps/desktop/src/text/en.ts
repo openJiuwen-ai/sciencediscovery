@@ -347,7 +347,6 @@ export const EN: Text = {
     rangeFrom: "From",
     rangeTo: "To",
     searchNarrowed: (query: string) => `No result matches "${query}" under the current narrowing.`,
-    showMore: "Show more",
     filtersLabel: "Filters",
     filterScopeCurrent: "Current project",
     filterScopeAll: "All projects",

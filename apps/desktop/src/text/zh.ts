@@ -338,7 +338,6 @@ export const ZH = {
     rangeFrom: "起",
     rangeTo: "止",
     searchNarrowed: (query: string) => `没有符合当前筛选条件的「${query}」结果。`,
-    showMore: "显示更多",
     filtersLabel: "筛选",
     filterScopeCurrent: "当前项目",
     filterScopeAll: "全部项目",
