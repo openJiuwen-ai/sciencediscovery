@@ -358,6 +358,7 @@ export const ZH = {
     searchEmpty: (query: string) => `没有匹配「${query}」的会话、项目或产物。搜索只匹配名称与标题，不包含消息正文。`,
     searchFailed: "搜索失败，请重试。",
     searchMore: (count: number) => `还有 ${count} 条结果，继续输入以缩小范围。`,
+    searchMoreAny: "还有更多结果，继续输入以缩小范围。",
     searchArchived: "已归档",
     collapseSidebar: "收起侧栏",
     expandSidebar: "显示侧栏",
