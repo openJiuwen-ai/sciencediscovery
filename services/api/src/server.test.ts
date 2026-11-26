@@ -4270,6 +4270,79 @@ test("an active run keeps its effective settings snapshot while later runs use u
   }
 });
 
+test("the raw SKILL.md, file delete and rename routes carry the revision they read", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `skill-raw-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const headers = { ...authorization, "content-type": "application/json" };
+
+  const created = await jsonRequest<SkillDetail>(`${origin}/api/skills`, {
+    body: JSON.stringify({
+      description: "A package the raw editor writes.",
+      instructions: "# Raw\n",
+      metadata: { version: "1.0.0" },
+      name: "raw-editor-skill",
+    }),
+    headers,
+    method: "POST",
+  });
+  assert.equal(created.response.status, 201);
+  const id = created.body.id;
+
+  // The editor reads the whole document, frontmatter included.
+  const markdown = await jsonRequest<{ content: string; revision: number }>(`${origin}/api/skills/${id}/skill-md`, {
+    headers: authorization,
+  });
+  assert.equal(markdown.response.status, 200);
+  assert.match(markdown.body.content, /name: raw-editor-skill/u);
+  assert.equal(markdown.body.revision, 1);
+
+  const written = await jsonRequest<SkillDetail>(`${origin}/api/skills/${id}/skill-md`, {
+    body: JSON.stringify({
+      content: "---\nname: raw-editor-skill\ndescription: Rewritten as raw text.\n---\n\n# Raw v2\n",
+      expectedRevision: 1,
+    }),
+    headers,
+    method: "PUT",
+  });
+  assert.equal(written.response.status, 200);
+  assert.equal(written.body.currentRevision, 2);
+  assert.equal(written.body.description, "Rewritten as raw text.");
+
+  const createdFile = await jsonRequest<SkillDetail>(`${origin}/api/skills/${id}/files/references%2Fnew.md`, {
+    body: JSON.stringify({ content: "# New\n", expectedRevision: 2 }),
+    headers,
+    method: "PUT",
+  });
+  assert.equal(createdFile.response.status, 200);
+  assert.deepEqual(createdFile.body.resources.map((item) => item.path), ["references/new.md"]);
+
+  const renamed = await jsonRequest<SkillDetail>(`${origin}/api/skills/${id}/files/references%2Fnew.md/rename`, {
+    body: JSON.stringify({ expectedRevision: 3, to: "references/renamed.md" }),
+    headers,
+    method: "POST",
+  });
+  assert.equal(renamed.response.status, 200);
+  assert.deepEqual(renamed.body.resources.map((item) => item.path), ["references/renamed.md"]);
+
+  // A delete that names the revision before the rename is a conflict, not a
+  // silent overwrite; the route the page retries with succeeds.
+  const stale = await fetch(`${origin}/api/skills/${id}/files/references%2Frenamed.md`, {
+    body: JSON.stringify({ expectedRevision: 3 }),
+    headers,
+    method: "DELETE",
+  });
+  assert.equal(stale.status, 409);
+  const deleted = await jsonRequest<SkillDetail>(`${origin}/api/skills/${id}/files/references%2Frenamed.md`, {
+    body: JSON.stringify({ expectedRevision: 4 }),
+    headers,
+    method: "DELETE",
+  });
+  assert.equal(deleted.response.status, 200);
+  assert.deepEqual(deleted.body.resources, []);
+});
+
 test("skill lifecycle APIs author, import, edit, select, audit impact, and delete safely", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `skill-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

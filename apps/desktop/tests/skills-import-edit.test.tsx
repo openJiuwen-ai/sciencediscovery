@@ -23,7 +23,6 @@ import type {
   SkillDetail,
 } from "../src/api/types.js";
 import { SkillDetailView } from "../src/views/settings/SkillDetailView.js";
-import { SkillEditorView } from "../src/views/settings/SkillEditorView.js";
 import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
 import { fileTree } from "../src/views/settings/skill-files.js";
 import { SkillToasts } from "../src/views/settings/SkillToasts.js";
@@ -387,183 +386,6 @@ test("a slow inspection says what it is doing and can be cancelled", async () =>
     // Cancelling is not a failure: the page goes back to 检查 with no alert.
     buttonWithText(view, TEXT.settings.skills.git.inspect);
     assert.ok(!JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.git.inspectHint));
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("the editor submits the revision it read and hands back the keys its form does not show", async () => {
-  const stub = new StubClient().reply(detail).reply({ ...detail, currentRevision: 2, instructions: "Review twice" });
-  const saved: SkillDetail[] = [];
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={(row) => { saved.push(row); }} skillId="review" />,
-  );
-  try {
-    assert.equal(stub.calls[0]?.path, "/api/skills/review");
-    const instructions = textareaWithLabel(view, TEXT.settings.skills.editor.instructions);
-    await act(async () => { instructions.props.onChange({ target: { value: "Review twice" } }); });
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
-
-    const write = stub.calls[1];
-    assert.ok(write);
-    assert.equal(write.path, "/api/skills/review");
-    assert.equal(write.init.method, "PUT");
-    assert.deepEqual(json(write), {
-      allowedTools: "Bash",
-      compatibility: "python 3.11",
-      description: "Review a draft",
-      expectedRevision: 1,
-      instructions: "Review twice",
-      license: "MIT",
-      metadata: { owner: "sd" },
-      name: "review",
-    });
-    assert.equal(saved[0]?.currentRevision, 2);
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("the editor forwards a list-valued allowed-tools unchanged", async () => {
-  const listed = {
-    ...detail,
-    frontmatter: { ...detail.frontmatter, "allowed-tools": ["Read", "Grep"] },
-  };
-  const stub = new StubClient().reply(listed).reply({ ...listed, currentRevision: 2 });
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
-  );
-  try {
-    const instructions = textareaWithLabel(view, TEXT.settings.skills.editor.instructions);
-    await act(async () => { instructions.props.onChange({ target: { value: "Review twice" } }); });
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
-    assert.deepEqual(json(stub.calls[1]!).allowedTools, ["Read", "Grep"]);
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("a stale revision is reported as a conflict, not as a failed save", async () => {
-  const stub = new StubClient()
-    .reply(detail)
-    .fail(new ApiRequestError("Skill revision conflict", 409));
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
-  );
-  try {
-    await act(async () => {
-      textareaWithLabel(view, TEXT.settings.skills.editor.instructions)
-        .props.onChange({ target: { value: "Review twice" } });
-    });
-    await act(async () => { buttonWithText(view, TEXT.settings.skills.editor.save).props.onClick(); });
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.conflict));
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("a resource file is read and written through its own route", async () => {
-  const withResource: SkillDetail = {
-    ...detail,
-    resources: [{ hash: "h", kind: "reference", path: "references/guide.md", size: 5 }],
-  };
-  const stub = new StubClient()
-    .reply(withResource)
-    .reply({ content: "guide", hash: "h", path: "references/guide.md", revision: 1, skillId: "review", size: 5 })
-    .reply({ ...withResource, currentRevision: 2 })
-    // The saved package re-keys the editor with its new revision, which reads
-    // the file again — the pane then shows what was stored, not the draft.
-    .reply({ content: "guide v2", hash: "h2", path: "references/guide.md", revision: 2, skillId: "review", size: 8 });
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
-  );
-  try {
-    await openAdvancedSettings(view);
-    await act(async () => {
-      view.root.findAllByType("button")
-        .find((node) => node.props["aria-label"] === "references/guide.md")?.props.onClick();
-    });
-    await settle();
-    assert.equal(stub.calls[1]?.path, "/api/skills/review/resources/references%2Fguide.md");
-
-    const file = textareaWithLabel(view, "references/guide.md");
-    assert.equal(file.props.value, "guide");
-    await act(async () => { file.props.onChange({ target: { value: "guide v2" } }); });
-    await act(async () => {
-      buttonWithText(view, TEXT.settings.skills.editor.saveFile).props.onClick();
-    });
-
-    const write = stub.calls[2];
-    assert.ok(write);
-    assert.equal(write.path, "/api/skills/review/files/references%2Fguide.md");
-    assert.deepEqual(json(write), { content: "guide v2", expectedRevision: 1 });
-
-    await settle();
-    assert.equal(textareaWithLabel(view, "references/guide.md").props.value, "guide v2");
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("a resource that is not UTF-8 is shown as uneditable rather than decoded", async () => {
-  const withBinary: SkillDetail = {
-    ...detail,
-    resources: [{ hash: "h", kind: "asset", path: "assets/logo.png", size: 8 }],
-  };
-  const stub = new StubClient()
-    .reply(withBinary)
-    .fail(new Error("Skill resource is not valid UTF-8"));
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
-  );
-  try {
-    await openAdvancedSettings(view);
-    await act(async () => {
-      view.root.findAllByType("button")
-        .find((node) => node.props["aria-label"] === "assets/logo.png")?.props.onClick();
-    });
-    await settle();
-    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.binary));
-    assert.equal(
-      view.root.findAllByType("textarea")
-        .some((node) => node.props["aria-label"] === "assets/logo.png"),
-      false,
-    );
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("a partial reference upload keeps the revision it already stored", async () => {
-  const stub = new StubClient()
-    .reply(detail)
-    .reply({ ...detail, currentRevision: 2 })
-    .fail(new Error("disk full"));
-  const saved: SkillDetail[] = [];
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={(row) => { saved.push(row); }} skillId="review" />,
-  );
-  try {
-    await openAdvancedSettings(view);
-    const input = view.root.findAllByType("input")
-      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.references);
-    assert.ok(input);
-    const files = [new File(["# one"], "one.md"), new File(["# two"], "two.md")];
-    await act(async () => { input.props.onChange({ target: { files } }); });
-    await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
-
-    assert.equal(saved[0]?.currentRevision, 2);
-    assert.ok(JSON.stringify(view.toJSON()).includes("disk full"));
-  } finally { await act(async () => { view.unmount(); }); }
-});
-
-test("adding a non-UTF-8 reference file is refused before anything is written", async () => {
-  const stub = new StubClient().reply(detail);
-  const view = await mount(
-    <SkillEditorView client={stub.asClient()} onSaved={() => {}} skillId="review" />,
-  );
-  try {
-    await openAdvancedSettings(view);
-    const input = view.root.findAllByType("input")
-      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.references);
-    assert.ok(input);
-    const file = new File([new Uint8Array([0xff, 0xfe, 0x00, 0x01])], "logo.png", { type: "image/png" });
-    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
-    await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
-
-    assert.ok(JSON.stringify(view.toJSON())
-      .includes(TEXT.settings.skills.editor.referenceNotText("logo.png")));
-    assert.equal(stub.calls.some((call) => call.path.includes("/files/")), false);
-    assert.equal(view.root.findAllByType("fieldset")[0]?.props.disabled, false,
-      "a refused pick left the editor disabled");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -1185,6 +1007,118 @@ test("a save that fails part-way keeps the revision it already wrote", async () 
       assert.equal((json(write) as { expectedRevision: number }).expectedRevision, 3,
         "the retry used a revision from before the writes that landed");
     }
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("creating a file in the editor writes an empty one at the revision it read", async () => {
+  const created: SkillDetail = { ...detail, currentRevision: 2 };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .reply(created);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+
+    await act(async () => {
+      const add = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.newFile);
+      assert.ok(add, "the tree has no 新建文件");
+      add.props.onClick();
+    });
+    const name = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.newFile);
+    assert.ok(name, "新建文件 did not open a name field");
+    await act(async () => { name.props.onChange({ target: { value: "notes.md" } }); });
+    await act(async () => {
+      const confirm = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.uploadDialog.confirm);
+      assert.ok(confirm);
+      confirm.props.onClick();
+    });
+    await settle();
+
+    const write = stub.calls.find((call) => call.path === "/api/skills/review/files/notes.md");
+    assert.ok(write, "the created file was not written");
+    assert.deepEqual(json(write), { content: "", expectedRevision: 1 });
+    // The new file stays selected, so its body is the empty draft the next
+    // save will carry.
+    assert.equal(textareaWithLabel(view, TEXT.settings.skills.editor.content).props.value, "");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("an upload that is not a text file is refused before any write", async () => {
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+
+    const picker = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(picker, "the tree has no upload picker");
+    const file = new File(["png"], "logo.png");
+    await act(async () => { picker.props.onChange({ target: { files: [file], value: "" } }); });
+    await settle();
+
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.editor.uploadNotText("logo.png")));
+    assert.equal(stub.calls.some((call) => call.init.method === "PUT"), false,
+      "a refused upload still wrote to the package");
+  } finally { await act(async () => { view.unmount() }); }
+});
+
+test("renaming a package file from the editor sends the revision it read", async () => {
+  const withResource: SkillDetail = {
+    ...detail,
+    resources: [{ hash: "h1", kind: "reference", path: "references/b.md", size: 3 }],
+  };
+  const renamed: SkillDetail = {
+    ...withResource,
+    currentRevision: 2,
+    resources: [{ hash: "h1", kind: "reference", path: "references/c.md", size: 3 }],
+  };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(withResource)
+    .reply({ content: "---\nname: review\n---\n\nReview carefully", revision: 1, skillId: "review" })
+    .reply(renamed);
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openRowMenu(view, "review");
+    await act(async () => { menuItem(view, TEXT.settings.skills.rowMenu.edit).props.onClick(); });
+    await settle();
+
+    await act(async () => {
+      const edit = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.editPath("references/b.md"));
+      assert.ok(edit, "the file row has no rename control");
+      edit.props.onClick();
+    });
+    const field = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.editor.editPath("references/b.md"));
+    assert.ok(field, "the rename field did not open");
+    await act(async () => { field.props.onChange({ target: { value: "c.md" } }); });
+    await act(async () => {
+      const confirm = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.uploadDialog.confirm);
+      assert.ok(confirm);
+      confirm.props.onClick();
+    });
+    await settle();
+
+    const write = stub.calls.find((call) => call.path === "/api/skills/review/files/references%2Fb.md/rename");
+    assert.ok(write, "the rename was not sent");
+    assert.deepEqual(json(write), { expectedRevision: 1, to: "references/c.md" });
+    assert.ok(JSON.stringify(view.toJSON()).includes("c.md"), "the tree still shows the old name");
   } finally { await act(async () => { view.unmount() }); }
 });
 
